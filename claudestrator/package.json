@@ -2,9 +2,10 @@
   "name": "claudestrator",
   "displayName": "Claudestrator",
   "description": "A Claude Code agent pipeline in VS Code: plan → your approval → code and tests per repo → review with fix rounds → commit → confirmed push → draft PRs. Also checks a ticket's readiness against its acceptance criteria and audits projects for bugs and bottlenecks.",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "publisher": "bondevn",
   "license": "MIT",
+  "author": "Yurii Bondar",
   "repository": {
     "type": "git",
     "url": "https://github.com/yurii-bondar/vs-code-extensions.git",

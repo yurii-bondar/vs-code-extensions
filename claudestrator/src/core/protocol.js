@@ -16,6 +16,8 @@ const CRITERION_STATUSES = ['met', 'partial', 'not_met', 'unverifiable'];
 const INSTRUCTION_MODES = ['replace', 'append', 'prepend'];
 /** Reasoning effort, as `claude --effort` accepts it. Omitted: the model's default. */
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+/** Where a code or tests agent runs: once per repo of the plan, or once across all of them. */
+const RUNS = ['per-repo', 'all-repos'];
 const AGENT_COLORS = ['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'pink', 'cyan'];
 const AGENT_NAME = /^[a-z][a-z0-9-]*$/;
 const PLAN_TYPES = ['feat', 'fix', 'chore', 'refactor'];
@@ -37,7 +39,7 @@ const INFO_EVENTS = new Set(['agent_stopped', 'note', 'gates_ran', 'transition_r
 
 const STATE_EVENTS = new Set([
   'task_created', 'intake_completed', 'stage_started', 'stage_completed', 'stage_failed',
-  'checkpoint_answered', 'committed', 'commit_failed', 'published', 'stopped', 'resumed',
+  'checkpoint_answered', 'committed', 'commit_failed', 'published', 'stopped', 'resumed', 'pipeline_changed',
 ]);
 
 const isBlocking = (f) => f.severity !== 'minor';
@@ -116,6 +118,7 @@ const AGENT_LAYER = {
   'effort?': T.oneOf(EFFORTS),
   'color?': T.oneOf(AGENT_COLORS),
   'output?': T.oneOf(OUTPUTS),
+  'runs?': T.oneOf(RUNS),
   'instructions?': instructions,
 };
 
@@ -270,6 +273,7 @@ module.exports = {
   CRITERION_STATUSES,
   INSTRUCTION_MODES,
   AGENT_COLORS,
+  RUNS,
   EFFORTS,
   AGENT_NAME,
   PLAN_TYPES,

@@ -74,7 +74,7 @@
         'agents',
         `<div class="page-head">
           <div><h1>${icon('users')}Agents & pipeline</h1>
-          <p class="lead">Agents run top to bottom. What an agent <b>produces</b> decides how it is used: a <b>plan</b> waits for your approval, <b>code</b> and <b>tests</b> run once per repo of the plan with checks after them, and a <b>review</b> sends blocking findings back for a fix round.</p></div>
+          <p class="lead">Agents run top to bottom. What an agent <b>produces</b> decides how it is used: a <b>plan</b> waits for your approval, <b>code</b> runs once per repo of the plan and <b>tests</b> once across all of them (each switchable), with checks after them, and a <b>review</b> sends blocking findings back for a fix round.</p></div>
           <div class="row"><button class="btn" data-action="open-config">${icon('edit')}config.yaml</button><button class="btn primary" data-action="agent-new-open">${icon('plus')}New agent</button></div>
         </div>
         <div class="card flow-card"><div class="flow-label muted small">A task goes through</div>${outlineHtml(c.outline, colors)}</div>
@@ -165,6 +165,10 @@
       'agent-model-custom': async (el) => {
         if (el.value.trim() && (await save('updateAgent', { name: el.dataset.name, patch: { model: el.value.trim() } }))) views.agents.load();
       },
+      'agent-runs': async (el) => {
+        const runs = el.value || null;
+        if (await save('updateAgent', { name: el.dataset.name, patch: { runs } }, `${el.dataset.name}: ${el.selectedOptions[0].textContent}`)) views.agents.load();
+      },
       'agent-effort': async (el) => {
         const effort = el.value || null;
         if (await save('updateAgent', { name: el.dataset.name, patch: { effort } }, `${el.dataset.name}: ${effort ? `effort ${effort}` : 'default effort'}`)) views.agents.load();
@@ -246,6 +250,7 @@
       <div class="ac-controls">
         <label class="mini-field" title="Model">${icon('zap')}<select class="input sm" data-change="agent-model" data-name="${esc(a.name)}" aria-label="Model">${models}<option value="__custom">Other model id…</option></select><input class="input sm custom-model" hidden placeholder="claude-…" data-change="agent-model-custom" data-name="${esc(a.name)}"></label>
         <label class="mini-field effort-field eff-${act.effort || 'none'} ${a.effort ? '' : 'is-default'}" title="${esc(`Reasoning effort (claude --effort). Runs at ${act.effort || 'the model default'}${a.effort ? '' : ', the default for this model and account'}.`)}">${icon('gauge')}<select class="input sm" data-change="agent-effort" data-name="${esc(a.name)}" aria-label="Effort">${effortOptions(a.effort, act, supported)}</select></label>
+        ${a.output === 'code' || a.output === 'tests' ? runsField(a) : ''}
         <button class="btn sm" data-action="agent-instructions" data-name="${esc(a.name)}">${icon('edit')}Instructions</button>
         <button class="btn ghost sm" data-action="agent-toggle-open" data-name="${esc(a.name)}">${icon('gear')}${open ? 'Less' : 'More'}</button>
         <span class="grow"></span>
@@ -269,6 +274,14 @@
         </div>
       </div>` : ''}
     </article>`;
+  }
+
+  /** Per repo or once across all repos, for code and tests agents; the output's default is no setting. */
+  function runsField(a) {
+    const def = a.output === 'code' ? 'per-repo' : 'all-repos';
+    const label = { 'per-repo': 'Once per repo', 'all-repos': 'Once across all repos' };
+    const opt = (v) => `<option value="${v === def ? '' : v}" ${(a.runs || def) === v ? 'selected' : ''}>${label[v]}${v === def ? ' (default)' : ''}</option>`;
+    return `<label class="mini-field" title="Where it runs: once in each repo of the plan, one after another, or once with every repo of the plan in one session (it sees all the changes and the contracts between them)">${icon('repo')}<select class="input sm" data-change="agent-runs" data-name="${esc(a.name)}" aria-label="Runs">${opt('per-repo')}${opt('all-repos')}</select></label>`;
   }
 
   function newAgentForm(c) {

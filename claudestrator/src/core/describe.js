@@ -38,7 +38,7 @@ function describeEvent(e) {
     case 'stage_failed':
       return { tone: 'error', icon: 'error', text: `${at(e.agent, e.repo)} failed: ${e.error}` };
     case 'gates_ran':
-      return { tone: e.status === 'fail' ? 'error' : e.status === 'pass' ? 'ok' : 'dim', icon: 'beaker', text: `Checks in ${e.repo} (attempt ${e.attempt}): ${e.status}` };
+      return { tone: e.status === 'fail' ? 'error' : e.status === 'pass' ? 'ok' : 'dim', icon: 'beaker', text: `Checks in ${e.repo || (e.repos || []).join(', ')} (attempt ${e.attempt}): ${e.status}` };
     case 'checkpoint_answered':
       return { tone: 'strong', icon: 'person', text: `You answered "${CHECKPOINT_TITLE[e.id] || e.id}": ${e.option}${e.feedback ? ` — "${e.feedback}"` : ''}` };
     case 'committed':
@@ -51,6 +51,8 @@ function describeEvent(e) {
       return { tone: 'warn', icon: 'debug-stop', text: `Stopped${e.reason ? `: ${e.reason}` : ''}` };
     case 'resumed':
       return { tone: 'normal', icon: 'debug-continue', text: 'Resumed' };
+    case 'pipeline_changed':
+      return { tone: 'strong', icon: 'edit', text: `Pipeline changed · ${e.pipeline.stages.map((s) => s.agent).join(' → ') || 'no agents'}` };
     case 'agent_stopped': {
       const p = e.payload || {};
       return { tone: 'dim', icon: 'circle-small', text: `${e.agent} session ended · ${p.turns || 0} turns · $${Number(p.costUsd || 0).toFixed(2)}` };

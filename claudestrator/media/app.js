@@ -352,6 +352,124 @@
 
   // ---------- shared bits ----------
 
+  // Pipeline editor chips, shared by a task's pipeline and a scenario's agents in the composer. Each editor on
+  // screen registers `{ names(), from(), save(names) }` under the id its row carries in `data-pipe`.
+  const pipeEditors = {};
+  let pipeDrag = null;
+  const outputLabel = (o) => (OUTPUT_INFO[o] || { label: o }).label;
+  /** Whether an agent with this output can join a pipeline of this scenario. */
+  const fitsScenario = (output, sc) => (sc === 'deliver' ? output !== 'readiness' && output !== 'audit' : output === sc);
+
+  /** Where a code or tests agent runs: `repo` per repo, `repos` once across all; `runs` overrides the default. */
+  const scopeOf = (a) => a.scope || { 'per-repo': 'repo', 'all-repos': 'repos' }[a.runs] || { code: 'repo', tests: 'repos' }[a.output] || 'task';
+  const SCOPE_LABEL = { repo: 'per repo', repos: 'all repos' };
+
+  /**
+   * `stages`: `[{ agent, output, color, scope?, runs?, enabled? }]`; the ones before `from` ran and stay put.
+   * `runsToggle`: code and tests chips get a per repo / all repos switch.
+   */
+  function pipeRowHtml(id, { stages, from = 0, choices = [], empty = 'No agents.', runsToggle = false }) {
+    const chip = (st, i) => {
+      const locked = i < from;
+      const scope = scopeOf(st);
+      const where = SCOPE_LABEL[scope];
+      const toggle = runsToggle && !locked && where;
+      const other = scope === 'repo' ? 'all-repos' : 'per-repo';
+      const whereHtml = toggle
+        ? `<button class="pipe-runs" data-action="pipe-runs" data-pipe="${id}" data-name="${esc(st.agent)}" data-runs="${other}" title="${esc(scope === 'repo' ? `Runs once per repo of the plan. Click to run ${st.agent} once across all repos` : `Runs once across all repos of the plan. Click to run ${st.agent} once per repo`)}">${esc(where)} ⇄</button>`
+        : where ? ` · ${esc(where)}` : '';
+      const kind = `${esc(outputLabel(st.output))}${toggle ? '' : whereHtml}${st.enabled === false ? ' · off' : ''}`;
+      return `<span class="pipe-chip ${agentColor(st.color)} ${locked ? 'locked' : ''} ${st.enabled === false ? 'off' : ''}" ${locked ? '' : 'draggable="true"'} data-name="${esc(st.agent)}" title="${esc(locked ? `${st.agent} has run or is running, so it stays in place` : `${st.agent}: drag to move it${st.enabled === false ? '\nSwitched off in Agents, so it does not run' : ''}`)}">
+        ${locked ? icon('check') : `<span class="pipe-grip">${icon('grip')}</span>`}<span class="adot"></span><span class="pipe-name">${esc(st.agent)}</span><span class="pipe-kind">${kind}</span>${toggle ? whereHtml : ''}
+        ${locked ? '' : `<button class="pipe-x" data-action="pipe-remove" data-pipe="${id}" data-name="${esc(st.agent)}" title="Remove ${esc(st.agent)}">${icon('x')}</button>`}
+      </span>`;
+    };
+    const add = choices.length
+      ? `<span class="menu-wrap"><button class="pipe-add" data-action="eff-menu" title="Add an agent at the end">${icon('plus')}Add agent</button>
+          <div class="menu">${choices.map((a) => `<button data-action="pipe-add" data-pipe="${id}" data-name="${esc(a.name)}" class="${agentColor(a.color)}" title="${esc(a.description || '')}"><span class="adot"></span><b>${esc(a.name)}</b><span class="muted small">${esc(outputLabel(a.output))}${a.enabled === false ? ' · off in Agents' : ''}</span></button>`).join('')}</div></span>`
+      : '';
+    return `<div class="pipe-row" data-pipe="${id}">${stages.map(chip).join('<span class="pipe-arrow">→</span>')}${stages.length ? '' : `<span class="muted small">${esc(empty)}</span>`}${add}</div>`;
+  }
+
+  pipeEditors.composer = {
+    names: () => views.home.scenarioAgents(S.ui.scEdit).map((a) => a.name),
+    from: () => 0,
+    async save(names) {
+      const sc = S.ui.scEdit;
+      const ok = sc === 'deliver' ? await attempt('setPipeline', { pipeline: names }) : await attempt('setScenario', { scenario: sc, agents: names });
+      if (ok === undefined) return false;
+      await loadOverview();
+      if (S.route.name === 'home') {
+        views.home.renderAgentsChips();
+        views.home.preview();
+      }
+    },
+    redraw: () => views.home.renderScenarioEditor(),
+    async setRuns(name, runs) {
+      const a = S.overview.config.catalog.find((x) => x.name === name);
+      // The output's own default is written as no setting at all.
+      const value = a && scopeOf({ output: a.output }) === { 'per-repo': 'repo', 'all-repos': 'repos' }[runs] ? null : runs;
+      if ((await attempt('updateAgent', { name, patch: { runs: value } })) === undefined) return;
+      toast(`${name} now runs ${runs === 'per-repo' ? 'once per repo' : 'once across all repos'}`, 'ok');
+      await loadOverview();
+      if (S.route.name === 'home') views.home.renderAgentsChips();
+    },
+  };
+
+  async function pipeSave(id, names, done) {
+    const ed = pipeEditors[id];
+    if (!ed) return;
+    if ((await ed.save(names)) !== false && done) toast(done, 'ok');
+  }
+
+  // Drag and drop within one row; a chip never lands before one that ran.
+  const pipeDropAt = (e) => {
+    const chip = e.target.closest && e.target.closest('.pipe-chip');
+    const row = chip && chip.closest('.pipe-row');
+    if (!chip || !pipeDrag || row.dataset.pipe !== pipeDrag.id || chip.dataset.name === pipeDrag.name) return null;
+    const r = chip.getBoundingClientRect();
+    return { chip, after: chip.classList.contains('locked') || e.clientX > r.left + r.width / 2 };
+  };
+  const pipeClearDrop = () => $$('.pipe-chip').forEach((c) => c.classList.remove('drop-before', 'drop-after'));
+  document.addEventListener('dragstart', (e) => {
+    const chip = e.target.closest && e.target.closest('.pipe-chip[draggable="true"]');
+    if (!chip) return;
+    pipeDrag = { id: chip.closest('.pipe-row').dataset.pipe, name: chip.dataset.name };
+    chip.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', pipeDrag.name);
+  });
+  document.addEventListener('dragend', (e) => {
+    if (!e.target.closest || !e.target.closest('.pipe-chip')) return;
+    const id = pipeDrag && pipeDrag.id;
+    pipeDrag = null;
+    $$('.pipe-chip').forEach((c) => c.classList.remove('dragging'));
+    pipeClearDrop();
+    if (id && pipeEditors[id] && pipeEditors[id].redraw) pipeEditors[id].redraw();
+  });
+  document.addEventListener('dragover', (e) => {
+    const at = pipeDropAt(e);
+    if (!at) return;
+    e.preventDefault();
+    pipeClearDrop();
+    at.chip.classList.add(at.after ? 'drop-after' : 'drop-before');
+  });
+  document.addEventListener('drop', (e) => {
+    const at = pipeDropAt(e);
+    if (!at) return;
+    e.preventDefault();
+    const { id, name } = pipeDrag;
+    const ed = pipeEditors[id];
+    const before = ed.names();
+    const list = before.filter((n) => n !== name);
+    const i = Math.max(list.indexOf(at.chip.dataset.name) + (at.after ? 1 : 0), ed.from());
+    list.splice(i, 0, name);
+    pipeDrag = null;
+    pipeClearDrop();
+    if (list.join() !== before.join()) pipeSave(id, list, null);
+  });
+
+
   function statusBadge(st, live) {
     const spin = st.key === 'running' ? '<span class="pulse"></span>' : '';
     return `<span class="badge tone-${st.tone}">${spin}${esc(live && live.text && st.key === 'running' ? live.text : st.label)}</span>`;
@@ -374,7 +492,7 @@
     if (!items || !items.length) return '<span class="muted">Only the ticket is written: every agent is off.</span>';
     return `<div class="outline">${items
       .map((o) => {
-        if (o.kind === 'stage') return `<span class="ol-node ${agentColor(colors[o.agent])}"><span class="adot"></span>${esc(o.agent)}</span>`;
+        if (o.kind === 'stage') return `<span class="ol-node ${agentColor(colors[o.agent])}"><span class="adot"></span>${esc(o.agent)}${o.allRepos ? '<span class="ol-tag">all repos</span>' : ''}</span>`;
         if (o.kind === 'repo-block') return `<span class="ol-block"><span class="ol-tag">per repo</span>${o.agents.map((a) => `<span class="ol-node ${agentColor(colors[a.agent])}"><span class="adot"></span>${esc(a.agent)}</span>`).join('<span class="ol-arrow">→</span>')}</span>`;
         if (o.kind === 'human') return `<span class="ol-human">${icon('user')}${esc(o.text)}</span>`;
         if (o.kind === 'loop-start') return `<span class="ol-loop">${icon('refresh')}${esc(o.text)}</span>`;
@@ -503,8 +621,9 @@
       $('[data-region-static="composer"]').innerHTML = `
         <div class="composer-top">
           <label class="composer-label" for="composer-text">${icon('sparkles')}What should the agents do?</label>
-          <div class="scenarios" role="radiogroup" aria-label="Scenario" data-region="scenarios"></div>
+          <div class="scenarios" data-region="scenarios"></div>
         </div>
+        <div data-region="sc-editor"></div>
         <textarea id="composer-text" class="composer-text" rows="3" placeholder="${esc(SCENARIO_INFO[this.scenario()].placeholder)}" ${disabled ? 'disabled' : ''}>${esc(S.draft.text)}</textarea>
         <div class="composer-detect" data-region="detect"></div>
         <div class="composer-row">
@@ -528,19 +647,59 @@
     scenario() {
       return S.draft.scenario && S.draft.scenario !== 'auto' ? S.draft.scenario : this.detected || 'deliver';
     },
+    /** A scenario's agents as the config lists them, switched-off ones included. */
+    scenarioAgents(sc) {
+      const c = S.overview && S.overview.config;
+      return c && c.ok ? c.agents.filter((a) => (a.scenario || 'deliver') === sc) : [];
+    },
     renderScenario() {
       const sc = this.scenario();
       const picked = S.draft.scenario && S.draft.scenario !== 'auto';
+      const auto = (id) => sc === id && !picked && id !== 'deliver';
+      const info = SCENARIO_INFO[sc];
+      const c = S.overview && S.overview.config;
+      const editable = Boolean(c && c.ok && c.catalog);
       patch(
         'scenarios',
-        Object.entries(SCENARIO_INFO)
-          .map(([id, info]) => `<button class="sc-opt sc-${id} ${sc === id ? 'on' : ''}" role="radio" aria-checked="${sc === id}" data-action="set-scenario" data-id="${id}" title="${esc(info.hint)}${sc === id && !picked && id !== 'deliver' ? '\n\nPicked from your words; click another to change it.' : ''}">${icon(info.icon)}${esc(info.label)}${sc === id && !picked && id !== 'deliver' ? '<span class="sc-auto">auto</span>' : ''}</button>`)
-          .join('')
+        `<span class="menu-wrap sc-select">
+          <button class="sc-current sc-${sc}" data-action="eff-menu" aria-haspopup="menu" title="${esc(`${info.hint}${auto(sc) ? '\n\nPicked from your words; choose another to change it.' : ''}`)}">${icon(info.icon)}${esc(info.label)}${auto(sc) ? '<span class="sc-auto">auto</span>' : ''}<span class="sc-caret">▾</span></button>
+          <div class="menu sc-menu" role="menu">${Object.entries(SCENARIO_INFO)
+            .map(([id, x]) => {
+              const agents = this.scenarioAgents(id).filter((a) => a.enabled);
+              return `<div class="sc-item ${sc === id ? 'current' : ''}">
+                <button class="sc-pick" role="menuitemradio" aria-checked="${sc === id}" data-action="set-scenario" data-id="${id}">${icon(sc === id ? 'check' : x.icon)}<span class="sc-text"><b>${esc(x.label)}${auto(id) ? '<span class="sc-auto">auto</span>' : ''}</b><span class="muted small">${esc(x.hint)}</span><span class="sc-agents">${agents.length ? agents.map((a) => `<span class="${agentColor(a.color)}"><span class="adot"></span>${esc(a.name)}</span>`).join('<span class="pipe-arrow">→</span>') : '<span class="muted">no agents</span>'}</span></span></button>
+                ${editable ? `<button class="sc-edit ${S.ui.scEdit === id ? 'on' : ''}" data-action="sc-edit" data-id="${id}" title="Edit the agents of ${esc(x.label)}">${icon('edit')}</button>` : ''}
+              </div>`;
+            })
+            .join('')}</div>
+        </span>`
       );
+      this.renderScenarioEditor();
       patch('auto-switch', sc === 'deliver' ? `<label class="switch" title="The plan goes straight to development, without waiting for your approval"><input type="checkbox" id="composer-auto" ${S.draft.auto ? 'checked' : ''}><span class="track"></span><span>Skip plan approval</span></label>` : '');
       patch('start-label', sc === 'readiness' ? 'Check' : sc === 'audit' ? 'Audit' : 'Start');
       const ta = $('#composer-text');
       if (ta) ta.placeholder = SCENARIO_INFO[sc].placeholder;
+    },
+    renderScenarioEditor() {
+      const c = S.overview && S.overview.config;
+      const sc = S.ui.scEdit;
+      if (!sc || !SCENARIO_INFO[sc] || !c || !c.ok || !c.catalog) return patch('sc-editor', '');
+      const stages = this.scenarioAgents(sc).map((a) => ({ agent: a.name, output: a.output, runs: a.runs, color: a.color, enabled: a.enabled }));
+      const choices = c.catalog.filter((a) => fitsScenario(a.output, sc) && !stages.some((st) => st.agent === a.name));
+      const warnings = sc === 'deliver' ? c.pipelineWarnings || [] : [];
+      if (pipeDrag && pipeDrag.id === 'composer') return;
+      patch(
+        'sc-editor',
+        `<div class="pipe-editor sc-editor">
+          <div class="pipe-head">
+            <div><h3>${icon('edit')}${esc(SCENARIO_INFO[sc].label)}: agents</h3>
+              <p class="muted small">Drag to reorder, ${icon('x')} to remove, <b>Add agent</b> to add; <b>per repo ⇄ all repos</b> switches whether a code or tests agent runs once per repo or once across them. Saved to <code>.claudestrator/config.yaml</code>: new tasks run this order, running tasks keep theirs (change those on the task screen).</p></div>
+            <button class="btn sm" data-action="sc-edit" data-id="${sc}">${icon('check')}Done</button>
+          </div>
+          ${pipeRowHtml('composer', { stages, choices, runsToggle: true, empty: 'No agents: add one, or tasks of this kind cannot start.' })}
+          ${warnings.length ? `<div class="pipe-warn">${warnings.map((w) => `<div>${icon('alert')}${esc(w)}</div>`).join('')}</div>` : ''}
+        </div>`
+      );
     },
     renderAgentsChips() {
       const c = S.overview && S.overview.config;
@@ -850,7 +1009,28 @@
       views.home.preview();
     },
     start: () => views.home.start(),
+    'pipe-remove': (el) => {
+      const { pipe, name } = el.dataset;
+      pipeSave(pipe, pipeEditors[pipe].names().filter((n) => n !== name), `${name} removed`);
+    },
+    'pipe-runs': (el) => {
+      const { pipe, name, runs } = el.dataset;
+      const ed = pipeEditors[pipe];
+      if (ed && ed.setRuns) ed.setRuns(name, runs);
+    },
+    'pipe-add': (el) => {
+      const { pipe, name } = el.dataset;
+      el.closest('.menu-wrap').classList.remove('open');
+      pipeSave(pipe, [...pipeEditors[pipe].names(), name], `${name} added at the end`);
+    },
+    'sc-edit': (el) => {
+      $$('.menu-wrap.open').forEach((w) => w.classList.remove('open'));
+      S.ui.scEdit = S.ui.scEdit === el.dataset.id ? null : el.dataset.id;
+      persist();
+      views.home.renderScenario();
+    },
     'set-scenario': (el) => {
+      $$('.menu-wrap.open').forEach((w) => w.classList.remove('open'));
       S.draft.scenario = el.dataset.id;
       persist();
       views.home.renderAgentsChips();
@@ -1034,7 +1214,7 @@
     for (const el of $$('[data-since]')) el.textContent = dur(Date.now() - Number(el.dataset.since));
   }, 1000);
 
-  window.CS = { vscode, call, attempt, toast, icon, esc, md, $, $$, ago, clock, dur, money, fmtTokens, resetIn, meter, level, EFFORT_LABEL, effortTag, size, plural, stepName, OUTPUT_INFO, SCENARIO_INFO, scenarioChip, sevCounts, agentColor, S, views, go, patch, debounce, persist, statusBadge, miniSteps, sourceChip, outlineHtml, permissionCard, loadOverview, autosize, shake, refreshSoon, actions, changes, inputs };
+  window.CS = { vscode, call, attempt, toast, icon, esc, md, $, $$, ago, clock, dur, money, fmtTokens, resetIn, meter, level, EFFORT_LABEL, effortTag, size, plural, stepName, OUTPUT_INFO, SCENARIO_INFO, scenarioChip, sevCounts, agentColor, S, views, pipeRowHtml, pipeEditors, pipeDragging: () => Boolean(pipeDrag), go, patch, debounce, persist, statusBadge, miniSteps, sourceChip, outlineHtml, permissionCard, loadOverview, autosize, shake, refreshSoon, actions, changes, inputs };
 
   window.CS.boot = async () => {
     renderShell();

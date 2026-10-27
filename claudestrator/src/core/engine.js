@@ -7,8 +7,8 @@ const crypto = require('crypto');
 const { EventEmitter } = require('events');
 const { loadConfig } = require('./config');
 const { EFFORTS, SCENARIOS } = require('./protocol');
-const { buildPipeline } = require('./pipeline');
-const { nextAction, runOf, artifactPath, branchName, sameStep, TASK_FILES } = require('./machine');
+const { buildPipeline, taskPipeline, fitsScenario, onRepos } = require('./pipeline');
+const { nextAction, runOf, artifactPath, branchName, sameStep, editableFrom, stepRepos, TASK_FILES } = require('./machine');
 const { parseInvocation, classifyInput, detectScenario, runIntake, renderTicket, IntakeError, extractAcceptanceCriteria } = require('./intake');
 const { TaskService } = require('./store');
 const { exec, GitRepo, branchSync, taskRepos, prepareRepos, taskDiff, removeWorktrees } = require('./git');
@@ -269,7 +269,7 @@ class Engine extends EventEmitter {
   /** Branch mode switches your checkouts, so two tasks with repo stages cannot run at once. */
   checkExclusive(taskId) {
     const s = this.svc.state(taskId);
-    const touchesRepos = (st) => st.gitMode === 'branch' && st.pipeline.stages.some((x) => x.scope === 'repo');
+    const touchesRepos = (st) => st.gitMode === 'branch' && st.pipeline.stages.some(onRepos);
     if (!touchesRepos(s)) return;
     for (const other of this.running) {
       if (other === taskId) continue;
@@ -447,14 +447,17 @@ class Engine extends EventEmitter {
     }
 
     let repoDir;
-    if (step.repo) {
+    /** A `repos` stage (the tester) works in every repo of the pass: `[{ name, dir }]`. */
+    let workRepos = [];
+    if (onRepos(stage)) {
       if (!this.prepared.has(taskId)) {
         this.setLive(taskId, { phase: 'preparing', step, text: `Preparing branch ${branchName(s)}` });
         const p = await prepareRepos(this.workspace, s, config);
         if (!p.ok) throw new EngineError(p.code, `${p.error}${p.blocked ? `: ${p.blocked.map((b) => `${b.repo} (${b.problem})`).join(', ')}` : ''}`, { blocked: p.blocked });
         this.prepared.add(taskId);
       }
-      repoDir = taskRepos(this.workspace, s, config, [step.repo])[0].dir;
+      if (step.repo) repoDir = taskRepos(this.workspace, s, config, [step.repo])[0].dir;
+      else workRepos = taskRepos(this.workspace, s, config, stepRepos(s, step)).map((r) => ({ name: r.name, dir: r.dir }));
     }
 
     let diffPath;
@@ -482,18 +485,18 @@ class Engine extends EventEmitter {
     const run = next.kind === 'run' ? next : runOf(state, step);
     // Readiness and audit agents read every configured repo where it is, also outside the workspace folder.
     const readRepos = REPORT_OUTPUTS.has(stage.output) ? Object.values(config.repos).map((r) => ({ name: r.name, dir: path.resolve(this.workspace, r.path), baseBranch: r.baseBranch, ...(r.role && { role: r.role }) })) : [];
-    const prompt = buildAgentPrompt({ state, next: run, taskDir, language: config.language, ...(repoDir && { repoDir }), ...(diffPath && { diffPath }), ...(readRepos.length && { repos: readRepos }) });
-    const cwd = repoDir || this.workspace;
+    const prompt = buildAgentPrompt({ state, next: run, taskDir, language: config.language, ...(repoDir && { repoDir }), ...(workRepos.length && { workRepos }), ...(diffPath && { diffPath }), ...(readRepos.length && { repos: readRepos }) });
+    const cwd = repoDir || (workRepos.length === 1 ? workRepos[0].dir : this.workspace);
     const emitItem = this.emitter(taskId, key);
     if (next.kind === 'run') emitItem({ type: 'prompt', text: prompt });
 
-    const writeRoot = stage.scope === 'repo' ? repoDir : undefined;
-    const hook = this.hooks.register((call) => this.decide({ taskId, step, writeRoot, config, call, emitItem }));
+    const writeRoots = stage.scope === 'repo' ? [repoDir] : workRepos.map((r) => r.dir);
+    const hook = this.hooks.register((call) => this.decide({ taskId, step, writeRoots, config, call, emitItem }));
     const session = this.runner.start({
       agent,
       prompt,
       cwd,
-      additionalDirectories: [...new Set([taskDir, this.workspace, ...readRepos.map((r) => r.dir).filter((d) => fs.existsSync(d))])].filter((d) => !realInside(cwd, d)),
+      additionalDirectories: [...new Set([taskDir, this.workspace, ...workRepos.map((r) => r.dir), ...readRepos.map((r) => r.dir).filter((d) => fs.existsSync(d))])].filter((d) => !realInside(cwd, d)),
       env: hook.env,
       name: `claudestrator ${taskId} · ${label}`,
       onOutput: emitItem,
@@ -514,19 +517,31 @@ class Engine extends EventEmitter {
       if (!t.ok) return void fail(t.error || 'the agent failed');
 
       let gates = 'none';
-      const repoCfg = step.repo ? config.repos[step.repo] : undefined;
-      if (stage.scope === 'repo' && repoCfg && repoDir && repoCfg.gates.length) {
+      // The repos whose checks run after this step: its own, or every repo a `repos` stage worked in.
+      const targets = (stage.scope === 'repo' ? [{ name: step.repo, dir: repoDir }] : workRepos).filter((r) => r.dir && config.repos[r.name] && config.repos[r.name].gates.length);
+      const where = targets.map((r) => r.name).join(', ');
+      if (targets.length) {
         for (let attempt = 1; ; attempt++) {
-          this.setLive(taskId, { phase: 'gates', step, key, text: `Running gates in ${step.repo}` });
-          const g = await runGates({
-            repo: repoCfg,
-            dir: repoDir,
-            logDir: path.join(taskDir, 'gates', `r${state.review.round}`),
-            onGate: (name) => this.setLive(taskId, { phase: 'gates', step, key, text: `Gate "${name}" in ${step.repo} (attempt ${attempt})` }),
-          });
-          if (stopped()) return;
-          this.svc.record(taskId, { type: 'gates_ran', agent: step.agent, repo: step.repo, status: g.status, attempt, summary: g.summary });
-          emitItem({ type: 'gates', status: g.status, attempt, summary: g.summary, results: g.results.map(({ gate, status, ms }) => ({ gate, status, ms })) });
+          const runs = [];
+          for (const r of targets) {
+            this.setLive(taskId, { phase: 'gates', step, key, text: `Running gates in ${r.name}` });
+            runs.push(
+              await runGates({
+                repo: config.repos[r.name],
+                dir: r.dir,
+                logDir: path.join(taskDir, 'gates', `r${state.review.round}`),
+                onGate: (name) => this.setLive(taskId, { phase: 'gates', step, key, text: `Gate "${name}" in ${r.name} (attempt ${attempt})` }),
+              })
+            );
+            if (stopped()) return;
+          }
+          const g = {
+            status: runs.some((x) => x.status === 'fail') ? 'fail' : runs.some((x) => x.status === 'pass') ? 'pass' : 'skipped',
+            summary: runs.map((x) => x.summary).join('\n'),
+            results: runs.flatMap((x) => x.results.map(({ gate, status, ms }) => ({ gate: runs.length > 1 ? `${x.repo} · ${gate}` : gate, status, ms }))),
+          };
+          this.svc.record(taskId, { type: 'gates_ran', agent: step.agent, ...(step.repo ? { repo: step.repo } : { repos: targets.map((r) => r.name) }), status: g.status, attempt, summary: g.summary });
+          emitItem({ type: 'gates', status: g.status, attempt, summary: g.summary, results: g.results });
           if (g.status !== 'fail') {
             gates = g.status === 'pass' ? 'pass' : 'none';
             break;
@@ -535,8 +550,9 @@ class Engine extends EventEmitter {
             gates = 'fail';
             break;
           }
-          session.send(`Gates failed in ${step.repo} (attempt ${attempt} of ${config.limits.gateAttempts}). Fix the causes below. Do not weaken, skip or delete tests or lint rules. Then reply with your full report again.\n\n${g.summary}`, { from: 'orchestrator' });
-          this.setLive(taskId, { phase: 'agent', step, key, text: `${label} is fixing red gates` });
+          const red = runs.filter((x) => x.status === 'fail').map((x) => x.repo).join(', ');
+          session.send(`Gates failed in ${red} (attempt ${attempt} of ${config.limits.gateAttempts}). Fix the causes below. Do not weaken, skip or delete tests or lint rules. Then reply with your full report again.\n\n${g.summary}`, { from: 'orchestrator' });
+          this.setLive(taskId, { phase: 'agent', step, key, text: `${label} is fixing red gates in ${where.includes(',') ? red : where}` });
           t = await session.turn();
           if (stopped()) return;
           if (!t.ok) return void fail(t.error || 'the agent failed while fixing gates');
@@ -595,14 +611,14 @@ class Engine extends EventEmitter {
   }
 
   /** The permission policy of an agent session: the Bash guard, writes only inside the stage's repo, then (optionally) you. */
-  async decide({ taskId, step, writeRoot, config, call, emitItem }) {
+  async decide({ taskId, step, writeRoots = [], config, call, emitItem }) {
     const { tool, input } = call;
     const blocked = (reason) => {
       emitItem({ type: 'blocked', tool, reason, input: summarizeInput(tool, input) });
       return { allow: false, reason: `Claudestrator: ${reason}` };
     };
     if (READ_TOOLS.has(tool)) return { allow: true };
-    const cwd = writeRoot || this.workspace;
+    const cwd = writeRoots.length === 1 ? writeRoots[0] : this.workspace;
     if (tool === 'Bash') {
       const d = guardBash(String(input.command || ''), {
         policy: config.policy,
@@ -620,8 +636,8 @@ class Engine extends EventEmitter {
     }
     if (WRITE_TOOLS.has(tool)) {
       const target = String(input.file_path || input.notebook_path || input.path || '');
-      if (!writeRoot) return blocked(`the ${step.agent} stage does not change files`);
-      if (!target || !realInside(writeRoot, path.resolve(writeRoot, target))) return blocked(`${tool} outside ${writeRoot} is not allowed: this stage works only in ${step.repo}`);
+      if (!writeRoots.length) return blocked(`the ${step.agent} stage does not change files`);
+      if (!target || !writeRoots.some((root) => realInside(root, path.resolve(cwd, target)))) return blocked(`${tool} outside ${writeRoots.join(', ')} is not allowed: this stage works only in ${step.repo || 'the task\'s repos'}`);
     }
     if (!this.askPermissions()) return { allow: true };
     const requestId = crypto.randomUUID();
@@ -809,6 +825,29 @@ class Engine extends EventEmitter {
   // ---------- commands from the UI ----------
 
   /** Starts or resumes a task. */
+  /**
+   * Reshapes what is still to come in a task: `names` is the whole new order. Stages that ran keep their place;
+   * an agent the task already has keeps its role, a new one comes from the config. A running task carries on with it.
+   */
+  editPipeline(taskId, names) {
+    const s = this.svc.state(taskId);
+    if (editableFrom(s) === -1) throw new EngineError('pipeline_locked', 'The stages of this task are through; its pipeline can no longer change');
+    const config = this.config();
+    const agents = names.map((name) => {
+      const kept = s.pipeline.stages.find((st) => st.agent === name);
+      // An agent the task has keeps its place and scope, also one from before a scope changed meaning.
+      if (kept) return { name, output: kept.output, scope: kept.scope };
+      const a = config.agents[name];
+      if (!a) throw new EngineError('unknown_agent', `There is no agent "${name}"`);
+      if (!fitsScenario(a.output, s.scenario)) throw new EngineError('wrong_scenario', `"${name}" writes a ${a.output} report and cannot join this task`);
+      return { name, output: a.output, runs: a.runs };
+    });
+    const pipeline = taskPipeline(agents, { scenario: s.scenario, auto: s.auto, maxRounds: s.limits.reviewRounds });
+    this.dispatch(taskId, { type: 'pipeline_changed', pipeline: { mode: pipeline.mode, stages: pipeline.stages, reviewLoop: pipeline.reviewLoop } });
+    pipeline.warnings.forEach((w) => this.log('warn', w.message, taskId));
+    return { warnings: pipeline.warnings.map((w) => w.message) };
+  }
+
   resume(taskId) {
     const s = this.svc.state(taskId);
     if (s.status === 'stopped') this.dispatch(taskId, { type: 'resumed' });

@@ -105,6 +105,12 @@ repos:
     assert.equal(events.filter((e) => e.type === 'stage_started' && e.agent === 'reviewer').length, 2, 'one fix round');
     const fixRound = events.filter((e) => e.type === 'stage_started' && e.agent === 'developer').map((e) => e.repo);
     assert.deepEqual(fixRound, ['api', 'web', 'web'], 'the fix round only re-ran the repo with findings');
+    const testers = events.filter((e) => e.type === 'stage_started' && e.agent === 'tester');
+    assert.deepEqual(testers.map((e) => e.repo), [undefined, undefined], 'one tester per round, across all repos');
+    const order = events.filter((e) => e.type === 'stage_started').map((e) => `${e.agent}${e.repo ? `@${e.repo}` : ''}`);
+    assert.deepEqual(order.slice(0, 5), ['planner', 'developer@api', 'developer@web', 'tester', 'reviewer']);
+    const testerPrompt = h.engine.svc.readTranscript(taskId, view.detail(h.engine, taskId).steps.find((st) => st.agent === 'tester').key).find((i) => i.type === 'prompt').text;
+    assert.match(testerPrompt, /Repositories of this task[^\n]*\n- api at .+\n- web at /);
 
     // The guard fed denials back into the transcript.
     const blocked = h.outputs.filter((o) => o.item.type === 'blocked').map((o) => o.item.reason);

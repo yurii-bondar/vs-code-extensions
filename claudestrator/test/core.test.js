@@ -35,11 +35,11 @@ test('pipeline: the built-in agents make a full pipeline with a review loop', ()
   assert.deepEqual(pipeline.stages.map((s) => [s.agent, s.scope, s.approval]), [
     ['planner', 'task', true],
     ['developer', 'repo', false],
-    ['tester', 'repo', false],
+    ['tester', 'repos', false],
     ['reviewer', 'task', false],
   ]);
   assert.deepEqual(pipeline.reviewLoop, { restartAt: 1, end: 3, fixers: ['developer', 'tester'], reviewers: ['reviewer'], maxRounds: 2 });
-  assert.deepEqual(outline(pipeline).map((o) => o.kind), ['stage', 'human', 'loop-start', 'repo-block', 'stage', 'loop-end', 'finish', 'human', 'finish']);
+  assert.deepEqual(outline(pipeline).map((o) => o.kind), ['stage', 'human', 'loop-start', 'repo-block', 'stage', 'stage', 'loop-end', 'finish', 'human', 'finish']);
   assert.equal(buildPipeline(defaultPipeline().config, { auto: true }).stages[0].approval, false);
 });
 
@@ -69,13 +69,16 @@ test('machine: plan → approval → per-repo work → review fix round → comm
   assert.equal(transition(s, { type: 'stage_started', agent: 'developer', repo: 'api', at: at(99) }).error.code, 'awaiting_checkpoint');
 
   apply({ type: 'checkpoint_answered', id: 'approve-plan', option: 'approve' });
-  assert.deepEqual(passSteps(s).map((p) => `${p.agent}@${p.repo || ''}`), ['planner@', 'developer@api', 'tester@api', 'developer@web', 'tester@web', 'reviewer@']);
+  // The developer works repo by repo, then one tester covers every repo.
+  assert.deepEqual(passSteps(s).map((p) => `${p.agent}@${p.repo || ''}`), ['planner@', 'developer@api', 'developer@web', 'tester@', 'reviewer@']);
   for (const repo of ['api', 'web']) {
-    for (const agent of ['developer', 'tester']) {
-      apply({ type: 'stage_started', agent, repo });
-      apply({ type: 'stage_completed', agent, repo, artifact: `reports/r1/${agent}-${repo}.md`, gates: 'pass' });
-    }
+    apply({ type: 'stage_started', agent: 'developer', repo });
+    apply({ type: 'stage_completed', agent: 'developer', repo, artifact: `reports/r1/developer-${repo}.md`, gates: 'pass' });
   }
+  apply({ type: 'stage_started', agent: 'tester' });
+  assert.equal(nextAction({ ...s, running: null, next: s.running }).artifact, 'reports/r1/tester.md');
+  assert.ok(['reports/r1/developer-api.md', 'reports/r1/developer-web.md'].every((f) => nextAction({ ...s, running: null, next: s.running }).inputs.includes(f)), 'the tester reads every developer report');
+  apply({ type: 'stage_completed', agent: 'tester', artifact: 'reports/r1/tester.md', gates: 'pass' });
   apply({ type: 'stage_started', agent: 'reviewer' });
   apply({ type: 'stage_completed', agent: 'reviewer', artifact: 'reviews/r1/reviewer.md', verdict: { status: 'changes_requested', summary: 'x', findings: [{ severity: 'major', repo: 'web', problem: 'no test' }, { severity: 'minor', problem: 'naming' }] } });
   // Fix round 2 targets only the repo with blocking findings.
@@ -85,10 +88,12 @@ test('machine: plan → approval → per-repo work → review fix round → comm
   assert.equal(run.kind, 'run');
   assert.equal(run.mode, 'fix');
   assert.ok(run.inputs.includes('reviews/r1/reviewer.md'));
-  for (const agent of ['developer', 'tester']) {
-    apply({ type: 'stage_started', agent, repo: 'web' });
-    apply({ type: 'stage_completed', agent, repo: 'web', artifact: `reports/r2/${agent}-web.md`, gates: 'pass' });
-  }
+  const { stepRepos } = require('../src/core/machine');
+  apply({ type: 'stage_started', agent: 'developer', repo: 'web' });
+  apply({ type: 'stage_completed', agent: 'developer', repo: 'web', artifact: 'reports/r2/developer-web.md', gates: 'pass' });
+  assert.deepEqual(stepRepos(s, s.next), ['web'], 'in a fix round the tester covers only the repos sent back');
+  apply({ type: 'stage_started', agent: 'tester' });
+  apply({ type: 'stage_completed', agent: 'tester', artifact: 'reports/r2/tester.md', gates: 'pass' });
   apply({ type: 'stage_started', agent: 'reviewer' });
   apply({ type: 'stage_completed', agent: 'reviewer', artifact: 'reviews/r2/reviewer.md', verdict: { status: 'approved', summary: 'ok', findings: [{ severity: 'minor', repo: 'web', problem: 'typo' }] } });
   assert.equal(s.phase, 'finish');
@@ -257,9 +262,8 @@ test('view: the step timeline continues after the step a checkpoint stopped at',
     'agent:planner:done',
     'human:Plan approval:waiting',
     'agent:developer@api:pending',
-    'agent:tester@api:pending',
     'agent:developer@web:pending',
-    'agent:tester@web:pending',
+    'agent:tester:pending',
     'agent:reviewer:pending',
     'finish:Commit:pending',
     'human:Confirm push:pending',
@@ -492,4 +496,100 @@ test('scenarios: the state machine finishes a report scenario without git; intak
   assert.deepEqual(svc.idFor({ source: jira, scenario: 'readiness' }), { taskId: 'PROJ-9-check', exists: true }, 'an unfinished check continues');
   assert.deepEqual(svc.idFor({ source: jira }), { taskId: 'PROJ-9', exists: false }, 'the delivery task has its own id');
   assert.equal(svc.state('PROJ-9-check').scenario, 'readiness');
+});
+
+test('machine: the pipeline of a task changes only after the steps that ran, run now or wait for you', () => {
+  const { pipeline } = defaultPipeline();
+  const { taskPipeline } = require('../src/core/pipeline');
+  const { editableFrom } = require('../src/core/machine');
+  let s = null;
+  let n = 0;
+  const apply = (e) => {
+    const r = transition(s, { ...e, at: at(++n) });
+    assert.ok(r.ok, r.error && r.error.message);
+    s = r.state;
+    return s;
+  };
+  const edit = (agents) => {
+    const p = taskPipeline(agents.map(([name, output]) => ({ name, output })), { auto: false, maxRounds: 2 });
+    return transition(s, { type: 'pipeline_changed', pipeline: { mode: p.mode, stages: p.stages, reviewLoop: p.reviewLoop }, at: at(++n) });
+  };
+  const PLANNER = ['planner', 'plan'];
+  const DEV = ['developer', 'code'];
+  const TESTER = ['tester', 'tests'];
+  const REVIEWER = ['reviewer', 'verdict'];
+
+  apply(createdEvent(pipeline));
+  assert.equal(editableFrom(s), 0, 'before the ticket everything can change');
+  apply({ type: 'intake_completed', spec });
+  apply({ type: 'stage_started', agent: 'planner' });
+  assert.equal(edit([DEV, PLANNER, TESTER, REVIEWER]).error.code, 'pipeline_locked', 'the running planner stays first');
+  assert.equal(edit([PLANNER, DEV, DEV, REVIEWER]).error.code, 'pipeline_duplicate');
+
+  // While the planner runs, the tester goes and a second reviewer joins; the loop now ends at the new reviewer.
+  s = edit([PLANNER, DEV, REVIEWER, ['security', 'verdict']]).state;
+  assert.deepEqual(s.pipeline.stages.map((st) => st.agent), ['planner', 'developer', 'reviewer', 'security']);
+  assert.equal(s.pipeline.reviewLoop.end, 3);
+  apply({ type: 'stage_completed', agent: 'planner', artifact: 'plan/planner.md', plan: PLAN });
+  assert.equal(s.checkpoint.id, 'approve-plan');
+  // A question that waits for you does not block an edit.
+  s = edit([PLANNER, DEV, TESTER, REVIEWER]).state;
+  apply({ type: 'checkpoint_answered', id: 'approve-plan', option: 'approve' });
+  assert.deepEqual(passSteps(s).map((p) => `${p.agent}@${p.repo || ''}`), ['planner@', 'developer@api', 'developer@web', 'tester@', 'reviewer@']);
+
+  apply({ type: 'stage_started', agent: 'developer', repo: 'api' });
+  apply({ type: 'stage_completed', agent: 'developer', repo: 'api', artifact: 'reports/r1/developer-api.md', gates: 'pass' });
+  // The developer's per-repo block is still running; the tester after it can still go.
+  assert.equal(editableFrom(s), 2);
+  assert.equal(edit([PLANNER, REVIEWER, DEV]).error.code, 'pipeline_locked');
+  s = edit([PLANNER, DEV, REVIEWER]).state;
+  assert.deepEqual(passSteps(s).map((p) => `${p.agent}@${p.repo || ''}`), ['planner@', 'developer@api', 'developer@web', 'reviewer@']);
+  s = edit([PLANNER, DEV, TESTER]).state;
+  assert.equal(s.pipeline.reviewLoop, null);
+
+  // A task that started when the tester ran per repo keeps it so: consecutive per-repo stages run repo by repo.
+  const old = { ...s, pipeline: { ...s.pipeline, stages: s.pipeline.stages.map((st) => (st.agent === 'tester' ? { ...st, scope: 'repo' } : st)) } };
+  assert.deepEqual(passSteps(old).map((p) => `${p.agent}@${p.repo || ''}`), ['planner@', 'developer@api', 'tester@api', 'developer@web', 'tester@web']);
+
+  apply({ type: 'stopped' });
+  s = edit([PLANNER, DEV, TESTER, REVIEWER]).state;
+  assert.equal(s.status, 'stopped', 'a stopped task can be edited and stays stopped');
+});
+
+test('pipeline: runs switches a code or tests agent between once per repo and once across all repos', () => {
+  const { stepRepos } = require('../src/core/machine');
+  const ws = tmp('cs-runs-');
+  fs.mkdirSync(path.join(ws, '.claudestrator'));
+  const load = (yaml) => {
+    fs.writeFileSync(config.projectConfigFile(ws), yaml);
+    const r = config.loadConfig({ workspace: ws, home: tmp('cs-h-') });
+    assert.ok(r.ok, JSON.stringify(r.errors));
+    return r;
+  };
+  const steps = (pipeline, repos) => {
+    let s = null;
+    for (const e of [createdEvent(pipeline), { type: 'intake_completed', spec }, { type: 'stage_started', agent: 'planner' }, { type: 'stage_completed', agent: 'planner', artifact: 'p', plan: { ...PLAN, repos } }, { type: 'checkpoint_answered', id: 'approve-plan', option: 'approve' }]) s = transition(s, { ...e, at: at(1) }).state;
+    return s;
+  };
+  const two = PLAN.repos;
+
+  // The tester back to per repo: developer and tester alternate repo by repo, as before.
+  let r = load('agents:\n  tester: { runs: per-repo }\n');
+  assert.equal(r.config.agents.tester.runs, 'per-repo');
+  let s = steps(buildPipeline(r.config), two);
+  assert.deepEqual(passSteps(s).map((p) => `${p.agent}@${p.repo || ''}`), ['planner@', 'developer@api', 'tester@api', 'developer@web', 'tester@web', 'reviewer@']);
+
+  // The developer across all repos at once; it skips a repo the plan wants tests only for.
+  r = load('agents:\n  developer: { runs: all-repos }\n  hotfix: { extends: developer, description: Hotfix }\npipeline: [planner, hotfix, tester, reviewer]\n');
+  assert.equal(r.config.agents.hotfix.runs, 'all-repos', 'runs is inherited along extends');
+  s = steps(buildPipeline(r.config), [{ name: 'api', mode: 'full' }, { name: 'web', mode: 'tests_only' }]);
+  assert.deepEqual(passSteps(s).map((p) => `${p.agent}@${p.repo || ''}`), ['planner@', 'hotfix@', 'tester@', 'reviewer@']);
+  assert.deepEqual(stepRepos(s, s.next), ['api']);
+  assert.deepEqual(stepRepos(s, passSteps(s)[2]), ['api', 'web']);
+
+  // On a plan or review agent it means nothing, and says so.
+  r = load('agents:\n  reviewer: { runs: per-repo }\n');
+  assert.ok(r.warnings.some((w) => w.code === 'runs_ignored'));
+  assert.equal(buildPipeline(r.config).stages.find((st) => st.agent === 'reviewer').scope, 'task');
+  assert.throws(() => config.updateAgentConfig(ws, 'tester', { runs: 'sometimes' }), /runs: expected one of per-repo, all-repos/);
 });

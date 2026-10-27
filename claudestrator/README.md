@@ -3,7 +3,7 @@
 A standalone agent pipeline for Claude Code, driven from VS Code. You describe a task (or paste a Jira key, a Jira link or a Confluence page), and a pipeline of Claude Code agents takes it to draft PRs:
 
 ```
-ticket → planner → [you approve the plan] → per repo: developer → tester (checks after each)
+ticket → planner → [you approve the plan] → per repo: developer (checks after each) → tester across all repos (checks in each)
        → reviewer (fresh context, whole diff) → fix rounds → commit → [you confirm the push] → draft PRs
 ```
 
@@ -38,7 +38,7 @@ First time in a workspace, *Set up this workspace* finds the git repos and sugge
 
 ## How it works
 
-- **Routing by output, never by name.** An agent's `output` decides its role. `plan` waits for your approval. `code` and `tests` run once per repo of the plan, in plan order, with the repo's checks after them. `verdict` sends blocking findings (blocker, major) back to the code/tests stages of only the affected repos, up to `limits.reviewRounds`. Minor findings go into the PR description.
+- **Routing by output, never by name.** An agent's `output` decides its role. `plan` waits for your approval. `code` runs once per repo of the plan, in plan order, with the repo's checks after it. `tests` runs once after that, across every repo the plan names (one tester sees all the changes and the contracts between them), then the checks of each of those repos. An agent's `runs: per-repo | all-repos` switches this for a code or tests agent (Agents screen, or *per repo ⇄ all repos* on its chip in the composer's scenario editor). Tasks started before keep the tester per repo. `verdict` sends blocking findings (blocker, major) back to the code/tests stages of only the affected repos, up to `limits.reviewRounds`. Minor findings go into the PR description.
 - **Checks.** After a code or tests step the repo's checks run on its changes. Red output goes back into the same agent session, up to `limits.gateAttempts` times; then you decide.
 - **Reports.** Plan and verdict stages end with a JSON block. It is validated, and an unreadable report is sent back to the agent for correction (twice) before the step fails.
 - **Git.**

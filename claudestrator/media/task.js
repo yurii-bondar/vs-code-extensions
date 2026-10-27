@@ -1,7 +1,7 @@
 // The task screen: what needs you (checkpoint, permissions, errors), the step timeline, the agent's live
 // output with a message box, the activity feed, files, ticket and plan.
 (function () {
-  const { call, attempt, toast, icon, esc, md, $, $$, ago, clock, dur, money, size, plural, stepName, agentColor, S, views, go, patch, persist, statusBadge, sourceChip, permissionCard, autosize, shake, fmtTokens, meter, level, effortTag, scenarioChip, sevCounts, SCENARIO_INFO } = window.CS;
+  const { call, attempt, toast, icon, esc, md, $, $$, ago, clock, dur, money, size, plural, stepName, agentColor, S, views, go, patch, persist, statusBadge, sourceChip, permissionCard, autosize, shake, fmtTokens, meter, level, effortTag, scenarioChip, sevCounts, SCENARIO_INFO, pipeRowHtml, pipeEditors, pipeDragging } = window.CS;
 
   const CP_UI = {
     'approve-plan': {
@@ -95,6 +95,7 @@
           <div data-region="task-perms"></div>
           <div data-region="task-checkpoint"></div>
           <div data-region="task-result"></div>
+          <div data-region="task-pipeline"></div>
           <div data-region="task-steps"></div>
           <div class="task-grid">
             <div class="task-main">
@@ -184,6 +185,8 @@
         const focus = strip && (strip.querySelector('.st.s-running, .st.s-waiting, .st.s-failed, .st.s-interrupted') || strip.querySelector('.st.selected'));
         if (focus) strip.scrollLeft = Math.max(0, focus.offsetLeft - strip.clientWidth / 2 + focus.clientWidth / 2);
       }
+      // A re-render would drop the chip being dragged.
+      if (!pipeDragging()) patch('task-pipeline', pipelineHtml(d));
       patch('task-tabs', tabsHtml(d));
       for (const el of $$('.tab-body')) el.classList.toggle('active', el.dataset.tab === T.tab);
       patch('transcript-head', transcriptHead(d));
@@ -315,6 +318,11 @@
       'sev-filter': (el) => {
         T.sev = el.dataset.sev;
         patch('task-result', reportHtml(T.d));
+      },
+      'pipe-toggle': () => {
+        S.ui.pipeEdit = !S.ui.pipeEdit;
+        persist();
+        views.task.render();
       },
       'fix-gaps': () => go({ name: 'home', scenario: 'deliver', compose: fixGapsText(T.d) }),
       'fix-finding': (el) => go({ name: 'home', scenario: 'deliver', compose: fixFindingText(T.d.result.findings[Number(el.dataset.i)]) }),
@@ -489,13 +497,40 @@
       if (s.costUsd) meta.push(money(s.costUsd));
       const selected = s.key && s.key === T.viewKey;
       const label = s.kind === 'agent' ? esc(s.agent) : esc(s.label);
-      const sub = s.repo ? `<span class="st-repo">${esc(s.repo)}</span>` : s.perRepo ? '<span class="st-repo">per repo</span>' : '';
+      const sub = s.repo ? `<span class="st-repo">${esc(s.repo)}</span>` : s.perRepo ? '<span class="st-repo">per repo</span>' : s.allRepos ? `<span class="st-repo">${esc(d.repos.length ? d.repos.join(', ') : 'all repos')}</span>` : '';
       nodes.push(`<button class="st s-${s.status} k-${s.kind} ${s.kind === 'agent' ? agentColor(c[s.agent]) : ''} ${selected ? 'selected' : ''}" ${s.key ? `data-action="select-step" data-key="${s.key}"` : 'disabled'} title="${esc(`${stepName(s)} · ${s.status}${s.model ? `\n${s.model}${s.effort ? ` · effort ${s.effort}` : ''}` : ''}${s.ctxPct != null ? ` · ctx ${s.ctxPct}%` : ''}${s.tokens ? ` · ${fmtTokens(s.tokens)} tokens` : ''}${s.error ? `\n${s.error}` : ''}`)}">
         <span class="st-ic">${s.status === 'running' ? '<span class="spinner xs"></span>' : ic ? icon(ic) : s.kind === 'human' ? icon('user') : '<span class="st-dot"></span>'}</span>
         <span class="st-text"><span class="st-name">${label}</span>${sub}${meta.length ? `<span class="st-meta">${esc(meta.join(' · '))}</span>` : ''}</span>
       </button>`);
     }
     return `<div class="steps" role="list">${nodes.join('<span class="st-line"></span>')}</div>`;
+  }
+
+  // ---------- pipeline editor ----------
+
+  pipeEditors.task = {
+    names: () => T.d.pipelineEdit.stages.map((st) => st.agent),
+    from: () => T.d.pipelineEdit.from,
+    async save(names) {
+      if ((await attempt('editPipeline', { taskId: T.taskId, names })) === undefined) return false;
+      views.task.load(false);
+    },
+    redraw: () => T.d && S.route.name === 'task' && patch('task-pipeline', pipelineHtml(T.d)),
+  };
+
+  function pipelineHtml(d) {
+    const pe = d.pipelineEdit;
+    if (!pe) return '';
+    if (!S.ui.pipeEdit) return `<div class="pipe-bar"><button class="btn ghost sm" data-action="pipe-toggle" title="Add, remove or reorder the agents still to come in this task">${icon('edit')}Edit pipeline</button></div>`;
+    return `<section class="card pipe-editor">
+      <div class="pipe-head">
+        <div><h3>${icon('edit')}Pipeline of this task</h3>
+          <p class="muted small">Drag to reorder, ${icon('x')} to remove, <b>Add agent</b> to add. Steps that ran or run now stay in place. This changes this task only; the next steps follow the new order${d.status.key === 'running' ? ' once the running agent finishes' : ''}.</p></div>
+        <button class="btn sm" data-action="pipe-toggle">${icon('check')}Done</button>
+      </div>
+      ${pipeRowHtml('task', { stages: pe.stages, from: pe.from, choices: pe.choices, empty: 'No agents: the task ends after the ticket.' })}
+      ${pe.warnings.length ? `<div class="pipe-warn">${pe.warnings.map((w) => `<div>${icon('alert')}${esc(w)}</div>`).join('')}</div>` : ''}
+    </section>`;
   }
 
   function tabsHtml(d) {
