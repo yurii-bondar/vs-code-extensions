@@ -344,7 +344,7 @@
         <div class="th-meta">
           <button class="chip mono" data-action="copy-id" title="Copy task id">${esc(d.taskId)}</button>
           ${sourceChip(d.source)}
-          ${scenarioChip(d.scenario)}
+          ${scenarioChip(d.scenario, d.scenarioLabel)}
           ${statusBadge(d.status, d.live)}
           ${live ? `<span class="muted small">${icon('clock')}<span data-since="${d.live.since}">${dur(Date.now() - d.live.since)}</span></span>` : ''}
           ${d.round > 1 ? `<span class="chip">${icon('refresh')}round ${d.round}/${d.maxRounds}</span>` : ''}
@@ -411,7 +411,9 @@
       ${deliver ? `${row('Branch', d.branch ? `<code>${esc(d.branch)}</code>` : '<span class="muted">after the plan</span>')}
       ${row('Repos', d.repos.length ? d.repos.map((r) => `<button class="chip" data-action="open-repo" data-repo="${esc(r)}" title="Reveal in Explorer">${icon('repo')}${esc(r)}</button>`).join(' ') : '<span class="muted">from the plan</span>')}
       ${row('Git', d.gitMode === 'worktree' ? 'separate worktrees' : 'branch in your checkout')}
-      ${row('Plan approval', d.auto ? 'skipped (auto)' : 'by you')}` : `${row('Scenario', `${esc(SCENARIO_INFO[d.scenario].label)}<div class="muted small">read-only: nothing in your repos changes</div>`)}`}
+      ${row('Plan approval', d.auto ? 'skipped (auto)' : 'by you')}
+      ${d.scenarioLabel ? row('Scenario', esc(d.scenarioLabel)) : ''}` : `${row('Scenario', `${esc(d.scenarioLabel || SCENARIO_INFO[d.scenario].label)}<div class="muted small">read-only: nothing in your repos changes</div>`)}`}
+      ${Object.keys(d.model || {}).length ? row('Model', `${Object.entries(d.model).map(([a, m]) => `<span class="eff-pair">${esc(a)} <code>${esc(m)}</code></span>`).join(' ')}<div class="muted small">from the scenario, over the agents' settings</div>`) : ''}
       ${Object.keys(d.effort || {}).length ? row('Effort', `${Object.entries(d.effort).map(([a, l]) => `<span class="eff-pair">${esc(a)} ${effortTag(l)}</span>`).join(' ')}<div class="muted small">for this task, over the agents' settings</div>`) : ''}
       ${deliver ? row('Review', `round ${d.round} of ${d.maxRounds}`) : ''}
       ${row('Cost', money(d.cost))}

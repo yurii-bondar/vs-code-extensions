@@ -102,10 +102,21 @@ class DashboardPanel {
     return {
       ok: true,
       warnings: r.warnings.map((w) => w.message),
-      // The delivery pipeline's agents, then each report scenario's; `scenario` says which composer mode shows them.
-      agents: [...c.pipeline.map((n) => [n, 'deliver']), ...Object.entries(c.scenarios).flatMap(([sc, names]) => names.map((n) => [n, sc]))]
+      // The delivery pipeline's agents, then each report scenario's, then each custom scenario's with its own model and
+      // effort; `scenario` says which composer mode shows them.
+      agents: [
+        ...c.pipeline.map((n) => [n, 'deliver']),
+        ...Object.entries(c.scenarios).flatMap(([sc, names]) => names.map((n) => [n, sc])),
+        ...Object.values(c.custom).flatMap((sc) => sc.agents.map((st) => [st.name, sc.id, st])),
+      ]
         .filter(([n]) => c.agents[n])
-        .map(([n, scenario]) => ({ name: n, scenario, color: c.agents[n].color, output: c.agents[n].output, runs: c.agents[n].runs, enabled: c.agents[n].enabled, description: c.agents[n].description, model: c.agents[n].model, effort: c.agents[n].effort, actual: effectiveFor(c.agents[n], this.orch.defaults) })),
+        .map(([n, scenario, st = {}]) => {
+          const a = { ...c.agents[n], ...(st.model && { model: st.model }), ...(st.effort && { effort: st.effort }) };
+          return { name: n, scenario, color: a.color, output: a.output, runs: a.runs, enabled: a.enabled, description: a.description, model: a.model, effort: a.effort, ...(st.model && { ownModel: true }), ...(st.effort && { ownEffort: true }), actual: effectiveFor(a, this.orch.defaults) };
+        }),
+      // Custom scenarios for the composer's menu, and the built-in ones that were removed.
+      custom: Object.values(c.custom).map((sc) => ({ id: sc.id, label: sc.label, description: sc.description, kind: sc.kind })),
+      removedScenarios: c.removedScenarios,
       // Every agent, for the composer's scenario editor to add from.
       catalog: Object.values(c.agents).map((a) => ({ name: a.name, output: a.output, runs: a.runs, color: a.color, enabled: a.enabled, description: a.description })),
       pipelineWarnings: buildPipeline(c).warnings.map((w) => w.message),
@@ -400,6 +411,53 @@ class DashboardPanel {
 
   async $setScenario({ scenario, agents }) {
     cfg.setScenario(this.root, scenario, agents);
+  }
+
+  /**
+   * Creates or changes a custom scenario. `agents`: `[{ name, model?, effort? }]`; without `id` a new one is named after
+   * its label. Returns its id.
+   */
+  async $saveScenario({ id, label, description, agents = [] }) {
+    const r = this.orch.config();
+    const taken = new Set(['deliver', 'readiness', 'audit', 'auto', ...(r.ok ? Object.keys(r.config.custom) : [])]);
+    const clean = String(label || '').trim();
+    if (!clean) throw new Error('Give the scenario a name');
+    if (id && !(r.ok && r.config.custom[id])) throw new Error(`There is no scenario "${id}"`);
+    if (r.ok && Object.values(r.config.custom).some((sc) => sc.id !== id && sc.label.toLowerCase() === clean.toLowerCase())) throw new Error(`A scenario called "${clean}" already exists`);
+    let newId = id;
+    if (!newId) {
+      // Latin letters make the id; a name in another script gets a numbered one.
+      const base = clean.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^[^a-z]+|-+$/g, '') || 'scenario';
+      newId = base;
+      for (let n = 2; taken.has(newId); n++) newId = `${base}-${n}`;
+    }
+    // Some mistakes (an unknown agent, code and report agents mixed) only show once the agents resolve: such a change
+    // would break every task, so the file goes back to what it was.
+    const file = cfg.projectConfigFile(this.root);
+    const before = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
+    cfg.setCustomScenario(this.root, newId, { label: clean, description: description && description.trim(), agents });
+    const after = this.orch.config();
+    if (!after.ok) {
+      if (before === null) fs.rmSync(file);
+      else fs.writeFileSync(file, before);
+      const mine = after.errors.filter((e) => e.message.includes(`"${newId}"`));
+      throw new Error((mine.length ? mine : after.errors).map((e) => e.message).join('; '));
+    }
+    return { id: newId };
+  }
+
+  async $deleteScenario({ id }) {
+    const r = this.orch.config();
+    const label = (r.ok && r.config.custom[id] && r.config.custom[id].label) || { readiness: 'Check readiness', audit: 'Audit' }[id] || id;
+    const builtin = id === 'readiness' || id === 'audit';
+    const ok = await vscode.window.showWarningMessage(`Delete the scenario "${label}"?`, { modal: true, detail: builtin ? 'It disappears from the menu. You can bring it back from the same menu.' : 'Its agents stay; only this scenario (their order, models and effort) is removed from config.yaml. Tasks already started keep running.' }, 'Delete');
+    if (!ok) return { deleted: false };
+    cfg.removeScenario(this.root, id);
+    return { deleted: true };
+  }
+
+  async $restoreScenario({ id }) {
+    cfg.restoreScenario(this.root, id);
   }
 
   async $newAgent({ name, base, description, output, model, effort }) {

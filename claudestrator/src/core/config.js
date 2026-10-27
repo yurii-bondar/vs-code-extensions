@@ -235,7 +235,8 @@ function mergeLayers(layers) {
     }
     for (const [name, repo] of Object.entries(c.repos ?? {})) merged.repos.set(name, { ...merged.repos.get(name), ...defined(repo) });
     if (c.pipeline) merged.pipeline = { names: [...c.pipeline], source: layer.name };
-    for (const [name, list] of Object.entries(c.scenarios ?? {})) merged.scenarios[name] = { names: [...list], source: layer.name };
+    // A later layer replaces a whole scenario: its list, `false` (removed) or a custom scenario.
+    for (const [name, value] of Object.entries(c.scenarios ?? {})) merged.scenarios[name] = { value: clone(value), source: layer.name };
     if (c.limits) merged.limits = { ...merged.limits, ...defined(c.limits) };
     if (c.language) merged.language = c.language;
     if (c.baseBranch) merged.baseBranch = c.baseBranch;
@@ -310,8 +311,10 @@ function resolveConfig(layers, opts = {}) {
     };
   }
 
-  const scenarios = resolveScenarios(merged.scenarios, merged.agents, agents, diags);
-  const pipeline = resolvePipeline(merged.pipeline, merged.agents, diags, scenarios);
+  const { scenarios, removed } = resolveScenarios(merged.scenarios, merged.agents, agents, diags);
+  const custom = resolveCustomScenarios(merged.scenarios, merged.agents, agents, diags);
+  const inCustom = Object.values(custom).flatMap((s) => s.agents.map((st) => st.name));
+  const pipeline = resolvePipeline(merged.pipeline, merged.agents, diags, scenarios, inCustom);
   for (const name of pipeline) {
     const a = agents[name];
     if (a && Object.values(SCENARIO_OUTPUT).includes(a.output)) {
@@ -345,6 +348,8 @@ function resolveConfig(layers, opts = {}) {
       agents,
       pipeline,
       scenarios,
+      custom,
+      removedScenarios: removed,
       pipelineSource: merged.pipeline ? merged.pipeline.source : 'agents',
       limits: {
         reviewRounds: merged.limits.reviewRounds ?? 2,
@@ -442,12 +447,14 @@ function applyOps(ops, read, onError) {
   return text;
 }
 
-/** The agents of each report scenario. They must exist and produce that scenario's report. */
+/** The agents of each built-in report scenario. They must exist and produce that scenario's report. A removed one has none. */
 function resolveScenarios(merged, drafts, agents, diags) {
   const out = {};
+  const removed = [];
   for (const [scenario, output] of Object.entries(SCENARIO_OUTPUT)) {
     const entry = merged[scenario];
-    const names = entry ? entry.names : [];
+    if (entry && entry.value === false) removed.push(scenario);
+    const names = entry && Array.isArray(entry.value) ? entry.value : [];
     const seen = new Set();
     for (const name of names) {
       if (!drafts.has(name)) diags.push({ level: 'error', code: 'scenario_unknown_agent', agent: name, source: entry.source, message: `scenarios.${scenario} names unknown agent "${name}"` });
@@ -457,11 +464,39 @@ function resolveScenarios(merged, drafts, agents, diags) {
     }
     out[scenario] = names;
   }
+  return { scenarios: out, removed };
+}
+
+/**
+ * Custom scenarios: `{ id: { id, label, description, kind, agents: [{ name, model?, effort? }] } }`. Their kind is
+ * `deliver` when the agents change code, else the report they all write; `null` while a scenario has no agents.
+ */
+function resolveCustomScenarios(merged, drafts, agents, diags) {
+  const out = {};
+  for (const [id, entry] of Object.entries(merged)) {
+    if (SCENARIO_OUTPUT[id] || !entry.value || typeof entry.value !== 'object' || Array.isArray(entry.value)) continue;
+    const def = entry.value;
+    const steps = def.agents.map((st) => (typeof st === 'string' ? { name: st } : { name: st.agent, ...(st.model && { model: st.model }), ...(st.effort && { effort: st.effort }) }));
+    const seen = new Set();
+    const kinds = new Set();
+    for (const { name } of steps) {
+      if (!drafts.has(name)) diags.push({ level: 'error', code: 'scenario_unknown_agent', agent: name, source: entry.source, message: `scenario "${id}" names unknown agent "${name}"` });
+      if (seen.has(name)) diags.push({ level: 'error', code: 'scenario_duplicate', agent: name, source: entry.source, message: `scenario "${id}" lists "${name}" more than once` });
+      seen.add(name);
+      if (agents[name]) kinds.add(Object.values(SCENARIO_OUTPUT).includes(agents[name].output) ? agents[name].output : 'deliver');
+    }
+    if (kinds.size > 1) {
+      diags.push({ level: 'error', code: 'scenario_mixed', source: entry.source, message: `scenario "${id}" mixes agents that change code with report agents (${[...kinds].join(', ')}); keep one kind per scenario` });
+    }
+    out[id] = { id, label: def.label || id, ...(def.description && { description: def.description }), kind: kinds.size ? [...kinds][0] : null, agents: steps };
+  }
   return out;
 }
 
-function resolvePipeline(pipeline, drafts, diags, scenarios = {}) {
+/** `elsewhere`: agents a custom scenario runs, so they are not reported as never running. */
+function resolvePipeline(pipeline, drafts, diags, scenarios = {}, elsewhere = []) {
   const inScenario = new Set(Object.values(scenarios).flat());
+  const used = new Set([...inScenario, ...elsewhere]);
   const names = pipeline ? pipeline.names : [...drafts.keys()].filter((n) => !inScenario.has(n));
   const source = pipeline && pipeline.source;
   const seen = new Set();
@@ -471,7 +506,7 @@ function resolvePipeline(pipeline, drafts, diags, scenarios = {}) {
     seen.add(name);
   }
   for (const [name, draft] of drafts) {
-    if ((draft.enabled ?? true) && !seen.has(name) && !inScenario.has(name)) diags.push({ level: 'warning', code: 'not_in_pipeline', agent: name, message: `agent "${name}" is enabled but not in the pipeline, so it never runs` });
+    if ((draft.enabled ?? true) && !seen.has(name) && !used.has(name)) diags.push({ level: 'warning', code: 'not_in_pipeline', agent: name, message: `agent "${name}" is enabled but not in the pipeline, so it never runs` });
   }
   return names;
 }
@@ -550,6 +585,33 @@ function setScenario(workspace, scenario, agents) {
     node.flow = true;
     doc.setIn(['scenarios', scenario], node);
   });
+}
+
+/**
+ * Writes a custom scenario: `{ label, description?, agents: [{ name, model?, effort? }] }`. A step without its own model
+ * or effort is written as the bare agent name. `oldId` renames it.
+ */
+function setCustomScenario(workspace, id, def, oldId) {
+  const agents = def.agents.map((st) => (st.model || st.effort ? { agent: st.name, ...(st.model && { model: st.model }), ...(st.effort && { effort: st.effort }) } : st.name));
+  return editProjectConfig(workspace, (doc) => {
+    if (oldId && oldId !== id) doc.deleteIn(['scenarios', oldId]);
+    doc.setIn(['scenarios', id], doc.createNode(defined({ label: def.label, description: def.description || undefined, agents })));
+  });
+}
+
+/** A custom scenario is deleted; a built-in report scenario is switched off with `false` so a lower layer cannot bring it back. */
+function removeScenario(workspace, id) {
+  return editProjectConfig(workspace, (doc) => {
+    if (SCENARIO_OUTPUT[id]) doc.setIn(['scenarios', id], false);
+    else doc.deleteIn(['scenarios', id]);
+    const node = doc.getIn(['scenarios'], true);
+    if (node && node.items && node.items.length === 0) doc.deleteIn(['scenarios']);
+  });
+}
+
+/** Brings a removed built-in report scenario back with its built-in agents. */
+function restoreScenario(workspace, id) {
+  return setScenario(workspace, id, BUILTIN.scenarios[id] || []);
 }
 
 function setPipeline(workspace, pipeline) {
@@ -639,6 +701,9 @@ module.exports = {
   resetAgentConfig,
   setPipeline,
   setScenario,
+  setCustomScenario,
+  removeScenario,
+  restoreScenario,
   setProjectValue,
   setRepo,
   createProjectConfig,

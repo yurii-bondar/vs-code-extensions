@@ -25,7 +25,7 @@ function tokenize(line) {
 }
 
 const FLAG_RE = /(^|\s)--(auto|no|only|key|effort|scenario)(?=[\s=]|$)/;
-const SCENARIO_NAMES = ['deliver', 'readiness', 'audit'];
+const { SCENARIOS: SCENARIO_NAMES, SCENARIO_ID } = require('./protocol');
 
 /**
  * Parses `<input> [--auto] [--no X] [--only X,Y] [--key=K] [--effort high | --effort developer=high,tester=low] [--scenario readiness]`.
@@ -78,7 +78,7 @@ function parseInvocation(line) {
         break;
       case '--scenario':
         scenario = inline ?? tokens[++i];
-        if (!SCENARIO_NAMES.includes(scenario)) throw new Error(`--scenario is one of ${SCENARIO_NAMES.join(', ')}`);
+        if (!SCENARIO_ID.test(scenario || '')) throw new Error(`--scenario names a scenario, e.g. ${SCENARIO_NAMES.join(', ')} or one of your own`);
         break;
       default:
         words.push(t);

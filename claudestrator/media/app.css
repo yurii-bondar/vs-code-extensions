@@ -814,3 +814,21 @@ b.err, .lim-pct.err { color: var(--err); }
 .scenario-block { margin: 10px 0 14px; }
 .sb-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
 .sb-head .muted { flex-basis: 100%; padding-left: 22px; }
+
+/* Custom scenarios: delete next to edit, a footer to add one or bring a built-in back, and per-agent model/effort in the editor. */
+.sc-tools { display: flex; flex-direction: column; justify-content: center; flex: none; }
+.menu .sc-item .sc-tools .sc-edit { height: 28px; }
+.menu .sc-item .sc-del:hover { color: var(--err); }
+.sc-foot { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 4px; display: flex; flex-direction: column; }
+.menu .sc-foot .sc-new { font-weight: 600; flex-wrap: wrap; }
+.menu .sc-foot .sc-new .muted { font-weight: 400; width: 100%; padding-left: 22px; }
+.menu .sc-foot .sc-new > .ic, .menu .sc-foot .sc-restore > .ic { color: var(--accent); }
+.sc-current.sc-custom .ic, .sc-chip.sc-custom .ic { color: var(--accent); }
+.sc-fields { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+.sc-fields .field { flex: 1 1 220px; margin-bottom: 4px; }
+.sc-fields .field:first-child { flex: 0 1 220px; }
+.pipe-sets { display: inline-flex; gap: 4px; }
+.pipe-set { border: 1px solid var(--border-strong); border-radius: 999px; background: transparent; color: var(--muted); font: inherit; font-size: 10.5px; padding: 0 4px; line-height: 16px; height: 18px; max-width: 150px; cursor: pointer; }
+.pipe-set:hover { border-color: var(--accent); color: var(--fg); }
+.pipe-set.own { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong)); font-weight: 600; }
+.pipe-set option { color: var(--fg); background: var(--bg); }

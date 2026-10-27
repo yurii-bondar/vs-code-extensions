@@ -7,7 +7,7 @@ const crypto = require('crypto');
 const { EventEmitter } = require('events');
 const { loadConfig } = require('./config');
 const { EFFORTS, SCENARIOS } = require('./protocol');
-const { buildPipeline, taskPipeline, fitsScenario, onRepos } = require('./pipeline');
+const { buildPipeline, scenarioKind, taskPipeline, fitsScenario, onRepos } = require('./pipeline');
 const { nextAction, runOf, artifactPath, branchName, sameStep, editableFrom, stepRepos, TASK_FILES } = require('./machine');
 const { parseInvocation, classifyInput, detectScenario, runIntake, renderTicket, IntakeError, extractAcceptanceCriteria } = require('./intake');
 const { TaskService } = require('./store');
@@ -144,12 +144,27 @@ class Engine extends EventEmitter {
    * sentence names as its source.
    */
   resolveScenario(inv, scenario, config) {
+    const removed = config.removedScenarios || [];
+    const custom = config.custom || {};
+    const available = [...SCENARIOS.filter((id) => !removed.includes(id)), ...Object.keys(custom)];
     const explicit = scenario && scenario !== 'auto' ? scenario : inv.scenario;
-    if (explicit && !SCENARIOS.includes(explicit)) throw new EngineError('bad_scenario', `scenario "${explicit}" is not one of ${SCENARIOS.join(', ')}`);
-    const chosen = explicit || detectScenario(inv.input);
+    if (explicit && !available.includes(explicit)) throw new EngineError('bad_scenario', `there is no scenario "${explicit}" here; choose one of ${available.join(', ')}`);
+    // Words can only pick a built-in scenario that is still there.
+    const detected = detectScenario(inv.input);
+    const name = explicit || (available.includes(detected) ? detected : 'deliver');
+    const kind = scenarioKind(config, name);
     const input = inv.input || inv.key || '';
-    const source = classifyInput(input, { embedded: chosen === 'readiness', projects: config.jira.allowedProjects });
-    return { scenario: chosen, detected: !explicit && chosen !== 'deliver', source };
+    const source = classifyInput(input, { embedded: kind === 'readiness', projects: config.jira.allowedProjects });
+    return { scenario: kind, name, ...(custom[name] && { label: custom[name].label }), detected: !explicit && name !== 'deliver', source };
+  }
+
+  /** A custom scenario's own model and effort per agent, as `{ model: { agent: m }, effort: { agent: level } }`. */
+  scenarioDefaults(config, name) {
+    const steps = (config.custom && config.custom[name] && config.custom[name].agents) || [];
+    return {
+      model: Object.fromEntries(steps.filter((st) => st.model).map((st) => [st.name, st.model])),
+      effort: Object.fromEntries(steps.filter((st) => st.effort).map((st) => [st.name, st.effort])),
+    };
   }
 
   /** What a composer input would do, without creating anything. */
@@ -172,7 +187,7 @@ class Engine extends EventEmitter {
       return { ok: false, error: e.message };
     }
     const source = sc.source;
-    const pipeline = buildPipeline(r.config, { auto: auto || inv.auto, scenario: sc.scenario });
+    const pipeline = buildPipeline(r.config, { auto: auto || inv.auto, scenario: sc.name });
     const { taskId, exists } = this.svc.idFor({ taskId: key || inv.key, source, scenario: sc.scenario });
     let problem;
     if (source.kind === 'jira') {
@@ -180,24 +195,25 @@ class Engine extends EventEmitter {
       const project = source.key.split('-')[0];
       if (allowed.length && !allowed.includes(project)) problem = `Jira project ${project} is not allowed here (allowed: ${allowed.join(', ')})`;
     }
-    if (pipeline.stages.length === 0) problem = problem || (sc.scenario === 'deliver' ? 'every agent is switched off' : `no agent is on for the ${sc.scenario} scenario`);
+    if (pipeline.stages.length === 0) problem = problem || (sc.name === 'deliver' ? 'every agent is switched off' : `no agent is on for the ${sc.label || sc.name} scenario`);
     let taskEffort = {};
     try {
-      taskEffort = this.effortFor(r.config, pipeline, inv.effort, effort);
+      taskEffort = this.effortFor(r.config, pipeline, inv.effort, effort, this.scenarioDefaults(r.config, sc.name).effort);
     } catch (e) {
       problem = problem || e.message;
     }
-    return { ok: true, source, taskId, exists, scenario: sc.scenario, scenarioDetected: sc.detected, pipeline, effort: taskEffort, warnings: [...r.warnings, ...pipeline.warnings].map((w) => w.message), ...(problem && { problem }) };
+    return { ok: true, source, taskId, exists, scenario: sc.scenario, scenarioName: sc.name, scenarioDetected: sc.detected, pipeline, effort: taskEffort, warnings: [...r.warnings, ...pipeline.warnings].map((w) => w.message), ...(problem && { problem }) };
   }
 
   /**
    * Merges `--effort` from the text with the composer's per-agent choices into `{ agent: level }` for the task's
-   * enabled agents. `*` applies to every one of them; a named agent wins over `*`.
+   * enabled agents. `*` applies to every one of them; a named agent wins over `*`. `defaults` (a custom scenario's own
+   * effort per agent) apply unless the task sets something else.
    */
-  effortFor(config, pipeline, fromText = {}, fromUi = {}) {
+  effortFor(config, pipeline, fromText = {}, fromUi = {}, defaults = {}) {
     const merged = { ...fromText, ...fromUi };
-    const out = {};
     const agents = pipeline.stages.map((s) => s.agent);
+    const out = Object.fromEntries(Object.entries(defaults).filter(([name]) => agents.includes(name)));
     for (const [name, level] of Object.entries(merged)) {
       if (!level) continue;
       if (!EFFORTS.includes(level)) throw new EngineError('bad_effort', `effort "${level}" is not one of ${EFFORTS.join(', ')}`);
@@ -221,18 +237,22 @@ class Engine extends EventEmitter {
       if (allowed.length && !allowed.includes(project)) throw new EngineError('project_not_allowed', `Jira project ${project} is not allowed (allowed: ${allowed.join(', ')})`);
     }
     const isAuto = auto || inv.auto;
-    const pipeline = buildPipeline(config, { auto: isAuto, scenario: sc.scenario });
-    if (pipeline.stages.length === 0) throw new EngineError('empty_pipeline', sc.scenario === 'deliver' ? 'Every agent is switched off; turn at least one on' : `No agent is on for the ${sc.scenario} scenario; turn one on in Agents`);
-    const taskEffort = this.effortFor(config, pipeline, inv.effort, effort);
+    const pipeline = buildPipeline(config, { auto: isAuto, scenario: sc.name });
+    if (pipeline.stages.length === 0) throw new EngineError('empty_pipeline', sc.name === 'deliver' ? 'Every agent is switched off; turn at least one on' : `No agent is on for the ${sc.label || sc.name} scenario; add one or turn one on in Agents`);
+    const defaults = this.scenarioDefaults(config, sc.name);
+    const taskEffort = this.effortFor(config, pipeline, inv.effort, effort, defaults.effort);
+    const taskModel = Object.fromEntries(Object.entries(defaults.model).filter(([name]) => pipeline.stages.some((st) => st.agent === name)));
     const extra = [...(no.length ? [`--no ${no.join(',')}`] : []), ...(auto && !inv.auto ? ['--auto'] : []), ...(scenario && scenario !== 'auto' && !inv.scenario ? [`--scenario ${scenario}`] : [])].join(' ');
     const started = this.svc.start({
       input: extra ? `${text.trim()} ${extra}` : text.trim(),
       source,
       scenario: sc.scenario,
+      ...(sc.label && { scenarioName: sc.name, scenarioLabel: sc.label }),
       auto: isAuto,
       pipeline,
       config,
       effort: taskEffort,
+      model: taskModel,
       ...((key || inv.key) && { taskId: key || inv.key }),
     });
     this.svc.setCurrent(started.taskId);
@@ -433,9 +453,10 @@ class Engine extends EventEmitter {
     const taskDir = this.svc.dir(taskId);
     const stage = s.pipeline.stages[step.stage];
     const configured = config.agents[step.agent];
-    // The task's own effort for this agent wins over the configured one.
+    // The task's own model and effort for this agent (from its scenario or the composer) win over the configured ones.
     const override = s.effort && s.effort[step.agent];
-    const agent = configured && override ? { ...configured, effort: override } : configured;
+    const model = s.model && s.model[step.agent];
+    const agent = configured && (override || model) ? { ...configured, ...(override && { effort: override }), ...(model && { model }) } : configured;
     const label = stepLabel(step);
 
     const budget = config.limits.budgetUsd;

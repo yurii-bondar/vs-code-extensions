@@ -10,6 +10,11 @@ const OUTPUTS = ['plan', 'code', 'tests', 'verdict', 'readiness', 'audit'];
 const SCENARIOS = ['deliver', 'readiness', 'audit'];
 /** The output every agent of a report scenario produces. */
 const SCENARIO_OUTPUT = { readiness: 'readiness', audit: 'audit' };
+/**
+ * Custom scenarios are named in config.yaml next to the built-in ones. Their kind follows from their agents:
+ * agents that change code make a delivery (draft PRs), readiness or audit agents make that report.
+ */
+const SCENARIO_ID = /^[a-z][a-z0-9-]*$/;
 /** Severities of audit findings and readiness gaps, worst first. */
 const REPORT_SEVERITIES = ['critical', 'high', 'medium', 'low'];
 const CRITERION_STATUSES = ['met', 'partial', 'not_met', 'unverifiable'];
@@ -122,12 +127,28 @@ const AGENT_LAYER = {
   'instructions?': instructions,
 };
 
+/** A step of a custom scenario: an agent name, or the agent with the model and effort it runs with in this scenario. */
+const SCENARIO_STEP = T.any(agentName, T.obj({ agent: agentName, 'model?': T.str(1), 'effort?': T.oneOf(EFFORTS) }));
+const CUSTOM_SCENARIO = T.obj({ 'label?': T.str(1, 60), 'description?': T.str(), agents: T.arr(SCENARIO_STEP) });
+
+/** `readiness` and `audit` list their agents, or are `false` when removed; any other name is a custom scenario. */
+const scenariosLayer = (v, p) => {
+  if (kind(v) !== 'object') return [`${at(p)}: expected a map, got ${kind(v)}`];
+  return Object.entries(v).flatMap(([id, x]) => {
+    const sub = `${p}.${id}`;
+    if (id === 'deliver' || id === 'auto') return [`${sub}: "${id}" is reserved; the delivery pipeline is set with pipeline`];
+    if (!SCENARIO_ID.test(id)) return [`${sub}: scenario names are lowercase kebab-case and start with a letter`];
+    if (SCENARIO_OUTPUT[id]) return x === false ? [] : T.arr(agentName)(x, sub);
+    return CUSTOM_SCENARIO(x, sub);
+  });
+};
+
 const GATE = T.obj({ name: T.str(1), cmd: T.str(1), 'dir?': T.str(1), 'when?': T.str(1) });
 
 const CONFIG_LAYER = T.obj({
   'agents?': T.rec(agentName, T.obj(AGENT_LAYER)),
   'pipeline?': T.arr(agentName),
-  'scenarios?': T.obj({ 'readiness?': T.arr(agentName), 'audit?': T.arr(agentName) }),
+  'scenarios?': scenariosLayer,
   'limits?': T.obj({ 'reviewRounds?': T.int(0, 20), 'gateAttempts?': T.int(1, 20), 'budgetUsd?': T.pos() }),
   'language?': T.str(1),
   'baseBranch?': T.str(1),
@@ -269,6 +290,7 @@ module.exports = {
   OUTPUTS,
   SCENARIOS,
   SCENARIO_OUTPUT,
+  SCENARIO_ID,
   REPORT_SEVERITIES,
   CRITERION_STATUSES,
   INSTRUCTION_MODES,

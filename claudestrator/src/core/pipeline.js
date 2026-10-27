@@ -14,12 +14,27 @@ const stageOf = (a) => ({ agent: a.name, output: a.output, scope: a.scope || (SC
 /** Whether a stage works in the plan's repos (and so the task branches, commits and opens PRs). */
 const onRepos = (st) => st.scope === 'repo' || st.scope === 'repos';
 
-/** `opts.scenario`: `deliver` (default) runs `config.pipeline`; a report scenario runs its own read-only agents. */
+/**
+ * `opts.scenario`: `deliver` (default) runs `config.pipeline`; a report scenario runs its own read-only agents; a custom
+ * scenario runs its agents as a delivery or as the report they write.
+ */
 function buildPipeline(config, opts = {}) {
   const scenario = opts.scenario || 'deliver';
+  const custom = config.custom && config.custom[scenario];
+  if (custom) {
+    const enabled = custom.agents.map((st) => config.agents[st.name]).filter((a) => a && a.enabled);
+    if (custom.kind && custom.kind !== 'deliver') return reportStages(enabled, custom.kind);
+    return routed(enabled.map(stageOf), { auto: opts.auto, maxRounds: config.limits.reviewRounds });
+  }
   if (scenario !== 'deliver') return reportPipeline(config, scenario);
   const enabled = config.pipeline.map((n) => config.agents[n]).filter((a) => a && a.enabled);
   return routed(enabled.map(stageOf), { auto: opts.auto, maxRounds: config.limits.reviewRounds });
+}
+
+/** What a scenario runs as: `deliver`, `readiness` or `audit`. A custom scenario without agents counts as a delivery. */
+function scenarioKind(config, scenario = 'deliver') {
+  const custom = config.custom && config.custom[scenario];
+  return custom ? custom.kind || 'deliver' : scenario;
 }
 
 /**
@@ -91,10 +106,11 @@ function routed(plain, { auto, maxRounds }) {
 /** Readiness and audit: task-scoped stages one after another, no approval, no review loop, no git. */
 function reportPipeline(config, scenario) {
   const names = (config.scenarios && config.scenarios[scenario]) || [];
-  const stages = names
-    .map((n) => config.agents[n])
-    .filter((a) => a && a.enabled)
-    .map((a) => ({ agent: a.name, output: a.output, scope: 'task', approval: false }));
+  return reportStages(names.map((n) => config.agents[n]).filter((a) => a && a.enabled), scenario);
+}
+
+function reportStages(agents, scenario) {
+  const stages = agents.map((a) => ({ agent: a.name, output: a.output, scope: 'task', approval: false }));
   return { mode: scenario, scenario, stages, reviewLoop: null, warnings: [] };
 }
 
@@ -134,4 +150,4 @@ function outline(pipeline) {
   return out;
 }
 
-module.exports = { buildPipeline, taskPipeline, fitsScenario, onRepos, outline };
+module.exports = { buildPipeline, scenarioKind, taskPipeline, fitsScenario, onRepos, outline };

@@ -1,7 +1,7 @@
 // Agents & pipeline, repos & checks, settings. Every change is written to .claudestrator/config.yaml
 // (comments kept) and applies to the next agent run; tasks already running keep their frozen pipeline.
 (function () {
-  const { call, attempt, toast, icon, esc, $, $$, plural, OUTPUT_INFO, SCENARIO_INFO, agentColor, S, views, go, patch, outlineHtml, dur, ago, EFFORT_LABEL } = window.CS;
+  const { call, attempt, toast, icon, esc, $, $$, plural, OUTPUT_INFO, SCENARIO_INFO, agentColor, S, views, go, patch, outlineHtml, dur, ago, EFFORT_LABEL, modelChoices } = window.CS;
   const REPORT_SCENARIOS = ['readiness', 'audit'];
   const EFFORT_HINT = { '': 'the model\'s default', low: 'fastest, cheapest', medium: 'balanced', high: 'thorough', xhigh: 'very thorough', max: 'deepest, slowest' };
   const ALL_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -16,20 +16,6 @@
       `<option value="" ${!current ? 'selected' : ''}>${esc(def ? `Default — ${def}` : actual && actual.model ? 'Default — no effort for this model' : 'Default (checking…)')}</option>`,
       ...levels.map((e) => `<option value="${e}" ${e === current ? 'selected' : ''}>${esc(`${EFFORT_LABEL[e]} — ${EFFORT_HINT[e]}`)}</option>`),
     ].join('');
-  }
-
-  const FALLBACK_MODELS = [
-    ['opus', 'Opus'],
-    ['sonnet', 'Sonnet'],
-    ['haiku', 'Haiku'],
-  ];
-  /** Model choices from the CLI's own list, with the real default named: `[value, label]`. */
-  function modelChoices(defaults) {
-    const def = defaults && defaults.byModel.inherit;
-    const name = (id) => ((defaults && defaults.models.find((m) => m.model === id)) || {}).name || id;
-    const aliases = defaults ? defaults.models.filter((m) => !/^claude-/.test(m.value)).map((m) => [m.value, m.name]) : FALLBACK_MODELS;
-    const pinned = defaults ? defaults.models.filter((m) => /^claude-/.test(m.value)).map((m) => [m.value, m.name]) : [];
-    return [['inherit', def ? `Default — ${name(def.model)}` : 'Default (checking…)'], ...aliases, ...pinned];
   }
 
   function errorsHtml(errors) {
@@ -67,8 +53,11 @@
       const colors = Object.fromEntries(c.agents.map((a) => [a.name, a.color]));
       const inPipeline = c.config.pipeline.filter((n) => byName[n]);
       const scenarios = c.config.scenarios || {};
-      const inScenario = new Set(Object.values(scenarios).flat());
+      const custom = Object.values(c.config.custom || {});
+      const removed = c.config.removedScenarios || [];
+      const inScenario = new Set([...Object.values(scenarios).flat(), ...custom.flatMap((sc) => sc.agents.map((st) => st.name))]);
       const others = c.agents.filter((a) => !inPipeline.includes(a.name) && !inScenario.has(a.name));
+      const step = (st) => `<span class="${agentColor(colors[st.name])}"><span class="adot"></span>${esc(st.name)}${st.model || st.effort ? ` <span class="muted small">${esc([st.model, st.effort].filter(Boolean).join(' · '))}</span>` : ''}</span>`;
       const open = this.open || {};
       patch(
         'agents',
@@ -85,11 +74,15 @@
         </div>
         <h3 class="section-title">Other scenarios</h3>
         <p class="muted small">Read-only agents that end with a report instead of PRs. Pick the scenario in the task composer, or let your words pick it (“перевір готовність…”, “аудит…”).</p>
-        ${REPORT_SCENARIOS.map((sc) => {
+        ${REPORT_SCENARIOS.filter((sc) => !removed.includes(sc)).map((sc) => {
           const names = (scenarios[sc] || []).filter((n) => byName[n]);
           return `<div class="scenario-block"><div class="sb-head">${icon(SCENARIO_INFO[sc].icon)}<b>${esc(SCENARIO_INFO[sc].label)}</b><span class="muted small">${esc(SCENARIO_INFO[sc].hint)}</span></div>
             <div class="agent-list">${names.length ? names.map((n) => agentCard(byName[n], -1, 0, open[n], sc)).join('') : `<div class="muted small">No agent: add one that produces a ${esc(OUTPUT_INFO[sc].label)} report.</div>`}</div></div>`;
         }).join('')}
+        ${custom.length ? `<h3 class="section-title">Your scenarios</h3>
+          <p class="muted small">Made, changed and deleted from the scenario menu of the task composer; each sets its agents' order and, if you like, their model and effort.</p>
+          ${custom.map((sc) => `<div class="scenario-block"><div class="sb-head">${icon('wand')}<b>${esc(sc.label)}</b>${sc.description ? `<span class="muted small">${esc(sc.description)}</span>` : ''}</div>
+            <div class="sc-agents">${sc.agents.length ? sc.agents.map(step).join('<span class="pipe-arrow">→</span>') : '<span class="muted small">no agents yet</span>'}</div></div>`).join('')}` : ''}
         ${others.length ? `<h3 class="section-title">Not in the pipeline</h3><div class="agent-list">${others.map((a) => agentCard(a, -1, 0, open[a.name])).join('')}</div>` : ''}
         <p class="muted small">Changes are saved to <code>.claudestrator/config.yaml</code> and apply to new tasks; a running task keeps the pipeline it started with, but picks up edited instructions for its next agent.</p>`
       );

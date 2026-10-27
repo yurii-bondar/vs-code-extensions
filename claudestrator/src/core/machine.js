@@ -94,6 +94,8 @@ function created(e) {
     source: e.source,
     /** deliver, readiness or audit; logs written before scenarios existed are deliveries. */
     scenario: e.scenario ?? 'deliver',
+    /** A custom scenario the task came from; `scenario` is then what it runs as. */
+    ...(e.scenarioName && { scenarioName: e.scenarioName, scenarioLabel: e.scenarioLabel }),
     auto: e.auto,
     pipeline: e.pipeline,
     knownRepos: e.knownRepos,
@@ -101,6 +103,8 @@ function created(e) {
     gitMode: e.gitMode ?? 'branch',
     /** Effort chosen for this task only, per agent; it wins over the agents' configured effort. */
     effort: e.effort ?? {},
+    /** Model per agent for this task (a custom scenario's own); it wins over the agents' configured model. */
+    model: e.model ?? {},
     limits: e.limits,
     status: 'active',
     phase: 'intake',

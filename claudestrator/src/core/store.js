@@ -182,6 +182,7 @@ class TaskService {
       input: req.input,
       source: req.source,
       ...(scenario !== 'deliver' && { scenario }),
+      ...(req.scenarioName && { scenarioName: req.scenarioName, scenarioLabel: req.scenarioLabel }),
       auto: req.auto,
       pipeline: { mode: req.pipeline.mode, stages: req.pipeline.stages, reviewLoop: req.pipeline.reviewLoop },
       limits: { reviewRounds: req.config.limits.reviewRounds, gateAttempts: req.config.limits.gateAttempts },
@@ -189,6 +190,7 @@ class TaskService {
       contextFiles: req.config.context ?? [],
       gitMode: (req.config.git && req.config.git.mode) || 'branch',
       ...(req.effort && Object.keys(req.effort).length && { effort: req.effort }),
+      ...(req.model && Object.keys(req.model).length && { model: req.model }),
       at: this.now().toISOString(),
     };
     const r = transition(null, event);

@@ -486,7 +486,9 @@ test('scenarios: the state machine finishes a report scenario without git; intak
   assert.equal(classifyInput('XY-1 ready?', { embedded: true, projects: ['PROJ'] }).kind, 'text', 'outside the allowed projects it is no issue');
   assert.equal(classifyInput('switch to UTF-8, ready?', { embedded: true }).kind, 'text');
   assert.equal(parseInvocation('x --scenario audit').scenario, 'audit');
-  assert.throws(() => parseInvocation('x --scenario nope'), /--scenario is one of/);
+  // Any well-formed name parses (it may be a custom scenario); the engine checks that it exists.
+  assert.equal(parseInvocation('x --scenario hotfix').scenario, 'hotfix');
+  assert.throws(() => parseInvocation('x --scenario Not_A_Name'), /--scenario names a scenario/);
 
   const ws = tmp('cs-ids-');
   const svc = new TaskService({ workspace: ws });
@@ -592,4 +594,53 @@ test('pipeline: runs switches a code or tests agent between once per repo and on
   assert.ok(r.warnings.some((w) => w.code === 'runs_ignored'));
   assert.equal(buildPipeline(r.config).stages.find((st) => st.agent === 'reviewer').scope, 'task');
   assert.throws(() => config.updateAgentConfig(ws, 'tester', { runs: 'sometimes' }), /runs: expected one of per-repo, all-repos/);
+});
+
+test('scenarios: custom scenarios with their own agents, models and effort; built-in ones can be removed', () => {
+  const { Engine } = require('../src/core/engine');
+  const layer = (c) => ({ name: 'project', baseDir: '/ws/.claudestrator', config: c });
+  const hotfix = { label: 'Hotfix', description: 'Code and a quick review', agents: ['developer', { agent: 'reviewer', model: 'sonnet', effort: 'low' }] };
+  const r = config.resolveConfig([config.builtinLayer(), layer({ scenarios: { hotfix, 'deep-audit': { agents: [{ agent: 'auditor', effort: 'max' }] }, readiness: false } })]);
+  assert.ok(r.ok, JSON.stringify(r.errors));
+  assert.deepEqual(r.config.custom.hotfix, { id: 'hotfix', label: 'Hotfix', description: 'Code and a quick review', kind: 'deliver', agents: [{ name: 'developer' }, { name: 'reviewer', model: 'sonnet', effort: 'low' }] });
+  assert.equal(r.config.custom['deep-audit'].kind, 'audit', 'the kind follows from the agents');
+  assert.deepEqual(r.config.removedScenarios, ['readiness']);
+  assert.deepEqual(r.config.scenarios.readiness, []);
+
+  const p = buildPipeline(r.config, { scenario: 'hotfix' });
+  assert.deepEqual(p.stages.map((s) => s.agent), ['developer', 'reviewer']);
+  assert.ok(p.reviewLoop, 'a delivery scenario gets the review loop');
+  assert.equal(buildPipeline(r.config, { scenario: 'deep-audit' }).mode, 'audit');
+
+  const mixed = config.resolveConfig([config.builtinLayer(), layer({ scenarios: { odd: { agents: ['developer', 'auditor'] } } })]);
+  assert.deepEqual(mixed.errors.map((e) => e.code), ['scenario_mixed']);
+  assert.match(config.resolveConfig([config.builtinLayer(), layer({ scenarios: { odd: { agents: ['ghost', 'developer', 'developer'] } } })]).errors.map((e) => e.code).join(), /scenario_unknown_agent.*scenario_duplicate/);
+
+  // Written to the project file and run by the engine with the scenario's model and effort.
+  const ws = tmp('cs-custom-');
+  config.setCustomScenario(ws, 'hotfix', { label: 'Hotfix', agents: [{ name: 'developer' }, { name: 'reviewer', model: 'sonnet', effort: 'low' }] });
+  config.removeScenario(ws, 'audit');
+  const yaml = fs.readFileSync(config.projectConfigFile(ws), 'utf8');
+  assert.match(yaml, /hotfix:\n\s+label: Hotfix\n\s+agents:\n\s+- developer\n\s+- agent: reviewer\n\s+model: sonnet\n\s+effort: low/);
+  assert.match(yaml, /audit: false/);
+  const engine = new Engine({ workspace: ws, home: tmp('cs-h-'), runner: {}, hooks: {} });
+  const prev = engine.preview({ text: 'Fix the login', scenario: 'hotfix' });
+  assert.equal(prev.scenarioName, 'hotfix');
+  assert.deepEqual(prev.effort, { reviewer: 'low' });
+  assert.equal(engine.preview({ text: 'Зроби аудит проекту' }).scenarioName, 'deliver', 'words cannot pick a removed scenario');
+  assert.throws(() => engine.start({ text: 'x', scenario: 'audit' }), /no scenario "audit"/);
+  const { taskId } = engine.start({ text: 'Fix the login', scenario: 'hotfix', effort: { developer: 'high' } });
+  const s = engine.svc.state(taskId);
+  assert.equal(s.scenario, 'deliver');
+  assert.equal(s.scenarioLabel, 'Hotfix');
+  assert.deepEqual(s.model, { reviewer: 'sonnet' });
+  assert.deepEqual(s.effort, { reviewer: 'low', developer: 'high' }, 'the composer adds to the scenario effort');
+
+  config.setCustomScenario(ws, 'quick-fix', { label: 'Quick fix', agents: [{ name: 'developer' }] }, 'hotfix');
+  config.restoreScenario(ws, 'audit');
+  const after = config.loadConfig({ workspace: ws, home: tmp('cs-h-') });
+  assert.deepEqual(Object.keys(after.config.custom), ['quick-fix'], 'renamed');
+  assert.deepEqual(after.config.removedScenarios, []);
+  config.removeScenario(ws, 'quick-fix');
+  assert.deepEqual(Object.keys(config.loadConfig({ workspace: ws, home: tmp('cs-h-') }).config.custom), []);
 });

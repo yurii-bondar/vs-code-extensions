@@ -18,6 +18,7 @@ The orchestration is code, not a prompt: a pure state machine decides what runs 
 
 - **New task**: the activity-bar icon, `⌘⌥N`, or *Start a Task from Selection* in an editor. Type what you want in plain words. Below the box you see what it was recognised as (free text, Jira issue, Confluence page), the task id, and the exact pipeline it will run. Click an agent chip to skip it for this task, or turn on *Skip plan approval*. The effort part of a chip (`medium ▾`) changes that agent's effort for this task only; *Effort: … ▾* sets it for every agent. In the text, `--effort high` or `--effort developer=max,tester=low` does the same. The choice is saved with the task and wins over the agents' settings.
 - **Scenario**: *Deliver*, *Check readiness* or *Audit* at the top of the composer. Your words pick it (`готовність`, `acceptance criteria`, `критерії приймання` → readiness; `аудит`, `audit`, `вузькі місця` → audit) unless you click one; `--scenario readiness|audit` in the text does the same. A readiness check takes the one Jira issue a sentence names as its source and keeps the rest of the sentence in the ticket as what you asked. Report tasks get their own ids (`PROJ-123-check`, `AUDIT-<time>`), so they never continue the delivery task; checking again after a finished check is a new run (`PROJ-123-check-2`). Commands: *Check a Task's Readiness…*, *Audit the Project…*.
+- **Your own scenarios**: *New scenario* at the bottom of the scenario menu. Give it a name and a description, add agents, drag them into order, and pick a model and an effort per agent for this scenario only (empty means the agent's own setting; the composer can still change effort per task). Agents that change code make it end with draft PRs like Deliver; readiness or audit agents make it a read-only report. One scenario cannot mix the two. 🗑 next to a scenario deletes it. Check readiness and Audit can be deleted too and brought back from the same menu; Deliver always stays. `--scenario <name>` in the text picks one. A task started from your scenario shows its name and the models it runs with.
 - **Tasks view** (sidebar) groups tasks into *Needs you*, *Running*, *Paused* and *Finished*. The badge and the status bar count what needs you. Notifications tell you when a task needs a decision, finishes or fails.
 - **Task screen**:
   - **Decisions** appear at the top, with everything needed to decide: the rendered plan with its open questions and branch, the red check output, the reviewer's findings, or per-repo commits with the combined diff before a push. Options that take feedback (request changes, retry with a hint) have a text box. `⌘↵` picks the primary option.
@@ -74,6 +75,13 @@ pipeline: [planner, developer, tester, reviewer, security]
 scenarios:                      # read-only agents of the report scenarios (built in: verifier, auditor)
   readiness: [verifier]
   audit: [auditor, perf-auditor] # e.g. perf-auditor: { extends: auditor, instructions: { mode: append, file: ./prompts/perf.md } }
+  # readiness: false             # removes a built-in report scenario from the menu
+  hotfix:                        # your own scenario: its agents in order, each with an optional model and effort
+    label: Hotfix
+    description: Code and a quick review, no plan
+    agents:
+      - developer
+      - { agent: reviewer, model: sonnet, effort: low }
 limits: { reviewRounds: 2, gateAttempts: 3, budgetUsd: 20 }
 language: Ukrainian
 baseBranch: main

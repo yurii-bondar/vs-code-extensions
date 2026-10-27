@@ -15,7 +15,7 @@ const CHECKPOINT_TITLE = {
 function describeEvent(e) {
   switch (e.type) {
     case 'task_created':
-      return { tone: 'strong', icon: 'add', text: `${{ readiness: 'Readiness check', audit: 'Audit' }[e.scenario] || 'Task'} created · ${e.pipeline.stages.map((s) => s.agent).join(' → ') || 'intake only'}` };
+      return { tone: 'strong', icon: 'add', text: `${e.scenarioLabel ? `"${e.scenarioLabel}" task` : { readiness: 'Readiness check', audit: 'Audit' }[e.scenario] || 'Task'} created · ${e.pipeline.stages.map((s) => s.agent).join(' → ') || 'intake only'}` };
     case 'intake_completed':
       return { tone: 'normal', icon: 'note', text: `Ticket ready: ${e.spec.title}` };
     case 'stage_started':
