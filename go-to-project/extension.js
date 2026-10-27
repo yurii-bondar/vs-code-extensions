@@ -184,10 +184,12 @@ async function recentItems() {
   return recent && recent.filter((u) => !open.has(u.toString()) && worthListing(u)).map((u) => projectItem(u));
 }
 
-// VS Code focuses the existing window when the target is already open there.
+// VS Code focuses the existing window when the target is already open there; otherwise it opens a new
+// window. Without forceNewWindow it falls back to `window.openFoldersInNewWindow`, which by default
+// replaces the current window.
 function openTarget(uri) {
   return vscode.commands.executeCommand('vscode.openFolder', uri, {
-    forceNewWindow: false,
+    forceNewWindow: true,
     forceReuseWindow: false,
     noRecentEntry: false,
   });

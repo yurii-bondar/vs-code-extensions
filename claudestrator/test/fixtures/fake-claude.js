@@ -143,8 +143,11 @@ function first(prompt, uuid) {
       return reply('Changed feature.txt.', uuid);
     }
     case 'tester': {
-      tool('Write', { file_path: path.join(repoDir, 'feature.test.txt'), content: 'test\n' });
-      return reply('Added feature.test.txt.', uuid);
+      // One tester across every repo of the task, or (tasks from before) the one repo it is given.
+      const section = (prompt.match(/Repositories of this task[^\n]*\n((?:- .+\n?)+)/) || [])[1] || '';
+      const dirs = [...section.matchAll(/^- \S+ at (.+)$/gm)].map((m) => m[1]);
+      for (const dir of dirs.length ? dirs : [repoDir]) tool('Write', { file_path: path.join(dir, 'feature.test.txt'), content: 'test\n' });
+      return reply(`Added feature.test.txt in ${dirs.length || 1} repo(s).`, uuid);
     }
     case 'reviewer': {
       const marker = path.join(state, 'reviewed-once');

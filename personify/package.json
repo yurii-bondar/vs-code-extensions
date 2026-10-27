@@ -5,6 +5,7 @@
   "version": "0.1.0",
   "publisher": "bondevn",
   "license": "MIT",
+  "author": "Yurii Bondar",
   "repository": {
     "type": "git",
     "url": "https://github.com/yurii-bondar/vs-code-extensions.git",

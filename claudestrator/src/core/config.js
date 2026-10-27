@@ -44,15 +44,16 @@ ${COMMON}
 
 End with a report: changed files, contract changes, deviations from the plan, notes for the tester, blockers.`;
 
-const TESTER = `You own the tests one repository's part of the task needs.
+const TESTER = `You own the tests the task needs, in every repository the developers changed.
 
 ${COMMON}
 
-- Read the repo's testing rules and the change under test (its diff and the developer report).
+- Go through the repositories you are given one by one. In each, read its testing rules and the change under test (its diff and the developer report for it).
+- Cover the contracts between the repos too: what one changes, the others must call and expect the same way.
 - Cover the success path, the edge cases the plan names and the failure behaviour. Test behaviour, not implementation.
 - Do not change production code. If a test exposes a real bug, leave it failing and report it.
 
-End with a report: tests added or updated, acceptance criteria covered, what could not be executed, bugs found.`;
+End with a report per repository: tests added or updated, acceptance criteria covered, what could not be executed, bugs found.`;
 
 const REVIEWER = `You review a task's combined diff with fresh eyes. You did not write it. You change nothing.
 
@@ -130,7 +131,7 @@ const BUILTIN = {
       instructions: DEVELOPER,
     },
     tester: {
-      description: 'Writes and updates the tests the approved plan owes in one repository and makes them pass.',
+      description: 'Writes and updates the tests the approved plan owes in every repository it changed and makes them pass.',
       model: 'inherit',
       tools: WRITE,
       color: 'yellow',
@@ -288,6 +289,7 @@ function resolveConfig(layers, opts = {}) {
     );
     if (enabled && instructions.trim() === '') diags.push({ level: 'warning', code: 'empty_instructions', agent: name, message: `agent "${name}" has no instructions` });
     if (!base.description || !base.output) continue;
+    if (base.runs && base.output !== 'code' && base.output !== 'tests') diags.push({ level: 'warning', code: 'runs_ignored', agent: name, message: `"${name}" has runs: ${base.runs}, which only applies to code and tests agents` });
 
     agents[name] = {
       name,
@@ -299,6 +301,7 @@ function resolveConfig(layers, opts = {}) {
       ...(base.disallowedTools && { disallowedTools: base.disallowedTools }),
       ...(base.maxTurns !== undefined && { maxTurns: base.maxTurns }),
       ...(base.effort && { effort: base.effort }),
+      ...(base.runs && { runs: base.runs }),
       ...(base.color && { color: base.color }),
       output: base.output,
       instructions,
@@ -402,6 +405,7 @@ function resolveExtends(drafts, diags) {
       disallowedTools: draft.disallowedTools ?? base.disallowedTools,
       maxTurns: draft.maxTurns ?? base.maxTurns,
       effort: draft.effort ?? base.effort,
+      runs: draft.runs ?? base.runs,
       color: draft.color ?? base.color,
       output: draft.output ?? base.output,
       ops: [...base.ops, ...draft.ops],

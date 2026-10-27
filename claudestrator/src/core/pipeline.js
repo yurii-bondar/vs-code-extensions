@@ -1,19 +1,44 @@
 // Turns the resolved config into stages and loop rules. Routing depends on outputs only, never on names.
 
 const isWork = (o) => o === 'code' || o === 'tests';
+const REPORT_OUTPUTS = ['readiness', 'audit'];
+
+/**
+ * Where a stage runs: `repo` once per repo of the plan, `repos` once across all of them, `task` once without a repo.
+ * A code or tests agent picks with `runs` (per-repo, all-repos); by default the developer works repo by repo and
+ * one tester covers what it did in every repo. A task keeps the scope it started with.
+ */
+const SCOPE = { code: 'repo', tests: 'repos' };
+const RUNS_SCOPE = { 'per-repo': 'repo', 'all-repos': 'repos' };
+const stageOf = (a) => ({ agent: a.name, output: a.output, scope: a.scope || (SCOPE[a.output] && (RUNS_SCOPE[a.runs] || SCOPE[a.output])) || 'task' });
+/** Whether a stage works in the plan's repos (and so the task branches, commits and opens PRs). */
+const onRepos = (st) => st.scope === 'repo' || st.scope === 'repos';
 
 /** `opts.scenario`: `deliver` (default) runs `config.pipeline`; a report scenario runs its own read-only agents. */
 function buildPipeline(config, opts = {}) {
   const scenario = opts.scenario || 'deliver';
   if (scenario !== 'deliver') return reportPipeline(config, scenario);
-  const warnings = [];
   const enabled = config.pipeline.map((n) => config.agents[n]).filter((a) => a && a.enabled);
+  return routed(enabled.map(stageOf), { auto: opts.auto, maxRounds: config.limits.reviewRounds });
+}
 
-  const stages = enabled.map((a, i) => ({
-    agent: a.name,
-    output: a.output,
-    scope: isWork(a.output) ? 'repo' : 'task',
-    approval: a.output === 'plan' && !opts.auto && enabled.slice(i + 1).some((b) => b.output !== 'plan'),
+/**
+ * The pipeline of a running task after you edited it: `agents` are `{ name, output }` in the new order.
+ * Delivery stages are routed again (approval, review loop, warnings); report stages stay task-scoped and read-only.
+ */
+function taskPipeline(agents, { scenario = 'deliver', auto, maxRounds }) {
+  if (scenario !== 'deliver') return { mode: scenario, scenario, stages: agents.map((a) => ({ ...stageOf(a), scope: 'task', approval: false })), reviewLoop: null, warnings: [] };
+  return routed(agents.map(stageOf), { auto, maxRounds });
+}
+
+/** Whether an agent with this output can join a task of this scenario. */
+const fitsScenario = (output, scenario = 'deliver') => (scenario === 'deliver' ? !REPORT_OUTPUTS.includes(output) : output === scenario);
+
+function routed(plain, { auto, maxRounds }) {
+  const warnings = [];
+  const stages = plain.map((st, i) => ({
+    ...st,
+    approval: st.output === 'plan' && !auto && plain.slice(i + 1).some((b) => b.output !== 'plan'),
   }));
 
   const firstIndex = (pred) => stages.findIndex(pred);
@@ -43,7 +68,7 @@ function buildPipeline(config, opts = {}) {
   if (firstVerdict !== -1 && firstCode !== -1 && firstVerdict < firstCode) {
     warn('verdict_before_code', `"${stages[firstVerdict].agent}" reviews before any code is written; it reviews the existing branch`, stages[firstVerdict].agent);
   }
-  if (firstPlan === -1 && firstIndex((s) => s.scope === 'repo') !== -1) {
+  if (firstPlan === -1 && firstIndex(onRepos) !== -1) {
     warn('no_plan', 'no plan stage: per-repo stages have no repos to run in unless the task names them');
   }
 
@@ -56,7 +81,7 @@ function buildPipeline(config, opts = {}) {
       end: lastVerdict,
       fixers: span.filter((s) => isWork(s.output)).map((s) => s.agent),
       reviewers: span.filter((s) => s.output === 'verdict').map((s) => s.agent),
-      maxRounds: config.limits.reviewRounds,
+      maxRounds,
     };
   }
 
@@ -98,15 +123,15 @@ function outline(pipeline) {
       out.push({ kind: 'repo-block', text: 'per repo', agents: block.map((b) => ({ agent: b.agent, output: b.output })) });
       i = j;
     } else {
-      out.push({ kind: 'stage', agent: st.agent, output: st.output, text: st.agent });
+      out.push({ kind: 'stage', agent: st.agent, output: st.output, text: st.agent, ...(st.scope === 'repos' && { allRepos: true }) });
       if (st.approval) out.push({ kind: 'human', text: 'you approve' });
       i++;
     }
     if (reviewLoop && i - 1 === reviewLoop.end) out.push({ kind: 'loop-end', text: 'fix rounds' });
   }
-  if (stages.some((s) => s.scope === 'repo')) out.push({ kind: 'finish', text: 'commit' }, { kind: 'human', text: 'you confirm push' }, { kind: 'finish', text: 'draft PRs' });
+  if (stages.some(onRepos)) out.push({ kind: 'finish', text: 'commit' }, { kind: 'human', text: 'you confirm push' }, { kind: 'finish', text: 'draft PRs' });
   else if (pipeline.scenario && stages.length) out.push({ kind: 'finish', text: pipeline.scenario === 'audit' ? 'audit report' : 'readiness report' });
   return out;
 }
 
-module.exports = { buildPipeline, outline };
+module.exports = { buildPipeline, taskPipeline, fitsScenario, onRepos, outline };

@@ -1,6 +1,7 @@
 // The task state machine. Pure: the same events always give the same state, and an illegal
 // event (a skipped approval, an extra review round, a push before it was confirmed) is rejected.
 const { CHECKPOINT_OPTIONS, INFO_EVENTS, JIRA_ONLY_OPTIONS, isBlocking } = require('./protocol');
+const { onRepos } = require('./pipeline');
 
 const ok = (state) => ({ ok: true, state });
 const fail = (code, message) => ({ ok: false, error: { code, message } });
@@ -21,6 +22,8 @@ function transition(state, event) {
   const s = clone(state);
   s.updatedAt = event.at;
 
+  // You may reshape what is still to come at any time, even while an agent runs or a question waits.
+  if (event.type === 'pipeline_changed') return pipelineChanged(s, event);
   if (event.type === 'stopped') {
     if (s.status === 'stopped') return fail('already_stopped', 'task is already stopped');
     s.status = 'stopped';
@@ -134,7 +137,7 @@ function intakeCompleted(s, e) {
   }
   const stages = s.pipeline.stages;
   const firstPlan = stages.findIndex((st) => st.output === 'plan');
-  const firstRepo = stages.findIndex((st) => st.scope === 'repo');
+  const firstRepo = stages.findIndex(onRepos);
   if (firstRepo !== -1 && (firstPlan === -1 || firstRepo < firstPlan) && s.repos.length === 0) {
     return fail('repos_required', `"${stages[firstRepo].agent}" runs per repo before any plan names repos; pass repos with intake_completed`);
   }
@@ -249,6 +252,38 @@ function checkpointAnswered(s, e) {
   return ok(s);
 }
 
+/**
+ * The first stage a pipeline edit may change, or -1 once the stages are through. Everything before it has run,
+ * runs now or waits for you: a per-repo block counts whole (it runs repo by repo), and a fix round keeps its loop.
+ */
+function editableFrom(s) {
+  if (s.status === 'done') return -1;
+  if (s.phase === 'intake') return 0;
+  if (s.phase !== 'stages') return -1;
+  const { stages, reviewLoop } = s.pipeline;
+  const current = s.running || (s.checkpoint && s.checkpoint.step) || s.next;
+  let at = current ? current.stage : reviewLoop ? reviewLoop.end : stages.length - 1;
+  while (stages[at].scope === 'repo' && at + 1 < stages.length && stages[at + 1].scope === 'repo') at++;
+  if (s.review.fixing && reviewLoop) at = Math.max(at, reviewLoop.end);
+  return at + 1;
+}
+
+function pipelineChanged(s, e) {
+  const from = editableFrom(s);
+  if (from === -1) return fail('pipeline_locked', 'the pipeline cannot change once its stages are through');
+  const before = s.pipeline.stages;
+  const { stages } = e.pipeline;
+  const same = (a, b) => Boolean(a && b) && a.agent === b.agent && a.output === b.output && a.scope === b.scope;
+  for (let i = 0; i < from; i++) {
+    if (!same(before[i], stages[i])) return fail('pipeline_locked', `"${before[i].agent}" has run or is running; only the stages after it can change`);
+  }
+  const names = stages.map((st) => st.agent);
+  const twice = names.find((n, i) => names.indexOf(n) !== i);
+  if (twice) return fail('pipeline_duplicate', `"${twice}" is in the pipeline twice`);
+  s.pipeline = { mode: e.pipeline.mode, stages, reviewLoop: e.pipeline.reviewLoop };
+  return ok(s);
+}
+
 function openCheckpoint(s, id, at, step, reason) {
   const jira = s.source.kind === 'jira';
   const options = CHECKPOINT_OPTIONS[id].filter((o) => jira || !JIRA_ONLY_OPTIONS.includes(o));
@@ -258,8 +293,9 @@ function openCheckpoint(s, id, at, step, reason) {
 
 /**
  * The steps of the current pass, derived from the pipeline and the plan's repos.
- * Consecutive `repo` stages form a block that runs repo by repo (developer then tester for A, then for B).
- * A fix round covers only `restartAt..end` and only the repos with blocking findings.
+ * Consecutive `repo` stages form a block that runs repo by repo (developer for A, then for B); a `repos` stage
+ * runs once after it, across every repo (the tester). A fix round covers only `restartAt..end` and only the
+ * repos with blocking findings.
  */
 function passSteps(s) {
   const { stages, reviewLoop } = s.pipeline;
@@ -271,7 +307,7 @@ function passSteps(s) {
   const steps = [];
   let i = from;
   while (i <= to) {
-    if (stages[i].scope === 'task') {
+    if (stages[i].scope !== 'repo') {
       steps.push({ stage: i, agent: stages[i].agent });
       i++;
       continue;
@@ -335,7 +371,7 @@ function passReview(s, shipBlocking) {
 }
 
 function enterFinish(s) {
-  const worked = s.pipeline.stages.some((st) => st.scope === 'repo') && s.repos.length > 0;
+  const worked = s.pipeline.stages.some(onRepos) && s.repos.length > 0;
   if (worked) {
     s.phase = 'finish';
     s.finishStep = 'commit';
@@ -355,6 +391,15 @@ function finish(s, outcome) {
 /** Paths inside the task folder. Agents pass these to each other, never the contents. */
 const TASK_FILES = { events: 'events.ndjson', ticket: 'ticket.md', ticketJson: 'ticket.json', report: 'report.md' };
 
+/** The repos a step works in: its own, or for a `repos` stage every repo of the pass (a fix round: the ones sent back). */
+function stepRepos(s, step) {
+  if (step.repo) return [step.repo];
+  // A code stage across all repos leaves out the ones the plan wants tests only for.
+  const code = step.stage !== undefined && s.pipeline.stages[step.stage].output === 'code';
+  const names = s.repos.filter((r) => !(code && r.mode === 'tests_only')).map((r) => r.name);
+  return s.review.fixing ? names.filter((n) => s.review.fixRepos.includes(n)) : names;
+}
+
 function artifactPath(output, agent, round, repo) {
   switch (output) {
     case 'plan':
@@ -365,7 +410,7 @@ function artifactPath(output, agent, round, repo) {
     case 'audit':
       return `${output}/${agent}.md`;
     default:
-      return `reports/r${round}/${agent}-${repo}.md`;
+      return `reports/r${round}/${agent}${repo ? `-${repo}` : ''}.md`;
   }
 }
 
@@ -414,8 +459,10 @@ function inputsFor(s, step, output) {
   inputs.push(...plans);
 
   if (output === 'code' || output === 'tests') {
-    // Everything earlier stages wrote for this repo in this round, e.g. the developer report for the tester.
-    inputs.push(...latest((a) => a.repo === step.repo && a.round === s.review.round && (a.output === 'code' || a.output === 'tests')));
+    // Everything earlier stages wrote for this repo in this round, e.g. the developer reports for the tester;
+    // a stage across all repos reads every repo's.
+    const repos = stepRepos(s, step);
+    inputs.push(...latest((a) => a.round === s.review.round && (a.output === 'code' || a.output === 'tests') && (step.repo ? a.repo === step.repo : !a.repo || repos.includes(a.repo))));
     if (s.nextMode === 'fix') inputs.push(...s.review.lastVerdicts.map((v) => v.artifact));
   }
   // Verdict stages get only the ticket and plan: fresh context is the point. The diff is added by the engine.
@@ -431,4 +478,4 @@ function branchName(s) {
   return `${s.plan.type}/${key}${s.plan.slug}`;
 }
 
-module.exports = { transition, replay, canPush, passSteps, nextAction, runOf, artifactPath, branchName, sameStep, TASK_FILES };
+module.exports = { transition, replay, canPush, passSteps, editableFrom, stepRepos, nextAction, runOf, artifactPath, branchName, sameStep, TASK_FILES };

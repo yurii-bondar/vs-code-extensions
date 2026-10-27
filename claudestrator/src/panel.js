@@ -6,7 +6,8 @@ const path = require('path');
 const crypto = require('crypto');
 const view = require('./core/view');
 const cfg = require('./core/config');
-const { outline } = require('./core/pipeline');
+const { buildPipeline, outline, taskPipeline, fitsScenario } = require('./core/pipeline');
+const { editableFrom } = require('./core/machine');
 const { taskRepos, taskDiff } = require('./core/git');
 const { findRepos, describeRepo, reposFromFolders, WORKSPACE_MAP, safeName } = require('./core/setup');
 const { claudeAccounts, expand } = require('./core/env');
@@ -104,7 +105,10 @@ class DashboardPanel {
       // The delivery pipeline's agents, then each report scenario's; `scenario` says which composer mode shows them.
       agents: [...c.pipeline.map((n) => [n, 'deliver']), ...Object.entries(c.scenarios).flatMap(([sc, names]) => names.map((n) => [n, sc]))]
         .filter(([n]) => c.agents[n])
-        .map(([n, scenario]) => ({ name: n, scenario, color: c.agents[n].color, output: c.agents[n].output, enabled: c.agents[n].enabled, description: c.agents[n].description, model: c.agents[n].model, effort: c.agents[n].effort, actual: effectiveFor(c.agents[n], this.orch.defaults) })),
+        .map(([n, scenario]) => ({ name: n, scenario, color: c.agents[n].color, output: c.agents[n].output, runs: c.agents[n].runs, enabled: c.agents[n].enabled, description: c.agents[n].description, model: c.agents[n].model, effort: c.agents[n].effort, actual: effectiveFor(c.agents[n], this.orch.defaults) })),
+      // Every agent, for the composer's scenario editor to add from.
+      catalog: Object.values(c.agents).map((a) => ({ name: a.name, output: a.output, runs: a.runs, color: a.color, enabled: a.enabled, description: a.description })),
+      pipelineWarnings: buildPipeline(c).warnings.map((w) => w.message),
       repos: Object.keys(c.repos),
       language: c.language,
       gitMode: c.git.mode,
@@ -184,7 +188,26 @@ class DashboardPanel {
       d.checkpointFull = state.checkpoint;
     }
     d.ticket = engine.svc.readArtifact(taskId, 'ticket.md');
+    d.pipelineEdit = this.pipelineEdit(state);
     return d;
+  }
+
+  /** What the task's pipeline editor shows: its stages, from which one they can change, and the agents to add. */
+  pipelineEdit(state) {
+    const from = editableFrom(state);
+    if (from === -1) return null;
+    const r = this.orch.config();
+    const agents = r.ok ? r.config.agents : {};
+    const stages = state.pipeline.stages.map((st) => ({ agent: st.agent, output: st.output, scope: st.scope, color: agents[st.agent] && agents[st.agent].color }));
+    const { warnings } = taskPipeline(stages.map((st) => ({ name: st.agent, output: st.output, scope: st.scope })), { scenario: state.scenario, auto: state.auto, maxRounds: state.limits.reviewRounds });
+    const choices = Object.values(agents)
+      .filter((a) => fitsScenario(a.output, state.scenario) && !stages.some((st) => st.agent === a.name))
+      .map((a) => ({ name: a.name, output: a.output, runs: a.runs, color: a.color, description: a.description, enabled: a.enabled }));
+    return { from, stages, choices, warnings: warnings.map((w) => w.message) };
+  }
+
+  async $editPipeline({ taskId, names }) {
+    return this.engine.editPipeline(taskId, names);
   }
 
   async $transcript({ taskId, key }) {
@@ -348,7 +371,6 @@ class DashboardPanel {
     const layer = this.root ? cfg.readProjectLayer(this.root) : {};
     const base = { root: this.root, hasConfig: this.orch.hasProjectConfig(), files: { project: this.root && cfg.projectConfigFile(this.root), user: cfg.userConfigFile() }, layer, colors: AGENT_COLORS, outputs: OUTPUTS, efforts: EFFORTS, builtins: cfg.builtinAgentNames(), languages: LANGUAGES };
     if (!r.ok) return { ...base, ok: false, errors: r.errors.map((e) => e.message), warnings: (r.warnings || []).map((w) => w.message) };
-    const { buildPipeline } = require('./core/pipeline');
     const pipeline = buildPipeline(r.config);
     const agents = Object.values(r.config.agents).map((a) => ({
       ...a,

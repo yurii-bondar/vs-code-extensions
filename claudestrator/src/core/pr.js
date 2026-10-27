@@ -28,7 +28,8 @@ function prBody(state, repo, taskDir, language, prs = {}) {
   const link = state.spec && state.spec.links[0];
   const order = state.repos.map((r, i) => `${i + 1}. ${r.name === repo ? `**${r.name}** ←` : r.name}`).join('\n');
   const related = Object.entries(prs).filter(([r]) => r !== repo).map(([r, url]) => `- ${r}: ${url}`).join('\n') || `_${t.none}_`;
-  const failed = state.gateFailures.filter((g) => g.repo === repo);
+  // A step across all repos (the tester) left its checks red in some of them; each PR mentions it.
+  const failed = state.gateFailures.filter((g) => !g.repo || g.repo === repo);
   const findings = state.review.openFindings.filter((f) => !f.repo || f.repo === repo);
   return [
     `## ${t.what}`,

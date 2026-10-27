@@ -12,8 +12,11 @@ const MODE = {
   fix: 'fix: fix the blocker and major findings of the previous review round (among the inputs) and nothing else.',
 };
 
-/** `repos`: for task-wide stages, the repositories they may read: `[{ name, dir, role?, baseBranch }]`. */
-function buildAgentPrompt({ state, next, taskDir, language, repoDir, diffPath, repos }) {
+/**
+ * `repos`: for task-wide stages, the repositories they may read: `[{ name, dir, role?, baseBranch }]`.
+ * `workRepos`: for a stage across the plan's repos (the tester), the ones it works in: `[{ name, dir }]`.
+ */
+function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, diffPath, repos }) {
   const inputs = next.inputs.map((p) => path.resolve(taskDir, p));
   if (diffPath) inputs.push(diffPath);
   const lines = [
@@ -23,6 +26,9 @@ function buildAgentPrompt({ state, next, taskDir, language, repoDir, diffPath, r
     `Review round: ${next.round}.`,
   ];
   if (next.step.repo) lines.push(`Repository: ${next.step.repo} at ${repoDir}. Work only there.`);
+  if (workRepos && workRepos.length) {
+    lines.push('', 'Repositories of this task (cover the changes in every one of them; work only there):', ...workRepos.map((r) => `- ${r.name} at ${r.dir}`));
+  }
   if (repos && repos.length) {
     lines.push('', 'Repositories (read them where they are; change nothing):', ...repos.map((r) => `- ${r.name} at ${r.dir} (base branch ${r.baseBranch})${r.role ? `: ${r.role}` : ''}`));
   }

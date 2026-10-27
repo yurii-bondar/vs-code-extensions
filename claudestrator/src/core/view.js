@@ -1,5 +1,6 @@
 // UI models built from a task's state and events: cards for lists, a step timeline, the activity feed.
 const { transition, passSteps, sameStep, branchName } = require('./machine');
+const { onRepos } = require('./pipeline');
 const { describeEvent, CHECKPOINT_TITLE } = require('./describe');
 const { transcriptKey } = require('./engine');
 const { resultOf } = require('./report');
@@ -46,7 +47,7 @@ function stepsOf(events, state, { running }) {
   for (const e of events) {
     switch (e.type) {
       case 'stage_started':
-        steps.push({ kind: 'agent', key: transcriptKey(e.seq, e), agent: e.agent, repo: e.repo, round: s ? s.review.round : 1, status: 'running', startedAt: e.at, mode: s ? s.nextMode : 'initial' });
+        steps.push({ kind: 'agent', key: transcriptKey(e.seq, e), agent: e.agent, repo: e.repo, ...(!e.repo && s && s.pipeline.stages.some((st) => st.agent === e.agent && st.scope === 'repos') && { allRepos: true }), round: s ? s.review.round : 1, status: 'running', startedAt: e.at, mode: s ? s.nextMode : 'initial' });
         break;
       case 'stage_completed': {
         const st = findLast((x) => x.status === 'running' && sameStep(x, e));
@@ -101,14 +102,14 @@ function stepsOf(events, state, { running }) {
       for (const p of rest) upcoming.push({ kind: 'agent', agent: p.agent, repo: p.repo, round: state.review.round, status: state.next && sameStep(state.next, p) && p.stage === state.next.stage ? 'next' : 'pending' });
       // Stages after a running review loop only show up once the loop is left.
       if (state.review.fixing && state.pipeline.reviewLoop) {
-        for (const st of state.pipeline.stages.slice(state.pipeline.reviewLoop.end + 1)) upcoming.push({ kind: 'agent', agent: st.agent, perRepo: st.scope === 'repo', status: 'pending' });
+        for (const st of state.pipeline.stages.slice(state.pipeline.reviewLoop.end + 1)) upcoming.push({ kind: 'agent', agent: st.agent, perRepo: st.scope === 'repo', allRepos: st.scope === 'repos', status: 'pending' });
       }
     } else {
       const from = current ? current.stage + (after ? 1 : 0) : 0;
-      for (const st of state.pipeline.stages.slice(from)) upcoming.push({ kind: 'agent', agent: st.agent, perRepo: st.scope === 'repo', status: current && st === state.pipeline.stages[current.stage] ? 'next' : 'pending' });
+      for (const st of state.pipeline.stages.slice(from)) upcoming.push({ kind: 'agent', agent: st.agent, perRepo: st.scope === 'repo', allRepos: st.scope === 'repos', status: current && st === state.pipeline.stages[current.stage] ? 'next' : 'pending' });
     }
   }
-  const hasRepoStages = state.pipeline.stages.some((st) => st.scope === 'repo');
+  const hasRepoStages = state.pipeline.stages.some(onRepos);
   if (hasRepoStages && state.outcome !== 'completed') {
     const fs = state.finishStep;
     const done = state.phase === 'done';
