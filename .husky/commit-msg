@@ -1,0 +1,17 @@
+#!/bin/sh
+
+# No AI tool is credited in the history (.aiassistant/rules/git.md). Editors and agents add
+# these lines on their own — Cursor passes `--trailer` to every `git commit` its agent runs — so
+# they are stripped here rather than trusted to each author.
+msg_file="$1"
+tmp_file="$(mktemp)"
+
+grep -viE \
+  -e '^co-authored-by:.*(cursor|claude|anthropic|copilot|openai|chatgpt|codex|gemini|aider)' \
+  -e '^(claude-session|made-with|generated-by):' \
+  -e 'made with \[?cursor' \
+  -e 'generated with \[?claude' \
+  "$msg_file" | git stripspace > "$tmp_file" || true
+
+cat "$tmp_file" > "$msg_file"
+rm -f "$tmp_file"
