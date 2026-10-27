@@ -2,6 +2,7 @@
   "name": "personify",
   "displayName": "Personify",
   "description": "One friendly panel to customize hotkeys, sidebar/editor/terminal colors and fonts, and JS/TS/Go syntax colors.",
+  "icon": "media/icon.png",
   "version": "0.1.0",
   "publisher": "bondevn",
   "license": "MIT",
@@ -24,7 +25,15 @@
     "colors",
     "keybindings",
     "syntax",
-    "customize"
+    "customize",
+    "personalize",
+    "hotkeys",
+    "fonts",
+    "terminal",
+    "sidebar",
+    "typescript",
+    "go",
+    "color theme"
   ],
   "main": "./extension.js",
   "activationEvents": [
