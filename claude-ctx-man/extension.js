@@ -3,15 +3,15 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { AccountStore, ENV_KEY, expand } = require('./src/accounts');
-const { SessionTree, ago } = require('./src/tree');
+const { SessionTree, ago, BIG_SESSION_BYTES } = require('./src/tree');
 const sessions = require('./src/sessions');
 const { StatusLinePanel } = require('./src/statusline');
 
-const BIG_SESSION_BYTES = 2 * 1024 * 1024;
 const config = () => vscode.workspace.getConfiguration('ctxMan');
 
 let store;
 let tree;
+let view;
 
 function workspaceRoot(preferPath) {
   const folders = (vscode.workspace.workspaceFolders || []).map((f) => f.uri.fsPath);
@@ -36,14 +36,14 @@ async function pickAccount(placeHolder, exclude) {
     if (exclude && exclude.dir === account.dir) continue;
     const loggedIn = await store.loginState(account);
     items.push({
-      label: `${active && active.dir === account.dir ? '$(pass-filled)' : loggedIn ? '$(account)' : '$(circle-slash)'} ${account.label}`,
-      description: [account.email, account.org].filter(Boolean).join(' · ') || (loggedIn ? '' : 'not logged in'),
+      label: `${active && active.dir === account.dir ? '$(pass-filled)' : loggedIn ? '$(account)' : '$(warning)'} ${account.label}`,
+      description: [active && active.dir === account.dir ? 'active' : '', account.email, account.org].filter(Boolean).join(' · ') || (loggedIn ? '' : 'not logged in'),
       detail: account.dir,
       account,
     });
   }
   if (!items.length) {
-    vscode.window.showWarningMessage('No other Claude Code accounts found. Add one with "Ctx Man: Add Account Folder…".');
+    vscode.window.showWarningMessage('No other Claude Code accounts found. Add one with "Claude Ctx Man: Add Account Folder…".');
     return undefined;
   }
   const picked = await vscode.window.showQuickPick(items, { placeHolder, matchOnDescription: true, matchOnDetail: true });
@@ -56,7 +56,7 @@ async function pickSession(placeHolder) {
   const here = folders.length ? all.filter((s) => sessions.inWorkspace(s, folders)) : [];
   const list = (here.length ? here : all).slice(0, 50);
   if (!list.length) {
-    vscode.window.showInformationMessage('No Claude Code sessions found.');
+    vscode.window.showInformationMessage('No Claude Code sessions yet. Start one with the + next to an account.');
     return undefined;
   }
   const picked = await vscode.window.showQuickPick(
@@ -70,15 +70,16 @@ const sessionOf = async (node, placeHolder) => (node && node.session) || pickSes
 
 async function switchTo(account) {
   const applied = await store.activate(account);
-  const actions = ['Open Claude Terminal'];
-  if (applied.includes('extension')) actions.unshift('Restart Claude Code Extension');
+  const actions = ['Start Claude'];
+  if (applied.includes('extension')) actions.push('Reload Claude Code Extension');
   const users = [];
   if (applied.includes('terminals')) users.push('new terminals');
-  if (applied.includes('extension')) users.push('the Claude Code extension (after a restart)');
-  const where = users.length ? ` From now on ${users.join(' and ')} use it.` : '';
-  const choice = await vscode.window.showInformationMessage(`Active Claude account: ${account.label}${account.email ? ` (${account.email})` : ''}.${where}`, ...actions);
-  if (choice === 'Open Claude Terminal') launch(account, workspaceRoot());
-  else if (choice === 'Restart Claude Code Extension') vscode.commands.executeCommand('workbench.action.restartExtensionHost');
+  if (applied.includes('extension')) users.push('the Claude Code extension (after a reload)');
+  const who = users.join(' and ');
+  const where = who ? ` ${who[0].toUpperCase()}${who.slice(1)} use it now.` : '';
+  const choice = await vscode.window.showInformationMessage(`Now using ${account.label}${account.email ? ` (${account.email})` : ''}.${where}`, ...actions);
+  if (choice === 'Start Claude') launch(account, workspaceRoot());
+  else if (choice === 'Reload Claude Code Extension') vscode.commands.executeCommand('workbench.action.restartExtensionHost');
 }
 
 async function continueOnAccount(node) {
@@ -142,14 +143,15 @@ async function exportHandoff(node) {
 async function sessionActions(node) {
   const s = node.session;
   const items = [
-    { label: `$(play) Resume on ${s.account.label}`, run: () => launch(s.account, s.cwd, ['--resume', s.id]) },
-    { label: '$(arrow-swap) Continue on another account…', run: () => continueOnAccount(node) },
-    { label: '$(export) Export handoff (Cursor / other tools)', run: () => exportHandoff(node) },
+    { label: '$(play) Resume', description: `on ${s.account.label}`, run: () => launch(s.account, s.cwd, ['--resume', s.id]) },
+    { label: '$(arrow-swap) Continue on another account…', description: 'e.g. when this one hit its limit', run: () => continueOnAccount(node) },
+    { label: '$(export) Hand off to Cursor / other tool', description: 'summary file + clipboard', run: () => exportHandoff(node) },
+    { kind: vscode.QuickPickItemKind.Separator, label: '' },
     { label: '$(copy) Copy session ID', run: () => vscode.env.clipboard.writeText(s.id) },
     { label: '$(file) Reveal transcript file', run: () => vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(s.file)) },
   ];
-  const picked = await vscode.window.showQuickPick(items, { placeHolder: s.title });
-  if (picked) await picked.run();
+  const picked = await vscode.window.showQuickPick(items, { placeHolder: `What to do with "${s.title}"?` });
+  if (picked && picked.run) await picked.run();
 }
 
 async function addAccount() {
@@ -165,7 +167,7 @@ async function addAccount() {
 function updateStatus(item) {
   const a = store.active;
   item.text = `$(account) ${a ? a.label : 'Claude'}`;
-  item.tooltip = a ? `Claude account: ${a.label}${a.email ? `\n${a.email}` : ''}\n${a.dir}\n\nClick to switch` : 'Switch Claude account';
+  item.tooltip = a ? `Claude account: ${a.label}${a.email ? `\n${a.email}` : ''}\n\nClick to switch` : 'Switch Claude account';
   item.show();
 }
 
@@ -187,11 +189,21 @@ function watchSessions() {
   });
 }
 
+function setAllProjects(on) {
+  tree.allProjects = on;
+  view.description = on ? 'all projects' : 'this workspace';
+  vscode.commands.executeCommand('setContext', 'ctxMan.allProjects', on);
+  tree.refresh();
+}
+
 function activate(context) {
   store = new AccountStore(context);
   tree = new SessionTree(store);
   watchSessions();
   context.subscriptions.push({ dispose: () => watchers.forEach((w) => w.dispose()) });
+
+  view = vscode.window.createTreeView('ctxMan.sessions', { treeDataProvider: tree, showCollapseAll: true });
+  setAllProjects(false);
 
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99);
   status.command = 'ctxMan.switchAccount';
@@ -200,7 +212,7 @@ function activate(context) {
   const reg = (id, fn) => vscode.commands.registerCommand(id, fn);
   context.subscriptions.push(
     status,
-    vscode.window.registerTreeDataProvider('ctxMan.sessions', tree),
+    view,
     store.onDidChange(() => updateStatus(status)),
     reg('ctxMan.switchAccount', async () => {
       const account = await pickAccount('Switch the active Claude Code account');
@@ -233,10 +245,9 @@ function activate(context) {
       store.refreshLogins();
       store.reload();
     }),
-    reg('ctxMan.toggleAllProjects', () => {
-      tree.allProjects = !tree.allProjects;
-      tree.refresh();
-    }),
+    reg('ctxMan.toggleAllProjects', () => setAllProjects(!tree.allProjects)),
+    reg('ctxMan.showAllProjects', () => setAllProjects(true)),
+    reg('ctxMan.showWorkspaceOnly', () => setAllProjects(false)),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (['accounts', 'autoDiscover', 'hiddenAccounts'].some((k) => e.affectsConfiguration(`ctxMan.${k}`))) {
         store.reload();

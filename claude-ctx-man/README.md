@@ -1,4 +1,4 @@
-# Ctx Man
+# Claude Ctx Man
 
 Work with several Claude Code accounts from VS Code (or Cursor): switch the active one, move a session to another account and keep going, or hand a session off to another tool.
 
@@ -9,19 +9,24 @@ Each account is a config folder used as `CLAUDE_CONFIG_DIR` (`~/.claude`, `~/.cl
 - login: macOS Keychain item `Claude Code-credentials-<first 8 hex of sha256(folder path)>`, one per folder;
 - sessions: `<folder>/projects/<cwd with non-alphanumerics replaced by ->/<session-id>.jsonl`.
 
-Ctx Man only reads whether a Keychain item exists; it never reads tokens.
+Claude Ctx Man only reads whether a Keychain item exists; it never reads tokens.
 
-## Features
+## Using it
 
-- **Accounts & Sessions view** (activity bar): every `~/.claude` / `~/.claude-*` folder with its email, login state and the sessions of the open workspace. Toggle to see all projects.
-- **Switch account** (status bar or `Ctx Man: Switch Claude Account`): sets `CLAUDE_CONFIG_DIR` for new terminals (`terminal.integrated.env.*`) and for the Claude Code extension (`claudeCode.environmentVariables`; it needs a restart, offered in the notification).
-- **Continue Session on Another Account**: copies the transcript (plus subagent and file-history folders) into the other account and runs `claude --resume <id>` there in a new terminal. If the target already has a newer copy, you choose between resuming it and overwriting it.
-- **Export Handoff**: writes `.ctx-man/handoff-<id>.md` (git-ignored) with the original request, changed files, task list and recent messages, and copies it to the clipboard. In Cursor, @-mention the file or paste it.
-- **Resume Session**, **Open Claude Terminal**, **Copy Session ID**, **Reveal Transcript File**.
+Open the **Claude Accounts** icon in the activity bar (three accounts with arrows between them).
+
+- **Accounts** are listed with the active one on top (green check). Hover an account to see what it is used for.
+  - **✓** makes it the active account: new terminals (`terminal.integrated.env.*`) and the Claude Code extension (`claudeCode.environmentVariables`, after a reload offered in the notification) use it from then on. The status bar item does the same from anywhere.
+  - **+** starts a new Claude session on that account. On an account that is not logged in, Claude asks you to log in first.
+- **Sessions** of the open workspace are listed under each account. The list icon in the title bar shows sessions from all projects instead; the view subtitle says which one you see.
+  - **▶** resumes the session on its account.
+  - **⇄** continues it on another account, for example when this one hit its limit: the transcript (plus subagent and file-history folders) is copied there and `claude --resume <id>` runs in a new terminal. If the other account already has a newer copy, you choose between resuming it and overwriting it.
+  - Click a session for every action, including **Hand off to Cursor / other tool**: it writes `.ctx-man/handoff-<id>.md` (git-ignored) with the original request, changed files, task list and recent messages, and copies it to the clipboard. In Cursor, @-mention the file or paste it.
+- The **…** menu holds the less frequent actions: add an account folder, show hidden accounts, customize the status line.
 
 ## Status line
 
-`Ctx Man: Configure Claude Status Line` (or the pulse icon in the panel) opens an editor for Claude Code's footer:
+`Claude Ctx Man: Customize Claude Status Line…` (also in the panel's … menu) opens an editor for Claude Code's footer:
 
 - drag segments onto up to 3 lines: account, project, git (ahead/behind, changed files), model, effort, context, tokens, 5-hour and weekly limits (with time to reset), cost, lines changed, session time, clock, output style, version, custom text;
 - per segment: icon, label, color (palette or any hex), bold, attach to previous; percentages as `77%`, a bar `▰▰▰▱`, or both, optionally colored by usage (warn/danger thresholds);

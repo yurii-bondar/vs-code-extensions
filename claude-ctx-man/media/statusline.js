@@ -290,7 +290,7 @@
     install() {
       const c = S.config.compat;
       const status = (st) =>
-        st.kind === 'ctxman' ? '<span class="badge ok">Ctx Man ✓</span>' : st.kind === 'custom' ? `<span class="badge">custom</span> <code class="small">${esc(st.command)}</code>` : '<span class="badge">none</span>';
+        st.kind === 'ctxman' ? '<span class="badge ok">Claude Ctx Man ✓</span>' : st.kind === 'custom' ? `<span class="badge">custom</span> <code class="small">${esc(st.command)}</code>` : '<span class="badge">none</span>';
       $('#install-card').innerHTML = `
         <h3>Install</h3>
         <p class="muted small">Sets <code>statusLine</code> in each selected account's <code>settings.json</code>. The previous value is remembered, so Restore puts it back. A copy <code>settings.json.ctx-man-backup</code> is kept too.</p>

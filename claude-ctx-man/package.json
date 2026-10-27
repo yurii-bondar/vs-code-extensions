@@ -1,15 +1,16 @@
 {
-  "name": "ctx-man",
-  "displayName": "Ctx Man",
-  "description": "Switch between Claude Code accounts, move a session to another account and keep going, or hand it off to Cursor and other tools.",
-  "version": "0.1.0",
+  "name": "claude-ctx-man",
+  "displayName": "Claude Ctx Man",
+  "description": "Several Claude Code accounts in one place: switch with one click, move a session to another account and keep going, or hand it off to Cursor and other tools.",
+  "icon": "media/icon.png",
+  "version": "0.2.0",
   "publisher": "bondevn",
   "license": "MIT",
   "author": "Yurii Bondar",
   "repository": {
     "type": "git",
     "url": "https://github.com/yurii-bondar/vs-code-extensions.git",
-    "directory": "ctx-man"
+    "directory": "claude-ctx-man"
   },
   "engines": {
     "vscode": "^1.85.0"
@@ -17,6 +18,18 @@
   "categories": [
     "Other",
     "AI"
+  ],
+  "keywords": [
+    "claude",
+    "claude code",
+    "anthropic",
+    "accounts",
+    "switch account",
+    "session",
+    "resume",
+    "handoff",
+    "cursor",
+    "status line"
   ],
   "main": "./extension.js",
   "activationEvents": [
@@ -27,7 +40,7 @@
       "activitybar": [
         {
           "id": "ctxMan",
-          "title": "Ctx Man",
+          "title": "Claude Accounts",
           "icon": "media/activity.svg"
         }
       ]
@@ -36,98 +49,110 @@
       "ctxMan": [
         {
           "id": "ctxMan.sessions",
-          "name": "Accounts & Sessions"
+          "name": "Accounts"
         }
       ]
     },
     "viewsWelcome": [
       {
         "view": "ctxMan.sessions",
-        "contents": "No Claude Code config folders found.\nCtx Man looks for ~/.claude and ~/.claude-* folders.\n[Add account](command:ctxMan.addAccount)"
+        "contents": "No Claude Code accounts found yet.\nEach account is a config folder such as ~/.claude or ~/.claude-work. Log in to Claude Code once, or point to an existing folder.\n[Add Account Folder](command:ctxMan.addAccount)"
       }
     ],
     "commands": [
       {
         "command": "ctxMan.switchAccount",
-        "title": "Switch Claude Account",
-        "category": "Ctx Man",
+        "title": "Switch Account",
+        "category": "Claude Ctx Man",
         "icon": "$(account)"
       },
       {
-        "command": "ctxMan.openTerminal",
-        "title": "Open Claude Terminal",
-        "category": "Ctx Man",
-        "icon": "$(terminal)"
+        "command": "ctxMan.activateAccount",
+        "title": "Use This Account",
+        "category": "Claude Ctx Man",
+        "icon": "$(check)"
       },
       {
-        "command": "ctxMan.continueOnAccount",
-        "title": "Continue Session on Another Account",
-        "category": "Ctx Man",
-        "icon": "$(arrow-swap)"
+        "command": "ctxMan.openTerminal",
+        "title": "New Claude Session",
+        "category": "Claude Ctx Man",
+        "icon": "$(add)"
       },
       {
         "command": "ctxMan.resumeHere",
-        "title": "Resume Session",
-        "category": "Ctx Man",
+        "title": "Resume",
+        "category": "Claude Ctx Man",
         "icon": "$(play)"
       },
       {
-        "command": "ctxMan.exportHandoff",
-        "title": "Export Handoff (Cursor / other tools)",
-        "category": "Ctx Man",
-        "icon": "$(export)"
+        "command": "ctxMan.continueOnAccount",
+        "title": "Continue on Another Account",
+        "category": "Claude Ctx Man",
+        "icon": "$(arrow-swap)"
       },
       {
-        "command": "ctxMan.revealSession",
-        "title": "Reveal Transcript File",
-        "category": "Ctx Man"
+        "command": "ctxMan.exportHandoff",
+        "title": "Hand Off to Cursor / Other Tool",
+        "category": "Claude Ctx Man",
+        "icon": "$(export)"
       },
       {
         "command": "ctxMan.copySessionId",
         "title": "Copy Session ID",
-        "category": "Ctx Man"
+        "category": "Claude Ctx Man"
       },
       {
-        "command": "ctxMan.activateAccount",
-        "title": "Make Active Account",
-        "category": "Ctx Man",
-        "icon": "$(check)"
+        "command": "ctxMan.revealSession",
+        "title": "Reveal Transcript File",
+        "category": "Claude Ctx Man"
       },
       {
         "command": "ctxMan.addAccount",
         "title": "Add Account Folder…",
-        "category": "Ctx Man",
+        "category": "Claude Ctx Man",
         "icon": "$(add)"
       },
       {
         "command": "ctxMan.hideAccount",
         "title": "Hide Account",
-        "category": "Ctx Man",
+        "category": "Claude Ctx Man",
         "icon": "$(eye-closed)"
       },
       {
         "command": "ctxMan.showHiddenAccounts",
         "title": "Show Hidden Accounts…",
-        "category": "Ctx Man",
+        "category": "Claude Ctx Man",
         "icon": "$(eye)"
       },
       {
         "command": "ctxMan.configureStatusLine",
-        "title": "Configure Claude Status Line",
-        "category": "Ctx Man",
+        "title": "Customize Claude Status Line…",
+        "category": "Claude Ctx Man",
         "icon": "$(pulse)"
       },
       {
         "command": "ctxMan.refresh",
         "title": "Refresh",
-        "category": "Ctx Man",
+        "category": "Claude Ctx Man",
         "icon": "$(refresh)"
       },
       {
         "command": "ctxMan.toggleAllProjects",
         "title": "Toggle: This Workspace / All Projects",
-        "category": "Ctx Man",
+        "category": "Claude Ctx Man",
         "icon": "$(list-tree)"
+      },
+      {
+        "command": "ctxMan.showAllProjects",
+        "title": "Show Sessions from All Projects",
+        "category": "Claude Ctx Man",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "ctxMan.showWorkspaceOnly",
+        "title": "Show Only This Workspace",
+        "category": "Claude Ctx Man",
+        "icon": "$(list-flat)"
       }
     ],
     "menus": {
@@ -138,34 +163,44 @@
           "group": "navigation@1"
         },
         {
-          "command": "ctxMan.continueOnAccount",
-          "when": "view == ctxMan.sessions",
+          "command": "ctxMan.showAllProjects",
+          "when": "view == ctxMan.sessions && !ctxMan.allProjects",
           "group": "navigation@2"
         },
         {
-          "command": "ctxMan.toggleAllProjects",
-          "when": "view == ctxMan.sessions",
-          "group": "navigation@3"
-        },
-        {
-          "command": "ctxMan.configureStatusLine",
-          "when": "view == ctxMan.sessions",
-          "group": "navigation@4"
+          "command": "ctxMan.showWorkspaceOnly",
+          "when": "view == ctxMan.sessions && ctxMan.allProjects",
+          "group": "navigation@2"
         },
         {
           "command": "ctxMan.refresh",
           "when": "view == ctxMan.sessions",
-          "group": "navigation@5"
+          "group": "navigation@3"
+        },
+        {
+          "command": "ctxMan.continueOnAccount",
+          "when": "view == ctxMan.sessions",
+          "group": "1_session@1"
+        },
+        {
+          "command": "ctxMan.exportHandoff",
+          "when": "view == ctxMan.sessions",
+          "group": "1_session@2"
         },
         {
           "command": "ctxMan.addAccount",
           "when": "view == ctxMan.sessions",
-          "group": "1_accounts@1"
+          "group": "2_accounts@1"
         },
         {
           "command": "ctxMan.showHiddenAccounts",
           "when": "view == ctxMan.sessions",
-          "group": "1_accounts@2"
+          "group": "2_accounts@2"
+        },
+        {
+          "command": "ctxMan.configureStatusLine",
+          "when": "view == ctxMan.sessions",
+          "group": "3_statusline@1"
         }
       ],
       "view/item/context": [
@@ -178,11 +213,6 @@
           "command": "ctxMan.continueOnAccount",
           "when": "view == ctxMan.sessions && viewItem == session",
           "group": "inline@2"
-        },
-        {
-          "command": "ctxMan.exportHandoff",
-          "when": "view == ctxMan.sessions && viewItem == session",
-          "group": "inline@3"
         },
         {
           "command": "ctxMan.resumeHere",
@@ -210,14 +240,24 @@
           "group": "2_misc@2"
         },
         {
+          "command": "ctxMan.activateAccount",
+          "when": "view == ctxMan.sessions && viewItem == account",
+          "group": "inline@1"
+        },
+        {
           "command": "ctxMan.openTerminal",
           "when": "view == ctxMan.sessions && viewItem =~ /^account/",
-          "group": "inline@1"
+          "group": "inline@2"
         },
         {
           "command": "ctxMan.activateAccount",
           "when": "view == ctxMan.sessions && viewItem == account",
-          "group": "inline@2"
+          "group": "1_account@1"
+        },
+        {
+          "command": "ctxMan.openTerminal",
+          "when": "view == ctxMan.sessions && viewItem =~ /^account/",
+          "group": "1_account@2"
         },
         {
           "command": "ctxMan.hideAccount",
@@ -241,11 +281,19 @@
         {
           "command": "ctxMan.hideAccount",
           "when": "false"
+        },
+        {
+          "command": "ctxMan.showAllProjects",
+          "when": "false"
+        },
+        {
+          "command": "ctxMan.showWorkspaceOnly",
+          "when": "false"
         }
       ]
     },
     "configuration": {
-      "title": "Ctx Man",
+      "title": "Claude Ctx Man",
       "properties": {
         "ctxMan.accounts": {
           "type": "array",
