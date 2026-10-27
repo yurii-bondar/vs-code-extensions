@@ -1,0 +1,5 @@
+.vscode/**
+release.config.cjs
+*.vsix
+test/**
+media/icon.svg

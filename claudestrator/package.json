@@ -1,0 +1,372 @@
+{
+  "name": "claudestrator",
+  "displayName": "Claudestrator",
+  "description": "A Claude Code agent pipeline in VS Code: plan → your approval → code and tests per repo → review with fix rounds → commit → confirmed push → draft PRs. Also checks a ticket's readiness against its acceptance criteria and audits projects for bugs and bottlenecks.",
+  "version": "0.1.1",
+  "publisher": "bondevn",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yurii-bondar/vs-code-extensions.git",
+    "directory": "claudestrator"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "keywords": [
+    "claude",
+    "claude code",
+    "agents",
+    "orchestrator",
+    "pipeline",
+    "jira",
+    "pull request"
+  ],
+  "icon": "media/icon.png",
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "package": "npx @vscode/vsce package",
+    "preview": "node test/harness/server.js"
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "claudestrator",
+          "title": "Claudestrator",
+          "icon": "media/activity-orchestra.svg"
+        }
+      ]
+    },
+    "views": {
+      "claudestrator": [
+        {
+          "id": "claudestrator.tasks",
+          "name": "Tasks",
+          "icon": "media/activity-orchestra.svg"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "claudestrator.tasks",
+        "contents": "Hand a task to a pipeline of Claude Code agents: they plan it, you approve, they write the code and tests in each repo, review it, and open draft PRs once you confirm.\n[$(add) New Task](command:claudestrator.newTask)\nOr check that a ticket is done, or audit the code: [Check readiness](command:claudestrator.checkReadiness) · [Audit](command:claudestrator.audit)\n[$(rocket) Open Claudestrator](command:claudestrator.open)\nFirst time here? [Set up this workspace](command:claudestrator.setup) (repos, checks, agents)."
+      }
+    ],
+    "commands": [
+      {
+        "command": "claudestrator.open",
+        "title": "Open Dashboard",
+        "category": "Claudestrator",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "claudestrator.newTask",
+        "title": "New Task…",
+        "category": "Claudestrator",
+        "icon": "$(add)"
+      },
+      {
+        "command": "claudestrator.checkReadiness",
+        "title": "Check a Task's Readiness…",
+        "category": "Claudestrator",
+        "icon": "$(checklist)"
+      },
+      {
+        "command": "claudestrator.audit",
+        "title": "Audit the Project…",
+        "category": "Claudestrator",
+        "icon": "$(search)"
+      },
+      {
+        "command": "claudestrator.newTaskFromSelection",
+        "title": "Start a Task from Selection",
+        "category": "Claudestrator"
+      },
+      {
+        "command": "claudestrator.openTask",
+        "title": "Open Task",
+        "category": "Claudestrator",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "claudestrator.runTask",
+        "title": "Run / Resume Task",
+        "category": "Claudestrator",
+        "icon": "$(play)"
+      },
+      {
+        "command": "claudestrator.stopTask",
+        "title": "Stop Task",
+        "category": "Claudestrator",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "claudestrator.answer",
+        "title": "Answer…",
+        "category": "Claudestrator",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "claudestrator.revealTaskFolder",
+        "title": "Reveal Task Folder",
+        "category": "Claudestrator"
+      },
+      {
+        "command": "claudestrator.deleteTask",
+        "title": "Delete Task…",
+        "category": "Claudestrator",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "claudestrator.agents",
+        "title": "Agents & Pipeline",
+        "category": "Claudestrator",
+        "icon": "$(organization)"
+      },
+      {
+        "command": "claudestrator.repos",
+        "title": "Repositories & Checks",
+        "category": "Claudestrator",
+        "icon": "$(repo)"
+      },
+      {
+        "command": "claudestrator.settings",
+        "title": "Settings",
+        "category": "Claudestrator",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "claudestrator.setup",
+        "title": "Set Up This Workspace",
+        "category": "Claudestrator",
+        "icon": "$(wand)"
+      },
+      {
+        "command": "claudestrator.openConfig",
+        "title": "Open config.yaml",
+        "category": "Claudestrator",
+        "icon": "$(file-code)"
+      },
+      {
+        "command": "claudestrator.checkHealth",
+        "title": "Check Claude Code, Git and GitHub CLI",
+        "category": "Claudestrator",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "claudestrator.refresh",
+        "title": "Refresh",
+        "category": "Claudestrator",
+        "icon": "$(refresh)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "claudestrator.newTask",
+        "key": "ctrl+alt+n",
+        "mac": "cmd+alt+n",
+        "when": "!terminalFocus"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "claudestrator.newTask",
+          "when": "view == claudestrator.tasks",
+          "group": "navigation@1"
+        },
+        {
+          "command": "claudestrator.open",
+          "when": "view == claudestrator.tasks",
+          "group": "navigation@2"
+        },
+        {
+          "command": "claudestrator.agents",
+          "when": "view == claudestrator.tasks",
+          "group": "navigation@3"
+        },
+        {
+          "command": "claudestrator.refresh",
+          "when": "view == claudestrator.tasks",
+          "group": "navigation@4"
+        },
+        {
+          "command": "claudestrator.repos",
+          "when": "view == claudestrator.tasks",
+          "group": "1_config@1"
+        },
+        {
+          "command": "claudestrator.settings",
+          "when": "view == claudestrator.tasks",
+          "group": "1_config@2"
+        },
+        {
+          "command": "claudestrator.openConfig",
+          "when": "view == claudestrator.tasks",
+          "group": "1_config@3"
+        },
+        {
+          "command": "claudestrator.setup",
+          "when": "view == claudestrator.tasks",
+          "group": "1_config@4"
+        },
+        {
+          "command": "claudestrator.checkHealth",
+          "when": "view == claudestrator.tasks",
+          "group": "1_config@5"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "claudestrator.answer",
+          "when": "view == claudestrator.tasks && viewItem =~ /waiting/",
+          "group": "inline@1"
+        },
+        {
+          "command": "claudestrator.runTask",
+          "when": "view == claudestrator.tasks && viewItem =~ /resumable/",
+          "group": "inline@2"
+        },
+        {
+          "command": "claudestrator.stopTask",
+          "when": "view == claudestrator.tasks && viewItem =~ /stoppable/",
+          "group": "inline@3"
+        },
+        {
+          "command": "claudestrator.openTask",
+          "when": "view == claudestrator.tasks && viewItem =~ /^task/",
+          "group": "1_task@1"
+        },
+        {
+          "command": "claudestrator.answer",
+          "when": "view == claudestrator.tasks && viewItem =~ /waiting/",
+          "group": "1_task@2"
+        },
+        {
+          "command": "claudestrator.runTask",
+          "when": "view == claudestrator.tasks && viewItem =~ /resumable/",
+          "group": "1_task@3"
+        },
+        {
+          "command": "claudestrator.stopTask",
+          "when": "view == claudestrator.tasks && viewItem =~ /stoppable/",
+          "group": "1_task@4"
+        },
+        {
+          "command": "claudestrator.revealTaskFolder",
+          "when": "view == claudestrator.tasks && viewItem =~ /^task/",
+          "group": "2_misc@1"
+        },
+        {
+          "command": "claudestrator.deleteTask",
+          "when": "view == claudestrator.tasks && viewItem =~ /^task/ && !(viewItem =~ /stoppable/)",
+          "group": "3_danger@1"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "claudestrator.newTaskFromSelection",
+          "when": "editorHasSelection",
+          "group": "claudestrator@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "claudestrator.openTask",
+          "when": "false"
+        },
+        {
+          "command": "claudestrator.revealTaskFolder",
+          "when": "false"
+        },
+        {
+          "command": "claudestrator.newTaskFromSelection",
+          "when": "editorHasSelection"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Claudestrator",
+      "properties": {
+        "claudestrator.claudePath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the Claude Code CLI. Empty: found on your login shell's `PATH` (e.g. `~/.local/bin/claude`)."
+        },
+        "claudestrator.claudeConfigDir": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Claude Code account (config folder, used as `CLAUDE_CONFIG_DIR`) the agents run under, e.g. `~/.claude-alt`. Empty: your default account."
+        },
+        "claudestrator.settingSources": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "user",
+              "project",
+              "local"
+            ]
+          },
+          "default": [
+            "project",
+            "local"
+          ],
+          "markdownDescription": "Which Claude Code settings the agents load. `project` brings each repo's `CLAUDE.md` and `.claude/` rules; leaving out `user` keeps your personal plugins and hooks away from the pipeline."
+        },
+        "claudestrator.askPermissions": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Ask you before an agent edits a file or runs a command. Off: the built-in guard decides (no force-push, no pushes before you confirm, edits only inside the stage's repo, no destructive `rm`/`git`)."
+        },
+        "claudestrator.notifications": {
+          "type": "string",
+          "enum": [
+            "all",
+            "needsYou",
+            "off"
+          ],
+          "enumDescriptions": [
+            "When a task needs you, finishes or fails",
+            "Only when a task needs you",
+            "Never"
+          ],
+          "default": "all",
+          "description": "When Claudestrator shows a notification."
+        },
+        "claudestrator.workspaceFolder": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Folder that holds the repos and `.claudestrator/config.yaml`. Empty: the first workspace folder."
+        },
+        "claudestrator.nodePath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Node.js used to run the guard hook. Empty: `node` from your `PATH`, else VS Code's own runtime."
+        },
+        "claudestrator.atlassian.site": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Atlassian site for Jira and Confluence, e.g. `acme.atlassian.net`. The API token is stored in VS Code's secret storage (set it in Claudestrator → Settings)."
+        },
+        "claudestrator.atlassian.email": {
+          "type": "string",
+          "default": "",
+          "description": "Email of the Atlassian account the API token belongs to."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "yaml": "^2.5.0"
+  }
+}

@@ -1,0 +1,14 @@
+.vscode/**
+*.vsix
+test/**
+release.config.cjs
+.gitignore
+media/icon.svg
+# yaml: only the Node build is loaded (dist/index.js); browser build, types, CLI and docs are not
+node_modules/yaml/browser/**
+node_modules/yaml/**/*.d.ts
+node_modules/yaml/bin.mjs
+node_modules/yaml/README.md
+node_modules/yaml/util.js
+node_modules/yaml/dist/cli.mjs
+node_modules/yaml/dist/test-events.js

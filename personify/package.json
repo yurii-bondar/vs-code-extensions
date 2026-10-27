@@ -1,0 +1,74 @@
+{
+  "name": "personify",
+  "displayName": "Personify",
+  "description": "One friendly panel to customize hotkeys, sidebar/editor/terminal colors and fonts, and JS/TS/Go syntax colors.",
+  "version": "0.1.0",
+  "publisher": "bondevn",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yurii-bondar/vs-code-extensions.git",
+    "directory": "personify"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Themes",
+    "Keymaps",
+    "Other"
+  ],
+  "keywords": [
+    "theme",
+    "colors",
+    "keybindings",
+    "syntax",
+    "customize"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "personify.open",
+        "title": "Open",
+        "category": "Personify"
+      },
+      {
+        "command": "personify.openHotkeys",
+        "title": "Hotkeys",
+        "category": "Personify"
+      },
+      {
+        "command": "personify.openAppearance",
+        "title": "Appearance (Sidebar, Editor, Terminal)",
+        "category": "Personify"
+      },
+      {
+        "command": "personify.openSyntax",
+        "title": "Syntax Colors",
+        "category": "Personify"
+      }
+    ],
+    "configuration": {
+      "title": "Personify",
+      "properties": {
+        "personify.showStatusBarItem": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the Personify button in the status bar."
+        },
+        "personify.keybindingsPath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to keybindings.json. Leave empty to detect it (set this when you use a non-default VS Code profile)."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "jsonc-parser": "^3.3.1"
+  }
+}

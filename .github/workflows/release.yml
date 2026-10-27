@@ -1,0 +1,65 @@
+name: Release
+
+# Paused: extensions are published by hand for now. To turn it back on, restore:
+#   push:
+#     branches: [main]
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write # push release commits and tags
+  issues: write # semantic-release comments on released issues
+  pull-requests: write # ...and on released PRs
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # semantic-release needs the full history and tags
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: '**/package-lock.json'
+
+      - name: Install release tooling
+        run: npm ci
+
+      - name: Install extension dependencies and run tests
+        run: |
+          for dir in */; do
+            dir="${dir%/}"
+            [ -f "$dir/release.config.cjs" ] || continue
+            echo "::group::$dir"
+            if [ -f "$dir/package-lock.json" ]; then npm ci --prefix "$dir"; fi
+            npm test --prefix "$dir" --if-present
+            echo "::endgroup::"
+          done
+
+      # Extensions are released one after another in the same checkout, so each
+      # release commit lands on top of the previous one and pushes never race.
+      - name: Release changed extensions
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          failed=""
+          for dir in */; do
+            dir="${dir%/}"
+            [ -f "$dir/release.config.cjs" ] || continue
+            echo "::group::semantic-release: $dir"
+            (cd "$dir" && npx --no-install semantic-release) || failed="$failed $dir"
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::Release failed for:$failed"
+            exit 1
+          fi

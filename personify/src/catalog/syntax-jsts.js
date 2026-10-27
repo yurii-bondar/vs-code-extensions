@@ -1,0 +1,158 @@
+// JavaScript / TypeScript / Node.js tokens.
+// `scopes` are TextMate selectors (prefixed with every root below), `semantic` are semantic token
+// selectors (suffixed with every language below) so the color wins whether or not
+// semantic highlighting is on.
+
+const item = (id, label, example, scopes, semantic = [], hint) => ({ id, label, example, scopes, semantic, hint });
+
+const SEMANTIC_HINT = 'With semantic highlighting on, TypeScript may color some of these as plain variables.';
+
+module.exports = {
+  id: 'jsts',
+  title: 'JavaScript / TypeScript',
+  short: 'JS / TS',
+  roots: ['source.js', 'source.ts', 'source.tsx'],
+  semanticLanguages: ['javascript', 'typescript', 'javascriptreact', 'typescriptreact'],
+  sampleLanguage: 'typescriptreact',
+  groups: [
+    {
+      title: 'Keywords',
+      items: [
+        item('kw.import', 'Import / export', 'import, export, from, as, default', ['keyword.control.import', 'keyword.control.export', 'keyword.control.from', 'keyword.control.as', 'keyword.control.default', 'keyword.control.require']),
+        item('kw.cond', 'Conditionals', 'if, else, switch, case', ['keyword.control.conditional', 'keyword.control.switch']),
+        item('kw.loop', 'Loops', 'for, while, do, break, continue', ['keyword.control.loop']),
+        item('kw.flow', 'Flow', 'return, await, yield', ['keyword.control.flow']),
+        item('kw.trycatch', 'Errors', 'try, catch, finally, throw', ['keyword.control.trycatch']),
+        item('kw.decl', 'Variable declarations', 'const, let, var', ['storage.type']),
+        item('kw.func', 'Function & class keywords', 'function, class, get, set', ['storage.type.function', 'storage.type.class', 'storage.type.property']),
+        item('kw.type', 'Type declarations', 'interface, type, enum, namespace', ['storage.type.interface', 'storage.type.type', 'storage.type.enum', 'storage.type.namespace', 'storage.type.module']),
+        item('kw.mod', 'Modifiers', 'async, static, private, readonly, extends', ['storage.modifier']),
+        item('kw.op', 'Keyword operators', 'new, typeof, instanceof, in, of, delete, keyof', ['keyword.operator.new', 'keyword.operator.expression']),
+        item('kw.this', 'this / super', 'this, super', ['variable.language.this', 'variable.language.super']),
+        item('kw.arrow', 'Arrow', '=>', ['storage.type.function.arrow']),
+      ],
+    },
+    {
+      title: 'Literals',
+      items: [
+        item('lit.string', 'Strings', "'text', \"text\"", ['string.quoted', 'punctuation.definition.string']),
+        item('lit.template', 'Template strings', '`hello ${name}`', ['string.template', 'punctuation.definition.string.template']),
+        item('lit.interp', 'Template ${ }', '${ … }', ['punctuation.definition.template-expression', 'punctuation.section.embedded']),
+        item('lit.escape', 'Escape sequences', '\\n, \\t, \\u00e9', ['constant.character.escape']),
+        item('lit.regex', 'Regular expressions', '/^[a-z]+$/i', ['string.regexp']),
+        item('lit.number', 'Numbers', '42, 0xff, 1_000n', ['constant.numeric']),
+        item('lit.bool', 'Booleans', 'true, false', ['constant.language.boolean']),
+        item('lit.null', 'null / undefined', 'null, undefined, NaN, Infinity', ['constant.language.null', 'constant.language.undefined', 'constant.language.nan', 'constant.language.infinity']),
+      ],
+    },
+    {
+      title: 'Names',
+      items: [
+        item('id.var', 'Variables', 'let count', ['variable.other.readwrite', 'variable.other.object'], ['variable']),
+        item('id.const', 'Constants', 'const MAX, const file', ['variable.other.constant'], ['variable.readonly']),
+        item('id.prop', 'Properties', 'this.cache, obj.size', ['variable.other.property', 'variable.other.object.property', 'support.variable.property'], ['property']),
+        item('id.key', 'Object keys', '{ loaded: true }', ['meta.object-literal.key']),
+        item('id.param', 'Parameters', 'function f(name, opts)', ['variable.parameter'], ['parameter']),
+        item('fn.decl', 'Function declarations', 'function load() / async load()', ['meta.definition.function entity.name.function', 'meta.definition.method entity.name.function', 'meta.method.declaration entity.name.function'], ['function.declaration', 'method.declaration']),
+        item('fn.call', 'Function calls', 'load(), path.join()', ['entity.name.function'], ['function', 'method']),
+        item('fn.builtin', 'Built-in functions', 'JSON.parse, Object.keys, setTimeout', ['support.function'], ['function.defaultLibrary', 'method.defaultLibrary']),
+        item('deco', 'Decorators', '@Injectable()', ['meta.decorator entity.name.function', 'meta.decorator variable.other.readwrite', 'punctuation.decorator']),
+      ],
+    },
+    {
+      title: 'Types',
+      items: [
+        item('type.class', 'Class names', 'class ConfigService', ['entity.name.type.class'], ['class']),
+        item('type.name', 'Type names', 'type Handler, : Handler', ['entity.name.type', 'entity.name.type.alias'], ['type']),
+        item('type.iface', 'Interfaces', 'interface Loader', ['entity.name.type.interface'], ['interface']),
+        item('type.enum', 'Enums', 'enum Level', ['entity.name.type.enum'], ['enum']),
+        item('type.enumMember', 'Enum members', 'Level.Debug', ['variable.other.enummember'], ['enumMember']),
+        item('type.param', 'Generic type parameters', '<T, K extends keyof T>', ['meta.type.parameters entity.name.type'], ['typeParameter']),
+        item('type.primitive', 'Primitive types', 'string, number, boolean, void, unknown', ['support.type.primitive', 'support.type.builtin']),
+        item('type.builtin', 'Built-in classes', 'Map, Promise, Error, Object, JSON', ['support.class.builtin', 'support.class', 'support.constant.json'], ['class.defaultLibrary', 'interface.defaultLibrary', 'variable.defaultLibrary']),
+        item('type.inherited', 'Extended / implemented', 'extends Base implements Loader', ['entity.other.inherited-class']),
+        item('type.namespace', 'Namespaces & modules', 'namespace Api', ['entity.name.type.module'], ['namespace']),
+      ],
+    },
+    {
+      title: 'Node.js',
+      items: [
+        item('node.global', 'Node globals', 'process, require, module, exports, __dirname', ['support.variable.object.process', 'support.variable.object.node', 'support.type.object.module', 'support.function.node', 'support.variable.node'], [], SEMANTIC_HINT),
+        item('node.console', 'console', 'console.log, console.error', ['support.class.console', 'support.function.console'], [], SEMANTIC_HINT),
+      ],
+    },
+    {
+      title: 'Operators & punctuation',
+      items: [
+        item('op.general', 'Operators', '+ - * / | ?:', ['keyword.operator']),
+        item('op.assign', 'Assignment', '= += ??=', ['keyword.operator.assignment']),
+        item('op.logic', 'Comparison & logic', '=== !== && || ! ??', ['keyword.operator.logical', 'keyword.operator.comparison', 'keyword.operator.relational']),
+        item('op.spread', 'Spread / rest', '...args', ['keyword.operator.spread', 'keyword.operator.rest']),
+        item('punc.brace', 'Brackets', '( ) [ ] { } < >', ['meta.brace', 'punctuation.definition.block', 'punctuation.definition.parameters', 'punctuation.definition.typeparameters', 'punctuation.definition.binding-pattern'], [], 'Bracket pair colorization (Appearance → Editor) overrides this.'),
+        item('punc.sep', 'Separators', ', ; :', ['punctuation.separator', 'punctuation.terminator']),
+        item('punc.accessor', 'Dot accessor', 'obj.prop, obj?.prop', ['punctuation.accessor']),
+      ],
+    },
+    {
+      title: 'Comments',
+      items: [
+        item('cmt', 'Comments', '// note, /* block */', ['comment', 'punctuation.definition.comment']),
+        item('cmt.doc', 'JSDoc blocks', '/** … */', ['comment.block.documentation']),
+        item('cmt.tag', 'JSDoc tags', '@param, @returns', ['storage.type.class.jsdoc', 'punctuation.definition.block.tag.jsdoc']),
+        item('cmt.type', 'JSDoc types & names', '{string} name', ['entity.name.type.instance.jsdoc', 'variable.other.jsdoc']),
+      ],
+    },
+    {
+      title: 'JSX / TSX',
+      items: [
+        item('jsx.tag', 'HTML tags', '<div>, <span>', ['entity.name.tag']),
+        item('jsx.component', 'Components', '<Button />', ['support.class.component', 'entity.name.tag.custom']),
+        item('jsx.attr', 'Attributes', 'className, onClick', ['entity.other.attribute-name']),
+        item('jsx.punc', 'Tag brackets', '< /> </', ['punctuation.definition.tag']),
+      ],
+    },
+  ],
+  // ⟦itemId¦text⟧ marks a token; everything else is plain text.
+  sample: [
+    '⟦kw.import¦import⟧ ⟦punc.brace¦{⟧ ⟦id.var¦readFile⟧ ⟦punc.brace¦}⟧ ⟦kw.import¦from⟧ ⟦lit.string¦\'node:fs/promises\'⟧⟦punc.sep¦;⟧',
+    '⟦kw.import¦import⟧ ⟦id.var¦path⟧ ⟦kw.import¦from⟧ ⟦lit.string¦\'path\'⟧⟦punc.sep¦;⟧',
+    '⟦kw.decl¦const⟧ ⟦id.const¦os⟧ ⟦op.assign¦=⟧ ⟦node.global¦require⟧⟦punc.brace¦(⟧⟦lit.string¦\'os\'⟧⟦punc.brace¦)⟧⟦punc.sep¦;⟧',
+    '',
+    '⟦cmt.doc¦/**⟧',
+    '⟦cmt.doc¦ * Loads a config file and caches it.⟧',
+    '⟦cmt.doc¦ * ⟧⟦cmt.tag¦@param⟧⟦cmt.doc¦ ⟧⟦cmt.type¦{string}⟧⟦cmt.doc¦ ⟧⟦cmt.type¦name⟧⟦cmt.doc¦ config name⟧',
+    '⟦cmt.doc¦ */⟧',
+    '⟦deco¦@Injectable⟧⟦punc.brace¦()⟧',
+    '⟦kw.import¦export⟧ ⟦kw.func¦class⟧ ⟦type.class¦ConfigService⟧⟦punc.brace¦<⟧⟦type.param¦T⟧ ⟦kw.mod¦extends⟧ ⟦type.primitive¦object⟧⟦punc.brace¦>⟧ ⟦kw.mod¦extends⟧ ⟦type.inherited¦BaseService⟧ ⟦kw.mod¦implements⟧ ⟦type.inherited¦Loader⟧ ⟦punc.brace¦{⟧',
+    '  ⟦kw.mod¦private⟧ ⟦kw.mod¦readonly⟧ ⟦id.prop¦cache⟧ ⟦op.assign¦=⟧ ⟦kw.op¦new⟧ ⟦type.builtin¦Map⟧⟦punc.brace¦<⟧⟦type.primitive¦string⟧⟦punc.sep¦,⟧ ⟦type.param¦T⟧⟦punc.brace¦>()⟧⟦punc.sep¦;⟧',
+    '  ⟦kw.mod¦static⟧ ⟦id.prop¦MAX_SIZE⟧ ⟦op.assign¦=⟧ ⟦lit.number¦100⟧⟦punc.sep¦;⟧',
+    '',
+    '  ⟦kw.mod¦async⟧ ⟦fn.decl¦load⟧⟦punc.brace¦(⟧⟦id.param¦name⟧⟦punc.sep¦:⟧ ⟦type.primitive¦string⟧⟦punc.sep¦,⟧ ⟦id.param¦retries⟧ ⟦op.assign¦=⟧ ⟦lit.number¦3⟧⟦punc.brace¦)⟧⟦punc.sep¦:⟧ ⟦type.builtin¦Promise⟧⟦punc.brace¦<⟧⟦type.param¦T⟧ ⟦op.general¦|⟧ ⟦lit.null¦null⟧⟦punc.brace¦>⟧ ⟦punc.brace¦{⟧',
+    '    ⟦kw.decl¦const⟧ ⟦id.const¦file⟧ ⟦op.assign¦=⟧ ⟦id.var¦path⟧⟦punc.accessor¦.⟧⟦fn.call¦join⟧⟦punc.brace¦(⟧⟦node.global¦__dirname⟧⟦punc.sep¦,⟧ ⟦lit.template¦`⟧⟦lit.interp¦${⟧⟦id.param¦name⟧⟦lit.interp¦}⟧⟦lit.template¦.json`⟧⟦punc.brace¦)⟧⟦punc.sep¦;⟧',
+    '    ⟦kw.cond¦if⟧ ⟦punc.brace¦(⟧⟦op.logic¦!⟧⟦id.param¦name⟧ ⟦op.logic¦||⟧ ⟦id.param¦retries⟧ ⟦op.logic¦<=⟧ ⟦lit.number¦0⟧⟦punc.brace¦)⟧ ⟦kw.flow¦return⟧ ⟦lit.null¦null⟧⟦punc.sep¦;⟧',
+    '    ⟦kw.loop¦for⟧ ⟦punc.brace¦(⟧⟦kw.decl¦const⟧ ⟦id.const¦key⟧ ⟦kw.op¦of⟧ ⟦type.builtin¦Object⟧⟦punc.accessor¦.⟧⟦fn.builtin¦keys⟧⟦punc.brace¦(⟧⟦kw.this¦this⟧⟦punc.accessor¦.⟧⟦id.prop¦cache⟧⟦punc.brace¦))⟧ ⟦kw.op¦delete⟧ ⟦kw.this¦this⟧⟦punc.accessor¦.⟧⟦id.prop¦cache⟧⟦punc.brace¦[⟧⟦id.const¦key⟧⟦punc.brace¦]⟧⟦punc.sep¦;⟧',
+    '    ⟦kw.trycatch¦try⟧ ⟦punc.brace¦{⟧',
+    '      ⟦kw.decl¦const⟧ ⟦id.const¦raw⟧ ⟦op.assign¦=⟧ ⟦kw.flow¦await⟧ ⟦fn.call¦readFile⟧⟦punc.brace¦(⟧⟦id.const¦file⟧⟦punc.sep¦,⟧ ⟦lit.string¦\'utf8\'⟧⟦punc.brace¦)⟧⟦punc.sep¦;⟧',
+    '      ⟦kw.this¦this⟧⟦punc.accessor¦.⟧⟦id.prop¦cache⟧⟦punc.accessor¦.⟧⟦fn.call¦set⟧⟦punc.brace¦(⟧⟦id.param¦name⟧⟦punc.sep¦,⟧ ⟦punc.brace¦{⟧ ⟦op.spread¦...⟧⟦type.builtin¦JSON⟧⟦punc.accessor¦.⟧⟦fn.builtin¦parse⟧⟦punc.brace¦(⟧⟦id.const¦raw⟧⟦punc.brace¦)⟧⟦punc.sep¦,⟧ ⟦id.key¦loaded⟧⟦punc.sep¦:⟧ ⟦lit.bool¦true⟧ ⟦punc.brace¦})⟧⟦punc.sep¦;⟧',
+    '    ⟦punc.brace¦}⟧ ⟦kw.trycatch¦catch⟧ ⟦punc.brace¦(⟧⟦id.var¦err⟧⟦punc.brace¦)⟧ ⟦punc.brace¦{⟧',
+    '      ⟦node.console¦console⟧⟦punc.accessor¦.⟧⟦node.console¦error⟧⟦punc.brace¦(⟧⟦lit.string¦\'failed⟧⟦lit.escape¦\\n⟧⟦lit.string¦\'⟧⟦punc.sep¦,⟧ ⟦id.var¦err⟧⟦punc.sep¦,⟧ ⟦node.global¦process⟧⟦punc.accessor¦.⟧⟦id.prop¦env⟧⟦punc.accessor¦.⟧⟦id.prop¦NODE_ENV⟧⟦punc.brace¦)⟧⟦punc.sep¦;⟧',
+    '      ⟦kw.trycatch¦throw⟧ ⟦kw.op¦new⟧ ⟦type.builtin¦Error⟧⟦punc.brace¦(⟧⟦lit.template¦`cannot load ⟧⟦lit.interp¦${⟧⟦id.param¦name⟧⟦lit.interp¦}⟧⟦lit.template¦`⟧⟦punc.brace¦)⟧⟦punc.sep¦;⟧',
+    '    ⟦punc.brace¦}⟧',
+    '    ⟦kw.flow¦return⟧ ⟦kw.this¦this⟧⟦punc.accessor¦.⟧⟦id.prop¦cache⟧⟦punc.accessor¦.⟧⟦fn.call¦get⟧⟦punc.brace¦(⟧⟦id.param¦name⟧⟦punc.brace¦)⟧ ⟦op.logic¦??⟧ ⟦lit.null¦undefined⟧⟦punc.sep¦;⟧',
+    '  ⟦punc.brace¦}⟧',
+    '⟦punc.brace¦}⟧',
+    '',
+    '⟦cmt¦// enums, types and plain functions⟧',
+    '⟦kw.type¦enum⟧ ⟦type.enum¦Level⟧ ⟦punc.brace¦{⟧ ⟦type.enumMember¦Debug⟧ ⟦op.assign¦=⟧ ⟦lit.number¦0⟧⟦punc.sep¦,⟧ ⟦type.enumMember¦Warn⟧ ⟦punc.brace¦}⟧',
+    '⟦kw.type¦interface⟧ ⟦type.iface¦Loader⟧ ⟦punc.brace¦{⟧ ⟦id.prop¦level⟧⟦punc.sep¦:⟧ ⟦type.enum¦Level⟧ ⟦punc.brace¦}⟧',
+    '⟦kw.type¦type⟧ ⟦type.name¦Handler⟧ ⟦op.assign¦=⟧ ⟦punc.brace¦(⟧⟦id.param¦req⟧⟦punc.sep¦:⟧ ⟦type.builtin¦Request⟧⟦punc.brace¦)⟧ ⟦kw.arrow¦=>⟧ ⟦type.primitive¦void⟧⟦punc.sep¦;⟧',
+    '⟦kw.func¦function⟧ ⟦fn.decl¦isValid⟧⟦punc.brace¦(⟧⟦id.param¦input⟧⟦punc.sep¦:⟧ ⟦type.primitive¦unknown⟧⟦punc.brace¦)⟧⟦punc.sep¦:⟧ ⟦type.primitive¦boolean⟧ ⟦punc.brace¦{⟧',
+    '  ⟦kw.flow¦return⟧ ⟦kw.op¦typeof⟧ ⟦id.param¦input⟧ ⟦op.logic¦===⟧ ⟦lit.string¦\'string\'⟧ ⟦op.logic¦&&⟧ ⟦lit.regex¦/^[a-z]+$/i⟧⟦punc.accessor¦.⟧⟦fn.builtin¦test⟧⟦punc.brace¦(⟧⟦id.param¦input⟧⟦punc.brace¦)⟧⟦punc.sep¦;⟧',
+    '⟦punc.brace¦}⟧',
+    '⟦node.global¦module⟧⟦punc.accessor¦.⟧⟦node.global¦exports⟧ ⟦op.assign¦=⟧ ⟦punc.brace¦{⟧ ⟦id.var¦isValid⟧ ⟦punc.brace¦}⟧⟦punc.sep¦;⟧',
+    '',
+    '⟦cmt¦// JSX / TSX⟧',
+    '⟦kw.decl¦const⟧ ⟦id.const¦view⟧ ⟦op.assign¦=⟧ ⟦jsx.punc¦<⟧⟦jsx.component¦Button⟧ ⟦jsx.attr¦onClick⟧⟦op.assign¦=⟧⟦punc.brace¦{⟧⟦id.var¦handler⟧⟦punc.brace¦}⟧ ⟦jsx.attr¦disabled⟧ ⟦jsx.punc¦/>⟧⟦punc.sep¦;⟧',
+    '⟦kw.decl¦const⟧ ⟦id.const¦box⟧ ⟦op.assign¦=⟧ ⟦jsx.punc¦<⟧⟦jsx.tag¦div⟧ ⟦jsx.attr¦className⟧⟦op.assign¦=⟧⟦lit.string¦"box"⟧⟦jsx.punc¦>⟧Hi⟦jsx.punc¦</⟧⟦jsx.tag¦div⟧⟦jsx.punc¦>⟧⟦punc.sep¦;⟧',
+  ],
+};

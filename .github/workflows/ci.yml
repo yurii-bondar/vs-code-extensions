@@ -1,0 +1,45 @@
+name: CI
+
+# Paused for now. To turn it back on, restore:
+#   pull_request:
+#     branches: [main]
+#     types: [opened, edited, synchronize, reopened]
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  # With squash merges the PR title becomes the commit on main, and
+  # semantic-release reads that commit to decide the next version.
+  pr-title:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: '**/package-lock.json'
+
+      - name: Test and package every extension
+        run: |
+          for dir in */; do
+            dir="${dir%/}"
+            [ -f "$dir/release.config.cjs" ] || continue
+            echo "::group::$dir"
+            if [ -f "$dir/package-lock.json" ]; then npm ci --prefix "$dir"; fi
+            npm test --prefix "$dir" --if-present
+            (cd "$dir" && npx --yes @vscode/vsce@3 package --out /tmp/)
+            echo "::endgroup::"
+          done

@@ -1,0 +1,4 @@
+.vscode/**
+*.vsix
+**/*.personify-backup
+release.config.cjs

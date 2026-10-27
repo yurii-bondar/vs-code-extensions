@@ -1,0 +1,99 @@
+{
+  "name": "go-to-project",
+  "displayName": "Go To Project",
+  "description": "Switch between open project windows with quick search, open recent projects, and jump back to the last project.",
+  "version": "0.1.0",
+  "publisher": "bondevn",
+  "license": "MIT",
+  "author": "Yurii Bondar",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#3A6FD8",
+    "theme": "dark"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yurii-bondar/vs-code-extensions.git",
+    "directory": "go-to-project"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Keymaps",
+    "Other"
+  ],
+  "keywords": [
+    "project",
+    "projects",
+    "project switcher",
+    "switch window",
+    "window switcher",
+    "recent projects",
+    "open recent",
+    "workspace",
+    "jetbrains",
+    "git branch"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "main": "./extension.js",
+  "extensionKind": [
+    "ui"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "goToProject.open",
+        "title": "Go To Project"
+      },
+      {
+        "command": "goToProject.recent",
+        "title": "Go To Recent Project"
+      },
+      {
+        "command": "goToProject.last",
+        "title": "Go To Last Project"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "goToProject.open",
+        "key": "ctrl+alt+p",
+        "mac": "cmd+alt+p"
+      },
+      {
+        "command": "goToProject.recent",
+        "key": "ctrl+alt+e",
+        "mac": "cmd+alt+e"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "goToProject.last",
+          "when": "goToProject.hasLast"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Go To Project",
+      "properties": {
+        "goToProject.includeRecent": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a \"Recent projects…\" entry at the end of the Go To Project list."
+        },
+        "goToProject.showBranch": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the current git branch next to each local project."
+        }
+      }
+    }
+  }
+}
