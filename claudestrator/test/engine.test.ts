@@ -158,7 +158,10 @@ repos:
     assert.equal(planner!.args[planner!.args.indexOf('--effort') + 1], 'max', 'the agent runs at its effort');
     const efforts = h.calls().filter((c) => c.args.includes('--append-system-prompt')).map((c) => (c.args.includes('--effort') ? c.args[c.args.indexOf('--effort') + 1] : null));
     assert.ok(efforts.includes('low'), 'the task override reached the reviewer');
-    assert.ok(efforts.every((e) => e === null || e === 'max' || e === 'low'), `agents without an effort use the default: ${efforts}`);
+    assert.ok(efforts.every((e) => e === null || e === 'max' || e === 'low' || e === 'medium'), `agents without a task or config effort use their built-in one: ${efforts}`);
+    const sonnet = h.calls().filter((c) => c.args.includes('--model') && c.args[c.args.indexOf('--model') + 1] === 'sonnet');
+    assert.ok(sonnet.length > 0, 'developer and tester run on sonnet by default');
+    assert.ok(sonnet.every((c) => c.args[c.args.indexOf('--effort') + 1] === 'medium'), 'developer and tester run at medium effort by default');
     assert.equal(view.detail(h.engine, taskId).steps.find((st) => st.agent === 'reviewer')!.effort, 'low');
     assert.deepEqual(h.engine.limits!.fiveHour, { pct: 31, resetsAt: 1900000000, status: 'allowed' });
     assert.equal(h.engine.limits!.sevenDay!.pct, 26);

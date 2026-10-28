@@ -335,11 +335,12 @@ test('config: effort is validated and inherited along extends', () => {
   fs.writeFileSync(config.projectConfigFile(ws), 'agents:\n  reviewer: { effort: high }\n  security: { extends: reviewer, description: Security }\n');
   const r = passed(loadCfg({ workspace: ws, home: tmp('cs-h-') }));
   assert.equal(r.config.agents.security!.effort, 'high');
-  assert.equal(r.config.agents.planner!.effort, undefined);
+  assert.equal(r.config.agents.planner!.effort, 'high', 'the built-in effort of the planner');
+  assert.equal(r.config.agents.verifier!.effort, undefined);
   config.updateAgentConfig(ws, 'planner', { effort: 'xhigh' });
   assert.equal(passed(loadCfg({ workspace: ws })).config.agents.planner!.effort, 'xhigh');
   config.updateAgentConfig(ws, 'planner', { effort: null });
-  assert.equal(passed(loadCfg({ workspace: ws })).config.agents.planner!.effort, undefined);
+  assert.equal(passed(loadCfg({ workspace: ws })).config.agents.planner!.effort, 'high', 'clearing the setting falls back to the built-in effort');
   assert.throws(() => config.updateAgentConfig(ws, 'planner', { effort: 'huge' }), /effort: expected one of low, medium, high, xhigh, max/);
   const args = buildArgs({ agent: { model: 'opus', effort: 'low', instructions: 'x' } as Agent }, { flags: () => new Set(['--effort']), settingSources: () => null, hookSettings: () => '/h.json' } as RunnerOptions);
   assert.equal(args[args.indexOf('--effort') + 1], 'low');

@@ -237,6 +237,7 @@ const BUILTIN: BuiltinConfig = {
     planner: {
       description: 'Read-only planner. Turns a ticket into a cross-repo plan with contracts, order and open questions.',
       model: 'opus',
+      effort: 'high',
       tools: READ_ONLY,
       color: 'blue',
       output: 'plan',
@@ -244,7 +245,8 @@ const BUILTIN: BuiltinConfig = {
     },
     developer: {
       description: 'Implements the approved plan in exactly one repository, or fixes review findings there.',
-      model: 'inherit',
+      model: 'sonnet',
+      effort: 'medium',
       tools: WRITE,
       color: 'green',
       output: 'code',
@@ -252,7 +254,8 @@ const BUILTIN: BuiltinConfig = {
     },
     tester: {
       description: 'Writes and updates the tests the approved plan owes in every repository it changed and makes them pass.',
-      model: 'inherit',
+      model: 'sonnet',
+      effort: 'medium',
       tools: WRITE,
       color: 'yellow',
       output: 'tests',
@@ -261,6 +264,7 @@ const BUILTIN: BuiltinConfig = {
     reviewer: {
       description: 'Fresh-context, read-only reviewer of the combined cross-repo diff. Returns a verdict with findings.',
       model: 'opus',
+      effort: 'high',
       tools: READ_ONLY,
       color: 'red',
       output: 'verdict',
