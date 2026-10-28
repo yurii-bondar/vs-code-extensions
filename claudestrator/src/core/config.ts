@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as YAML from 'yaml';
-import { validateConfigLayer, validateAgentPatch, SCENARIO_OUTPUT } from './protocol';
+import { validateConfigLayer, validateAgentPatch, validateLibraryLayer, SCENARIO_OUTPUT } from './protocol';
 import type { Agent, Config, CustomScenario, Diagnostic, Effort, Gate, GitMode, Output, Policy, RepoConfig, Runs, ScenarioStep } from './types';
 
 // ---------- the shapes of a config layer, as written in config.yaml ----------
@@ -46,6 +46,8 @@ interface ConfigLayer {
   agents?: Record<string, AgentLayer>;
   pipeline?: string[];
   scenarios?: Record<string, string[] | false | CustomScenarioLayer>;
+  /** Folders (or files) of agents and scenarios kept apart from this config, merged in before it. */
+  libraries?: string[];
   limits?: { reviewRounds?: number; gateAttempts?: number; budgetUsd?: number };
   language?: string;
   baseBranch?: string;
@@ -324,18 +326,70 @@ function loadLayerFile(file: string, name: string): { layer?: Layer; diagnostics
   return { layer: { name, baseDir: path.dirname(file), config: raw }, diagnostics: [] };
 }
 
+/**
+ * The layers in order: built-in, the libraries (those the user config lists, then the project's), the user config,
+ * the project config. A later layer wins field by field, so a project can change what a library defines.
+ */
 function loadLayers({ workspace, home = os.homedir() }: { workspace: string; home?: string }): { layers: Layer[]; diagnostics: Diagnostic[] } {
-  const layers = [builtinLayer()];
   const diagnostics: Diagnostic[] = [];
+  const own: Layer[] = [];
   const files: [string, string][] = [['user', userConfigFile(home)], ['project', projectConfigFile(workspace)]];
   // A workspace inside the home folder must not load the same file twice.
   if (path.resolve(files[0]![1]) === path.resolve(files[1]![1])) files.shift();
   for (const [name, file] of files) {
     const r = loadLayerFile(file, name);
     diagnostics.push(...r.diagnostics);
-    if (r.layer) layers.push(r.layer);
+    if (r.layer) own.push(r.layer);
   }
-  return { layers, diagnostics };
+  const libraries: Layer[] = [];
+  const seen = new Set<string>();
+  for (const layer of own) {
+    for (const entry of layer.config.libraries ?? []) {
+      const file = libraryFile(entry, layer.baseDir, home);
+      if (seen.has(file)) continue;
+      seen.add(file);
+      let label = libraryLabel(file);
+      for (let n = 2; libraries.some((l) => l.name === `${LIBRARY_PREFIX}${label}`); n++) label = `${libraryLabel(file)}-${n}`;
+      const r = loadLibraryFile(file, label);
+      diagnostics.push(...r.diagnostics);
+      if (r.layer) libraries.push(r.layer);
+    }
+  }
+  return { layers: [builtinLayer(), ...libraries, ...own], diagnostics };
+}
+
+const LIBRARY_FILE = 'library.yaml';
+/** Layer names of libraries: `library:<folder name>`. */
+const LIBRARY_PREFIX = 'library:';
+const isLibraryLayer = (name: string): boolean => name.startsWith(LIBRARY_PREFIX);
+
+/** A library's file: the entry itself when it names a .yaml file, else library.yaml in that folder. `~` and relative paths resolve from the config that lists it. */
+function libraryFile(entry: string, baseDir: string, home: string = os.homedir()): string {
+  const abs = path.resolve(baseDir, entry.replace(/^~(?=$|[\\/])/, home));
+  return /\.ya?ml$/i.test(abs) ? abs : path.join(abs, LIBRARY_FILE);
+}
+
+/** What a library is called on screen: its folder's name (or the file's, without .yaml). */
+function libraryLabel(file: string): string {
+  return path.basename(file) === LIBRARY_FILE ? path.basename(path.dirname(file)) : path.basename(file).replace(/\.ya?ml$/i, '');
+}
+
+/**
+ * A library missing on this machine (a teammate's path, an unmounted disk) is a warning: the rest still loads, and a
+ * scenario that needs its agents says so. A library that does not parse or holds more than agents and scenarios is an
+ * error, as config.yaml would be.
+ */
+function loadLibraryFile(file: string, label: string): { layer?: Layer; diagnostics: Diagnostic[] } {
+  if (!fs.existsSync(file)) return { diagnostics: [{ level: 'warning', code: 'library_missing', source: file, message: `library "${label}" is not at ${file}; its agents and scenarios are not loaded` }] };
+  let raw: unknown;
+  try {
+    raw = YAML.parse(fs.readFileSync(file, 'utf8')) ?? {};
+  } catch (e) {
+    return { diagnostics: [{ level: 'error', code: 'yaml_invalid', source: file, message: `${file}: ${(e as Error).message}` }] };
+  }
+  const issues = validateLibraryLayer(raw);
+  if (issues.length) return { diagnostics: issues.map((m) => ({ level: 'error', code: 'library_invalid', source: file, message: `library "${label}": ${m}` })) };
+  return { layer: { name: `${LIBRARY_PREFIX}${label}`, baseDir: path.dirname(file), config: raw as ConfigLayer }, diagnostics: [] };
 }
 
 // ---------- merging ----------
@@ -620,7 +674,7 @@ function resolveCustomScenarios(merged: Record<string, ScenarioEntry>, drafts: M
     if (kinds.size > 1) {
       diags.push({ level: 'error', code: 'scenario_mixed', source: entry.source, message: `scenario "${id}" mixes agents that change code with report agents (${[...kinds].join(', ')}); keep one kind per scenario` });
     }
-    out[id] = { id, label: def.label || id, ...(def.description && { description: def.description }), kind: kinds.size ? [...kinds][0]! : null, agents: steps };
+    out[id] = { id, label: def.label || id, ...(def.description && { description: def.description }), kind: kinds.size ? [...kinds][0]! : null, agents: steps, source: entry.source };
   }
   return out;
 }
@@ -629,7 +683,9 @@ function resolveCustomScenarios(merged: Record<string, ScenarioEntry>, drafts: M
 function resolvePipeline(pipeline: Merged['pipeline'], drafts: Map<string, Draft>, diags: Diagnostic[], scenarios: Record<string, string[]> = {}, elsewhere: string[] = []): string[] {
   const inScenario = new Set(Object.values(scenarios).flat());
   const used = new Set([...inScenario, ...elsewhere]);
-  const names = pipeline ? pipeline.names : [...drafts.keys()].filter((n) => !inScenario.has(n));
+  // An agent only a library defines is there to be picked (for a scenario, or into the pipeline), not run by default.
+  const fromLibraryOnly = (d: Draft): boolean => d.layers.length > 0 && d.layers.every(isLibraryLayer);
+  const names = pipeline ? pipeline.names : [...drafts.keys()].filter((n) => !inScenario.has(n) && !fromLibraryOnly(drafts.get(n)!));
   const source = pipeline && pipeline.source;
   const seen = new Set<string>();
   for (const name of names) {
@@ -638,7 +694,9 @@ function resolvePipeline(pipeline: Merged['pipeline'], drafts: Map<string, Draft
     seen.add(name);
   }
   for (const [name, draft] of drafts) {
-    if ((draft.enabled ?? true) && !seen.has(name) && !used.has(name)) diags.push({ level: 'warning', code: 'not_in_pipeline', agent: name, message: `agent "${name}" is enabled but not in the pipeline, so it never runs` });
+    if ((draft.enabled ?? true) && !seen.has(name) && !used.has(name) && !fromLibraryOnly(draft)) diags.push({ level: 'warning', code: 'not_in_pipeline', agent: name, message: `agent "${name}" is enabled but not in the pipeline, so it never runs` });
+    const libs = draft.layers.filter(isLibraryLayer);
+    if (libs.length > 1) diags.push({ level: 'warning', code: 'library_conflict', agent: name, message: `agent "${name}" is defined in ${libs.map((l) => l.slice(LIBRARY_PREFIX.length)).join(' and ')}; the last one wins` });
   }
   return names;
 }
@@ -670,15 +728,22 @@ function readProjectLayer(workspace: string): ConfigLayer {
  * that no longer validates. Returns the file path.
  */
 function editProjectConfig(workspace: string, mutate: (doc: YAML.Document) => unknown): string {
-  const file = projectConfigFile(workspace);
+  return editYamlFile(projectConfigFile(workspace), mutate, { validate: validateConfigLayer, what: `${CONFIG_DIR}/${CONFIG_FILE}` });
+}
+
+/**
+ * Edits a YAML file in place, keeping comments and formatting, and refuses a result `validate` finds problems in.
+ * The project config, the user config and library files are all edited this way. Returns the file.
+ */
+function editYamlFile(file: string, mutate: (doc: YAML.Document) => unknown, { validate, what }: { validate: (raw: unknown) => string[]; what: string }): string {
   const doc = YAML.parseDocument(fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '');
   if (doc.errors.length) throw new Error(`${file}: ${doc.errors[0]!.message}`);
   if (doc.contents === null) doc.contents = doc.createNode({}) as unknown as typeof doc.contents;
   mutate(doc);
   pruneEmpty(doc, ['agents']);
   pruneEmpty(doc, ['repos']);
-  const issues = validateConfigLayer(doc.toJS() ?? {});
-  if (issues.length) throw new Error(`the change would make ${CONFIG_DIR}/${CONFIG_FILE} invalid: ${issues.join('; ')}`);
+  const issues = validate(doc.toJS() ?? {});
+  if (issues.length) throw new Error(`the change would make ${what} invalid: ${issues.join('; ')}`);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, doc.toString());
   return file;
@@ -946,6 +1011,13 @@ export {
   updateAgentConfig,
   resetAgentConfig,
   setAgentLayer,
+  editYamlFile,
+  editProjectConfig,
+  libraryFile,
+  libraryLabel,
+  isLibraryLayer,
+  LIBRARY_FILE,
+  LIBRARY_PREFIX,
   configRelative,
   withConfigRollback,
   saveCustomScenario,

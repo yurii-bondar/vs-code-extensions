@@ -8,6 +8,7 @@ import { transition, replay, nextAction, passSteps, stepRepos, editableFrom } fr
 import { buildPipeline, outline, taskPipeline } from '../src/core/pipeline';
 import * as config from '../src/core/config';
 import * as backups from '../src/core/backup';
+import * as libraries from '../src/core/library';
 import { parseStageReport, reportLanguage } from '../src/core/prompt';
 import { guardBash } from '../src/core/guard';
 import { GitRepo } from '../src/core/git';
@@ -869,7 +870,7 @@ test('pipeline: runs switches a code or tests agent between once per repo and on
 test('scenarios: custom scenarios with their own agents, models and effort; built-in ones can be removed', () => {
   const hotfix: NonNullable<ConfigLayer['scenarios']>[string] = { label: 'Hotfix', description: 'Code and a quick review', agents: ['developer', { agent: 'reviewer', model: 'sonnet', effort: 'low' }] };
   const r = passed(resolve([config.builtinLayer(), layer({ scenarios: { hotfix, 'deep-audit': { agents: [{ agent: 'auditor', effort: 'max' }] }, readiness: false } })]));
-  assert.deepEqual(r.config.custom.hotfix, { id: 'hotfix', label: 'Hotfix', description: 'Code and a quick review', kind: 'deliver', agents: [{ name: 'developer' }, { name: 'reviewer', model: 'sonnet', effort: 'low' }] });
+  assert.deepEqual(r.config.custom.hotfix, { id: 'hotfix', label: 'Hotfix', description: 'Code and a quick review', kind: 'deliver', agents: [{ name: 'developer' }, { name: 'reviewer', model: 'sonnet', effort: 'low' }], source: 'project' });
   assert.equal(r.config.custom['deep-audit']!.kind, 'audit', 'the kind follows from the agents');
   assert.deepEqual(r.config.removedScenarios, ['readiness']);
   assert.deepEqual(r.config.scenarios.readiness, []);
@@ -967,6 +968,114 @@ test('setup: a picked repo is written with only what differs from the defaults; 
   assert.equal(validateSetting('claudePath', { evil: true }).length, 1);
   assert.match(validateSetting('constructor', 'x')[0]!, /unknown setting/, 'nothing reached through the prototype');
   assert.match(validateSetting('editor.fontSize', 30)[0]!, /unknown setting/);
+});
+
+/** A library folder: one agent of its own with its instructions in prompts/, and a scenario that runs it. */
+function securityLibrary(dir: string = tmp('cs-lib-')): string {
+  fs.mkdirSync(path.join(dir, 'prompts'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'prompts', 'security.md'), 'Look for injection first.\n');
+  fs.writeFileSync(path.join(dir, 'library.yaml'), [
+    'agents:',
+    '  security-reviewer:',
+    '    extends: reviewer',
+    '    description: Reviews for security',
+    '    instructions: { mode: append, file: ./prompts/security.md }',
+    'scenarios:',
+    '  secure-delivery:',
+    '    label: Secure delivery',
+    '    agents: [planner, developer, security-reviewer]',
+    '',
+  ].join('\n'));
+  return dir;
+}
+
+const userConfig = (home: string, text: string): void => {
+  fs.mkdirSync(path.join(home, config.CONFIG_DIR), { recursive: true });
+  fs.writeFileSync(path.join(home, config.CONFIG_DIR, config.CONFIG_FILE), text);
+};
+
+test('libraries: agents and scenarios from a folder of their own merge in, a project changes them without touching the library', () => {
+  const lib = securityLibrary();
+  const home = tmp('cs-lib-h-');
+  const ws = tmp('cs-lib-ws-');
+  userConfig(home, `libraries: [${lib}]\n`);
+  const label = path.basename(lib);
+
+  const r = passed(loadCfg({ workspace: ws, home }));
+  const agent = r.config.agents['security-reviewer']!;
+  assert.ok(agent.layers.includes(`library:${label}`));
+  assert.match(agent.instructions, /Look for injection first/, 'instruction files resolve from the library folder');
+  assert.equal(r.config.custom['secure-delivery']!.source, `library:${label}`);
+  assert.deepEqual(r.config.pipeline, ['planner', 'developer', 'tester', 'reviewer'], 'a library agent is not run by default');
+  assert.ok(!r.warnings.some((w) => w.code === 'not_in_pipeline'), 'nor is it reported as never running');
+  assert.deepEqual(bp(r.config, { scenario: 'secure-delivery' }).stages.map((st) => st.agent), ['planner', 'developer', 'security-reviewer']);
+
+  // The project changes the library's agent; the library file stays as it was.
+  const before = fs.readFileSync(path.join(lib, 'library.yaml'), 'utf8');
+  config.updateAgentConfig(ws, 'security-reviewer', { model: 'opus' });
+  const changed = passed(loadCfg({ workspace: ws, home })).config.agents['security-reviewer']!;
+  assert.equal(changed.model, 'opus');
+  assert.deepEqual(changed.layers.filter((l) => l !== 'builtin'), [`library:${label}`, 'project']);
+  assert.equal(fs.readFileSync(path.join(lib, 'library.yaml'), 'utf8'), before);
+
+  // A library that is not there: a warning, the rest loads. One that holds more than agents and scenarios: an error.
+  userConfig(home, `libraries: [${lib}, ${path.join(lib, 'nope')}]\n`);
+  assert.ok(passed(loadCfg({ workspace: ws, home })).warnings.some((w) => w.code === 'library_missing'));
+  const bad = tmp('cs-lib-bad-');
+  fs.writeFileSync(path.join(bad, 'library.yaml'), 'repos:\n  api: {}\n');
+  userConfig(home, `libraries: [${bad}]\n`);
+  assert.match(failed(loadCfg({ workspace: ws, home })).errors[0]!.message, /only agents and scenarios/);
+
+  // Two libraries with the same agent: the later one wins, and that is said.
+  userConfig(home, `libraries: [${lib}, ${securityLibrary()}]\n`);
+  assert.ok(passed(loadCfg({ workspace: ws, home })).warnings.some((w) => w.code === 'library_conflict'));
+});
+
+test('libraries: added for you or for the project, removed only when nothing needs them, and a project moves its own into one', () => {
+  const home = tmp('cs-lib-h-');
+  const ws = tmp('cs-lib-ws-');
+  const where = { workspace: ws, home };
+
+  // A folder inside the workspace is listed relative to .claudestrator/, so it works in every clone.
+  const shared = path.join(ws, 'shared-agents');
+  assert.throws(() => libraries.addLibrary({ ...where, dir: shared, scope: 'project' }), /no library\.yaml/);
+  const added = libraries.addLibrary({ ...where, dir: shared, scope: 'project', create: true });
+  assert.deepEqual([added.scope, added.entry, added.exists], ['project', '../shared-agents', true]);
+  assert.match(fs.readFileSync(path.join(shared, 'library.yaml'), 'utf8'), /^# Claudestrator library/);
+  assert.throws(() => libraries.addLibrary({ ...where, dir: shared, scope: 'user' }), /already/);
+  // One elsewhere under home, for you: `~/…` in the user config.
+  const mine = path.join(home, 'my-agents');
+  fs.mkdirSync(mine);
+  securityLibrary(mine);
+  assert.equal(libraries.addLibrary({ ...where, dir: mine, scope: 'user' }).entry, '~/my-agents');
+  assert.deepEqual(libraries.listLibraries(where).map((l) => [l.label, l.scope, l.agents.join(), l.scenarios.join()]), [['my-agents', 'user', 'security-reviewer', 'secure-delivery'], ['shared-agents', 'project', '', '']]);
+
+  // While the project runs a library's agent, the library cannot go.
+  config.saveCustomScenario({ ...where, label: 'Careful', agents: [{ name: 'developer' }, { name: 'security-reviewer' }] });
+  const userFile = path.join(home, config.CONFIG_DIR, config.CONFIG_FILE);
+  const before = fs.readFileSync(userFile, 'utf8');
+  assert.throws(() => libraries.removeLibrary({ ...where, file: path.join(mine, 'library.yaml'), scope: 'user' }), /security-reviewer/);
+  assert.equal(fs.readFileSync(userFile, 'utf8'), before, 'the user config is as it was');
+  config.removeScenario(ws, 'careful');
+  libraries.removeLibrary({ ...where, file: path.join(mine, 'library.yaml'), scope: 'user' });
+  assert.deepEqual(libraries.listLibraries(where).map((l) => l.label), ['shared-agents']);
+
+  // The project's own scenario moves into the shared library, with the agent it needs and that agent's instructions.
+  config.addAgent({ ...where, name: 'perf-auditor', output: 'audit', description: 'Finds slow code' });
+  fs.writeFileSync(path.join(ws, config.CONFIG_DIR, config.PROMPTS_DIR, 'perf-auditor.md'), 'Measure before you judge.\n');
+  config.saveCustomScenario({ ...where, label: 'Perf audit', agents: [{ name: 'perf-auditor', effort: 'high' }] });
+  const moved = libraries.moveToLibrary({ ...where, library: path.join(shared, 'library.yaml'), scenarios: ['perf-audit'] });
+  assert.deepEqual(moved, { agents: ['perf-auditor'], scenarios: ['perf-audit'] });
+  assert.equal(fs.readFileSync(path.join(shared, 'prompts', 'perf-auditor.md'), 'utf8'), 'Measure before you judge.\n');
+  assert.match(fs.readFileSync(path.join(shared, 'library.yaml'), 'utf8'), /^agents:\n {2}perf-auditor:\n {4}/m, 'written as a person would, not on one line');
+  assert.equal(fs.existsSync(path.join(ws, config.CONFIG_DIR, config.PROMPTS_DIR, 'perf-auditor.md')), false, 'the project copy is gone');
+  const projectNow = config.readProjectLayer(ws);
+  assert.ok(!(projectNow.agents && projectNow.agents['perf-auditor']) && !(projectNow.scenarios && projectNow.scenarios['perf-audit']));
+  const after = passed(loadCfg({ workspace: ws, home })).config;
+  assert.equal(after.custom['perf-audit']!.source, 'library:shared-agents');
+  assert.match(after.agents['perf-auditor']!.instructions, /Measure before you judge/);
+  assert.throws(() => libraries.moveToLibrary({ ...where, library: '/nowhere/library.yaml', agents: ['developer'] }), /not one of this project's libraries/);
+  assert.throws(() => libraries.moveToLibrary({ ...where, library: path.join(shared, 'library.yaml'), agents: ['ghost'] }), /not defined in this project/);
 });
 
 /** A project with an agent of its own (its instructions in a file), a changed built-in agent, a pipeline and scenarios. */

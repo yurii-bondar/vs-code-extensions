@@ -156,6 +156,14 @@ const scenariosLayer: Check = (v, p) => {
   });
 };
 
+/** What a library.yaml may hold: agents and scenarios, in the shape config.yaml has them. Nothing that is a project's own. */
+function validateLibraryLayer(raw: unknown): string[] {
+  if (kind(raw) !== 'object') return [`${at('')}: expected a map, got ${kind(raw)}`];
+  const extra = Object.keys(asRecord(raw)).filter((k) => k !== 'agents' && k !== 'scenarios');
+  if (extra.length) return [`a library holds only agents and scenarios, not ${extra.join(', ')}`];
+  return validateConfigLayer(raw);
+}
+
 /** The VS Code settings (`claudestrator.*`) the dashboard may change, and what each holds. */
 const SETTINGS: Record<string, Check> = {
   claudePath: T.str(),
@@ -179,6 +187,7 @@ const CONFIG_LAYER = T.obj({
   'agents?': T.rec(agentName, T.obj(AGENT_LAYER)),
   'pipeline?': T.arr(agentName),
   'scenarios?': scenariosLayer,
+  'libraries?': T.arr(T.str(1)),
   'limits?': T.obj({ 'reviewRounds?': T.int(0, 20), 'gateAttempts?': T.int(1, 20), 'budgetUsd?': T.pos() }),
   'language?': T.str(1),
   'baseBranch?': T.str(1),
@@ -359,6 +368,7 @@ export {
   JIRA_ONLY_OPTIONS,
   INFO_EVENTS,
   validateSetting,
+  validateLibraryLayer,
   isInfoEvent,
   STATE_EVENTS,
   isBlocking,

@@ -69,7 +69,29 @@ What the built-in agents do by default, and what to change per task.
 
 ## Configuration
 
-Layers, each overriding the previous field by field: built-in defaults → `~/.claudestrator/config.yaml` → `<workspace>/.claudestrator/config.yaml`. The dashboard edits the workspace file in place and keeps your comments.
+Layers, each overriding the previous field by field: built-in defaults → libraries → `~/.claudestrator/config.yaml` → `<workspace>/.claudestrator/config.yaml`. The dashboard edits the workspace file in place and keeps your comments.
+
+### Libraries
+
+Agents and scenarios you want in more than one project, or kept apart from a project's config, live in a folder of their own:
+
+```
+my-claudestrator-library/
+  library.yaml          # agents: and scenarios:, written as in config.yaml
+  prompts/
+    security.md         # instruction files, relative to library.yaml
+```
+
+List it under `libraries:` in `~/.claudestrator/config.yaml` (all your projects) or in a project's config (for the team; a folder inside the project is listed by a relative path, so it works in every clone):
+
+```yaml
+libraries: [~/my-claudestrator-library, ../shared-agents]
+```
+
+- A project can change a library's agent (its model, say) in its own config; the library stays as it is.
+- An agent only a library has is not in the delivery pipeline until you add it; scenarios use it right away.
+- A library that is missing on this machine is a warning, not an error. Two libraries defining the same agent: the later one wins, and the dashboard says so.
+- On the Agents page: *Add library…* (an empty folder becomes a new library), *Move to …* on an agent or a scenario of the project's own (it goes with its instructions file, and a scenario takes the project agents it runs), *Stop using*.
 
 ```yaml
 agents:

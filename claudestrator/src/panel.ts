@@ -8,6 +8,7 @@ import * as os from 'os';
 import * as view from './core/view';
 import * as cfg from './core/config';
 import * as backups from './core/backup';
+import * as libraries from './core/library';
 import { buildPipeline, outline, taskPipeline, fitsScenario } from './core/pipeline';
 import { editableFrom } from './core/machine';
 import { taskRepos, taskDiff } from './core/git';
@@ -443,7 +444,7 @@ class DashboardPanel implements RpcHandlers {
   async $config(): Promise<ConfigData> {
     const r = this.orch.config();
     const layer = this.root ? cfg.readProjectLayer(this.root) : {};
-    const base = { root: this.root, hasConfig: this.orch.hasProjectConfig(), files: { project: this.root && cfg.projectConfigFile(this.root), user: cfg.userConfigFile() }, layer, colors: AGENT_COLORS, outputs: OUTPUTS, efforts: EFFORTS, builtins: cfg.builtinAgentNames(), languages: LANGUAGES };
+    const base = { root: this.root, hasConfig: this.orch.hasProjectConfig(), files: { project: this.root && cfg.projectConfigFile(this.root), user: cfg.userConfigFile() }, layer, colors: AGENT_COLORS, outputs: OUTPUTS, efforts: EFFORTS, builtins: cfg.builtinAgentNames(), languages: LANGUAGES, libraries: this.root ? libraries.listLibraries({ workspace: this.root }) : [] };
     if (!r.ok) return { ...base, ok: false, errors: r.errors.map((e) => e.message), warnings: (r.warnings || []).map((w) => w.message) };
     const pipeline = buildPipeline(r.config);
     const agents = Object.values(r.config.agents).map((a) => ({
@@ -538,6 +539,40 @@ class DashboardPanel implements RpcHandlers {
     if (!ok) return nothing;
     const done = backups.restoreBackup({ workspace: this.root, backup: parsed.backup });
     return { cancelled: false, agents: [...done.agents.add, ...done.agents.replace], pipeline: done.pipeline, scenarios: [...done.scenarios.add, ...done.scenarios.replace], skipped: done.skipped };
+  }
+
+  // ---------- libraries ----------
+
+  /** Picks a folder, offers to start a library in it when it has no library.yaml, and asks who uses it. */
+  async $addLibrary() {
+    const none = { added: null };
+    const [uri] = (await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: false, defaultUri: vscode.Uri.file(this.root), openLabel: 'Use as a library', title: 'A folder of agents and scenarios (library.yaml)' })) || [];
+    if (!uri) return none;
+    const name = path.basename(uri.fsPath);
+    const exists = fs.existsSync(path.join(uri.fsPath, cfg.LIBRARY_FILE));
+    if (!exists) {
+      const create = await vscode.window.showInformationMessage(`${name} has no ${cfg.LIBRARY_FILE}. Start a library there?`, { modal: true, detail: `An empty ${cfg.LIBRARY_FILE} is written; move agents and scenarios into it from the Agents page, or write them as in config.yaml.` }, 'Start a library');
+      if (!create) return none;
+    }
+    const scope = await vscode.window.showInformationMessage(`Use ${name} in…`, { modal: true, detail: 'All my projects: listed in ~/.claudestrator/config.yaml.\n\nThis project: listed in its .claudestrator/config.yaml, so teammates get it too (a folder inside the project is listed by a relative path).' }, 'All my projects', 'This project');
+    if (!scope) return none;
+    const info = libraries.addLibrary({ workspace: this.root, dir: uri.fsPath, scope: scope === 'This project' ? 'project' : 'user', create: !exists });
+    return { added: info.label };
+  }
+
+  async $removeLibrary({ file, scope }: { file: string; scope: 'user' | 'project' }) {
+    const label = cfg.libraryLabel(file);
+    const ok = await vscode.window.showWarningMessage(`Stop using the library ${label}?`, { modal: true, detail: `It is taken out of ${scope === 'user' ? '~/.claudestrator/config.yaml' : 'this project\'s config.yaml'}; the folder stays on disk. If this project still runs one of its agents, nothing changes and you are told which.` }, 'Stop using it');
+    if (!ok) return { removed: false };
+    libraries.removeLibrary({ workspace: this.root, file, scope });
+    return { removed: true };
+  }
+
+  async $moveToLibrary({ library, agents = [], scenarios = [] }: { library: string; agents?: string[]; scenarios?: string[] }) {
+    const what = [...scenarios.map((s) => `scenario ${s}`), ...agents.map((a) => `agent ${a}`)].join(', ');
+    const ok = await vscode.window.showInformationMessage(`Move ${what} to the library ${cfg.libraryLabel(library)}?`, { modal: true, detail: 'It leaves this project\'s config.yaml and is kept in the library, with its instructions file; a scenario takes along the agents of this project it runs. The project keeps using it through the library. The same names in the library are replaced.' }, 'Move');
+    if (!ok) return { moved: false, agents: [], scenarios: [] };
+    return { moved: true, ...libraries.moveToLibrary({ workspace: this.root, library, agents, scenarios }) };
   }
 
   async $newAgent({ name, base, description, output, model, effort }: NewAgentParams) {
