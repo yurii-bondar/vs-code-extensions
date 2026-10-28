@@ -164,7 +164,7 @@ internal class HostRequests(private val project: Project, private val engine: En
         val cwd = p.str("cwd") ?: project.basePath
         val command = p.get("command")?.takeIf { it.isJsonArray }?.asJsonArray?.map { it.asString }
         if (command != null) runProcess(id, name, command, cwd, p.obj("env"))
-        else openShell(id, name, cwd)
+        else openShell(id, cwd)
     }
 
     /** A one-off process (a sign-in) in the Run tool window; the engine hears when it ends. */
@@ -185,11 +185,8 @@ internal class HostRequests(private val project: Project, private val engine: En
         handler.startNotify()
     }
 
-    private fun openShell(id: Int, name: String, cwd: String?) {
-        onEdt {
-            val session = InteractiveShell.open(project, name, cwd)
-            if (session != null) shells[id] = session
-        }
+    private fun openShell(id: Int, cwd: String?) {
+        onEdt { shells[id] = InteractiveShell.open(project, cwd) }
     }
 
     private fun terminalClose(id: Int?) {

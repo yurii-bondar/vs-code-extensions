@@ -20,8 +20,6 @@ dependencies {
         intellijIdea(providers.gradleProperty("platformVersion"))
         // The embedded browser: a plugin of its own since 2026.2 (see the <depends> in plugin.xml).
         bundledPlugin("com.intellij.modules.jcef")
-        // Optional (see terminal-support.xml): the shell tab for "resume this step in a terminal".
-        bundledPlugin("org.jetbrains.plugins.terminal")
         pluginVerifier()
         zipSigner()
     }

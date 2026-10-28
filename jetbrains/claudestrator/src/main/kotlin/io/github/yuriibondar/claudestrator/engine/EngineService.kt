@@ -4,7 +4,6 @@ import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.intellij.execution.configurations.GeneralCommandLine
-import com.intellij.execution.configurations.PathEnvironmentVariableUtil
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.PathManager
@@ -12,6 +11,7 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
+import com.intellij.util.EnvironmentUtil
 import com.intellij.util.concurrency.AppExecutorUtil
 import io.github.yuriibondar.claudestrator.Notifier
 import io.github.yuriibondar.claudestrator.settings.ClaudestratorSettings
@@ -132,7 +132,19 @@ class EngineService(private val project: Project) : Disposable {
     private fun findNode(): String? {
         val configured = ClaudestratorSettings.get().nodePath.trim()
         if (configured.isNotEmpty()) return configured.takeIf { File(it).canExecute() }
-        return PathEnvironmentVariableUtil.findInPath("node")?.path
+        return findOnPath("node")
+    }
+
+    /**
+     * `name` in the folders of the login shell's PATH (an IDE started from the Dock has a bare one). The platform's own
+     * lookup is deprecated in some IDE versions and missing its replacement in others, so it is not used.
+     */
+    private fun findOnPath(name: String): String? {
+        val windows = System.getProperty("os.name").startsWith("Windows")
+        val names = if (windows) listOf("$name.exe", "$name.cmd", "$name.bat") else listOf(name)
+        return (EnvironmentUtil.getValue("PATH") ?: System.getenv("PATH") ?: "").split(File.pathSeparator).filter { it.isNotBlank() }
+            .flatMap { dir -> names.map { File(dir, it) } }
+            .firstOrNull { it.isFile && it.canExecute() }?.path
     }
 
     private fun settingsJson(): JsonObject {

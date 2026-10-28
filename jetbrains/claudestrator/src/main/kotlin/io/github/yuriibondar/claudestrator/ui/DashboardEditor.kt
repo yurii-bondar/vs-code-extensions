@@ -8,6 +8,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.fileEditor.FileEditor
 import com.intellij.openapi.fileEditor.FileEditorManager
+import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.fileEditor.FileEditorPolicy
 import com.intellij.openapi.fileEditor.FileEditorProvider
 import com.intellij.openapi.fileEditor.FileEditorState
@@ -57,7 +58,7 @@ class DashboardEditorProvider : FileEditorProvider, DumbAware {
 
         /** Opens the tab, or brings it forward. */
         fun reveal(project: Project) {
-            FileEditorManager.getInstance(project).openFile(file(project), true)
+            OpenFileDescriptor(project, file(project)).navigate(true)
         }
 
         /** Whether the dashboard is what you are looking at; the notifications stay quiet then, as in VS Code. */
