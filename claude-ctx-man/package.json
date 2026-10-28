@@ -31,10 +31,18 @@
     "cursor",
     "status line"
   ],
-  "main": "./extension.js",
+  "main": "./dist/extension.js",
   "activationEvents": [
     "onStartupFinished"
   ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.webview.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.webview.json",
+    "lint": "eslint .",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "package": "npx @vscode/vsce package",
+    "vscode:prepublish": "npm run build"
+  },
   "contributes": {
     "viewsContainers": {
       "activitybar": [
@@ -49,7 +57,8 @@
       "ctxMan": [
         {
           "id": "ctxMan.sessions",
-          "name": "Accounts"
+          "name": "Accounts",
+          "type": "webview"
         }
       ]
     },
@@ -153,6 +162,12 @@
         "title": "Show Only This Workspace",
         "category": "Claude Ctx Man",
         "icon": "$(list-flat)"
+      },
+      {
+        "command": "ctxMan.setupAiFiles",
+        "title": "Set Up AI Config Files…",
+        "category": "Claude Ctx Man",
+        "icon": "$(wand)"
       }
     ],
     "menus": {
@@ -201,68 +216,11 @@
           "command": "ctxMan.configureStatusLine",
           "when": "view == ctxMan.sessions",
           "group": "3_statusline@1"
-        }
-      ],
-      "view/item/context": [
-        {
-          "command": "ctxMan.resumeHere",
-          "when": "view == ctxMan.sessions && viewItem == session",
-          "group": "inline@1"
         },
         {
-          "command": "ctxMan.continueOnAccount",
-          "when": "view == ctxMan.sessions && viewItem == session",
-          "group": "inline@2"
-        },
-        {
-          "command": "ctxMan.resumeHere",
-          "when": "view == ctxMan.sessions && viewItem == session",
-          "group": "1_session@1"
-        },
-        {
-          "command": "ctxMan.continueOnAccount",
-          "when": "view == ctxMan.sessions && viewItem == session",
-          "group": "1_session@2"
-        },
-        {
-          "command": "ctxMan.exportHandoff",
-          "when": "view == ctxMan.sessions && viewItem == session",
-          "group": "1_session@3"
-        },
-        {
-          "command": "ctxMan.copySessionId",
-          "when": "view == ctxMan.sessions && viewItem == session",
-          "group": "2_misc@1"
-        },
-        {
-          "command": "ctxMan.revealSession",
-          "when": "view == ctxMan.sessions && viewItem == session",
-          "group": "2_misc@2"
-        },
-        {
-          "command": "ctxMan.activateAccount",
-          "when": "view == ctxMan.sessions && viewItem == account",
-          "group": "inline@1"
-        },
-        {
-          "command": "ctxMan.openTerminal",
-          "when": "view == ctxMan.sessions && viewItem =~ /^account/",
-          "group": "inline@2"
-        },
-        {
-          "command": "ctxMan.activateAccount",
-          "when": "view == ctxMan.sessions && viewItem == account",
-          "group": "1_account@1"
-        },
-        {
-          "command": "ctxMan.openTerminal",
-          "when": "view == ctxMan.sessions && viewItem =~ /^account/",
-          "group": "1_account@2"
-        },
-        {
-          "command": "ctxMan.hideAccount",
-          "when": "view == ctxMan.sessions && viewItem =~ /^account/",
-          "group": "2_manage@1"
+          "command": "ctxMan.setupAiFiles",
+          "when": "view == ctxMan.sessions",
+          "group": "4_setup@1"
         }
       ],
       "commandPalette": [
@@ -366,5 +324,13 @@
         }
       }
     }
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/node": "^22.20.5",
+    "@types/vscode": "^1.85.0",
+    "eslint": "^9.39.5",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.72.1"
   }
 }

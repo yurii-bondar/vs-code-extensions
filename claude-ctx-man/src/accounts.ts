@@ -1,46 +1,33 @@
-const vscode = require('vscode');
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const crypto = require('crypto');
-const { execFile } = require('child_process');
+import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
+import { DEFAULT_DIR, ENV_KEY, HOME, defaultLabel, expand, isLoggedIn, looksLikeConfigDir, readProfile } from './configdir';
+import { isRecord } from './json';
+import type { Account, ConfigDir } from './types';
 
-const HOME = os.homedir();
-const DEFAULT_DIR = path.join(HOME, '.claude');
-const ENV_KEY = 'CLAUDE_CONFIG_DIR';
-const PLATFORM_KEY = { darwin: 'osx', win32: 'windows' }[process.platform] || 'linux';
+const PLATFORM_KEY = ({ darwin: 'osx', win32: 'windows' } as Record<string, string>)[process.platform] ?? 'linux';
 
-const expand = (p) => path.resolve(String(p).replace(/^~(?=$|[\\/])/, HOME));
-const config = () => vscode.workspace.getConfiguration('ctxMan');
+const config = (): vscode.WorkspaceConfiguration => vscode.workspace.getConfiguration('ctxMan');
 
-function defaultLabel(dir) {
-  const base = path.basename(dir);
-  if (dir === DEFAULT_DIR) return 'default';
-  return base.replace(/^\.claude-?/, '') || base;
-}
-
-// The logged-in account is cached in .claude.json inside the config folder
-// (for the default folder it may live at ~/.claude.json instead).
-function readProfile(dir) {
-  const files = [path.join(dir, '.claude.json')];
-  if (dir === DEFAULT_DIR) files.push(path.join(HOME, '.claude.json'));
-  for (const file of files) {
-    try {
-      const account = JSON.parse(fs.readFileSync(file, 'utf8')).oauthAccount;
-      if (account) return { email: account.emailAddress, org: account.organizationName };
-    } catch {
-      // missing or unreadable, try the next one
-    }
+/** The `ctxMan.accounts` setting: only entries that name a folder are kept. */
+export function configuredAccounts(): { label: string; configDir: string }[] {
+  const raw = config().get<unknown>('accounts');
+  const out: { label: string; configDir: string }[] = [];
+  for (const a of Array.isArray(raw) ? raw : []) {
+    if (isRecord(a) && typeof a['configDir'] === 'string' && a['configDir']) out.push({ label: typeof a['label'] === 'string' ? a['label'] : '', configDir: a['configDir'] });
   }
-  return {};
+  return out;
 }
 
-const looksLikeConfigDir = (dir) => ['projects', '.claude.json', 'settings.json'].some((f) => fs.existsSync(path.join(dir, f)));
+const hiddenSetting = (): string[] => {
+  const raw = config().get<unknown>('hiddenAccounts');
+  return (Array.isArray(raw) ? raw : []).filter((h): h is string => typeof h === 'string' && !!h);
+};
 
-function discover() {
-  const found = new Map();
-  if (config().get('autoDiscover')) {
-    let names = [];
+function discover(): Account[] {
+  const found = new Map<ConfigDir, string>();
+  if (config().get<boolean>('autoDiscover')) {
+    let names: string[] = [];
     try {
       names = fs.readdirSync(HOME);
     } catch {
@@ -48,7 +35,7 @@ function discover() {
     }
     for (const name of names) {
       if (name !== '.claude' && !name.startsWith('.claude-')) continue;
-      const dir = path.join(HOME, name);
+      const dir = path.join(HOME, name) as ConfigDir;
       try {
         if (fs.statSync(dir).isDirectory() && looksLikeConfigDir(dir)) found.set(dir, defaultLabel(dir));
       } catch {
@@ -56,100 +43,99 @@ function discover() {
       }
     }
   }
-  for (const a of config().get('accounts') || []) {
-    if (!a || !a.configDir) continue;
+  for (const a of configuredAccounts()) {
     const dir = expand(a.configDir);
     found.set(dir, a.label || defaultLabel(dir));
   }
-  return [...found]
-    .map(([dir, label]) => ({ dir, label, ...readProfile(dir) }))
-    .sort((a, b) => a.label.localeCompare(b.label));
+  return [...found].map(([dir, label]): Account => ({ dir, label, ...readProfile(dir) })).sort((a, b) => a.label.localeCompare(b.label));
 }
 
-// macOS keeps each config folder's login in its own Keychain item:
-// "Claude Code-credentials-<first 8 hex of sha256(config dir)>". Only the item's existence is checked.
-const keychainService = (dir) => `Claude Code-credentials-${crypto.createHash('sha256').update(dir).digest('hex').slice(0, 8)}`;
-
-function keychainHas(service) {
-  return new Promise((resolve) => execFile('security', ['find-generic-password', '-s', service], (err) => resolve(!err)));
+/** `CLAUDE_CONFIG_DIR` as the Claude Code extension has it in `claudeCode.environmentVariables`. */
+function extensionEnvDir(cfg: vscode.WorkspaceConfiguration): string | undefined {
+  const list = cfg.get<unknown>('claudeCode.environmentVariables');
+  const hit = (Array.isArray(list) ? list : []).find((e) => isRecord(e) && e['name'] === ENV_KEY);
+  return isRecord(hit) && typeof hit['value'] === 'string' ? hit['value'] : undefined;
 }
 
-async function isLoggedIn(dir) {
-  if (process.platform === 'darwin') {
-    if (await keychainHas(keychainService(dir))) return true;
-    return dir === DEFAULT_DIR ? keychainHas('Claude Code-credentials') : false;
-  }
-  return fs.existsSync(path.join(dir, '.credentials.json'));
+function terminalEnvDir(cfg: vscode.WorkspaceConfiguration): string | undefined {
+  const env = cfg.get<unknown>(`terminal.integrated.env.${PLATFORM_KEY}`);
+  const value = isRecord(env) ? env[ENV_KEY] : undefined;
+  return typeof value === 'string' ? value : undefined;
 }
 
-class AccountStore {
-  constructor(context) {
-    this.context = context;
-    this.emitter = new vscode.EventEmitter();
-    this.onDidChange = this.emitter.event;
-    this.loginCache = new Map();
+export class AccountStore {
+  private readonly emitter = new vscode.EventEmitter<void>();
+  readonly onDidChange = this.emitter.event;
+  private readonly loginCache = new Map<ConfigDir, boolean>();
+  /** Every account found, hidden ones too, so the active one is still recognized when hidden. */
+  all: Account[] = [];
+  accounts: Account[] = [];
+
+  constructor(private readonly context: vscode.ExtensionContext) {
     this.reload();
   }
 
-  // `all` keeps hidden accounts so the active one is still recognized when hidden.
-  reload() {
+  reload(): void {
     this.all = discover();
     this.accounts = this.all.filter((a) => !this.isHidden(a));
     this.emitter.fire();
   }
 
-  isHidden(account) {
-    return (config().get('hiddenAccounts') || []).some((h) => h && (h === account.label || expand(h) === account.dir));
+  isHidden(account: Account): boolean {
+    return hiddenSetting().some((h) => h === account.label || expand(h) === account.dir);
   }
 
-  async setHidden(account, hidden) {
-    const list = (config().inspect('hiddenAccounts').globalValue || []).filter((h) => h !== account.label && expand(h) !== account.dir);
-    if (hidden) list.push(account.label);
-    await config().update('hiddenAccounts', list.length ? list : undefined, vscode.ConfigurationTarget.Global);
+  async setHidden(account: Account, hidden: boolean): Promise<void> {
+    const kept = (config().inspect<string[]>('hiddenAccounts')?.globalValue ?? []).filter((h) => h !== account.label && expand(h) !== account.dir);
+    if (hidden) kept.push(account.label);
+    await config().update('hiddenAccounts', kept.length ? kept : undefined, vscode.ConfigurationTarget.Global);
   }
 
-  async loginState(account) {
-    if (!this.loginCache.has(account.dir)) this.loginCache.set(account.dir, await isLoggedIn(account.dir));
-    return this.loginCache.get(account.dir);
+  async loginState(account: Account): Promise<boolean> {
+    const cached = this.loginCache.get(account.dir);
+    if (cached !== undefined) return cached;
+    const state = await isLoggedIn(account.dir);
+    this.loginCache.set(account.dir, state);
+    return state;
   }
 
-  refreshLogins() {
+  refreshLogins(): void {
     this.loginCache.clear();
   }
 
-  byDir(dir) {
+  byDir(dir: string): Account | undefined {
     return this.all.find((a) => a.dir === dir);
   }
 
-  // First run: pick up whatever CLAUDE_CONFIG_DIR is already configured.
-  get active() {
-    const stored = this.context.globalState.get('ctxMan.activeDir');
+  /** The stored choice, else whatever `CLAUDE_CONFIG_DIR` is already configured to. */
+  get active(): Account | undefined {
     const cfg = vscode.workspace.getConfiguration();
-    const fromExtension = (cfg.get('claudeCode.environmentVariables') || []).find((e) => e && e.name === ENV_KEY);
-    const fromTerminal = (cfg.get(`terminal.integrated.env.${PLATFORM_KEY}`) || {})[ENV_KEY];
-    const candidates = [stored, fromExtension && fromExtension.value, fromTerminal, process.env[ENV_KEY], DEFAULT_DIR];
+    const candidates = [this.context.globalState.get<string>('ctxMan.activeDir'), extensionEnvDir(cfg), terminalEnvDir(cfg), process.env[ENV_KEY], DEFAULT_DIR];
     for (const c of candidates) {
-      const account = c && this.byDir(expand(c));
+      const account = c ? this.byDir(expand(c)) : undefined;
       if (account) return account;
     }
-    return this.accounts[0] || this.all[0];
+    return this.accounts[0] ?? this.all[0];
   }
 
-  async activate(account) {
+  /** Makes the account the active one; returns where it now applies: `terminals` and/or `extension`. */
+  async activate(account: Account): Promise<('terminals' | 'extension')[]> {
     await this.context.globalState.update('ctxMan.activeDir', account.dir);
     const cfg = vscode.workspace.getConfiguration();
-    const applied = [];
-    if (config().get('syncTerminalEnv')) {
+    const applied: ('terminals' | 'extension')[] = [];
+    if (config().get<boolean>('syncTerminalEnv')) {
       const key = `terminal.integrated.env.${PLATFORM_KEY}`;
-      const env = { ...(cfg.inspect(key).globalValue || {}), [ENV_KEY]: account.dir };
-      await cfg.update(key, env, vscode.ConfigurationTarget.Global);
+      const current = cfg.inspect<Record<string, string>>(key)?.globalValue ?? {};
+      await cfg.update(key, { ...current, [ENV_KEY]: account.dir }, vscode.ConfigurationTarget.Global);
       applied.push('terminals');
     }
-    if (config().get('syncClaudeExtension') && cfg.inspect('claudeCode.environmentVariables')) {
+    const extensionKey = 'claudeCode.environmentVariables';
+    const inspected = cfg.inspect<{ name?: string; value?: string }[]>(extensionKey);
+    if (config().get<boolean>('syncClaudeExtension') && inspected) {
       try {
-        const list = (cfg.inspect('claudeCode.environmentVariables').globalValue || []).filter((e) => e && e.name !== ENV_KEY);
+        const list = (inspected.globalValue ?? []).filter((e) => e && e.name !== ENV_KEY);
         list.push({ name: ENV_KEY, value: account.dir });
-        await cfg.update('claudeCode.environmentVariables', list, vscode.ConfigurationTarget.Global);
+        await cfg.update(extensionKey, list, vscode.ConfigurationTarget.Global);
         applied.push('extension');
       } catch {
         // Claude Code extension not installed
@@ -158,6 +144,8 @@ class AccountStore {
     this.emitter.fire();
     return applied;
   }
-}
 
-module.exports = { AccountStore, ENV_KEY, expand };
+  dispose(): void {
+    this.emitter.dispose();
+  }
+}

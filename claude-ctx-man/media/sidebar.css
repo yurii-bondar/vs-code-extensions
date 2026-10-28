@@ -1,0 +1,142 @@
+/* Sidebar. Surfaces and text follow the VS Code theme; the accents are fixed and only used as tints over the surface,
+   so they read the same in light and dark themes. Nothing is set inline (the page's CSP forbids it). */
+
+:root {
+  --fg: var(--vscode-foreground);
+  --bg: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  --muted: var(--vscode-descriptionForeground);
+  --line: color-mix(in srgb, var(--fg) 12%, transparent);
+  --card: color-mix(in srgb, var(--fg) 5%, var(--bg));
+  --card-hi: color-mix(in srgb, var(--fg) 9%, var(--bg));
+  --ring: var(--vscode-focusBorder, #4c9aff);
+  --ok: #36b777;
+  --warn: #e6a935;
+  --violet: #8f7df7;
+  --blue: #4c9aff;
+  --brand: linear-gradient(135deg, #8f7df7 0%, #4c9aff 100%);
+  --a: #8f7df7;
+  --b: #4c9aff;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; padding: 10px 10px 14px; color: var(--fg); background: transparent; font: 13px/1.45 var(--vscode-font-family, system-ui, sans-serif); -webkit-font-smoothing: antialiased; }
+h2, p { margin: 0; }
+ul { margin: 0; padding: 0; list-style: none; }
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.i { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ---- top: scope and search ---- */
+
+.top { display: grid; gap: 8px; margin-bottom: 10px; }
+
+.seg { display: grid; grid-template-columns: 1fr 1fr; padding: 3px; gap: 3px; border-radius: 10px; background: var(--card); border: 1px solid var(--line); }
+.seg button { padding: 5px 8px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font-size: 12px; font-weight: 500; white-space: nowrap; transition: background 0.15s, color 0.15s; }
+.seg button:hover { color: var(--fg); }
+.seg button[aria-pressed='true'] { background: var(--bg); color: var(--fg); box-shadow: 0 1px 3px color-mix(in srgb, #000 25%, transparent), 0 0 0 1px var(--line); }
+
+.find { display: flex; gap: 6px; }
+.find .search { flex: 1; min-width: 0; }
+.btn.boxed { width: 30px; height: 30px; flex: none; border: 1px solid var(--line); border-radius: 10px; background: var(--card); opacity: 1; }
+.search { display: flex; align-items: center; gap: 8px; padding: 0 10px; height: 30px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--muted); transition: border-color 0.15s; }
+.search:focus-within { border-color: var(--ring); color: var(--fg); }
+.search input { flex: 1; min-width: 0; height: 100%; border: 0; background: transparent; outline: 0; font-size: 12.5px; }
+.search input::placeholder { color: var(--muted); }
+.search input::-webkit-search-cancel-button { display: none; }
+
+/* ---- account cards ---- */
+
+.card { --a: var(--violet); --b: var(--blue); position: relative; margin-bottom: 8px; border-radius: 14px; background: var(--card); border: 1px solid var(--line); overflow: hidden; transition: border-color 0.15s, background 0.15s; }
+.card:hover { border-color: color-mix(in srgb, var(--a) 40%, var(--line)); }
+.card.active { border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); background: color-mix(in srgb, var(--ok) 5%, var(--card)); }
+.h0 { --a: #8f7df7; --b: #4c9aff; }
+.h1 { --a: #4c9aff; --b: #29c7d9; }
+.h2 { --a: #29c7d9; --b: #36b777; }
+.h3 { --a: #36b777; --b: #a8c93a; }
+.h4 { --a: #e6a935; --b: #ef7d3c; }
+.h5 { --a: #ef7d3c; --b: #ee5a6c; }
+.h6 { --a: #ee5a6c; --b: #d65bb0; }
+.h7 { --a: #d65bb0; --b: #8f7df7; }
+
+.head { display: flex; align-items: center; gap: 4px; padding-right: 8px; }
+.toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px; padding: 9px 4px 9px 8px; border: 0; background: transparent; text-align: left; border-radius: 12px; }
+.toggle > .i { color: var(--muted); transition: transform 0.18s; }
+.card.open .toggle > .i { transform: rotate(90deg); }
+
+.avatar { position: relative; flex: none; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 11px; background: linear-gradient(135deg, var(--a), var(--b)); color: #fff; font-size: 12px; font-weight: 700; letter-spacing: 0.02em; text-shadow: 0 1px 2px color-mix(in srgb, #000 30%, transparent); }
+.dot { position: absolute; right: -3px; bottom: -3px; width: 11px; height: 11px; border-radius: 50%; border: 2px solid var(--bg); background: var(--muted); }
+.dot.ok { background: var(--ok); }
+.dot.warn { background: var(--warn); }
+.dot.idle { background: color-mix(in srgb, var(--fg) 35%, var(--bg)); }
+
+.who { min-width: 0; display: grid; gap: 1px; }
+.name { display: flex; align-items: center; gap: 6px; min-width: 0; font-weight: 600; font-size: 13.5px; }
+.mail { color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.count { margin-left: auto; padding: 0 6px; height: 17px; display: inline-flex; align-items: center; border-radius: 99px; background: color-mix(in srgb, var(--fg) 9%, transparent); color: var(--muted); font-size: 10.5px; font-weight: 600; }
+.pill { display: inline-flex; align-items: center; gap: 3px; padding: 0 7px; height: 17px; border-radius: 99px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.02em; }
+.pill .i { width: 11px; height: 11px; }
+.pill.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 16%, transparent); }
+.pill.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 18%, transparent); }
+
+.head-actions { display: flex; align-items: center; gap: 2px; }
+.btn { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--muted); transition: background 0.15s, color 0.15s; }
+.btn:hover { background: var(--card-hi); color: var(--fg); }
+/* Hiding an account is rare, so its button appears only when the card is pointed at. */
+.head-actions .btn.hover { opacity: 0; transition: opacity 0.15s, background 0.15s, color 0.15s; }
+.card:hover .head-actions .btn.hover, .head-actions:focus-within .btn.hover { opacity: 1; }
+.btn.solid { background: linear-gradient(135deg, var(--a), var(--b)); color: #fff; }
+.btn.solid:hover { background: linear-gradient(135deg, var(--a), var(--b)); filter: brightness(1.1); color: #fff; }
+
+/* ---- buttons with a label ---- */
+
+.act { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 26px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card-hi); font-size: 12px; font-weight: 500; white-space: nowrap; transition: background 0.15s, border-color 0.15s, filter 0.15s; }
+.act:hover { border-color: color-mix(in srgb, var(--fg) 30%, transparent); }
+.act.primary { border-color: transparent; background: linear-gradient(135deg, var(--a), var(--b)); color: #fff; font-weight: 600; text-shadow: 0 1px 2px color-mix(in srgb, #000 25%, transparent); }
+.act.primary:hover { filter: brightness(1.1); }
+.act.ghost { background: transparent; color: var(--muted); }
+.act.ghost:hover { color: var(--fg); }
+.act.sm { height: 22px; padding: 0 9px; font-size: 11.5px; }
+
+/* ---- sessions ---- */
+
+.sessions { padding: 0 6px 6px; display: grid; gap: 1px; }
+.session { position: relative; border-radius: 10px; }
+.session.open { background: color-mix(in srgb, var(--a) 9%, var(--bg)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--a) 30%, transparent); }
+
+.row { display: grid; gap: 2px; width: 100%; padding: 7px 38px 7px 10px; border: 0; border-radius: 10px; background: transparent; text-align: left; }
+.session:not(.open) .row:hover { background: var(--card-hi); }
+.s-title { font-size: 13px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.session.open .s-title { -webkit-line-clamp: 4; font-weight: 600; }
+.s-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; color: var(--muted); font-size: 11.5px; }
+.s-meta .i { width: 11px; height: 11px; }
+.chip { display: inline-flex; align-items: center; gap: 3px; max-width: 100%; padding: 0 6px; height: 17px; border-radius: 6px; background: color-mix(in srgb, var(--fg) 8%, transparent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.big { display: inline-flex; align-items: center; gap: 3px; color: var(--warn); font-weight: 500; }
+
+.quick { position: absolute; top: 50%; right: 8px; transform: translateY(-50%); opacity: 0; transition: opacity 0.12s; }
+.session:hover .quick, .session:focus-within .quick { opacity: 1; }
+
+.detail { padding: 0 10px 10px; display: grid; gap: 8px; }
+.quote { padding: 6px 9px; border-left: 2px solid color-mix(in srgb, var(--a) 60%, transparent); border-radius: 0 6px 6px 0; background: color-mix(in srgb, var(--fg) 5%, transparent); color: var(--muted); font-size: 12px; font-style: italic; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.actions { display: flex; flex-wrap: wrap; gap: 5px; }
+
+.more { padding: 0 14px 10px; color: var(--muted); font-size: 11.5px; }
+.empty-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 12px 12px; color: var(--muted); font-size: 12px; }
+
+/* ---- empty state, footer ---- */
+
+.loading { padding: 24px 0; text-align: center; color: var(--muted); }
+.empty { display: grid; justify-items: center; gap: 8px; padding: 28px 12px; text-align: center; color: var(--muted); }
+.empty h2 { color: var(--fg); font-size: 14px; font-weight: 600; }
+.empty p { font-size: 12px; }
+.empty-ico { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 14px; background: var(--brand); color: #fff; }
+.empty-ico .i { width: 22px; height: 22px; }
+.empty .act { margin-top: 4px; }
+
+.tools { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.tool { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: 99px; background: transparent; color: var(--muted); font-size: 12px; transition: color 0.15s, border-color 0.15s, background 0.15s; }
+.tool:hover { color: var(--fg); background: var(--card); border-color: color-mix(in srgb, var(--fg) 25%, transparent); }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+[hidden] { display: none !important; }
