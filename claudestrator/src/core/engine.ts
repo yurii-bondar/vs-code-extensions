@@ -149,6 +149,8 @@ class Engine extends EventEmitter {
   sessions: Map<string, ClaudeSession>;
   running: Set<string>;
   prepared: Set<string>;
+  /** The confirm-push question's context per task, with the checkpoint it was made for (`at`). */
+  pushContext = new Map<string, { at: string; value: CheckpointContext }>();
   lives: Map<string, Live>;
   errors: Map<string, { code: string; message: string; blocked?: BlockedRepo[]; at: string }>;
   permissions: Map<string, { request: PermissionRequest; resolve: (a: PermissionAnswer) => void }>;
@@ -1025,6 +1027,10 @@ class Engine extends EventEmitter {
         return { format: 'log', text: g ? g.summary : cp.reason || '' };
       }
       case 'confirm-push': {
+        // Several git calls per repo, asked again on every refresh of the task screen; nothing they read changes while
+        // the same question is open.
+        const hit = this.pushContext.get(s.taskId);
+        if (hit && hit.at === cp.at) return hit.value;
         const config = this.config();
         const parts: string[] = [];
         const repos: { name: string; branch: string | null; base: string; files: number; dir: string }[] = [];
@@ -1036,7 +1042,9 @@ class Engine extends EventEmitter {
           repos.push({ name: r.name, branch, base: r.base, files: files.length, dir: r.dir });
           parts.push(`${r.name} (${branch} → ${r.base})\n${log.stdout.trim() || 'no commits'}`);
         }
-        return { format: 'log', text: parts.join('\n\n'), repos };
+        const value: CheckpointContext = { format: 'log', text: parts.join('\n\n'), repos };
+        this.pushContext.set(s.taskId, { at: cp.at, value });
+        return value;
       }
       default:
         return { format: 'log', text: cp.reason || '' };
@@ -1049,6 +1057,7 @@ class Engine extends EventEmitter {
   }
 
   async remove(taskId: string): Promise<void> {
+    this.pushContext.delete(taskId);
     if (this.running.has(taskId)) await this.stop(taskId);
     this.svc.remove(taskId);
     this.errors.delete(taskId);

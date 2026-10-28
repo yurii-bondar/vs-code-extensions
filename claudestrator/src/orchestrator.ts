@@ -84,8 +84,8 @@ class Orchestrator {
   root: string | null;
   token: string | undefined;
   watchers: vscode.FileSystemWatcher[];
-  _onDidChange: vscode.EventEmitter<{ external: boolean }>;
-  onDidChange: vscode.Event<{ external: boolean }>;
+  _onDidChange: vscode.EventEmitter<void>;
+  onDidChange: vscode.Event<void>;
   _onDidChangeConfig: vscode.EventEmitter<void>;
   onDidChangeConfig: vscode.Event<void>;
   _onEngine: vscode.EventEmitter<EngineEvent>;
@@ -140,7 +140,8 @@ class Orchestrator {
     await this.hooks.listen();
     this.token = await this.context.secrets.get(SECRET_KEY);
     this.writeHookSettings(null);
-    this.ready = this.refreshHealth();
+    // No processes at activation: the health checks (and the model, sign-in and MCP checks after them) start the
+    // first time something needs them, see ensureReady.
     this.rebuild();
   }
 
@@ -148,7 +149,14 @@ class Orchestrator {
     writeHookSettings(this.hookSettingsFile, { node: nodePath, script: this.hookScript });
   }
 
-  async refreshHealth(): Promise<Health> {
+  /** Runs the health checks again; ensureReady waits for this same run. */
+  refreshHealth(): Promise<Health> {
+    const run = this.checkHealth();
+    this.ready = run;
+    return run;
+  }
+
+  private async checkHealth(): Promise<Health> {
     const s = settings();
     try {
       this.health = await probe({ claudePath: s.get<string>('claudePath') as string, nodePath: s.get<string>('nodePath') as string });
@@ -164,8 +172,9 @@ class Orchestrator {
     return this.health;
   }
 
+  /** The health checks, run the first time they are needed (a task, the dashboard, a command) and then kept. */
   async ensureReady(): Promise<void> {
-    if (this.ready) await this.ready;
+    await (this.ready ?? this.refreshHealth());
   }
 
   /** (Re)creates the engine for the current workspace root. Running tasks of the old one keep going. */
@@ -214,11 +223,15 @@ class Orchestrator {
     let timer: NodeJS.Timeout | undefined;
     const changed = (): void => {
       clearTimeout(timer);
-      timer = setTimeout(() => this.fire(true), 300);
+      timer = setTimeout(() => this.fire(), 300);
+    };
+    // The engine announces its own appends right away; the watcher is for the others (another window, the CLI).
+    const elsewhere = (uri: vscode.Uri): void => {
+      if (!(this.engine && this.engine.svc.isOwnWrite(path.basename(path.dirname(uri.fsPath))))) changed();
     };
     const tasks = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(base, '.orch/tasks/*/events.ndjson'));
-    tasks.onDidChange(changed);
-    tasks.onDidCreate(changed);
+    tasks.onDidChange(elsewhere);
+    tasks.onDidCreate(elsewhere);
     tasks.onDidDelete(changed);
     let ctimer: NodeJS.Timeout | undefined;
     const configChanged = (): void => {
@@ -241,11 +254,11 @@ class Orchestrator {
   }
 
   /** Coalesces bursts (streaming output, gate progress) into one UI refresh. */
-  fire(external?: boolean): void {
+  fire(): void {
     if (this.fireTimer) return;
     this.fireTimer = setTimeout(() => {
       this.fireTimer = null;
-      this._onDidChange.fire({ external: Boolean(external) });
+      this._onDidChange.fire();
     }, 120);
   }
 

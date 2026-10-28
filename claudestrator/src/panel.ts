@@ -49,6 +49,7 @@ class DashboardPanel implements RpcHandlers {
   initialRoute: Route | undefined;
   disposables: vscode.Disposable[];
   panel: vscode.WebviewPanel;
+  missedChange = false;
 
   static show(context: vscode.ExtensionContext, orch: Orchestrator, route?: Route): DashboardPanel {
     if (DashboardPanel.current) {
@@ -76,7 +77,14 @@ class DashboardPanel implements RpcHandlers {
     this.panel.iconPath = vscode.Uri.joinPath(media, 'tab-icon-orchestra.svg');
     this.panel.webview.html = this.html(media, scripts);
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
-    this.panel.onDidChangeViewState((e) => vscode.commands.executeCommand('setContext', 'claudestratorPanelFocus', e.webviewPanel.active), null, this.disposables);
+    this.panel.onDidChangeViewState((e) => {
+      vscode.commands.executeCommand('setContext', 'claudestratorPanelFocus', e.webviewPanel.active);
+      // What changed while the panel was hidden is refreshed once, as it shows again.
+      if (e.webviewPanel.visible && this.missedChange) {
+        this.missedChange = false;
+        this.post({ type: 'changed' });
+      }
+    }, null, this.disposables);
     this.panel.webview.onDidReceiveMessage((msg) => this.onMessage(msg), null, this.disposables);
 
     orch.onEngine(({ name, data: payload }) => {
@@ -88,7 +96,11 @@ class DashboardPanel implements RpcHandlers {
       else if (name === 'mcpLogin') this.post({ type: 'toast', kind: data.kind || (data.ok ? 'ok' : 'error'), text: data.message });
       else if (name === 'log' && data.level !== 'info') this.post({ type: 'toast', kind: data.level === 'error' ? 'error' : 'warn', text: data.message, taskId: data.taskId });
     }, null, this.disposables);
-    orch.onDidChange(() => this.post({ type: 'changed' }), null, this.disposables);
+    // A hidden panel keeps its page (retainContextWhenHidden), but reloading it on every change would be wasted work.
+    orch.onDidChange(() => {
+      if (this.panel.visible) this.post({ type: 'changed' });
+      else this.missedChange = true;
+    }, null, this.disposables);
     orch.onDidChangeConfig(() => this.post({ type: 'config' }), null, this.disposables);
     vscode.workspace.onDidChangeConfiguration((e) => e.affectsConfiguration('claudestrator') && this.post({ type: 'config' }), null, this.disposables);
   }
@@ -167,7 +179,11 @@ class DashboardPanel implements RpcHandlers {
 
   healthSummary(): HealthSummary {
     const h = this.orch.health;
-    if (!h) return { checking: true };
+    if (!h) {
+      // The dashboard is the first to need them: start the checks; the page refreshes when they are done.
+      void this.orch.ensureReady();
+      return { checking: true };
+    }
     const account = this.orch.account();
     return {
       checkedAt: h.checkedAt,

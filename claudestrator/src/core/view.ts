@@ -171,6 +171,35 @@ function statusOf(state: TaskState | null, { running, error, corrupt, asking }: 
   return { key: 'ready', label: 'Ready to continue', tone: 'muted', group: 'stopped' };
 }
 
+/** What a card derives from the whole event log: the step timeline, the cost, the last stop. */
+interface Derived {
+  steps: StepItem[];
+  cost: number;
+  lastStop: OrchEvent | undefined;
+}
+
+/**
+ * Derived data per state object. The store hands out the same state object until the events file changes, so a list
+ * refresh replays only the tasks that moved; finished tasks cost nothing. Keyed again by `running`, which steps show.
+ */
+const derivedCache = new WeakMap<TaskState, Map<boolean, Derived>>();
+
+function derive(engine: ViewEngine, taskId: string, state: TaskState, running: boolean): Derived {
+  const byRunning = derivedCache.get(state) ?? new Map<boolean, Derived>();
+  const hit = byRunning.get(running);
+  if (hit) return hit;
+  let events: OrchEvent[] = [];
+  try {
+    events = engine.svc.events(taskId);
+  } catch {
+    // raced with a delete
+  }
+  const derived = { steps: stepsOf(events, state, { running }), cost: costOf(events), lastStop: [...events].reverse().find((e) => e.type === 'stopped') };
+  byRunning.set(running, derived);
+  derivedCache.set(state, byRunning);
+  return derived;
+}
+
 /** A compact card for lists and the tree. */
 function summary(engine: ViewEngine, entry: TaskEntry): Card {
   const taskId = entry.taskId;
@@ -178,15 +207,8 @@ function summary(engine: ViewEngine, entry: TaskEntry): Card {
   const state = entry.state!;
   const running = engine.isRunning(taskId);
   const error = engine.lastError(taskId);
-  let events: OrchEvent[] = [];
-  try {
-    events = engine.svc.events(taskId);
-  } catch {
-    // raced with a delete
-  }
-  const steps = stepsOf(events, state, { running });
+  const { steps, cost, lastStop } = derive(engine, taskId, state, running);
   const agentSteps = steps.filter((s) => s.kind !== 'human' || s.status !== 'pending');
-  const lastStop = [...events].reverse().find((e) => e.type === 'stopped');
   const result = resultOf(state);
   return {
     taskId,
@@ -207,7 +229,7 @@ function summary(engine: ViewEngine, entry: TaskEntry): Card {
     prs: state.prs,
     branch: branchName(state),
     repos: state.repos.map((r) => r.name),
-    cost: costOf(events) + (engine.liveCost.get(taskId) || 0),
+    cost: cost + (engine.liveCost.get(taskId) || 0),
     createdAt: state.createdAt,
     updatedAt: state.updatedAt,
     progress: { done: agentSteps.filter((s) => ['done', 'skipped'].includes(s.status)).length, total: agentSteps.length },

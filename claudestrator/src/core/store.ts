@@ -127,6 +127,8 @@ class TaskService {
   now: () => Date;
   onAppend: ((taskId: string, event: OrchEvent) => void) | undefined;
   cache: Map<string, { size: number; mtimeMs: number; state: TaskState }>;
+  /** The events file's signature right after this process's last append to it, per task. */
+  written = new Map<string, string>();
 
   constructor({ workspace, now, onAppend }: { workspace: string; now?: (() => Date) | undefined; onAppend?: ((taskId: string, event: OrchEvent) => void) | undefined }) {
     this.workspace = workspace;
@@ -170,16 +172,27 @@ class TaskService {
   }
 
   store(taskId: string): EventStore {
-    const store = new EventStore(path.join(this.dir(taskId), TASK_FILES.events));
+    const file = path.join(this.dir(taskId), TASK_FILES.events);
+    const store = new EventStore(file);
     const notify = this.onAppend;
     const append = store.append.bind(store);
     store.append = (event: NewEvent): OrchEvent => {
       const stored = append(event);
       this.cache.delete(taskId);
+      this.written.set(taskId, signature(file));
       if (notify) notify(taskId, stored);
       return stored;
     };
     return store;
+  }
+
+  /**
+   * Whether the events file is as this process last wrote it. A file watcher then reports a change that `onAppend`
+   * has already announced, and refreshing again would only repeat the same work.
+   */
+  isOwnWrite(taskId: string): boolean {
+    const mine = this.written.get(taskId);
+    return mine !== undefined && mine === signature(path.join(this.dir(taskId), TASK_FILES.events));
   }
 
   exists(taskId: string): boolean {
@@ -401,4 +414,14 @@ class TaskService {
 }
 
 export type { DispatchResult, StartRequest, TranscriptItem };
+/** Size and mtime of a file, or '' when it is gone: enough to tell whether it changed since. */
+function signature(file: string): string {
+  try {
+    const st = fs.statSync(file);
+    return `${st.size}:${st.mtimeMs}`;
+  } catch {
+    return '';
+  }
+}
+
 export { ORCH_DIR, withLock, EventStore, TaskService };
