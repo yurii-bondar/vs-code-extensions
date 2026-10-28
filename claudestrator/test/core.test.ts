@@ -9,6 +9,7 @@ import { buildPipeline, outline, taskPipeline } from '../src/core/pipeline';
 import * as config from '../src/core/config';
 import { parseStageReport } from '../src/core/prompt';
 import { guardBash } from '../src/core/guard';
+import { plain } from '../src/core/gates';
 import { parseInvocation, classifyInput, extractAcceptanceCriteria, adfToText, detectScenario } from '../src/core/intake';
 import { TaskService } from '../src/core/store';
 import { stepsOf } from '../src/core/view';
@@ -329,17 +330,27 @@ test('view: the step timeline continues after the step a checkpoint stopped at',
   ]);
 });
 
+test('gates: output for agents has no colour codes and no redrawn progress lines', () => {
+  assert.equal(plain('\u001b[31mFAIL\u001b[0m src/a.ts\n[1/3] building\r[2/3] building\r[3/3] done  \nok\n'), 'FAIL src/a.ts\n[3/3] done\nok\n');
+});
+
 test('config: effort is validated and inherited along extends', () => {
   const ws = tmp('cs-effort-');
   fs.mkdirSync(path.join(ws, '.claudestrator'));
   fs.writeFileSync(config.projectConfigFile(ws), 'agents:\n  reviewer: { effort: high }\n  security: { extends: reviewer, description: Security }\n');
   const r = passed(loadCfg({ workspace: ws, home: tmp('cs-h-') }));
   assert.equal(r.config.agents.security!.effort, 'high');
-  assert.equal(r.config.agents.planner!.effort, undefined);
+  assert.equal(r.config.agents.planner!.effort, 'high', 'the built-in effort of the planner');
+  assert.equal(r.config.agents.verifier!.effort, undefined);
+  assert.deepEqual(['planner', 'developer', 'tester', 'reviewer'].map((n) => r.config.agents[n]!.mcp), [undefined, false, false, false], 'only agents that work on the repo run without MCP');
+  assert.equal(r.config.agents.security!.mcp, false, 'an agent that extends the reviewer inherits it');
+  config.updateAgentConfig(ws, 'developer', { mcp: true });
+  assert.equal(passed(loadCfg({ workspace: ws })).config.agents.developer!.mcp, true, 'a project can give an agent its MCP servers back');
+  assert.throws(() => config.updateAgentConfig(ws, 'developer', { mcp: 'no' }), /mcp/);
   config.updateAgentConfig(ws, 'planner', { effort: 'xhigh' });
   assert.equal(passed(loadCfg({ workspace: ws })).config.agents.planner!.effort, 'xhigh');
   config.updateAgentConfig(ws, 'planner', { effort: null });
-  assert.equal(passed(loadCfg({ workspace: ws })).config.agents.planner!.effort, undefined);
+  assert.equal(passed(loadCfg({ workspace: ws })).config.agents.planner!.effort, 'high', 'clearing the setting falls back to the built-in effort');
   assert.throws(() => config.updateAgentConfig(ws, 'planner', { effort: 'huge' }), /effort: expected one of low, medium, high, xhigh, max/);
   const args = buildArgs({ agent: { model: 'opus', effort: 'low', instructions: 'x' } as Agent }, { flags: () => new Set(['--effort']), settingSources: () => null, hookSettings: () => '/h.json' } as RunnerOptions);
   assert.equal(args[args.indexOf('--effort') + 1], 'low');

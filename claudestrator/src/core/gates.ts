@@ -1,12 +1,24 @@
 // Gates: a repo's lint/typecheck/test commands, run against its changes after a code or tests stage.
 import * as fs from 'fs';
 import * as path from 'path';
-import { exec, GitRepo } from './git';
+import { exec, getChildEnv, GitRepo } from './git';
 import type { RepoConfig } from './types';
 import type { GateResult, RepoGates } from './wire';
 
 const TAIL_LINES = 40;
+// Gate commands print plain text: colour codes are noise in the tail an agent reads, and some tools only colour on a terminal anyway.
+const PLAIN_ENV = { NO_COLOR: '1', FORCE_COLOR: '0' };
+const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`, 'g');
 const slug = (s: string): string => s.replace(/[^A-Za-z0-9._-]+/g, '_');
+
+/** Output as an agent should read it: no colour codes, and a progress line redrawn with \r keeps only its last state. */
+function plain(output: string): string {
+  return output
+    .replace(ANSI, '')
+    .split('\n')
+    .map((line) => line.slice(line.lastIndexOf('\r') + 1).trimEnd())
+    .join('\n');
+}
 
 function shellCommand(cmd: string): [string, string[]] {
   if (process.platform === 'win32') return ['cmd.exe', ['/d', '/s', '/c', cmd]];
@@ -40,10 +52,10 @@ async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = fal
     const cwd = path.join(dir, gate.dir ?? '.');
     const started = Date.now();
     const [bin, args] = shellCommand(gate.cmd);
-    const r = await exec(bin, args, { cwd, timeoutMs });
+    const r = await exec(bin, args, { cwd, timeoutMs, env: { ...getChildEnv(), ...PLAIN_ENV } });
     const ms = Date.now() - started;
     const log = path.join(logDir, `${slug(repo.name)}.${slug(gate.name)}.log`);
-    const output = `${r.stdout}${r.stderr}`;
+    const output = plain(`${r.stdout}${r.stderr}`);
     fs.writeFileSync(log, `$ (cd ${path.relative(dir, cwd) || '.'} && ${gate.cmd})\n${output}\nexit ${r.code}\n`);
     if (r.code === 0) {
       results.push({ repo: repo.name, gate: gate.name, status: 'pass', log, ms });
@@ -59,4 +71,4 @@ async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = fal
 }
 
 export type { GateResult, RepoGates };
-export { runGates, shellCommand };
+export { plain, runGates, shellCommand };

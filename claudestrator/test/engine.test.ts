@@ -53,7 +53,7 @@ async function harness(ws: string, env: Record<string, string> = {}) {
   const hooks = new HookServer();
   await hooks.listen();
   const settings = writeHookSettings(path.join(state, 'hook-settings.json'), { node: process.execPath, script: HOOK });
-  const runner = new ClaudeRunner({ command: () => FAKE, flags: () => new Set(['--include-partial-messages', '--tools', '--setting-sources', '--name', '--effort']), settingSources: () => ['project'], hookSettings: () => settings, env: () => ({}) });
+  const runner = new ClaudeRunner({ command: () => FAKE, flags: () => new Set(['--include-partial-messages', '--tools', '--setting-sources', '--name', '--effort', '--strict-mcp-config']), settingSources: () => ['project'], hookSettings: () => settings, env: () => ({}) });
   const engine = new Engine({ workspace: ws, home: state, runner, hooks });
   const outputs: OutputEvent[] = [];
   engine.on('output', (o: OutputEvent) => outputs.push(o));
@@ -158,7 +158,12 @@ repos:
     assert.equal(planner!.args[planner!.args.indexOf('--effort') + 1], 'max', 'the agent runs at its effort');
     const efforts = h.calls().filter((c) => c.args.includes('--append-system-prompt')).map((c) => (c.args.includes('--effort') ? c.args[c.args.indexOf('--effort') + 1] : null));
     assert.ok(efforts.includes('low'), 'the task override reached the reviewer');
-    assert.ok(efforts.every((e) => e === null || e === 'max' || e === 'low'), `agents without an effort use the default: ${efforts}`);
+    assert.ok(efforts.every((e) => e === null || e === 'max' || e === 'low' || e === 'medium'), `agents without a task or config effort use their built-in one: ${efforts}`);
+    const sonnet = h.calls().filter((c) => c.args.includes('--model') && c.args[c.args.indexOf('--model') + 1] === 'sonnet');
+    assert.ok(sonnet.length > 0, 'developer and tester run on sonnet by default');
+    assert.ok(sonnet.every((c) => c.args[c.args.indexOf('--effort') + 1] === 'medium'), 'developer and tester run at medium effort by default');
+    assert.ok(sonnet.every((c) => c.args.includes('--strict-mcp-config')), 'agents that only work on the repo get no MCP servers');
+    assert.ok(!planner!.args.includes('--strict-mcp-config'), 'the planner keeps them');
     assert.equal(view.detail(h.engine, taskId).steps.find((st) => st.agent === 'reviewer')!.effort, 'low');
     assert.deepEqual(h.engine.limits!.fiveHour, { pct: 31, resetsAt: 1900000000, status: 'allowed' });
     assert.equal(h.engine.limits!.sevenDay!.pct, 26);
@@ -311,6 +316,11 @@ test('engine: a signed-out Claude Code is reported as such, and agents get the a
   const base = { flags: () => new Set(['--mcp-config']), hookSettings: () => '/h.json', mcpConfig: () => '/m.json' };
   assert.ok(buildArgs({ agent: {} as Agent }, { ...base, settingSources: () => ['project', 'local'] } as RunnerOptions).includes('/m.json'), 'without the user source, MCP servers come in explicitly');
   assert.ok(!buildArgs({ agent: {} as Agent }, { ...base, settingSources: () => ['user', 'project'] } as RunnerOptions).includes('--mcp-config'), 'with it, Claude Code loads them itself');
+  const strict = { ...base, flags: () => new Set(['--mcp-config', '--strict-mcp-config']), settingSources: () => ['project', 'local'] } as RunnerOptions;
+  const none = buildArgs({ agent: { mcp: false } as Agent }, strict);
+  assert.ok(none.includes('--strict-mcp-config') && !none.includes('--mcp-config'), 'an agent with mcp: false sees no MCP servers, not even the account ones');
+  assert.ok(!buildArgs({ agent: {} as Agent }, strict).includes('--strict-mcp-config'), 'by default nothing changes');
+  assert.ok(!buildArgs({ agent: { mcp: false } as Agent }, { ...strict, flags: () => new Set(['--mcp-config']) } as RunnerOptions).includes('--strict-mcp-config'), 'an old CLI without the flag still runs');
   const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-acc-'));
   fs.writeFileSync(path.join(cfg, '.claude.json'), JSON.stringify({ mcpServers: { Grafana: { type: 'http', url: 'http://x', headers: { Authorization: 'Bearer t' } } } }));
   const file = writeUserMcpConfig(path.join(cfg, 'out', 'mcp.json'), cfg)!;

@@ -275,6 +275,9 @@ interface Views {
         const effort = el.value || null;
         if (await save('updateAgent', { name: el.dataset.name, patch: { effort } }, `${el.dataset.name}: ${effort ? `effort ${effort}` : 'default effort'}`)) views.agents.load();
       },
+      'agent-mcp': async (el) => {
+        if (await save('updateAgent', { name: el.dataset.name, patch: { mcp: el.checked } }, `${el.dataset.name}: ${el.checked ? 'MCP servers on' : 'no MCP servers'}`)) views.agents.load();
+      },
       'agent-color': async (el) => {
         if (await save('updateAgent', { name: el.dataset.name, patch: { color: el.value } }, null)) views.agents.load();
       },
@@ -374,6 +377,7 @@ interface Views {
           <label class="field"><span>Tools <span class="muted">(empty = all)</span></span><input class="input mono" data-change="agent-field" data-field="tools" data-name="${esc(a.name)}" value="${esc((a.tools || []).join(', '))}" placeholder="Read, Edit, Write, Grep, Glob, Bash"></label>
           <label class="field"><span>Never allowed</span><input class="input mono" data-change="agent-field" data-field="disallowedTools" data-name="${esc(a.name)}" value="${esc((a.disallowedTools || []).join(', '))}" placeholder="WebFetch"></label>
         </div>
+        <label class="check-line" title="Every MCP server adds its tool list to each turn. Off: this agent sees none."><input type="checkbox" data-change="agent-mcp" data-name="${esc(a.name)}" ${a.mcp === false ? '' : 'checked'}><span>MCP servers (Jira, Grafana, docs…) <span class="muted">turn off for agents that only work on the repo</span></span></label>
         <div class="field-row two">
           <label class="field"><span>Color</span><select class="input" data-change="agent-color" data-name="${esc(a.name)}">${['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'pink', 'cyan'].map((c) => `<option ${c === a.color ? 'selected' : ''}>${c}</option>`).join('')}</select></label>
           <div class="field"><span>Instructions come from</span><div class="sources">${a.instructionSources.map((s) => `<div class="mono small"><span class="chip small">${esc(s.mode)}</span> ${esc(s.source)}</div>`).join('') || '<span class="muted">nowhere</span>'}</div></div>

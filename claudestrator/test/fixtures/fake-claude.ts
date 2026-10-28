@@ -38,7 +38,7 @@ function main(): void {
     process.exit(0);
   }
   if (args.includes('--help')) {
-    console.log('--print --output-format --input-format --verbose --include-partial-messages --append-system-prompt --model --effort --tools --mcp-config --disallowedTools --setting-sources --settings --add-dir --name');
+    console.log('--print --output-format --input-format --verbose --include-partial-messages --append-system-prompt --model --effort --tools --mcp-config --strict-mcp-config --disallowedTools --setting-sources --settings --add-dir --name');
     process.exit(0);
   }
   if (args[0] === 'auth' && args[1] === 'status') {

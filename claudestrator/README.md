@@ -56,6 +56,17 @@ First time in a workspace, *Set up this workspace* finds the git repos and sugge
 - **Account.** Agents, MCP checks and limits use one Claude Code account (config folder), chosen in the header or followed from ctx-man. `claude auth status` shows which accounts are signed in; a signed-out one gets a banner with *Sign in* (`claude auth login` in a terminal). Agents run without the `user` setting source, so the account's own MCP servers are handed to them with `--mcp-config` (a 0600 file), without your personal plugins and hooks.
 - **State.** `<workspace>/.orch/tasks/<id>/events.ndjson` is the source of truth, and the state is rebuilt from it. Artifacts and transcripts sit next to it. `.orch/` ignores itself in git. The layout and the config format are those of the claudestrator CLI and plugin, so they can work on the same tasks.
 
+## Spending fewer tokens
+
+What the built-in agents do by default, and what to change per task.
+
+- **Model and effort.** planner and reviewer run on Opus at high effort; developer and tester on Sonnet at medium. Change them per agent on the Agents page, per scenario, or per task with the effort chips.
+- **MCP.** developer, tester and reviewer run with `mcp: false`: they see no MCP servers, so no server's tool list rides along in every turn. The planner, verifier and auditor keep them. The Agents page has the switch under *More*; in `config.yaml` it is `mcp: true` or `mcp: false`.
+- **Gates do the checking.** developer and tester are told not to run the full lint, typecheck or test suite; the gates run it after the stage and send back only the tail of a failing command (40 lines, without colour codes or redrawn progress lines). Make gate commands quiet so that tail holds the failure and not the progress: `--silent`, `-q`, a `dot` reporter.
+- **Run less.** For a small task, click agents off (no tester for a text fix), turn on *Skip plan approval*, or keep a scenario like the `hotfix` below (developer and a short review).
+- **Caps.** `limits.reviewRounds`, `limits.gateAttempts` and `limits.budgetUsd` stop a loop that is not converging.
+- **See the cost.** Every step shows its tokens, context used and cost; compare two runs of a task after changing a model or an effort.
+
 ## Configuration
 
 Layers, each overriding the previous field by field: built-in defaults → `~/.claudestrator/config.yaml` → `<workspace>/.claudestrator/config.yaml`. The dashboard edits the workspace file in place and keeps your comments.
@@ -64,6 +75,7 @@ Layers, each overriding the previous field by field: built-in defaults → `~/.c
 agents:
   tester: { enabled: false }
   planner: { effort: max }
+  developer: { mcp: true }       # built in: developer, tester and reviewer run without MCP servers
   reviewer:
     model: opus
     effort: high

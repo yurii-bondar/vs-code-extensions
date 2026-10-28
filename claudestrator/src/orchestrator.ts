@@ -61,7 +61,7 @@ interface EngineEvent {
   data: unknown;
 }
 // What a current Claude Code accepts; used until the real `claude --help` has been read.
-const DEFAULT_FLAGS = ['--include-partial-messages', '--tools', '--setting-sources', '--max-budget-usd', '--name', '--effort', '--mcp-config'];
+const DEFAULT_FLAGS = ['--include-partial-messages', '--tools', '--setting-sources', '--max-budget-usd', '--name', '--effort', '--mcp-config', '--strict-mcp-config'];
 
 const settings = (): vscode.WorkspaceConfiguration => vscode.workspace.getConfiguration('claudestrator');
 
