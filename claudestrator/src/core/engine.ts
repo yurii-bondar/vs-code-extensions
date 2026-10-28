@@ -729,6 +729,7 @@ class Engine extends EventEmitter {
         ...(this.home && { home: this.home }),
         task: { taskId, canPush: false },
         agent: true,
+        writeRoots,
         branchOf: branchSync,
         isRepoRoot: (dir) => fs.existsSync(path.join(dir, '.git')),
         readFile: (f) => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null),
@@ -738,8 +739,13 @@ class Engine extends EventEmitter {
     if (WRITE_TOOLS.has(tool)) {
       const target = String(input.file_path || input.notebook_path || input.path || '');
       if (!writeRoots.length) return blocked(`the ${step.agent} stage does not change files`);
+      if (path.resolve(cwd, target).split(path.sep).includes('.git')) return blocked(`${tool} into git metadata (.git) is not allowed; Claudestrator owns git`);
       if (!target || !writeRoots.some((root) => realInside(root, path.resolve(cwd, target)))) return blocked(`${tool} outside ${writeRoots.join(', ')} is not allowed: this stage works only in ${step.repo || 'the task\'s repos'}`);
     }
+    // Claude Code is started with the agent's tools; anything else reaching the hook is refused.
+    const agent = config.agents[step.agent];
+    const given = !agent || !agent.tools || agent.tools.some((t) => t === tool || t.startsWith(`${tool}(`)) || (tool.startsWith('mcp__') && agent.mcp !== false);
+    if (!given) return blocked(`${tool} is not one of the ${step.agent} agent's tools`);
     if (!this.askPermissions()) return { allow: true };
     const requestId = crypto.randomUUID();
     const request: PermissionRequest = { requestId, taskId, agent: step.agent, ...(step.repo && { repo: step.repo }), tool, input: summarizeInput(tool, input), at: Date.now() };

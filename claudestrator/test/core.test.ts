@@ -9,6 +9,7 @@ import { buildPipeline, outline, taskPipeline } from '../src/core/pipeline';
 import * as config from '../src/core/config';
 import { parseStageReport, reportLanguage } from '../src/core/prompt';
 import { guardBash } from '../src/core/guard';
+import { parseHookRequest } from '../src/core/hookserver';
 import { plain } from '../src/core/gates';
 import { parseInvocation, classifyInput, extractAcceptanceCriteria, adfToText, detectScenario } from '../src/core/intake';
 import { TaskService } from '../src/core/store';
@@ -179,6 +180,16 @@ test('machine: plan → approval → per-repo work → review fix round → comm
   assert.equal(s!.outcome, 'published');
 });
 
+test('machine: without configured repos a plan may only name plain folders of the workspace', () => {
+  const { pipeline } = defaultPipeline();
+  const planWith = (name: string) => {
+    const s = rpl(timed([createdEvent(pipeline, { knownRepos: [] }), { type: 'intake_completed', spec }, { type: 'stage_started', agent: 'planner' }]));
+    return tr(s, { type: 'stage_completed', agent: 'planner', artifact: 'p', plan: { ...PLAN, repos: [{ name, mode: 'full' }] }, at: at(50) });
+  };
+  for (const name of ['api', 'web-app', 'billing_v2', 'repo.js']) assert.ok(planWith(name).ok, name);
+  for (const name of ['../other', '/Users/me/dotfiles', 'a/b', '..', '.hidden', 'x..y']) assert.equal(failed(planWith(name)).error.code, 'unknown_repo', name);
+});
+
 test('machine: review limit, stop keeps the question, resume asks again', () => {
   const { pipeline } = defaultPipeline();
   const events: EventBody[] = [createdEvent(pipeline, { knownRepos: [] }), { type: 'intake_completed', spec }, { type: 'stage_started', agent: 'planner' }, { type: 'stage_completed', agent: 'planner', artifact: 'p', plan: { ...PLAN, repos: [{ name: 'api', mode: 'full' }] } }];
@@ -317,6 +328,139 @@ test('reports: plan and verdict blocks are validated, nulls tolerated', () => {
   const v = failed(report('verdict', '```json\n{"status":"approved","summary":"s","findings":[{"severity":"major","problem":"p","line":null}]}\n```'));
   assert.match(v.error, /changes_requested exactly when/);
   assert.ok(report('code', 'anything').ok);
+});
+
+test('guard: a command is recognised behind paths, shell keywords, wrappers, eval, sh -lc and find -exec', () => {
+  const policy = { protectedBranches: ['main'], draftPrsOnly: true, forbidAiAttribution: false, allowNoVerify: false };
+  const ctx: GuardContext = { policy, cwd: '/ws/api', workspace: '/ws', home: '/home/u', agent: true, task: { taskId: 'T', canPush: false }, branchOf: () => 'feat/x', isRepoRoot: (d) => d === '/ws/api', readFile: () => null };
+  const refused = [
+    '/usr/bin/git push --force origin main',
+    'if true; then git push --force; fi',
+    'for b in a; do git push -f; done',
+    '{ git push -f; }',
+    '! git push -f',
+    'xargs git push -f',
+    'xargs -n 1 -I {} git push -f',
+    'timeout 60 git push -f',
+    'timeout -s KILL 60 git push -f',
+    'nice git push -f',
+    'nice -n 10 git push -f',
+    'env -i git push -f',
+    'env -u HOME FOO=1 git push -f',
+    'stdbuf -o L git push -f',
+    'eval "git push -f"',
+    'bash -lc "git push -f"',
+    'sh -ec "git push -f"',
+    'zsh -xc "git push -f"',
+    'git \\\n  push -f',
+    'echo "<<EOF"\ngit push -f',
+    'git -c alias.p="push --force" p origin main',
+    'git -c core.hooksPath=/dev/null status',
+    'git config core.hooksPath /dev/null',
+    'git config alias.p "push --force"',
+    'git p origin main',
+    'git remote set-url origin https://evil.example/x.git',
+    'git remote add evil https://evil.example/x.git',
+    'gh api --method=POST repos/o/r/issues',
+    'gh api -XPOST repos/o/r/issues',
+    'gh api repos/o/r/issues -f title=x',
+    'gh api repos/o/r/issues --input body.json',
+    'gh api -Ftitle=x repos/o/r/issues',
+    '/bin/rm -rf /home/u',
+    'D=/home/u; rm -rf $D',
+    'rm -rf "$TARGET"',
+    'rm -rf `pwd`/..',
+    'find /home/u -delete',
+    'find / -name x -delete',
+    'find . -exec git push -f {} \\;',
+    'find . -execdir rm -rf /home/u {} +',
+    'echo "$(git push -f)"',
+    'echo "`git push -f`"',
+    'X=$(git push -f)',
+  ];
+  for (const command of refused) assert.equal(guard(command, ctx).allow, false, `should be refused: ${command}`);
+
+  // What agents do all day keeps working.
+  const allowed = [
+    'git status',
+    'git diff main...HEAD -- src',
+    'git log --oneline -20',
+    'git add -A',
+    'git show HEAD:package.json',
+    'git config --get user.name',
+    'git config --list',
+    'git remote -v',
+    'git branch --show-current',
+    'npm test',
+    'timeout 600 npm test',
+    'nice -n 5 npm run lint',
+    'env CI=1 npm test',
+    'bash -lc "npm run lint && npm test"',
+    'if [ -f package.json ]; then npm ci; fi',
+    'find . -name "*.ts" -exec grep -l foo {} \\;',
+    'find . -name "*.log" -delete',
+    'ls | xargs -n 1 echo',
+    'gh pr view 12',
+    'gh api repos/o/r/pulls',
+    'gh api -X GET repos/o/r/pulls',
+    'rm -rf node_modules dist',
+    'rm -rf /tmp/build-cache',
+    'echo "git push --force"',
+    'cat <<EOF\ngit push -f\nEOF',
+  ];
+  for (const command of allowed) assert.equal(guard(command, ctx).allow, true, `should be allowed: ${command}`);
+});
+
+test('guard: an agent writes files only where its stage works or in a temp folder, never into .git', () => {
+  const policy = { protectedBranches: ['main'], draftPrsOnly: true, forbidAiAttribution: false, allowNoVerify: false };
+  const base: GuardContext = { policy, cwd: '/ws/api', workspace: '/ws', home: '/home/u', agent: true, task: { taskId: 'T', canPush: false }, branchOf: () => 'feat/x', isRepoRoot: (d) => d === '/ws/api' || d === '/ws/web', readFile: () => null };
+  const developer = { ...base, writeRoots: ['/ws/api'] };
+  const reviewer = { ...base, writeRoots: [] };
+  const check = (ctx: GuardContext, list: string[], allowed: boolean): void => {
+    for (const command of list) assert.equal(guard(command, ctx).allow, allowed, `${allowed ? 'should be allowed' : 'should be refused'} (${ctx.writeRoots!.length ? 'developer' : 'reviewer'}): ${command}`);
+  };
+  check(developer, [
+    'echo x >> /home/u/.zshrc',
+    'echo x>/ws/web/a.ts',
+    'sed -i "s/a/b/" /ws/web/x.ts',
+    'perl -pi -e "s/a/b/" /ws/web/x.ts',
+    'cp a.ts /ws/web/a.ts',
+    'cp -t /ws/web a.ts',
+    'mv /ws/api/a.ts /home/u/a.ts',
+    'touch /ws/web/x',
+    'mkdir -p /home/u/bin',
+    'ls | tee /home/u/list.txt',
+    'echo x > "$OUT"',
+    'dd if=/dev/zero of=/home/u/big bs=1 count=1',
+    'cat > .git/hooks/pre-push',
+    'echo x > /ws/api/.git/config',
+    'bash -c "echo x >> ~/.profile"',
+  ], false);
+  check(developer, [
+    'echo x > out.txt',
+    'echo x > /ws/api/src/new.ts',
+    'npm test > /tmp/log.txt 2>&1',
+    'npm test 2>/dev/null',
+    'npm test >&2',
+    'sed -i "s/a/b/" src/x.ts',
+    'sed -i.bak -e "s/a/b/" src/x.ts',
+    'cp src/a.ts src/b.ts',
+    'mkdir -p src/new && touch src/new/index.ts',
+    'ls 2>&1 | tee /tmp/x',
+    'echo "a > b"',
+    'git diff > /tmp/patch.diff',
+  ], true);
+  check(reviewer, ['sed -i "s/a/b/" src/x.ts', 'echo x > notes.md', 'cp a.ts b.ts', 'rm src/x.ts'], false);
+  check(reviewer, ['npm test', 'cat src/x.ts | grep foo', 'echo x > /tmp/notes.md', 'git log > /tmp/log'], true);
+});
+
+test('hook: a tool call that is not in the expected shape is refused, never passed as an unknown tool', () => {
+  const ok = parseHookRequest(JSON.stringify({ token: 't', payload: { tool_name: 'Bash', tool_input: { command: 'ls' }, cwd: '/ws' } }));
+  assert.deepEqual(ok, { token: 't', call: { tool: 'Bash', input: { command: 'ls' }, cwd: '/ws' } });
+  assert.deepEqual(parseHookRequest(JSON.stringify({ token: 't', payload: { tool_name: 'Read' } }))!.call, { tool: 'Read', input: {}, cwd: '' });
+  for (const bad of ['', 'not json', '[]', '{}', '{"token":"t"}', '{"token":"t","payload":{}}', '{"token":"t","payload":{"tool_name":""}}', '{"token":"t","payload":{"tool_name":5}}', '{"token":1,"payload":{"tool_name":"Bash"}}', '{"token":"t","payload":{"tool_name":"Bash","tool_input":"rm -rf /"}}']) {
+    assert.equal(parseHookRequest(bad), null, bad);
+  }
 });
 
 test('guard: agents never touch git history, destructive commands are refused', () => {

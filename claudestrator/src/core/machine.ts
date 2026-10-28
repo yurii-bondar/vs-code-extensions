@@ -131,9 +131,14 @@ function created(e: Ev<'task_created'>): TaskState {
   };
 }
 
+/**
+ * Repos a plan names that this task may not touch: with repos configured, any other; without, anything that is not a
+ * plain folder name of the workspace (`../other`, `/Users/me/dotfiles`), since the name becomes the path agents write in.
+ */
 function unknownRepos(s: TaskState, repos: PlanRepo[]): string[] {
-  if (s.knownRepos.length === 0) return [];
-  return repos.map((r) => r.name).filter((n) => !s.knownRepos.includes(n));
+  const names = repos.map((r) => r.name);
+  if (s.knownRepos.length === 0) return names.filter((n) => !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(n) || n.includes('..'));
+  return names.filter((n) => !s.knownRepos.includes(n));
 }
 
 function intakeCompleted(s: TaskState, e: Ev<'intake_completed'>): Transition {
