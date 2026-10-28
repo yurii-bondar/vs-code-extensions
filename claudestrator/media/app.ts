@@ -19,12 +19,21 @@ interface HomeView extends View {
   scenarioIds(): string[];
   scenarioAgents(sc: string): AgentSummary[];
   renderScenario(): void;
-  renderScenarioEditor(): void;
-  customDef(id: string, change?: Partial<CustomDef>): CustomDef;
-  saveCustom(def: CustomDef, done?: string): Promise<false | undefined>;
   renderAgentsChips(): void;
   preview(): void;
   start(): Promise<void>;
+}
+
+/** Every scenario as a card; the one in `S.ui.scEdit` has its editor open. */
+interface ScenariosView extends View {
+  /** The libraries this project uses, for the page's own section. */
+  libs: LibraryView[];
+  load(): Promise<void>;
+  render(): void;
+  draftHtml(): string;
+  editorHtml(sc: string): string;
+  customDef(id: string, change?: Partial<CustomDef>): CustomDef;
+  saveCustom(def: CustomDef, done?: string): Promise<false | undefined>;
 }
 
 /** A repo of the setup wizard: what was found, plus whether it is ticked and which of its checks are. */
@@ -43,6 +52,7 @@ interface SetupView extends View {
 
 interface Views {
   home: HomeView;
+  scenarios: ScenariosView;
   setup: SetupView;
 }
 
@@ -343,6 +353,7 @@ interface Views {
   const NAV = [
     { name: 'home', label: 'Tasks', icon: 'list' },
     { name: 'agents', label: 'Agents', icon: 'users' },
+    { name: 'scenarios', label: 'Scenarios', icon: 'wand' },
     { name: 'repos', label: 'Repos & checks', icon: 'repo' },
     { name: 'mcp', label: 'MCP', icon: 'plug' },
     { name: 'settings', label: 'Settings', icon: 'gear' },
@@ -490,26 +501,69 @@ interface Views {
     return `<div class="pipe-row" data-pipe="${id}">${stages.map(chip).join('<span class="pipe-arrow">→</span>')}${stages.length ? '' : `<span class="muted small">${esc(empty)}</span>`}${add}</div>`;
   }
 
-  pipeEditors.composer = {
+  /** After a scenario changed: the screen that shows scenarios draws them again. */
+  function scRefresh() {
+    if (S.route.name === 'scenarios') views.scenarios.render();
+    else if (S.route.name === 'home') {
+      views.home.renderAgentsChips();
+      views.home.preview();
+    }
+  }
+
+  /** A library this project uses: what it holds, its library.yaml, and Stop using. Agents and Scenarios pages. */
+  function libraryBlock(l: LibraryView) {
+    const holds = !l.exists ? `${icon('alert')}Not found at ${esc(l.file)}` : l.error ? `${icon('alert')}${esc(l.error)}` : `${plural(l.agents.length, 'agent')}${l.agents.length ? `: ${esc(l.agents.join(', '))}` : ''} · ${plural(l.scenarios.length, 'scenario')}${l.scenarios.length ? `: ${esc(l.scenarios.join(', '))}` : ''}`;
+    return `<div class="scenario-block lib-block"><div class="sb-head">${icon('folder')}<b>${esc(l.label)}</b><span class="chip small">${l.scope === 'user' ? 'all my projects' : 'this project'}</span><span class="muted small mono">${esc(l.entry)}</span><span class="grow"></span>
+      <button class="btn ghost sm" data-action="lib-open" data-file="${esc(l.file)}" ${l.exists ? '' : 'disabled'}>${icon('edit')}library.yaml</button>
+      <button class="btn ghost sm danger" data-action="lib-remove" data-file="${esc(l.file)}" data-kind="${l.scope}">${icon('x')}Stop using</button></div>
+      <div class="muted small">${holds}</div></div>`;
+  }
+
+  /** "Move to library": a choice of the libraries that are there, and the button. Nothing when there is none. */
+  function libraryMove(kind: 'agent' | 'scenario', id: string, libs: LibraryView[]) {
+    const there = libs.filter((l) => l.exists && !l.error);
+    if (!there.length) return '';
+    const options = there.map((l) => `<option value="${esc(l.file)}">${esc(l.label)}</option>`).join('');
+    return `<span class="lib-move">${there.length > 1 ? `<select class="input sm" aria-label="Library">${options}</select>` : `<select class="input sm" hidden>${options}</select>`}<button class="btn ghost sm" data-action="to-library" data-kind="${kind}" data-id="${esc(id)}" title="Keep it in a library instead of this project's config.yaml">${icon('folder')}Move to ${there.length > 1 ? 'library' : esc(there[0]!.label)}</button></span>`;
+  }
+
+  // A new scenario's first agent: only then is it saved, so a stray "New scenario" leaves nothing in config.yaml.
+  pipeEditors['scenario-draft'] = {
+    names: () => [],
+    from: () => 0,
+    async save(names) {
+      const d = S.ui.scDraft;
+      if (!d) return false;
+      const r = await attempt('saveScenario', { label: d.label, description: d.description || undefined, agents: names.map((name) => ({ name })) });
+      if (!r) return false;
+      S.ui.scDraft = null;
+      S.ui.scEdit = r.id;
+      persist();
+      await loadOverview();
+      scRefresh();
+      toast(`${d.label} saved`, 'ok');
+    },
+    redraw: () => views.scenarios.render(),
+  };
+
+  // The agents of the scenario open on the Scenarios page.
+  pipeEditors.scenario = {
     names: () => views.home.scenarioAgents(S.ui.scEdit ?? '').map((a) => a.name),
     from: () => 0,
     async save(names) {
       const sc = S.ui.scEdit ?? '';
       if (scInfo(sc).custom) {
         // Each agent keeps its own model and effort in the new order; an added one starts with the agent's settings.
-        const def = views.home.customDef(sc);
+        const def = views.scenarios.customDef(sc);
         const steps = Object.fromEntries(def.agents.map((st) => [st.name, st]));
-        return views.home.saveCustom({ ...def, agents: names.map((n) => steps[n] || { name: n }) });
+        return views.scenarios.saveCustom({ ...def, agents: names.map((n) => steps[n] || { name: n }) });
       }
       const ok = sc === 'deliver' ? await attempt('setPipeline', { pipeline: names }) : await attempt('setScenario', { scenario: sc, agents: names });
       if (ok === undefined) return false;
       await loadOverview();
-      if (S.route.name === 'home') {
-        views.home.renderAgentsChips();
-        views.home.preview();
-      }
+      scRefresh();
     },
-    redraw: () => views.home.renderScenarioEditor(),
+    redraw: () => views.scenarios.render(),
     async setRuns(name, runs) {
       const a = okConfig()?.catalog.find((x) => x.name === name);
       // The output's own default is written as no setting at all.
@@ -517,7 +571,7 @@ interface Views {
       if ((await attempt('updateAgent', { name, patch: { runs: value } })) === undefined) return;
       toast(`${name} now runs ${runs === 'per-repo' ? 'once per repo' : 'once across all repos'}`, 'ok');
       await loadOverview();
-      if (S.route.name === 'home') views.home.renderAgentsChips();
+      scRefresh();
     },
   };
 
@@ -732,8 +786,7 @@ interface Views {
           <label class="composer-label" for="composer-text">${icon('sparkles')}What should the agents do?</label>
           <div class="scenarios" data-region="scenarios"></div>
         </div>
-        <div data-region="sc-editor"></div>
-        <textarea id="composer-text" class="composer-text" rows="3" placeholder="${esc(SCENARIO_INFO[this.scenario()]!.placeholder)}" ${disabled ? 'disabled' : ''}>${esc(S.draft.text)}</textarea>
+        <textarea id="composer-text" class="composer-text" rows="3" placeholder="${esc(scInfo(this.scenario()).placeholder)}" ${disabled ? 'disabled' : ''}>${esc(S.draft.text)}</textarea>
         <div class="composer-detect" data-region="detect"></div>
         <div class="composer-row">
           <div class="agents-chips" data-region="agent-chips"></div>
@@ -774,9 +827,7 @@ interface Views {
       const picked = S.draft.scenario && S.draft.scenario !== 'auto' && S.draft.scenario === sc;
       const auto = (id: string) => sc === id && !picked && id !== 'deliver';
       const info = scInfo(sc);
-      const c = okConfig();
-      const editable = Boolean(c && c.catalog);
-      const removed = (c && c.removedScenarios) || [];
+      // Only what to pick here; making, editing and deleting scenarios is the Scenarios page's.
       patch(
         'scenarios',
         `<span class="menu-wrap sc-select">
@@ -784,90 +835,20 @@ interface Views {
           <div class="menu sc-menu" role="menu">${this.scenarioIds()
             .map((id) => {
               const x = scInfo(id);
-              const agents = this.scenarioAgents(id).filter((a) => a.enabled);
               return `<div class="sc-item ${sc === id ? 'current' : ''}">
-                <button class="sc-pick" role="menuitemradio" aria-checked="${sc === id}" data-action="set-scenario" data-id="${esc(id)}">${icon(sc === id ? 'check' : x.icon)}<span class="sc-text"><b>${esc(x.label)}${auto(id) ? '<span class="sc-auto">auto</span>' : ''}</b><span class="muted small">${esc(x.hint)}</span><span class="sc-agents">${agents.length ? agents.map((a) => `<span class="${agentColor(a.color)}"><span class="adot"></span>${esc(a.name)}</span>`).join('<span class="pipe-arrow">→</span>') : '<span class="muted">no agents yet</span>'}</span></span></button>
-                ${editable ? `<span class="sc-tools">
-                  <button class="sc-edit ${S.ui.scEdit === id ? 'on' : ''}" data-action="sc-edit" data-id="${esc(id)}" title="Edit ${esc(x.label)}: agents, their order${x.custom ? ', models and effort' : ''}">${icon('edit')}</button>
-                  ${id === 'deliver' ? '' : `<button class="sc-edit sc-del" data-action="sc-delete" data-id="${esc(id)}" title="Delete ${esc(x.label)}">${icon('trash')}</button>`}
-                </span>` : ''}
+                <button class="sc-pick" role="menuitemradio" aria-checked="${sc === id}" data-action="set-scenario" data-id="${esc(id)}">${icon(sc === id ? 'check' : x.icon)}<span class="sc-text"><b>${esc(x.label)}${auto(id) ? '<span class="sc-auto">auto</span>' : ''}</b><span class="muted small">${esc(x.hint)}</span></span></button>
               </div>`;
             })
             .join('')}
-            ${editable ? `<div class="sc-foot">
-              <button class="sc-new" data-action="sc-new">${icon('plus')}New scenario<span class="muted small">your own agents, order, models and effort</span></button>
-              ${removed.map((id) => `<button class="sc-restore" data-action="sc-restore" data-id="${id}" title="${esc(SCENARIO_INFO[id]!.hint)}">${icon('refresh')}Bring back <b>${esc(SCENARIO_INFO[id]!.label)}</b></button>`).join('')}
-              <button class="sc-backup" data-action="backup-save" title="Save this project's agents, pipeline and scenarios to a file">${icon('download')}Save backup of agents &amp; scenarios</button>
-              <button class="sc-backup" data-action="backup-restore" title="Bring agents, pipeline and scenarios back from a backup file; ones with the same name are replaced">${icon('upload')}Restore from backup</button>
-            </div>` : ''}</div>
+            <div class="sc-foot">
+              <button class="sc-manage" data-action="nav" data-name="scenarios">${icon('edit')}Manage scenarios…<span class="muted small">agents and their order, models and effort, new ones, backup</span></button>
+            </div></div>
         </span>`
       );
-      this.renderScenarioEditor();
       patch('auto-switch', info.kind === 'deliver' ? `<label class="switch" title="The plan goes straight to development, without waiting for your approval"><input type="checkbox" id="composer-auto" ${S.draft.auto ? 'checked' : ''}><span class="track"></span><span>Skip plan approval</span></label>` : '');
       patch('start-label', info.kind === 'readiness' ? 'Check' : info.kind === 'audit' ? 'Audit' : 'Start');
       const ta = $<HTMLTextAreaElement>('#composer-text');
       if (ta) ta.placeholder = info.placeholder;
-    },
-    renderScenarioEditor() {
-      const c = okConfig();
-      const sc = S.ui.scEdit;
-      if (!sc || !this.scenarioIds().includes(sc) || !c || !c.catalog) return patch('sc-editor', '');
-      const info = scInfo(sc);
-      const own = (c.custom || []).find((x) => x.id === sc);
-      const stages: PipeStage[] = this.scenarioAgents(sc).map((a) => ({ agent: a.name, output: a.output, runs: a.runs, color: a.color, enabled: a.enabled, model: a.model, effort: a.effort, ownModel: a.ownModel, ownEffort: a.ownEffort }));
-      // An empty custom scenario takes any agent; after the first one, only agents of the same kind.
-      const kind = own ? own.kind : sc;
-      const choices = c.catalog.filter((a) => (!kind || fitsScenario(a.output, kind)) && !stages.some((st) => st.agent === a.name));
-      const warnings = sc === 'deliver' ? c.pipelineWarnings || [] : [];
-      if (pipeDrag && pipeDrag.id === 'composer') return;
-      const models = modelChoices(S.overview!.defaults);
-      // A custom scenario sets each agent's model and effort for itself; empty means the agent's own setting.
-      const extras: ((st: PipeStage) => string) | null = own
-        ? (st) => {
-            const known = models.some(([m]) => m === st.model);
-            const modelOpts = [`<option value="">agent's model${st.ownModel ? '' : ` (${esc(st.model)})`}</option>`, ...models.filter(([m]) => m !== 'inherit').map(([m, l]) => `<option value="${esc(m)}" ${st.ownModel && m === st.model ? 'selected' : ''}>${esc(l)}</option>`), ...(st.ownModel && !known ? [`<option value="${esc(st.model)}" selected>${esc(st.model)}</option>`] : [])].join('');
-            const effortOpts = [`<option value="">agent's effort${st.ownEffort ? '' : st.effort ? ` (${esc(st.effort)})` : ''}</option>`, ...EFFORT_LEVELS.map((l) => `<option value="${l}" ${st.ownEffort && l === st.effort ? 'selected' : ''}>${l}</option>`)].join('');
-            return `<span class="pipe-sets"><select class="pipe-set ${st.ownModel ? 'own' : ''}" data-change="sc-model" data-name="${esc(st.agent)}" title="Model of ${esc(st.agent)} in this scenario" aria-label="Model">${modelOpts}</select><select class="pipe-set ${st.ownEffort ? 'own' : ''}" data-change="sc-effort" data-name="${esc(st.agent)}" title="Effort of ${esc(st.agent)} in this scenario" aria-label="Effort">${effortOpts}</select></span>`;
-          }
-        : null;
-      patch(
-        'sc-editor',
-        `<div class="pipe-editor sc-editor">
-          <div class="pipe-head">
-            <div><h3>${icon(own ? 'wand' : 'edit')}${esc(info.label)}: ${own ? 'your scenario' : 'agents'}</h3>
-              <p class="muted small">Drag to reorder, ${icon('x')} to remove, <b>Add agent</b> to add${own ? '; pick a model and effort per agent for this scenario only' : ''}; <b>per repo ⇄ all repos</b> switches whether a code or tests agent runs once per repo or once across them. Saved to <code>.claudestrator/config.yaml</code>: new tasks run this order, running tasks keep theirs (change those on the task screen).</p></div>
-            <button class="btn sm" data-action="sc-edit" data-id="${esc(sc)}">${icon('check')}Done</button>
-          </div>
-          ${own ? `<div class="sc-fields">
-            <label class="field"><span>Name</span><input class="input" data-change="sc-label" value="${esc(own.label)}" maxlength="60" placeholder="e.g. Hotfix"></label>
-            <label class="field"><span>Description <span class="muted">(optional, shown in the menu)</span></span><input class="input" data-change="sc-desc" value="${esc(own.description || '')}" placeholder="e.g. Code and a quick review, no plan"></label>
-          </div>
-          <p class="muted small">${own.kind === 'readiness' || own.kind === 'audit' ? `Read-only: its agents write ${own.kind === 'audit' ? 'an audit' : 'a readiness'} report, nothing in your repos changes.` : own.kind ? 'Its agents change code: the task ends with commits and draft PRs, like Deliver.' : 'Add the first agent: agents that change code make it end with draft PRs, readiness or audit agents make it a read-only report.'}</p>` : ''}
-          ${pipeRowHtml('composer', { stages, choices, runsToggle: true, extras, empty: own ? 'No agents yet: add the first one.' : 'No agents: add one, or tasks of this kind cannot start.' })}
-          ${warnings.length ? `<div class="pipe-warn">${warnings.map((w) => `<div>${icon('alert')}${esc(w)}</div>`).join('')}</div>` : ''}
-        </div>`
-      );
-    },
-    /** A custom scenario as saveScenario takes it, with `change` applied to one agent's step. */
-    customDef(id, change = {}) {
-      const own = ((okConfig()?.custom) || []).find((x) => x.id === id);
-      if (!own) throw new Error(`No scenario ${id}`);
-      const agents = this.scenarioAgents(id).map((a) => {
-        const step: ScenarioStep = { name: a.name };
-        if (a.ownModel) step.model = a.model;
-        if (a.ownEffort && a.effort) step.effort = a.effort;
-        return step;
-      });
-      return { id, label: own.label, description: own.description, agents, ...change };
-    },
-    async saveCustom(def, done) {
-      if ((await attempt('saveScenario', def)) === undefined) return false;
-      await loadOverview();
-      if (S.route.name === 'home') {
-        this.renderAgentsChips();
-        this.preview();
-      }
-      if (done) toast(done, 'ok');
     },
     renderAgentsChips() {
       const c = okConfig();
@@ -1005,6 +986,145 @@ interface Views {
   }
 
   // ---------- setup wizard ----------
+
+  views.scenarios = {
+    libs: [],
+    async enter() {
+      $('#view')!.innerHTML = '<div class="page scenarios-page" data-region="scenarios-page"></div>';
+      await this.load();
+      $('.sc-card.open')?.scrollIntoView({ block: 'nearest' });
+    },
+    async load() {
+      const [, data] = await Promise.all([loadOverview(), call('config')]);
+      this.libs = data.libraries;
+      this.render();
+    },
+    refresh() {
+      return this.load();
+    },
+    onConfig() {
+      void this.load();
+    },
+    render() {
+      const o = S.overview;
+      if (!o || !o.root) return void patch('scenarios-page', `<div class="empty-state">${icon('folder', 'big')}<h2>Open a folder first</h2></div>`);
+      const c = okConfig();
+      if (!c) {
+        const errors = o.config && !o.config.ok ? o.config.errors : [];
+        return void patch('scenarios-page', `<h1>${icon('wand')}Scenarios</h1><div class="banner error">${icon('alert')}<div><b>The config has errors, so scenarios cannot be shown.</b><ul>${errors.map((e) => `<li>${esc(e)}</li>`).join('')}</ul></div><button class="btn sm" data-action="open-config">Open config.yaml</button></div>`);
+      }
+      // A chip being dragged keeps its row until it is dropped.
+      if (pipeDrag && pipeDrag.id === 'scenario') return;
+      const origin = (id: string) => {
+        const own = c.custom.find((x) => x.id === id);
+        if (!own) return '<span class="chip small" title="Comes with Claudestrator">built-in</span>';
+        const lib = own.source && own.source.startsWith('library:') ? own.source.slice('library:'.length) : '';
+        return lib ? `<span class="chip small lib-chip" title="${esc(`From the library ${lib}`)}">${icon('folder')}${esc(lib)}</span>` : '<span class="chip small" title="Defined in this project\'s or your own config.yaml">yours</span>';
+      };
+      const card = (id: string) => {
+        const x = scInfo(id);
+        const open = S.ui.scEdit === id;
+        const agents = views.home.scenarioAgents(id).filter((a) => a.enabled);
+        return `<article class="card sc-card ${open ? 'open' : ''}">
+          <div class="sc-card-head">
+            <span class="sc-card-icon">${icon(x.icon)}</span>
+            <div class="sc-card-title"><b>${esc(x.label)}</b>${origin(id)}<span class="muted small">${esc(x.hint)}</span></div>
+            <div class="sc-card-actions">
+              <button class="btn sm" data-action="sc-use" data-id="${esc(id)}" title="Start a task with ${esc(x.label)}">${icon('play')}Use</button>
+              <button class="btn sm ${open ? 'primary' : ''}" data-action="sc-edit" data-id="${esc(id)}" title="${open ? 'Close the editor' : `Edit ${esc(x.label)}: agents, their order${x.custom ? ', models and effort' : ''}`}">${icon(open ? 'check' : 'edit')}${open ? 'Done' : 'Edit'}</button>
+              ${c.custom.find((s) => s.id === id)?.source === 'project' ? libraryMove('scenario', id, this.libs) : ''}
+              ${id === 'deliver' ? '' : `<button class="icon-btn sc-del" data-action="sc-delete" data-id="${esc(id)}" title="Delete ${esc(x.label)}">${icon('trash')}</button>`}
+            </div>
+          </div>
+          ${open ? this.editorHtml(id) : `<div class="sc-agents">${agents.length ? agents.map((a) => `<span class="${agentColor(a.color)}"><span class="adot"></span>${esc(a.name)}</span>`).join('<span class="pipe-arrow">→</span>') : '<span class="muted">no agents yet</span>'}</div>`}
+        </article>`;
+      };
+      const removed = c.removedScenarios || [];
+      patch(
+        'scenarios-page',
+        `<div class="page-head">
+          <div><h1>${icon('wand')}Scenarios</h1>
+          <p class="lead">What a task is for, and which agents do it in what order. Pick one in the task composer, or let your words pick it. Your own scenarios and those from libraries can set each agent's model and effort for themselves.</p></div>
+          <div class="row"><button class="btn" data-action="backup-save" title="Save this project's agents, pipeline and scenarios to a file">${icon('download')}Save backup</button><button class="btn" data-action="backup-restore" title="Bring agents, pipeline and scenarios back from a backup file; ones with the same name are replaced">${icon('upload')}Restore</button><button class="btn" data-action="open-config">${icon('edit')}config.yaml</button><button class="btn primary" data-action="sc-new">${icon('plus')}New scenario</button></div>
+        </div>
+        <div class="sc-cards">${this.draftHtml()}${views.home.scenarioIds().map(card).join('')}</div>
+        ${removed.length ? `<h3 class="section-title">Removed</h3><div class="row">${removed.map((id) => `<button class="btn" data-action="sc-restore" data-id="${esc(id)}" title="${esc(SCENARIO_INFO[id]!.hint)}">${icon('refresh')}Bring back ${esc(SCENARIO_INFO[id]!.label)}</button>`).join('')}</div>` : ''}
+        <p class="muted small">Saved to <code>.claudestrator/config.yaml</code>: new tasks run the new order, running tasks keep theirs (change those on the task screen). A change to a library's scenario is kept in this project's config; the library stays as it is.</p>
+        <h3 class="section-title">Libraries</h3>
+        <p class="muted small">Your own scenarios together with the agents they run, in a folder of their own (<code>library.yaml</code>, instructions in <code>prompts/</code>), kept anywhere on disk: for all your projects or for this one and its team. Adding one brings in both: its scenarios show up above, its agents on the Agents page. They load before your config, so this project can change a library's agent or scenario without touching the library; an agent only a library has is not in the delivery pipeline until you add it there.</p>
+        ${this.libs.map(libraryBlock).join('')}
+        <div class="row"><button class="btn" data-action="lib-add">${icon('plus')}Add library…</button></div>`
+      );
+    },
+    draftHtml() {
+      const d = S.ui.scDraft;
+      const c = okConfig();
+      if (!d || !c) return '';
+      return `<article class="card sc-card open sc-draft">
+          <div class="sc-card-head">
+            <span class="sc-card-icon">${icon('wand')}</span>
+            <div class="sc-card-title"><b>${esc(d.label)}</b><span class="chip small">not saved yet</span><span class="muted small">It is saved to config.yaml when you add its first agent.</span></div>
+            <div class="sc-card-actions"><button class="btn sm" data-action="sc-draft-cancel">${icon('x')}Cancel</button></div>
+          </div>
+          <div class="pipe-editor sc-editor">
+            <div class="sc-fields">
+              <label class="field"><span>Name</span><input class="input" data-change="scd-label" value="${esc(d.label)}" maxlength="60" placeholder="e.g. Hotfix"></label>
+              <label class="field"><span>Description <span class="muted">(optional, shown in the menu)</span></span><input class="input" data-change="scd-desc" value="${esc(d.description)}" placeholder="e.g. Code and a quick review, no plan"></label>
+            </div>
+            <p class="muted small">Add the first agent: agents that change code make it end with draft PRs, readiness or audit agents make it a read-only report.</p>
+            ${pipeRowHtml('scenario-draft', { stages: [], choices: c.catalog, empty: 'No agents yet.' })}
+          </div>
+        </article>`;
+    },
+    editorHtml(sc) {
+      const c = okConfig();
+      if (!c) return '';
+      const own = c.custom.find((x) => x.id === sc);
+      const stages: PipeStage[] = views.home.scenarioAgents(sc).map((a) => ({ agent: a.name, output: a.output, runs: a.runs, color: a.color, enabled: a.enabled, model: a.model, effort: a.effort, ownModel: a.ownModel, ownEffort: a.ownEffort }));
+      // An empty custom scenario takes any agent; after the first one, only agents of the same kind.
+      const kind = own ? own.kind : sc;
+      const choices = c.catalog.filter((a) => (!kind || fitsScenario(a.output, kind)) && !stages.some((st) => st.agent === a.name));
+      const warnings = sc === 'deliver' ? c.pipelineWarnings || [] : [];
+      const models = modelChoices(S.overview!.defaults);
+      // A custom scenario sets each agent's model and effort for itself; empty means the agent's own setting.
+      const extras: ((st: PipeStage) => string) | null = own
+        ? (st) => {
+            const known = models.some(([m]) => m === st.model);
+            const modelOpts = [`<option value="">agent's model${st.ownModel ? '' : ` (${esc(st.model)})`}</option>`, ...models.filter(([m]) => m !== 'inherit').map(([m, l]) => `<option value="${esc(m)}" ${st.ownModel && m === st.model ? 'selected' : ''}>${esc(l)}</option>`), ...(st.ownModel && !known ? [`<option value="${esc(st.model)}" selected>${esc(st.model)}</option>`] : [])].join('');
+            const effortOpts = [`<option value="">agent's effort${st.ownEffort ? '' : st.effort ? ` (${esc(st.effort)})` : ''}</option>`, ...EFFORT_LEVELS.map((l) => `<option value="${l}" ${st.ownEffort && l === st.effort ? 'selected' : ''}>${l}</option>`)].join('');
+            return `<span class="pipe-sets"><select class="pipe-set ${st.ownModel ? 'own' : ''}" data-change="sc-model" data-name="${esc(st.agent)}" title="Model of ${esc(st.agent)} in this scenario" aria-label="Model">${modelOpts}</select><select class="pipe-set ${st.ownEffort ? 'own' : ''}" data-change="sc-effort" data-name="${esc(st.agent)}" title="Effort of ${esc(st.agent)} in this scenario" aria-label="Effort">${effortOpts}</select></span>`;
+          }
+        : null;
+      return `<div class="pipe-editor sc-editor">
+          <p class="muted small">Drag to reorder, ${icon('x')} to remove, <b>Add agent</b> to add${own ? '; pick a model and effort per agent for this scenario only' : ''}; <b>per repo ⇄ all repos</b> switches whether a code or tests agent runs once per repo or once across them.</p>
+          ${own ? `<div class="sc-fields">
+            <label class="field"><span>Name</span><input class="input" data-change="sc-label" value="${esc(own.label)}" maxlength="60" placeholder="e.g. Hotfix"></label>
+            <label class="field"><span>Description <span class="muted">(optional, shown in the menu)</span></span><input class="input" data-change="sc-desc" value="${esc(own.description || '')}" placeholder="e.g. Code and a quick review, no plan"></label>
+          </div>
+          <p class="muted small">${own.kind === 'readiness' || own.kind === 'audit' ? `Read-only: its agents write ${own.kind === 'audit' ? 'an audit' : 'a readiness'} report, nothing in your repos changes.` : own.kind ? 'Its agents change code: the task ends with commits and draft PRs, like Deliver.' : 'Add the first agent: agents that change code make it end with draft PRs, readiness or audit agents make it a read-only report.'}</p>` : ''}
+          ${pipeRowHtml('scenario', { stages, choices, runsToggle: true, extras, empty: own ? 'No agents yet: add the first one.' : 'No agents: add one, or tasks of this kind cannot start.' })}
+          ${warnings.length ? `<div class="pipe-warn">${warnings.map((w) => `<div>${icon('alert')}${esc(w)}</div>`).join('')}</div>` : ''}
+        </div>`;
+    },
+    /** A custom scenario as saveScenario takes it, with `change` applied to one agent's step. */
+    customDef(id, change = {}) {
+      const own = ((okConfig()?.custom) || []).find((x) => x.id === id);
+      if (!own) throw new Error(`No scenario ${id}`);
+      const agents = views.home.scenarioAgents(id).map((a) => {
+        const step: ScenarioStep = { name: a.name };
+        if (a.ownModel) step.model = a.model;
+        if (a.ownEffort && a.effort) step.effort = a.effort;
+        return step;
+      });
+      return { id, label: own.label, description: own.description, agents, ...change };
+    },
+    async saveCustom(def, done) {
+      if ((await attempt('saveScenario', def)) === undefined) return false;
+      await loadOverview();
+      scRefresh();
+      if (done) toast(done, 'ok');
+    },
+  };
 
   views.setup = {
     repos: [],
@@ -1201,10 +1321,15 @@ interface Views {
       if (ed) pipeSave(pipe, [...ed.names(), name], `${name} added at the end`);
     },
     'sc-edit': (el) => {
-      closeMenus();
       S.ui.scEdit = S.ui.scEdit === el.dataset.id ? null : el.dataset.id;
       persist();
-      views.home.renderScenario();
+      views.scenarios.render();
+    },
+    // From a scenario's card to the composer, with that scenario picked.
+    'sc-use': (el) => {
+      S.draft.scenario = el.dataset.id;
+      persist();
+      go({ name: 'home', compose: '' });
     },
     'set-scenario': (el) => {
       closeMenus();
@@ -1213,28 +1338,55 @@ interface Views {
       views.home.renderAgentsChips();
       views.home.preview();
     },
-    // A new scenario starts empty, picked and open in the editor, with its name ready to type over.
+    // A new scenario starts as a draft on the Scenarios page, its name ready to type over; its first agent saves it.
     'sc-new': async () => {
-      closeMenus();
       const labels = new Set(((okConfig()?.custom) || []).map((x) => x.label.toLowerCase()));
       let label = 'New scenario';
       for (let n = 2; labels.has(label.toLowerCase()); n++) label = `New scenario ${n}`;
-      const r = await attempt('saveScenario', { label, agents: [] });
-      if (!r) return;
-      await loadOverview();
-      S.draft.scenario = r.id;
-      S.ui.scEdit = r.id;
+      S.ui.scDraft = { label, description: '' };
+      S.ui.scEdit = null;
       persist();
-      views.home.renderAgentsChips();
-      views.home.preview();
-      const name = $<HTMLInputElement>('[data-change="sc-label"]');
+      if (S.route.name === 'scenarios') views.scenarios.render();
+      else await go({ name: 'scenarios' });
+      $('.sc-draft')?.scrollIntoView({ block: 'nearest' });
+      const name = $<HTMLInputElement>('[data-change="scd-label"]');
       if (name) {
         name.focus();
         name.select();
       }
     },
+    'sc-draft-cancel': () => {
+      S.ui.scDraft = null;
+      persist();
+      views.scenarios.render();
+    },
+    // Libraries, from the Agents or the Scenarios page: the page that is open shows the change.
+    'lib-add': async () => {
+      const r = await attempt('addLibrary');
+      if (!r || !r.added) return;
+      toast(`Library ${r.added} added`, 'ok');
+      await loadOverview();
+      if (current && current.onConfig) current.onConfig();
+    },
+    'lib-remove': async (el) => {
+      const r = await attempt('removeLibrary', { file: el.dataset.file, scope: el.dataset.kind === 'user' ? 'user' : 'project' });
+      if (!r || !r.removed) return;
+      await loadOverview();
+      if (current && current.onConfig) current.onConfig();
+    },
+    'lib-open': (el) => attempt('openFile', { file: el.dataset.file }),
+    // An agent (Agents page) or a scenario (Scenarios page) of this project's config moves into a library.
+    'to-library': async (el) => {
+      const select = el.closest('.lib-move')?.querySelector<HTMLSelectElement>('select');
+      if (!select || !select.value) return;
+      const id = el.dataset.id;
+      const r = await attempt('moveToLibrary', el.dataset.kind === 'scenario' ? { library: select.value, scenarios: [id] } : { library: select.value, agents: [id] });
+      if (!r || !r.moved) return;
+      toast(`Moved to ${select.selectedOptions[0]?.textContent || 'the library'}: ${[...r.scenarios, ...r.agents].join(', ')}`, 'ok');
+      await loadOverview();
+      if (current && current.onConfig) current.onConfig();
+    },
     'sc-delete': async (el) => {
-      closeMenus();
       const id = el.dataset.id;
       const label = scInfo(id).label;
       const r = await attempt('deleteScenario', { id });
@@ -1243,15 +1395,13 @@ interface Views {
       if (S.ui.scEdit === id) S.ui.scEdit = null;
       persist();
       await loadOverview();
-      views.home.renderAgentsChips();
-      views.home.preview();
+      scRefresh();
       toast(`${label} deleted`, 'ok');
     },
     'sc-restore': async (el) => {
-      closeMenus();
       if ((await attempt('restoreScenario', { id: el.dataset.id })) === undefined) return;
       await loadOverview();
-      views.home.renderAgentsChips();
+      scRefresh();
       toast(`${SCENARIO_INFO[el.dataset.id]!.label} is back`, 'ok');
     },
     'backup-save': async () => {
@@ -1330,10 +1480,10 @@ interface Views {
     },
   };
 
-  // The scenario open in the composer's editor: its name, description, and each agent's model and effort in it.
-  const scChange = (change: Partial<CustomDef>, done?: string) => views.home.saveCustom(views.home.customDef(S.ui.scEdit ?? '', change), done);
+  // The scenario open in the Scenarios page's editor: its name, description, and each agent's model and effort in it.
+  const scChange = (change: Partial<CustomDef>, done?: string) => views.scenarios.saveCustom(views.scenarios.customDef(S.ui.scEdit ?? '', change), done);
   const scStep = (el: FieldEl, key: 'model' | 'effort') => {
-    const def = views.home.customDef(S.ui.scEdit ?? '');
+    const def = views.scenarios.customDef(S.ui.scEdit ?? '');
     const agents = def.agents.map((st) => {
       if (st.name !== el.dataset.name) return st;
       const next: ScenarioStep = { ...st };
@@ -1351,9 +1501,27 @@ interface Views {
   };
 
   const changes: Record<string, FieldFn> = {
+    'scd-label': (el) => {
+      const d = S.ui.scDraft;
+      if (!d) return;
+      if (!el.value.trim()) {
+        el.value = d.label;
+        return toast('A scenario needs a name', 'warn');
+      }
+      S.ui.scDraft = { ...d, label: el.value.trim() };
+      persist();
+      const title = $('.sc-draft .sc-card-title b');
+      if (title) title.textContent = el.value.trim();
+    },
+    'scd-desc': (el) => {
+      const d = S.ui.scDraft;
+      if (!d) return;
+      S.ui.scDraft = { ...d, description: el.value.trim() };
+      persist();
+    },
     'sc-label': (el) => {
       if (!el.value.trim()) {
-        el.value = views.home.customDef(S.ui.scEdit ?? '').label;
+        el.value = views.scenarios.customDef(S.ui.scEdit ?? '').label;
         return toast('A scenario needs a name', 'warn');
       }
       scChange({ label: el.value.trim() }, 'Renamed');
@@ -1498,7 +1666,7 @@ interface Views {
     for (const el of $$('[data-since]')) el.textContent = dur(Date.now() - Number(el.dataset.since));
   }, 1000);
 
-  window.CS = { vscode, call, attempt, toast, icon, esc, md, $, $$, ago, clock, dur, money, fmtTokens, resetIn, meter, level, EFFORT_LABEL, effortTag, size, plural, stepName, OUTPUT_INFO, SCENARIO_INFO, scInfo, modelChoices, scenarioChip, sevCounts, agentColor, S, views, pipeRowHtml, pipeEditors, pipeDragging: () => Boolean(pipeDrag), go, patch, debounce, persist, statusBadge, miniSteps, sourceChip, outlineHtml, permissionCard, loadOverview, autosize, shake, refreshSoon, actions, changes, inputs,
+  window.CS = { vscode, call, attempt, toast, icon, esc, md, $, $$, ago, clock, dur, money, fmtTokens, resetIn, meter, level, EFFORT_LABEL, effortTag, size, plural, stepName, OUTPUT_INFO, SCENARIO_INFO, scInfo, modelChoices, scenarioChip, sevCounts, agentColor, S, views, pipeRowHtml, libraryBlock, libraryMove, pipeEditors, pipeDragging: () => Boolean(pipeDrag), go, patch, debounce, persist, statusBadge, miniSteps, sourceChip, outlineHtml, permissionCard, loadOverview, autosize, shake, refreshSoon, actions, changes, inputs,
     // Called by the last script to load (config.js) once every view is registered.
     boot: async () => {
       renderShell();

@@ -520,6 +520,8 @@ export interface CustomScenarioSummary {
   label: string;
   description: string | undefined;
   kind: string | null;
+  /** The layer that defines it: `project`, `user` or `library:<name>`. */
+  source?: string;
 }
 
 export type ConfigSummary =

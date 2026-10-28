@@ -973,7 +973,7 @@ test('setup: a picked repo is written with only what differs from the defaults; 
 /** A library folder: one agent of its own with its instructions in prompts/, and a scenario that runs it. */
 function securityLibrary(dir: string = tmp('cs-lib-')): string {
   fs.mkdirSync(path.join(dir, 'prompts'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'prompts', 'security.md'), 'Look for injection first.\n');
+  fs.writeFileSync(path.join(dir, 'prompts', 'security.md'), 'Look for injection first. The checklist is {{dir}}/checklist.md.\n');
   fs.writeFileSync(path.join(dir, 'library.yaml'), [
     'agents:',
     '  security-reviewer:',
@@ -1005,6 +1005,7 @@ test('libraries: agents and scenarios from a folder of their own merge in, a pro
   const agent = r.config.agents['security-reviewer']!;
   assert.ok(agent.layers.includes(`library:${label}`));
   assert.match(agent.instructions, /Look for injection first/, 'instruction files resolve from the library folder');
+  assert.ok(agent.instructions.includes(`The checklist is ${lib}/checklist.md.`), '{{dir}} names the library folder, wherever it is kept');
   assert.equal(r.config.custom['secure-delivery']!.source, `library:${label}`);
   assert.deepEqual(r.config.pipeline, ['planner', 'developer', 'tester', 'reviewer'], 'a library agent is not run by default');
   assert.ok(!r.warnings.some((w) => w.code === 'not_in_pipeline'), 'nor is it reported as never running');

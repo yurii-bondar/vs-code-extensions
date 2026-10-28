@@ -743,9 +743,7 @@ b.err, .lim-pct.err { color: var(--err); }
 .sc-text b { display: flex; align-items: center; gap: 6px; }
 .sc-agents { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 11px; margin-top: 2px; }
 .sc-agents > span { display: inline-flex; align-items: center; gap: 4px; }
-.menu .sc-item .sc-edit { width: 30px; flex: none; justify-content: center; padding: 0; color: var(--muted); }
-.menu .sc-item .sc-edit:hover, .menu .sc-item .sc-edit.on { color: var(--accent); }
-.sc-editor { margin: 4px 0 10px; padding: 10px 12px; border-radius: 9px; border: 1px dashed var(--border-strong); background: var(--bg); }
+.sc-editor { margin: 10px 0 0; padding: 10px 12px; border-radius: 9px; border: 1px dashed var(--border-strong); background: var(--bg); }
 .pipe-chip.off { opacity: 0.55; }
 .sc-opt { display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: 999px; padding: 3px 11px; background: transparent; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
 .sc-opt:hover { color: var(--fg); background: var(--hover); }
@@ -815,14 +813,23 @@ b.err, .lim-pct.err { color: var(--err); }
 .sb-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
 .sb-head .muted { flex-basis: 100%; padding-left: 22px; }
 
-/* Custom scenarios: delete next to edit, a footer to add one or bring a built-in back, and per-agent model/effort in the editor. */
-.sc-tools { display: flex; flex-direction: column; justify-content: center; flex: none; }
-.menu .sc-item .sc-tools .sc-edit { height: 28px; }
-.menu .sc-item .sc-del:hover { color: var(--err); }
+/* The composer's scenario menu ends with a way to the Scenarios page. */
 .sc-foot { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 4px; display: flex; flex-direction: column; }
-.menu .sc-foot .sc-new { font-weight: 600; flex-wrap: wrap; }
-.menu .sc-foot .sc-new .muted { font-weight: 400; width: 100%; padding-left: 22px; }
-.menu .sc-foot .sc-new > .ic, .menu .sc-foot .sc-restore > .ic, .menu .sc-foot .sc-backup > .ic { color: var(--accent); }
+.menu .sc-foot .sc-manage { flex-wrap: wrap; }
+.menu .sc-foot .sc-manage .muted { width: 100%; padding-left: 22px; }
+.menu .sc-foot .sc-manage > .ic { color: var(--accent); }
+
+/* The Scenarios page: one card per scenario, its editor opening inside the card. */
+.sc-cards { display: flex; flex-direction: column; gap: 10px; }
+.sc-card { padding: 12px 14px; }
+.sc-card.open { border-color: var(--accent); }
+.sc-card-head { display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
+.sc-card-icon { flex: none; display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.sc-card-title { flex: 1; min-width: 200px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.sc-card-title .muted { flex-basis: 100%; }
+.sc-card-actions { flex: none; display: flex; align-items: center; gap: 6px; }
+.sc-card-actions .sc-del:hover { color: var(--err); }
+.sc-card > .sc-agents { margin: 8px 0 0 38px; }
 .sc-current.sc-custom .ic, .sc-chip.sc-custom .ic { color: var(--accent); }
 .sc-fields { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
 .sc-fields .field { flex: 1 1 220px; margin-bottom: 4px; }

@@ -91,6 +91,8 @@ interface Draft {
 /** Small interface state that survives a reload: which groups are folded, which scenario is being edited. */
 interface UiState {
   scEdit?: string | null;
+  /** A new scenario not saved yet: it reaches config.yaml with its first agent. */
+  scDraft?: { label: string; description: string } | null;
   showAllDone?: boolean;
   taskTab?: string;
   pipeEdit?: boolean;
@@ -220,6 +222,8 @@ interface CSApi {
   S: AppState;
   views: Views;
   pipeRowHtml(id: string, opts: PipeRowOptions): string;
+  libraryBlock(l: LibraryView): string;
+  libraryMove(kind: 'agent' | 'scenario', id: string, libs: LibraryView[]): string;
   pipeEditors: Record<string, PipeEditor | undefined>;
   pipeDragging(): boolean;
   go(route: Route): Promise<void>;
