@@ -9,6 +9,7 @@ import { buildPipeline, outline, taskPipeline } from '../src/core/pipeline';
 import * as config from '../src/core/config';
 import { parseStageReport } from '../src/core/prompt';
 import { guardBash } from '../src/core/guard';
+import { plain } from '../src/core/gates';
 import { parseInvocation, classifyInput, extractAcceptanceCriteria, adfToText, detectScenario } from '../src/core/intake';
 import { TaskService } from '../src/core/store';
 import { stepsOf } from '../src/core/view';
@@ -327,6 +328,10 @@ test('view: the step timeline continues after the step a checkpoint stopped at',
     'human:Confirm push:pending',
     'finish:Draft PRs:pending',
   ]);
+});
+
+test('gates: output for agents has no colour codes and no redrawn progress lines', () => {
+  assert.equal(plain('\u001b[31mFAIL\u001b[0m src/a.ts\n[1/3] building\r[2/3] building\r[3/3] done  \nok\n'), 'FAIL src/a.ts\n[3/3] done\nok\n');
 });
 
 test('config: effort is validated and inherited along extends', () => {

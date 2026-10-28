@@ -97,7 +97,7 @@ function describeRepo(dir: string): RepoGuess {
   }
   if (fs.existsSync(path.join(dir, 'Cargo.toml'))) {
     stack.push('Rust');
-    gates.push({ name: 'check', cmd: 'cargo check --all-targets' }, { name: 'test', cmd: 'cargo test' });
+    gates.push({ name: 'check', cmd: 'cargo check --all-targets --quiet' }, { name: 'test', cmd: 'cargo test --quiet' });
   }
   const pyproject = read(path.join(dir, 'pyproject.toml'));
   if (pyproject || fs.existsSync(path.join(dir, 'requirements.txt'))) {
