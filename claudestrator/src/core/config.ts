@@ -71,6 +71,8 @@ interface InstructionOp {
   text?: string;
   file?: string;
   source: string;
+  /** The folder of the config that names these instructions: `{{dir}}` in them becomes this path. */
+  dir: string;
 }
 
 /** An agent while the layers are merged: its fields so far, before `extends` is followed. */
@@ -398,13 +400,14 @@ const defined = <T extends object>(obj: T): Partial<T> => Object.fromEntries(Obj
 
 function toOp(layer: Layer, input: InstructionsInput | undefined): InstructionOp | undefined {
   if (input === undefined) return undefined;
-  if (typeof input === 'string') return { mode: 'replace', text: input, source: `${layer.name} (inline)` };
+  const dir = layer.baseDir;
+  if (typeof input === 'string') return { mode: 'replace', text: input, source: `${layer.name} (inline)`, dir };
   const mode = input.mode || 'replace';
   if (input.file !== undefined) {
     const file = path.resolve(layer.baseDir, input.file);
-    return { mode, file, source: file };
+    return { mode, file, source: file, dir };
   }
-  return { mode, text: input.text ?? '', source: `${layer.name} (inline)` };
+  return { mode, text: input.text ?? '', source: `${layer.name} (inline)`, dir };
 }
 
 function mergeLayers(layers: Layer[]): Merged {
@@ -624,7 +627,8 @@ function applyOps(ops: InstructionOp[], read: ReadFile, onError: (op: Instructio
         continue;
       }
     } else fragment = op.text ?? '';
-    fragment = fragment.trim();
+    // A library's instructions can point at its own files (SQL, templates) wherever the library is kept.
+    fragment = fragment.replaceAll('{{dir}}', op.dir).trim();
     if (op.mode === 'replace') text = fragment;
     else if (!fragment) continue;
     else if (!text) text = fragment;

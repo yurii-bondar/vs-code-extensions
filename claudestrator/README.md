@@ -90,6 +90,7 @@ libraries: [~/my-claudestrator-library, ../shared-agents]
 
 - A project can change a library's agent (its model, say) in its own config; the library stays as it is.
 - An agent only a library has is not in the delivery pipeline until you add it; scenarios use it right away.
+- `{{dir}}` in instructions becomes the folder of the config that names them: in a library, the folder of `library.yaml`. Instructions point the agent at the library's own files with it (`sqlite3 "$DB" < "{{dir}}/sql/schema.sql"`), wherever the library is kept.
 - A library that is missing on this machine is a warning, not an error. Two libraries defining the same agent: the later one wins, and the dashboard says so.
 - On the Agents page: *Add library…* (an empty folder becomes a new library), *Move to …* on an agent or a scenario of the project's own (it goes with its instructions file, and a scenario takes the project agents it runs), *Stop using*.
 
