@@ -25,6 +25,7 @@ import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.fileChooser.FileChooserDescriptor
 import com.intellij.openapi.fileChooser.FileChooserFactory
+import com.intellij.openapi.fileChooser.FileSaverDescriptor
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
@@ -51,6 +52,7 @@ internal class HostRequests(private val project: Project, private val engine: En
             when (method) {
                 "showMessage" -> showMessage(id, p) { engine.respond(id, it?.let(::JsonPrimitive)) }
                 "openDialog" -> onEdt(id) { engine.respond(id, openDialog(p)) }
+                "saveDialog" -> onEdt(id) { engine.respond(id, saveDialog(p)) }
                 "openFile" -> onEdt(id) { openFile(p); engine.respond(id, null) }
                 "reveal" -> onEdt(id) { reveal(p); engine.respond(id, null) }
                 "openExternal" -> engine.respond(id, null).also { openExternal(p.str("url")) }
@@ -133,6 +135,15 @@ internal class HostRequests(private val project: Project, private val engine: En
         val chosen = FileChooserFactory.getInstance().createFileChooser(descriptor, project, null).choose(project, start)
         if (chosen.isEmpty()) return JsonNull.INSTANCE
         return com.google.gson.JsonArray().also { a -> chosen.forEach { a.add(it.path) } }
+    }
+
+    /** A save dialog: the path chosen, or null. The file type is the first extension of the engine's first filter. */
+    private fun saveDialog(p: JsonObject): JsonElement {
+        val extension = p.obj("filters")?.entrySet()?.firstOrNull()?.value?.asJsonArray?.firstOrNull()?.asString ?: ""
+        val descriptor = FileSaverDescriptor(p.str("title") ?: "Save", p.str("saveLabel") ?: "", extension)
+        val wanted = p.str("defaultPath")?.let { File(it) }
+        val saved = FileChooserFactory.getInstance().createSaveFileDialog(descriptor, project).save(wanted?.parentFile?.toPath(), wanted?.name) ?: return JsonNull.INSTANCE
+        return JsonPrimitive(saved.file.path)
     }
 
     private fun openFile(p: JsonObject) {

@@ -195,6 +195,13 @@ interface OpenDialogOptions {
   filters?: Record<string, string[]>;
 }
 
+interface SaveDialogOptions {
+  defaultUri?: Uri;
+  saveLabel?: string;
+  title?: string;
+  filters?: Record<string, string[]>;
+}
+
 interface TextDocument {
   uri: Uri;
   languageId?: string;
@@ -338,6 +345,10 @@ const window = {
   showOpenDialog: async (options: OpenDialogOptions = {}): Promise<Uri[] | undefined> => {
     const picked = await request<string[] | undefined>('openDialog', { ...options, defaultPath: options.defaultUri?.fsPath });
     return picked?.map(Uri.file);
+  },
+  showSaveDialog: async (options: SaveDialogOptions = {}): Promise<Uri | undefined> => {
+    const picked = await request<string | null>('saveDialog', { title: options.title, saveLabel: options.saveLabel, defaultPath: options.defaultUri?.fsPath, filters: options.filters });
+    return picked ? Uri.file(picked) : undefined;
   },
   createTerminal: (options: TerminalOptions): Terminal => new Terminal(options),
   onDidCloseTerminal: closeListeners.event,
