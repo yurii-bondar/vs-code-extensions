@@ -127,6 +127,7 @@ const AGENT_LAYER: Record<string, Check> = {
   'model?': T.str(1),
   'tools?': T.arr(T.str(1)),
   'disallowedTools?': T.arr(T.str(1)),
+  'mcp?': T.bool(),
   'maxTurns?': T.int(1),
   'effort?': T.oneOf(EFFORTS),
   'color?': T.oneOf(AGENT_COLORS),

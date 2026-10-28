@@ -172,6 +172,8 @@ export interface Agent {
   model: string;
   tools?: string[];
   disallowedTools?: string[];
+  /** `false`: the agent sees no MCP servers at all. Unset: the ones Claude Code loads for it. */
+  mcp?: boolean;
   maxTurns?: number;
   effort?: Effort;
   runs?: Runs;

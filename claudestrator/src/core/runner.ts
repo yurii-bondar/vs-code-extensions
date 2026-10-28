@@ -61,7 +61,7 @@ interface RunnerOptions {
 }
 
 /** The part of an agent definition a session needs. */
-type SessionAgent = Pick<Agent, 'instructions' | 'model'> & Partial<Pick<Agent, 'effort' | 'tools' | 'disallowedTools'>>;
+type SessionAgent = Pick<Agent, 'instructions' | 'model'> & Partial<Pick<Agent, 'effort' | 'tools' | 'disallowedTools' | 'mcp'>>;
 
 interface SessionRequest {
   agent: SessionAgent;
@@ -154,9 +154,14 @@ function buildArgs(req: Pick<SessionRequest, 'agent' | 'additionalDirectories' |
   const sources = opts.settingSources();
   if (sources && has('--setting-sources')) args.push('--setting-sources', sources.join(','));
   args.push('--settings', opts.hookSettings());
-  // Without the user source, the account's own MCP servers come in explicitly.
-  const mcpConfig = opts.mcpConfig && (!sources || !sources.includes('user')) ? opts.mcpConfig() : null;
-  if (mcpConfig && has('--mcp-config')) args.push('--mcp-config', mcpConfig);
+  if (a.mcp === false && has('--strict-mcp-config')) {
+    // Strict: only servers named in --mcp-config count, and none is given. Each server's tool list would otherwise ride along in every turn.
+    args.push('--strict-mcp-config');
+  } else {
+    // Without the user source, the account's own MCP servers come in explicitly.
+    const mcpConfig = opts.mcpConfig && (!sources || !sources.includes('user')) ? opts.mcpConfig() : null;
+    if (mcpConfig && has('--mcp-config')) args.push('--mcp-config', mcpConfig);
+  }
   for (const d of req.additionalDirectories || []) args.push('--add-dir', d);
   if (req.maxBudgetUsd !== undefined && has('--max-budget-usd')) args.push('--max-budget-usd', req.maxBudgetUsd.toFixed(2));
   if (req.name && has('--name')) args.push('--name', req.name);

@@ -337,6 +337,11 @@ test('config: effort is validated and inherited along extends', () => {
   assert.equal(r.config.agents.security!.effort, 'high');
   assert.equal(r.config.agents.planner!.effort, 'high', 'the built-in effort of the planner');
   assert.equal(r.config.agents.verifier!.effort, undefined);
+  assert.deepEqual(['planner', 'developer', 'tester', 'reviewer'].map((n) => r.config.agents[n]!.mcp), [undefined, false, false, false], 'only agents that work on the repo run without MCP');
+  assert.equal(r.config.agents.security!.mcp, false, 'an agent that extends the reviewer inherits it');
+  config.updateAgentConfig(ws, 'developer', { mcp: true });
+  assert.equal(passed(loadCfg({ workspace: ws })).config.agents.developer!.mcp, true, 'a project can give an agent its MCP servers back');
+  assert.throws(() => config.updateAgentConfig(ws, 'developer', { mcp: 'no' }), /mcp/);
   config.updateAgentConfig(ws, 'planner', { effort: 'xhigh' });
   assert.equal(passed(loadCfg({ workspace: ws })).config.agents.planner!.effort, 'xhigh');
   config.updateAgentConfig(ws, 'planner', { effort: null });

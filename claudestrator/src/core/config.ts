@@ -18,6 +18,7 @@ interface AgentLayer {
   model?: string;
   tools?: string[];
   disallowedTools?: string[];
+  mcp?: boolean;
   maxTurns?: number;
   effort?: Effort;
   runs?: Runs;
@@ -114,6 +115,7 @@ interface Inherited {
   model?: string | undefined;
   tools?: string[] | undefined;
   disallowedTools?: string[] | undefined;
+  mcp?: boolean | undefined;
   maxTurns?: number | undefined;
   effort?: Effort | undefined;
   runs?: Runs | undefined;
@@ -248,6 +250,7 @@ const BUILTIN: BuiltinConfig = {
       model: 'sonnet',
       effort: 'medium',
       tools: WRITE,
+      mcp: false,
       color: 'green',
       output: 'code',
       instructions: DEVELOPER,
@@ -257,6 +260,7 @@ const BUILTIN: BuiltinConfig = {
       model: 'sonnet',
       effort: 'medium',
       tools: WRITE,
+      mcp: false,
       color: 'yellow',
       output: 'tests',
       instructions: TESTER,
@@ -266,6 +270,7 @@ const BUILTIN: BuiltinConfig = {
       model: 'opus',
       effort: 'high',
       tools: READ_ONLY,
+      mcp: false,
       color: 'red',
       output: 'verdict',
       instructions: REVIEWER,
@@ -424,6 +429,7 @@ function resolveConfig(layers: Layer[], opts: { flags?: Flags | undefined; readF
       model: base.model ?? 'inherit',
       ...(base.tools && { tools: base.tools }),
       ...(base.disallowedTools && { disallowedTools: base.disallowedTools }),
+      ...(base.mcp !== undefined && { mcp: base.mcp }),
       ...(base.maxTurns !== undefined && { maxTurns: base.maxTurns }),
       ...(base.effort && { effort: base.effort }),
       ...(base.runs && { runs: base.runs }),
@@ -532,6 +538,7 @@ function resolveExtends(drafts: Map<string, Draft>, diags: Diagnostic[]): Map<st
       model: draft.model ?? base.model,
       tools: draft.tools ?? base.tools,
       disallowedTools: draft.disallowedTools ?? base.disallowedTools,
+      mcp: draft.mcp ?? base.mcp,
       maxTurns: draft.maxTurns ?? base.maxTurns,
       effort: draft.effort ?? base.effort,
       runs: draft.runs ?? base.runs,
