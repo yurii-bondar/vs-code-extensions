@@ -7,7 +7,7 @@ import * as path from 'path';
 import { transition, replay, nextAction, passSteps, stepRepos, editableFrom } from '../src/core/machine';
 import { buildPipeline, outline, taskPipeline } from '../src/core/pipeline';
 import * as config from '../src/core/config';
-import { parseStageReport } from '../src/core/prompt';
+import { parseStageReport, reportLanguage } from '../src/core/prompt';
 import { guardBash } from '../src/core/guard';
 import { plain } from '../src/core/gates';
 import { parseInvocation, classifyInput, extractAcceptanceCriteria, adfToText, detectScenario } from '../src/core/intake';
@@ -34,6 +34,11 @@ const rpl = (events: OrchEvent[]) => replay(events);
 const resolve = (...a: Parameters<typeof config.resolveConfig>) => config.resolveConfig(...a);
 const loadCfg = (a: Parameters<typeof config.loadConfig>[0]) => config.loadConfig(a);
 const report = (output: Output, text: string) => parseStageReport(output, text);
+
+test('stages only agents read report in English, the rest in the task language', () => {
+  for (const output of ['code', 'tests', 'verdict'] as Output[]) assert.equal(reportLanguage(output, 'Ukrainian'), 'English');
+  for (const output of ['plan', 'readiness', 'audit'] as Output[]) assert.equal(reportLanguage(output, 'Ukrainian'), 'Ukrainian');
+});
 const guard = (command: string, ctx: GuardContext) => guardBash(command, ctx);
 const bp = (c: Config, o?: Parameters<typeof buildPipeline>[1]) => buildPipeline(c, o);
 const pr = (v: unknown) => parseReadiness(v);

@@ -7,6 +7,12 @@ import type { Audit, NextMode, Output, ParseResult, PlanMeta, Readiness, TaskSta
 /** Outputs whose report ends with a JSON block a program validates. */
 const JSON_OUTPUTS = new Set(['plan', 'verdict', 'readiness', 'audit']);
 
+/** Outputs only other agents read (and the next review round), so they stay in English: it costs fewer tokens than most languages. */
+const AGENT_ONLY_OUTPUTS = new Set<Output>(['code', 'tests', 'verdict']);
+
+/** The language a stage writes its report in: the task's language when a human reads it, English when only agents do. */
+const reportLanguage = (output: Output, language: string): string => (AGENT_ONLY_OUTPUTS.has(output) ? 'English' : language);
+
 const MODE: Record<NextMode, string> = {
   initial: "initial: do this stage's work for the first time.",
   replan: "replan: start from your previous plan (among the inputs) and change what the user's feedback asks for.",
@@ -57,7 +63,7 @@ function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, 
   }
   lines.push('', 'Read these files first, in this order:', ...inputs.map((p) => `- ${p}`));
   if (next.feedback) lines.push('', 'Feedback from the user, verbatim:', next.feedback);
-  lines.push('', `Write your report in ${language}. Code, identifiers and anything a program reads stay in English.`);
+  lines.push('', `Write your report in ${reportLanguage(next.output, language)}. Code, identifiers and anything a program reads stay in English.`);
   if (JSON_OUTPUTS.has(next.output)) lines.push('End your reply with the fenced ```json block your instructions describe; a program validates it.');
   lines.push('Do not commit, push, stash or switch branches: Claudestrator owns git.', 'Your final message is your report; nothing may follow it.');
   return lines.join('\n');
@@ -94,4 +100,4 @@ function parseStageReport(output: Output, text: string): StageReport {
 }
 
 export type { StageReport };
-export { buildAgentPrompt, lastJsonBlock, parseStageReport };
+export { buildAgentPrompt, lastJsonBlock, parseStageReport, reportLanguage };
