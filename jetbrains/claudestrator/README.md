@@ -31,7 +31,7 @@ When the extension's engine or page changes, nothing here changes unless the wir
 | Commands (`Claudestrator: …`) | Tools | Claudestrator, the tool window's title and gear menus, Find Action |
 | Status bar items | Status bar widgets (tasks, Claude limits) |
 | Secret storage (Atlassian token) | Password safe |
-| Integrated terminal | Terminal tool window (Terminal plugin, optional) / Run tool window for sign-ins |
+| Integrated terminal | Sign-ins run in the Run tool window; "continue in terminal" opens the Terminal tool window with the command on the clipboard |
 | Editor context menu "Start a Task from Selection" | Editor context menu, same name |
 
 ## Requirements

@@ -33,7 +33,6 @@
     <depends>com.intellij.modules.platform</depends>
     <!-- The dashboard is a browser page. Since 2026.2 JCEF is a plugin of its own, and its classes are visible only to plugins that say so. -->
     <depends>com.intellij.modules.jcef</depends>
-    <depends optional="true" config-file="terminal-support.xml">org.jetbrains.plugins.terminal</depends>
 
     <extensions defaultExtensionNs="com.intellij">
         <toolWindow id="Claudestrator" anchor="left" icon="/icons/toolwindow.svg"
