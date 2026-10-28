@@ -733,7 +733,7 @@ interface Views {
           <div class="scenarios" data-region="scenarios"></div>
         </div>
         <div data-region="sc-editor"></div>
-        <textarea id="composer-text" class="composer-text" rows="3" placeholder="${esc(SCENARIO_INFO[this.scenario()]!.placeholder)}" ${disabled ? 'disabled' : ''}>${esc(S.draft.text)}</textarea>
+        <textarea id="composer-text" class="composer-text" rows="3" placeholder="${esc(scInfo(this.scenario()).placeholder)}" ${disabled ? 'disabled' : ''}>${esc(S.draft.text)}</textarea>
         <div class="composer-detect" data-region="detect"></div>
         <div class="composer-row">
           <div class="agents-chips" data-region="agent-chips"></div>
