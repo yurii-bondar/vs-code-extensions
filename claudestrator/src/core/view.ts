@@ -1,5 +1,5 @@
 // UI models built from a task's state and events: cards for lists, a step timeline, the activity feed.
-import { transition, passSteps, sameStep, branchName } from './machine';
+import { transition, passSteps, sameStep, branchName, MAX_EMPTY_ROUNDS } from './machine';
 import { onRepos } from './pipeline';
 import { describeEvent, CHECKPOINT_TITLE } from './describe';
 import { transcriptKey } from './engine';
@@ -42,6 +42,8 @@ const CHECKPOINT_HINT: Record<string, string> = {
   'hook-failure': 'A git hook rejected the commit.',
   'confirm-push': 'Everything is committed locally. Push the branches and open draft PRs?',
 };
+
+const EMPTY_DIFF_HINT = 'The last review rounds saw an empty diff: the agents changed nothing, so more fix rounds would not help. Add guidance and retry, ship as it is, or stop.';
 
 const titleOf = (s: TaskState | null | undefined, taskId: string): string => (s && s.spec && s.spec.title) || (s && s.input ? s.input.split('\n')[0]!.slice(0, 100) : taskId);
 
@@ -194,7 +196,7 @@ function summary(engine: ViewEngine, entry: TaskEntry): Card {
     ...(state.scenarioLabel && { scenarioLabel: state.scenarioLabel }),
     ...(result && { result: result.kind === 'readiness' ? { kind: 'readiness', verdict: result.verdict, met: result.met, total: result.criteria.length } : { kind: 'audit', counts: result.counts } }),
     status: statusOf(state, { running, error, asking: engine.pendingPermissions(taskId).length > 0 }),
-    checkpoint: state.checkpoint ? { id: state.checkpoint.id, title: CHECKPOINT_TITLE[state.checkpoint.id], hint: CHECKPOINT_HINT[state.checkpoint.id] } : null,
+    checkpoint: state.checkpoint ? { id: state.checkpoint.id, title: CHECKPOINT_TITLE[state.checkpoint.id], hint: state.checkpoint.id === 'review-limit' && state.review.emptyRounds >= MAX_EMPTY_ROUNDS ? EMPTY_DIFF_HINT : CHECKPOINT_HINT[state.checkpoint.id] } : null,
     live: engine.live(taskId),
     error,
     stopReason: state.status === 'stopped' && lastStop && lastStop.type === 'stopped' ? lastStop.reason : undefined,

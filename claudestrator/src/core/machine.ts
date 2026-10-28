@@ -118,7 +118,7 @@ function created(e: Ev<'task_created'>): TaskState {
     feedback: null,
     running: null,
     checkpoint: null,
-    review: { round: 1, maxRounds: e.limits.reviewRounds, fixing: false, fixRepos: [], verdicts: [], lastVerdicts: [], openFindings: [] },
+    review: { round: 1, maxRounds: e.limits.reviewRounds, fixing: false, fixRepos: [], emptyRounds: 0, verdicts: [], lastVerdicts: [], openFindings: [] },
     finishStep: null,
     gateFailures: [],
     artifacts: [],
@@ -196,7 +196,7 @@ function stageCompleted(s: TaskState, e: Ev<'stage_completed'>): Transition {
       else advance(s, step);
       return ok(s);
     case 'verdict':
-      s.review.verdicts.push({ agent: step.agent, artifact: e.artifact, status: e.verdict!.status, findings: e.verdict!.findings });
+      s.review.verdicts.push({ agent: step.agent, artifact: e.artifact, status: e.verdict!.status, findings: e.verdict!.findings, ...(e.emptyDiff && { emptyDiff: true }) });
       if (s.pipeline.reviewLoop && s.pipeline.reviewLoop.end === step.stage) evaluateRound(s, e.at);
       else advance(s, step);
       return ok(s);
@@ -347,9 +347,15 @@ function advance(s: TaskState, from: Step): void {
   setNext(s, next ?? null, s.review.fixing ? 'fix' : 'initial');
 }
 
+/** Review rounds in a row with an empty diff after which the loop stops: another fix round would change nothing either. */
+const MAX_EMPTY_ROUNDS = 2;
+
 function evaluateRound(s: TaskState, at: string): void {
   const blocking = s.review.verdicts.some((v) => v.status === 'changes_requested');
+  const empty = s.review.verdicts.length > 0 && s.review.verdicts.every((v) => v.emptyDiff);
+  s.review.emptyRounds = empty ? s.review.emptyRounds + 1 : 0;
   if (!blocking) passReview(s, false);
+  else if (s.review.emptyRounds >= MAX_EMPTY_ROUNDS) openCheckpoint(s, 'review-limit', at, undefined, `the diff was empty in ${s.review.emptyRounds} review rounds in a row: the agents changed nothing, so another fix round would not help`);
   else if (s.review.round < s.review.maxRounds) startFixRound(s, null);
   else openCheckpoint(s, 'review-limit', at, undefined, `round ${s.review.round} of ${s.review.maxRounds} still has blocking findings`);
 }
@@ -509,4 +515,4 @@ function branchName(s: TaskState): string | null {
 }
 
 export type { NextAction, RunAction };
-export { transition, replay, canPush, passSteps, editableFrom, stepRepos, nextAction, runOf, artifactPath, branchName, sameStep, TASK_FILES };
+export { MAX_EMPTY_ROUNDS, transition, replay, canPush, passSteps, editableFrom, stepRepos, nextAction, runOf, artifactPath, branchName, sameStep, TASK_FILES };

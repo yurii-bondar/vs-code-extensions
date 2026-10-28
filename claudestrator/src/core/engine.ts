@@ -559,10 +559,12 @@ class Engine extends EventEmitter {
     }
 
     let diffPath: string | undefined;
+    let emptyDiff = false;
     if (stage.output === 'verdict' && s.repos.length) {
       this.setLive(taskId, { phase: 'preparing', step, text: 'Collecting the diff for review' });
       const diff = await taskDiff(taskRepos(this.workspace, s, config, s.repos.map((r) => r.name)));
       diffPath = this.svc.writeArtifact(taskId, `reviews/r${s.review.round}/diff.patch`, diff.text);
+      emptyDiff = diff.empty;
     }
 
     let seq: number;
@@ -679,6 +681,7 @@ class Engine extends EventEmitter {
         ...(parsed.verdict && { verdict: parsed.verdict }),
         ...(parsed.readiness && { readiness: parsed.readiness }),
         ...(parsed.audit && { audit: parsed.audit }),
+        ...(emptyDiff && { emptyDiff: true }),
         gates,
       });
       if (REPORT_OUTPUTS.has(stage.output)) this.writeReport(taskId, config.language);
