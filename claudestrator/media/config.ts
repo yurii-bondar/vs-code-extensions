@@ -61,7 +61,7 @@ interface Views {
 }
 
 (function () {
-  const { call, attempt, toast, icon, esc, $, $$, plural, OUTPUT_INFO, SCENARIO_INFO, agentColor, views, patch, outlineHtml, dur, ago, EFFORT_LABEL, modelChoices } = window.CS;
+  const { call, attempt, toast, icon, esc, $, $$, plural, OUTPUT_INFO, SCENARIO_INFO, agentColor, views, patch, outlineHtml, dur, ago, EFFORT_LABEL, modelChoices, libraryMove } = window.CS;
   const REPORT_SCENARIOS = ['readiness', 'audit'];
   const EFFORT_HINT: Record<string, string> = { '': 'the model\'s default', low: 'fastest, cheapest', medium: 'balanced', high: 'thorough', xhigh: 'very thorough', max: 'deepest, slowest' };
   const ALL_EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -153,11 +153,11 @@ interface Views {
       const inPipeline = known(c.config.pipeline);
       const pipelineNames = new Set(inPipeline.map((a) => a.name));
       const scenarios = c.config.scenarios || {};
-      const custom = Object.values(c.config.custom || {});
       const removed = c.config.removedScenarios || [];
-      const inScenario = new Set([...Object.values(scenarios).flat(), ...custom.flatMap((sc) => sc.agents.map((st) => st.name))]);
-      const others = c.agents.filter((a) => !pipelineNames.has(a.name) && !inScenario.has(a.name));
-      const step = (st: { name: string; model?: string | undefined; effort?: string | undefined }) => `<span class="${agentColor(colors[st.name])}"><span class="adot"></span>${esc(st.name)}${st.model || st.effort ? ` <span class="muted small">${esc([st.model, st.effort].filter(Boolean).join(' · '))}</span>` : ''}</span>`;
+      // Agents of the report scenarios have their own sections; everything else outside the pipeline is listed once,
+      // including the agents your own and your libraries' scenarios run.
+      const inReports = new Set(Object.values(scenarios).flat());
+      const others = c.agents.filter((a) => !pipelineNames.has(a.name) && !inReports.has(a.name));
       const open = this.open;
       const defaults = c.defaults;
       patch(
@@ -180,15 +180,8 @@ interface Views {
           return `<div class="scenario-block"><div class="sb-head">${icon(SCENARIO_INFO[sc]!.icon)}<b>${esc(SCENARIO_INFO[sc]!.label)}</b><span class="muted small">${esc(SCENARIO_INFO[sc]!.hint)}</span></div>
             <div class="agent-list">${agents.length ? agents.map((a) => agentCard(a, { index: -1, total: 0, open: Boolean(open[a.name]), scenario: sc, defaults, libraries: c.libraries })).join('') : `<div class="muted small">No agent: add one that produces a ${esc(OUTPUT_INFO[sc]!.label)} report.</div>`}</div></div>`;
         }).join('')}
-        ${custom.length ? `<h3 class="section-title">Your scenarios</h3>
-          <p class="muted small">Made, changed and deleted from the scenario menu of the task composer; each sets its agents' order and, if you like, their model and effort.</p>
-          ${custom.map((sc) => `<div class="scenario-block"><div class="sb-head">${icon('wand')}<b>${esc(sc.label)}</b>${libraryChip(libraryOf([sc.source]), false)}${sc.description ? `<span class="muted small">${esc(sc.description)}</span>` : ''}<span class="grow"></span>${sc.source === 'project' ? libraryMove('scenario', sc.id, c.libraries) : ''}</div>
-            <div class="sc-agents">${sc.agents.length ? sc.agents.map(step).join('<span class="pipe-arrow">→</span>') : '<span class="muted small">no agents yet</span>'}</div></div>`).join('')}` : ''}
-        ${others.length ? `<h3 class="section-title">Not in the pipeline</h3><div class="agent-list">${others.map((a) => agentCard(a, { index: -1, total: 0, open: Boolean(open[a.name]), defaults, libraries: c.libraries })).join('')}</div>` : ''}
-        <h3 class="section-title">Libraries</h3>
-        <p class="muted small">Agents and scenarios kept in a folder of their own (<code>library.yaml</code>, instructions in <code>prompts/</code>), for all your projects or for this one and its team. They load before your config, so this project can change a library's agent without touching the library. An agent that only a library has is not in the pipeline until you add it.</p>
-        ${c.libraries.map(libraryBlock).join('')}
-        <div class="row"><button class="btn" data-action="lib-add">${icon('plus')}Add library…</button></div>
+        ${others.length ? `<h3 class="section-title">Not in the pipeline</h3><p class="muted small">Agents that <a data-action="nav" data-name="scenarios">your scenarios</a> run, and agents not used yet.</p><div class="agent-list">${others.map((a) => agentCard(a, { index: -1, total: 0, open: Boolean(open[a.name]), defaults, libraries: c.libraries })).join('')}</div>` : ''}
+        <p class="muted small">Libraries of your own agents and scenarios are added and removed on the <a data-action="nav" data-name="scenarios">Scenarios</a> page.</p>
         <p class="muted small">Changes are saved to <code>.claudestrator/config.yaml</code> and apply to new tasks; a running task keeps the pipeline it started with, but picks up edited instructions for its next agent.</p>`
       );
     },
@@ -205,30 +198,6 @@ interface Views {
       if (await save('setPipeline', { pipeline: list }, null)) this.load();
     },
     actions: {
-      'lib-add': async () => {
-        const r = await attempt('addLibrary');
-        if (!r || !r.added) return;
-        toast(`Library ${r.added} added`, 'ok');
-        await window.CS.loadOverview();
-        views.agents.load();
-      },
-      'lib-remove': async (el) => {
-        const r = await attempt('removeLibrary', { file: el.dataset.file, scope: el.dataset.kind === 'user' ? 'user' : 'project' });
-        if (!r || !r.removed) return;
-        await window.CS.loadOverview();
-        views.agents.load();
-      },
-      'lib-open': (el) => attempt('openFile', { file: el.dataset.file }),
-      'to-library': async (el) => {
-        const select = el.closest('.lib-move')?.querySelector<HTMLSelectElement>('select');
-        if (!select || !select.value) return;
-        const id = el.dataset.id;
-        const r = await attempt('moveToLibrary', el.dataset.kind === 'scenario' ? { library: select.value, scenarios: [id] } : { library: select.value, agents: [id] });
-        if (!r || !r.moved) return;
-        toast(`Moved to ${select.selectedOptions[0]?.textContent || 'the library'}: ${[...r.scenarios, ...r.agents].join(', ')}`, 'ok');
-        await window.CS.loadOverview();
-        views.agents.load();
-      },
       'agent-toggle-open': (el) => {
         const v = views.agents;
         v.open = { ...v.open, [el.dataset.name]: !v.open[el.dataset.name] };
@@ -376,22 +345,6 @@ interface Views {
   function libraryChip(lib: string | undefined, changedHere: boolean) {
     if (!lib) return '';
     return `<span class="chip small lib-chip" title="${esc(`From the library ${lib}${changedHere ? '; changed in this project' : ''}`)}">${icon('folder')}${esc(lib)}${changedHere ? ' ·  changed here' : ''}</span>`;
-  }
-
-  /** "Move to library": a choice of the libraries that are there, and the button. Nothing when there is none. */
-  function libraryMove(kind: 'agent' | 'scenario', id: string, libs: LibraryView[]) {
-    const there = libs.filter((l) => l.exists && !l.error);
-    if (!there.length) return '';
-    const options = there.map((l) => `<option value="${esc(l.file)}">${esc(l.label)}</option>`).join('');
-    return `<span class="lib-move">${there.length > 1 ? `<select class="input sm" aria-label="Library">${options}</select>` : `<select class="input sm" hidden>${options}</select>`}<button class="btn ghost sm" data-action="to-library" data-kind="${kind}" data-id="${esc(id)}" title="Keep it in a library instead of this project's config.yaml">${icon('folder')}Move to ${there.length > 1 ? 'library' : esc(there[0]!.label)}</button></span>`;
-  }
-
-  function libraryBlock(l: LibraryView) {
-    const holds = !l.exists ? `${icon('alert')}Not found at ${esc(l.file)}` : l.error ? `${icon('alert')}${esc(l.error)}` : `${plural(l.agents.length, 'agent')}${l.agents.length ? `: ${esc(l.agents.join(', '))}` : ''} · ${plural(l.scenarios.length, 'scenario')}${l.scenarios.length ? `: ${esc(l.scenarios.join(', '))}` : ''}`;
-    return `<div class="scenario-block lib-block"><div class="sb-head">${icon('folder')}<b>${esc(l.label)}</b><span class="chip small">${l.scope === 'user' ? 'all my projects' : 'this project'}</span><span class="muted small mono">${esc(l.entry)}</span><span class="grow"></span>
-      <button class="btn ghost sm" data-action="lib-open" data-file="${esc(l.file)}" ${l.exists ? '' : 'disabled'}>${icon('edit')}library.yaml</button>
-      <button class="btn ghost sm danger" data-action="lib-remove" data-file="${esc(l.file)}" data-kind="${l.scope}">${icon('x')}Stop using</button></div>
-      <div class="muted small">${holds}</div></div>`;
   }
 
   function agentCard(a: AgentView, { index, total, open, scenario, defaults, libraries }: AgentCardOptions) {

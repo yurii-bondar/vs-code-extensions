@@ -175,8 +175,8 @@ class DashboardPanel implements RpcHandlers {
           const a: Agent = { ...c.agents[n]!, ...(st.model && { model: st.model }), ...(st.effort && { effort: st.effort }) };
           return { name: n, scenario, color: a.color, output: a.output, runs: a.runs, enabled: a.enabled, description: a.description, model: a.model, effort: a.effort, ...(st.model && { ownModel: true }), ...(st.effort && { ownEffort: true }), actual: effectiveFor(a, this.orch.defaults) };
         }),
-      // Custom scenarios for the composer's menu, and the built-in ones that were removed.
-      custom: Object.values(c.custom).map((sc) => ({ id: sc.id, label: sc.label, description: sc.description, kind: sc.kind })),
+      // Custom scenarios for the composer's menu and the Scenarios page, and the built-in ones that were removed.
+      custom: Object.values(c.custom).map((sc) => ({ id: sc.id, label: sc.label, description: sc.description, kind: sc.kind, ...(sc.source && { source: sc.source }) })),
       removedScenarios: c.removedScenarios,
       // Every agent, for the composer's scenario editor to add from.
       catalog: Object.values(c.agents).map((a) => ({ name: a.name, output: a.output, runs: a.runs, color: a.color, enabled: a.enabled, description: a.description })),
