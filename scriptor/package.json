@@ -1,0 +1,251 @@
+{
+  "name": "scriptor",
+  "displayName": "Scriptor",
+  "description": "A launchpad for your scripts. Add any .sh, .js, .py or other script, group them, and run each one in a terminal with a click.",
+  "version": "0.0.0",
+  "publisher": "bondevn",
+  "license": "MIT",
+  "author": "Yurii Bondar",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yurii-bondar/vs-code-extensions.git",
+    "directory": "scriptor"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "scripts",
+    "script runner",
+    "launcher",
+    "shell",
+    "bash",
+    "python",
+    "node",
+    "terminal",
+    "automation"
+  ],
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#1E1B3A",
+    "theme": "dark"
+  },
+  "main": "./dist/extension.js",
+  "extensionKind": [
+    "ui"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.webview.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.webview.json",
+    "lint": "eslint .",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "package": "npx @vscode/vsce package",
+    "vscode:prepublish": "npm run build"
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "scriptor",
+          "title": "Scriptor",
+          "icon": "media/activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "scriptor": [
+        {
+          "id": "scriptor.scripts",
+          "name": "Scripts",
+          "icon": "media/activity.svg"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "scriptor.scripts",
+        "contents": "Keep your scripts in one place and run any of them in a terminal with a click. Shell, Node, Python and more.\n[$(add) Add Script](command:scriptor.addScript)\n[$(new-folder) New Group](command:scriptor.addGroup)\n[$(rocket) Open Scriptor](command:scriptor.open)"
+      }
+    ],
+    "commands": [
+      {
+        "command": "scriptor.open",
+        "title": "Open Scriptor",
+        "category": "Scriptor",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "scriptor.addScript",
+        "title": "Add Script…",
+        "category": "Scriptor",
+        "icon": "$(add)"
+      },
+      {
+        "command": "scriptor.addGroup",
+        "title": "New Group…",
+        "category": "Scriptor",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "scriptor.run",
+        "title": "Run Script…",
+        "category": "Scriptor",
+        "icon": "$(play)"
+      },
+      {
+        "command": "scriptor.runGroup",
+        "title": "Run All Scripts in a Group…",
+        "category": "Scriptor",
+        "icon": "$(run-all)"
+      },
+      {
+        "command": "scriptor.editScript",
+        "title": "Edit Script…",
+        "category": "Scriptor",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "scriptor.openFile",
+        "title": "Open Script File",
+        "category": "Scriptor",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "scriptor.reveal",
+        "title": "Reveal in File Manager",
+        "category": "Scriptor"
+      },
+      {
+        "command": "scriptor.removeScript",
+        "title": "Remove Script…",
+        "category": "Scriptor",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "scriptor.editGroup",
+        "title": "Edit Group…",
+        "category": "Scriptor",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "scriptor.removeGroup",
+        "title": "Remove Group…",
+        "category": "Scriptor",
+        "icon": "$(trash)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "scriptor.addScript",
+          "when": "view == scriptor.scripts",
+          "group": "navigation@1"
+        },
+        {
+          "command": "scriptor.addGroup",
+          "when": "view == scriptor.scripts",
+          "group": "navigation@2"
+        },
+        {
+          "command": "scriptor.open",
+          "when": "view == scriptor.scripts",
+          "group": "navigation@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "scriptor.run",
+          "when": "view == scriptor.scripts && viewItem == script",
+          "group": "inline@1"
+        },
+        {
+          "command": "scriptor.runGroup",
+          "when": "view == scriptor.scripts && viewItem == group",
+          "group": "inline@1"
+        },
+        {
+          "command": "scriptor.run",
+          "when": "view == scriptor.scripts && viewItem == script",
+          "group": "1_run@1"
+        },
+        {
+          "command": "scriptor.runGroup",
+          "when": "view == scriptor.scripts && viewItem == group",
+          "group": "1_run@1"
+        },
+        {
+          "command": "scriptor.addScript",
+          "when": "view == scriptor.scripts && viewItem == group",
+          "group": "1_run@2"
+        },
+        {
+          "command": "scriptor.editScript",
+          "when": "view == scriptor.scripts && viewItem == script",
+          "group": "2_edit@1"
+        },
+        {
+          "command": "scriptor.openFile",
+          "when": "view == scriptor.scripts && viewItem == script",
+          "group": "2_edit@2"
+        },
+        {
+          "command": "scriptor.reveal",
+          "when": "view == scriptor.scripts && viewItem == script",
+          "group": "2_edit@3"
+        },
+        {
+          "command": "scriptor.editGroup",
+          "when": "view == scriptor.scripts && viewItem == group",
+          "group": "2_edit@1"
+        },
+        {
+          "command": "scriptor.removeScript",
+          "when": "view == scriptor.scripts && viewItem == script",
+          "group": "9_danger@1"
+        },
+        {
+          "command": "scriptor.removeGroup",
+          "when": "view == scriptor.scripts && viewItem == group",
+          "group": "9_danger@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "scriptor.editScript",
+          "when": "false"
+        },
+        {
+          "command": "scriptor.openFile",
+          "when": "false"
+        },
+        {
+          "command": "scriptor.reveal",
+          "when": "false"
+        },
+        {
+          "command": "scriptor.removeScript",
+          "when": "false"
+        },
+        {
+          "command": "scriptor.editGroup",
+          "when": "false"
+        },
+        {
+          "command": "scriptor.removeGroup",
+          "when": "false"
+        }
+      ]
+    }
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/node": "^22.20.5",
+    "@types/vscode": "^1.85.0",
+    "eslint": "^9.39.5",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.72.1"
+  }
+}
