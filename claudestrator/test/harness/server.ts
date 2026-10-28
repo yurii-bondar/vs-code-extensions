@@ -129,7 +129,12 @@ const vscode = {
       log('warning:', msg, '→', choice);
       return choice;
     },
-    showInformationMessage: async (msg: string) => log('info:', msg),
+    // Like the warning: a question with buttons is answered with the first one.
+    showInformationMessage: async (msg: string, ...items: unknown[]) => {
+      const choice = items.find((i) => typeof i === 'string');
+      log('info:', msg, ...(choice ? ['→', choice] : []));
+      return choice;
+    },
     showErrorMessage: async (msg: string) => log('error:', msg),
     showTextDocument: async (d: { uri?: FsUri; fsPath?: string }) => log('open', (d.uri || d).fsPath || d),
     // A file picked for saving is the one offered; opening a file picks the last one saved.
