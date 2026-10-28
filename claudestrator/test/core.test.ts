@@ -7,6 +7,7 @@ import * as path from 'path';
 import { transition, replay, nextAction, passSteps, stepRepos, editableFrom } from '../src/core/machine';
 import { buildPipeline, outline, taskPipeline } from '../src/core/pipeline';
 import * as config from '../src/core/config';
+import * as backups from '../src/core/backup';
 import { parseStageReport, reportLanguage } from '../src/core/prompt';
 import { guardBash } from '../src/core/guard';
 import { GitRepo } from '../src/core/git';
@@ -968,3 +969,189 @@ test('setup: a picked repo is written with only what differs from the defaults; 
   assert.match(validateSetting('editor.fontSize', 30)[0]!, /unknown setting/);
 });
 
+/** A project with an agent of its own (its instructions in a file), a changed built-in agent, a pipeline and scenarios. */
+function projectWithAgents(): string {
+  const ws = tmp('cs-backup-');
+  const dir = path.join(ws, config.CONFIG_DIR);
+  fs.mkdirSync(path.join(dir, config.PROMPTS_DIR), { recursive: true });
+  fs.writeFileSync(path.join(dir, config.PROMPTS_DIR, 'security-reviewer.md'), 'Look for injection first.\n');
+  config.createProjectConfig(ws, {
+    agents: {
+      'security-reviewer': { extends: 'reviewer', description: 'Reviews for security', instructions: { mode: 'append', file: './prompts/security-reviewer.md' } },
+      developer: { model: 'opus', maxTurns: 40 },
+    },
+    pipeline: ['planner', 'developer', 'tester', 'security-reviewer'],
+    scenarios: { audit: false, hotfix: { label: 'Hotfix', agents: ['developer', { agent: 'security-reviewer', effort: 'low' }] } },
+  });
+  return ws;
+}
+
+const noBackup = { savedAt: undefined, agents: {}, files: {}, pipeline: undefined, scenarios: {} };
+
+test('backup: agents, pipeline and scenarios are saved as YAML with the instruction files, read back (JSON too), anything else is refused', () => {
+  const made = backups.createBackup({ workspace: projectWithAgents(), now: new Date('2026-10-28T12:00:00Z') });
+  assert.deepEqual([made.agents, made.scenarios, made.pipeline], [2, 2, true]);
+  assert.match(made.text, /^# Claudestrator backup/);
+  assert.match(made.text, /claudestrator-backup: 1/);
+  assert.match(made.text, /pipeline: \[ planner, developer, tester, security-reviewer \]/, 'a list of names stays on one line, written the way the extension writes config.yaml');
+  assert.match(made.text, /audit: false/);
+  assert.match(made.text, /files:\n\s+\.\/prompts\/security-reviewer\.md: \|\n\s+Look for injection first\./, 'the instruction file travels in the backup');
+
+  const parsed = backups.parseBackup(made.text);
+  assert.ok(parsed.ok);
+  assert.deepEqual(Object.keys(parsed.backup.agents).sort(), ['developer', 'security-reviewer']);
+  assert.deepEqual(parsed.backup.files, { './prompts/security-reviewer.md': 'Look for injection first.\n' });
+  assert.deepEqual(parsed.backup.pipeline, ['planner', 'developer', 'tester', 'security-reviewer']);
+  assert.deepEqual(Object.keys(parsed.backup.scenarios), ['audit', 'hotfix']);
+  assert.equal(parsed.backup.savedAt, '2026-10-28T12:00:00.000Z');
+
+  const { savedAt, ...asData } = parsed.backup;
+  assert.ok(savedAt);
+  assert.ok(backups.parseBackup(JSON.stringify({ [backups.MARKER]: 1, ...asData })).ok, 'a backup converted to JSON restores too');
+
+  const error = (t: string): string => {
+    const r = backups.parseBackup(t);
+    assert.ok(!r.ok, t);
+    return r.error;
+  };
+  assert.match(error('agents:\n  developer: {}\n'), /not a Claudestrator backup/, 'a config.yaml is not a backup');
+  assert.match(error('just some text'), /not a Claudestrator backup/);
+  assert.match(error('a: [1'), /not valid YAML or JSON/);
+  assert.match(error(`${backups.MARKER}: 2\nscenarios: {}`), /newer Claudestrator/);
+  assert.match(error(`${backups.MARKER}: 1`), /backup is empty/);
+  assert.match(error(`${backups.MARKER}: 1\nscenarios:\n  deliver: [developer]`), /reserved/);
+  assert.match(error(`${backups.MARKER}: 1\nagents:\n  Odd Name: {}\n`), /lowercase kebab-case/);
+  assert.match(error(`${backups.MARKER}: 1\nagents:\n  qa: {}\nfiles:\n  ../../evil.md: pwned\n`), /outside \.claudestrator/, 'a file may not leave .claudestrator/');
+  assert.match(error(`${backups.MARKER}: 1\nagents:\n  qa: {}\nfiles:\n  /etc/passwd: pwned\n`), /outside \.claudestrator/);
+  assert.match(error(`${backups.MARKER}: 1\nagents:\n  qa: {}\nfiles:\n  ./config.yaml: 'repos: {}'\n`), /outside \.claudestrator\/prompts/, 'a backup may not overwrite config.yaml');
+  assert.match(error(`${backups.MARKER}: 1\nagents:\n  qa: {}\nfiles:\n  ./prompts/qa.md: 5\n`), /"files" section/);
+
+  assert.throws(() => backups.createBackup({ workspace: tmp('cs-backup-'), now: new Date() }), /nothing to back up/);
+  const broken = tmp('cs-backup-');
+  fs.mkdirSync(path.join(broken, config.CONFIG_DIR));
+  fs.writeFileSync(config.projectConfigFile(broken), 'agents: [unclosed\n');
+  assert.throws(() => backups.createBackup({ workspace: broken, now: new Date() }), /does not parse/);
+});
+
+test('backup: restore into another project writes the agents with their instruction files, the pipeline and the scenarios', () => {
+  const parsed = backups.parseBackup(backups.createBackup({ workspace: projectWithAgents(), now: new Date() }).text);
+  assert.ok(parsed.ok);
+  const to = tmp('cs-backup-');
+  const home = tmp('cs-backup-h-');
+  config.setCustomScenario(to, 'mine', { label: 'Mine', agents: [{ name: 'developer' }] });
+
+  const plan = backups.previewRestore({ workspace: to, backup: parsed.backup, home });
+  assert.deepEqual(plan.agents, { add: ['security-reviewer', 'developer'], replace: [] });
+  assert.equal(plan.pipeline, true);
+  assert.deepEqual(plan.scenarios, { add: ['audit', 'hotfix'], replace: [] });
+  assert.deepEqual(plan.skipped, []);
+
+  backups.restoreBackup({ workspace: to, backup: parsed.backup, home });
+  assert.equal(fs.readFileSync(path.join(to, config.CONFIG_DIR, config.PROMPTS_DIR, 'security-reviewer.md'), 'utf8'), 'Look for injection first.\n');
+  const after = passed(loadCfg({ workspace: to, home }));
+  assert.equal(after.config.agents['security-reviewer']!.description, 'Reviews for security');
+  assert.match(after.config.agents['security-reviewer']!.instructions, /Look for injection first\./);
+  assert.equal(after.config.agents.developer!.model, 'opus');
+  assert.deepEqual(config.readProjectLayer(to).pipeline, ['planner', 'developer', 'tester', 'security-reviewer']);
+  assert.deepEqual(Object.keys(after.config.custom).sort(), ['hotfix', 'mine'], 'a scenario that is not in the backup is not touched');
+  assert.deepEqual(after.config.removedScenarios, ['audit']);
+
+  // The same backup again replaces what is there, an agent entirely, instruction file included.
+  config.updateAgentConfig(to, 'security-reviewer', { description: 'Edited by hand' });
+  fs.writeFileSync(path.join(to, config.CONFIG_DIR, config.PROMPTS_DIR, 'security-reviewer.md'), 'Edited too.\n');
+  assert.deepEqual(backups.previewRestore({ workspace: to, backup: parsed.backup, home }).agents.replace, ['security-reviewer', 'developer']);
+  backups.restoreBackup({ workspace: to, backup: parsed.backup, home });
+  assert.equal(passed(loadCfg({ workspace: to, home })).config.agents['security-reviewer']!.description, 'Reviews for security');
+  assert.equal(fs.readFileSync(path.join(to, config.CONFIG_DIR, config.PROMPTS_DIR, 'security-reviewer.md'), 'utf8'), 'Look for injection first.\n');
+});
+
+test('backup: what the project cannot run is left out and said so, a file outside .claudestrator/ is never written', () => {
+  const ws = tmp('cs-backup-');
+  const home = tmp('cs-backup-h-');
+  const backup = {
+    ...noBackup,
+    files: { './prompts/a.md': 'A\n' },
+    pipeline: ['planner', 'developer', 'ghost-agent'],
+    agents: {
+      a: { extends: 'reviewer', instructions: { mode: 'append', file: './prompts/a.md' } },
+      b: { extends: 'not-here' },
+      c: { extends: 'b' },
+      d: { extends: 'reviewer', instructions: { mode: 'append', file: './prompts/missing.md' } },
+      e: { extends: 'reviewer', instructions: { mode: 'append', file: '../escape.md' } },
+      f: { extends: 'reviewer', instructions: { mode: 'replace', file: './config.yaml' } },
+    },
+    scenarios: { s1: { agents: ['developer', 'c'] }, s2: { agents: ['developer', 'a'] } },
+  };
+  const plan = backups.previewRestore({ workspace: ws, backup, home });
+  assert.deepEqual(plan.agents, { add: ['a'], replace: [] });
+  assert.deepEqual(plan.skipped.map((x) => `${x.kind}:${x.id}`).sort(), ['agent:b', 'agent:c', 'agent:d', 'agent:e', 'agent:f', 'pipeline:pipeline', 'scenario:s1']);
+  assert.match(plan.skipped.find((x) => x.id === 'c')!.reason, /builds on the agent "b"/, 'an agent whose base was left out is left out too');
+  assert.match(plan.skipped.find((x) => x.id === 'd')!.reason, /not in the backup/);
+  assert.match(plan.skipped.find((x) => x.id === 'e')!.reason, /outside \.claudestrator/);
+  assert.match(plan.skipped.find((x) => x.kind === 'pipeline')!.reason, /"ghost-agent"/);
+  assert.deepEqual(plan.scenarios.add, ['s2']);
+
+  backups.restoreBackup({ workspace: ws, backup, home });
+  const after = passed(loadCfg({ workspace: ws, home }));
+  assert.ok(after.config.agents.a && !after.config.agents.b);
+  assert.equal(config.readProjectLayer(ws).pipeline, undefined, 'a pipeline naming an unknown agent is not written');
+  assert.equal(fs.existsSync(path.join(ws, 'escape.md')), false);
+  // A backup of which nothing can be restored writes nothing and says why.
+  const none = backups.restoreBackup({ workspace: ws, backup: { ...noBackup, agents: { x: { extends: 'nope' } } }, home });
+  assert.deepEqual(none.agents, { add: [], replace: [] });
+  assert.deepEqual(none.skipped.map((x) => x.id), ['x']);
+});
+
+test('backup: file paths mean the same on Windows and on macOS/Linux', () => {
+  // A backup names its files with `/`; one written on Windows with `\` is the same file.
+  assert.equal(backups.fileKey('./prompts/a.md'), 'prompts/a.md');
+  assert.equal(backups.fileKey('.\\prompts\\a.md'), 'prompts/a.md');
+  assert.equal(backups.fileKey('prompts/sub/../a.md'), 'prompts/a.md');
+  for (const bad of ['../x.md', '..\\x.md', 'prompts/../../x.md', '/etc/passwd', 'C:\\Windows\\x.md', 'c:/x.md', '.', '..', './config.yaml', 'config.yaml', 'prompts/../config.yaml', './notes.md', 'prompts']) assert.equal(backups.fileKey(bad), null, bad);
+
+  // The real folder check, with Windows paths (drive letters, `\`, another drive).
+  const dir = 'C:\\Users\\me\\ws\\.claudestrator';
+  assert.equal(backups.inside(dir, 'prompts/a.md', path.win32), 'C:\\Users\\me\\ws\\.claudestrator\\prompts\\a.md');
+  assert.equal(backups.inside(dir, '..\\evil.md', path.win32), null);
+  assert.equal(backups.inside(dir, 'D:\\evil.md', path.win32), null);
+  assert.equal(backups.inside(dir, '.', path.win32), null);
+  assert.equal(backups.inside('/ws/.claudestrator', 'prompts/a.md', path.posix), '/ws/.claudestrator/prompts/a.md');
+  assert.equal(backups.inside('/ws/.claudestrator', '../.claudestrator-other/x', path.posix), null, 'a sibling folder with the same prefix is outside');
+
+  // End to end: a Windows-made backup restores here, its agent finding its instruction file.
+  const text = `${backups.MARKER}: 1\nagents:\n  a:\n    extends: reviewer\n    instructions:\n      mode: append\n      file: .\\prompts\\a.md\nfiles:\n  .\\prompts\\a.md: A\n`;
+  const parsed = backups.parseBackup(text);
+  assert.ok(parsed.ok, parsed.ok ? '' : parsed.error);
+  const ws = tmp('cs-backup-');
+  const home = tmp('cs-backup-h-');
+  assert.deepEqual(backups.previewRestore({ workspace: ws, backup: parsed.backup, home }).agents.add, ['a']);
+  backups.restoreBackup({ workspace: ws, backup: parsed.backup, home });
+  assert.equal(fs.readFileSync(path.join(ws, config.CONFIG_DIR, 'prompts', 'a.md'), 'utf8'), 'A');
+  assert.deepEqual(config.readProjectLayer(ws).agents!.a!.instructions, { mode: 'append', file: './prompts/a.md' }, 'the config names the file with `/`');
+  assert.match(passed(loadCfg({ workspace: ws, home })).config.agents.a!.instructions, /A/);
+});
+
+test('backup: a restore that would break the config is undone, instruction files included', () => {
+  const home = tmp('cs-backup-h-');
+  const ws = projectWithAgents();
+  const file = config.projectConfigFile(ws);
+  const promptsDir = path.join(ws, config.CONFIG_DIR, config.PROMPTS_DIR);
+  const before = fs.readFileSync(file, 'utf8');
+  const backup = {
+    ...noBackup,
+    files: { './prompts/security-reviewer.md': 'CHANGED\n', './prompts/new-agent.md': 'x\n' },
+    agents: {
+      'new-agent': { extends: 'reviewer', instructions: { mode: 'append', file: './prompts/new-agent.md' } },
+      'security-reviewer': { extends: 'reviewer', instructions: { mode: 'replace', file: './prompts/security-reviewer.md' } },
+    },
+    scenarios: { odd: { agents: ['developer', 'auditor'] } },
+  };
+  assert.throws(() => backups.restoreBackup({ workspace: ws, backup, home }), /mixes agents/);
+  assert.equal(fs.readFileSync(file, 'utf8'), before, 'config.yaml is as it was');
+  assert.equal(fs.readFileSync(path.join(promptsDir, 'security-reviewer.md'), 'utf8'), 'Look for injection first.\n', 'an overwritten file is put back');
+  assert.equal(fs.existsSync(path.join(promptsDir, 'new-agent.md')), false, 'a new file is removed');
+
+  const empty = tmp('cs-backup-');
+  assert.throws(() => backups.restoreBackup({ workspace: empty, backup: { ...noBackup, scenarios: backup.scenarios }, home }), /mixes agents/);
+  assert.equal(fs.existsSync(config.projectConfigFile(empty)), false, 'a config that did not exist is not left behind');
+});

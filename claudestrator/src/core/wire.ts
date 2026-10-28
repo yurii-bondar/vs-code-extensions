@@ -466,6 +466,15 @@ export interface SaveScenarioParams {
   agents?: ScenarioStep[] | undefined;
 }
 
+/** What "Restore from backup" did: what was written, and what was left out with the reason. */
+export interface BackupRestoreResult {
+  cancelled: boolean;
+  agents: string[];
+  pipeline: boolean;
+  scenarios: string[];
+  skipped: { kind: 'agent' | 'pipeline' | 'scenario'; id: string; reason: string }[];
+}
+
 export interface SetupParams {
   repos?: AddedRepo[] | undefined;
   language?: string | undefined;
@@ -772,6 +781,8 @@ export interface Rpc {
   saveScenario: { params: SaveScenarioParams; result: { id: string } };
   deleteScenario: { params: { id: string }; result: { deleted: boolean } };
   restoreScenario: { params: { id: string }; result: Void };
+  backupConfig: { params: void; result: { saved: boolean; file?: string; agents?: number; scenarios?: number; pipeline?: boolean } };
+  restoreConfigBackup: { params: void; result: BackupRestoreResult };
   setup: { params: SetupParams; result: { file: string } };
 }
 

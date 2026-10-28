@@ -822,7 +822,7 @@ b.err, .lim-pct.err { color: var(--err); }
 .sc-foot { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 4px; display: flex; flex-direction: column; }
 .menu .sc-foot .sc-new { font-weight: 600; flex-wrap: wrap; }
 .menu .sc-foot .sc-new .muted { font-weight: 400; width: 100%; padding-left: 22px; }
-.menu .sc-foot .sc-new > .ic, .menu .sc-foot .sc-restore > .ic { color: var(--accent); }
+.menu .sc-foot .sc-new > .ic, .menu .sc-foot .sc-restore > .ic, .menu .sc-foot .sc-backup > .ic { color: var(--accent); }
 .sc-current.sc-custom .ic, .sc-chip.sc-custom .ic { color: var(--accent); }
 .sc-fields { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
 .sc-fields .field { flex: 1 1 220px; margin-bottom: 4px; }

@@ -7,6 +7,7 @@ import * as crypto from 'crypto';
 import * as os from 'os';
 import * as view from './core/view';
 import * as cfg from './core/config';
+import * as backups from './core/backup';
 import { buildPipeline, outline, taskPipeline, fitsScenario } from './core/pipeline';
 import { editableFrom } from './core/machine';
 import { taskRepos, taskDiff } from './core/git';
@@ -495,6 +496,48 @@ class DashboardPanel implements RpcHandlers {
 
   async $restoreScenario({ id }: { id: string }) {
     cfg.restoreScenario(this.root, id);
+  }
+
+  /** Saves the project's agents, pipeline and scenarios (with the agents' instruction files) to a file you pick. */
+  async $backupConfig() {
+    const now = new Date();
+    const backup = backups.createBackup({ workspace: this.root, now });
+    const uri = await vscode.window.showSaveDialog({
+      defaultUri: vscode.Uri.file(path.join(this.root, `claudestrator-backup-${now.toISOString().slice(0, 10)}.yaml`)),
+      filters: { 'Claudestrator backup': ['yaml', 'yml'] },
+      saveLabel: 'Save backup',
+      title: 'Save backup of agents, pipeline and scenarios',
+    });
+    if (!uri) return { saved: false };
+    fs.writeFileSync(uri.fsPath, backup.text);
+    return { saved: true, file: uri.fsPath, agents: backup.agents, scenarios: backup.scenarios, pipeline: backup.pipeline };
+  }
+
+  /** Reads a backup you pick and, after you confirm, writes its agents, pipeline and scenarios into the project. */
+  async $restoreConfigBackup() {
+    const nothing = { cancelled: true, agents: [], pipeline: false, scenarios: [], skipped: [] };
+    const [uri] = (await vscode.window.showOpenDialog({ canSelectMany: false, defaultUri: vscode.Uri.file(this.root), openLabel: 'Restore', title: 'Restore from backup', filters: { 'Claudestrator backup': ['yaml', 'yml', 'json'] } })) || [];
+    if (!uri) return nothing;
+    const parsed = backups.parseBackup(fs.readFileSync(uri.fsPath, 'utf8'));
+    if (!parsed.ok) throw new Error(parsed.error);
+    const plan = backups.previewRestore({ workspace: this.root, backup: parsed.backup });
+    const count = plan.agents.add.length + plan.agents.replace.length + plan.scenarios.add.length + plan.scenarios.replace.length + (plan.pipeline ? 1 : 0);
+    const left = plan.skipped.map((x) => `${x.kind === 'pipeline' ? 'the pipeline' : `${x.kind} ${x.id}`} (${x.reason})`).join('; ');
+    if (!count) throw new Error(`Nothing can be restored from this backup: ${left}`);
+    const line = (label: string, ids: string[]): string | false => ids.length > 0 && `${label}: ${ids.join(', ')}.`;
+    const detail = [
+      line('Agents added', plan.agents.add),
+      line('Agents replaced, with their instructions', plan.agents.replace),
+      plan.pipeline && "The pipeline is replaced with the backup's.",
+      line('Scenarios added', plan.scenarios.add),
+      line('Scenarios replaced', plan.scenarios.replace),
+      left && `Left out: ${left}.`,
+      'Everything else in this project stays as it is.',
+    ].filter(Boolean).join('\n\n');
+    const ok = await vscode.window.showWarningMessage(`Restore ${count} item${count === 1 ? '' : 's'} from the backup?`, { modal: true, detail }, 'Restore');
+    if (!ok) return nothing;
+    const done = backups.restoreBackup({ workspace: this.root, backup: parsed.backup });
+    return { cancelled: false, agents: [...done.agents.add, ...done.agents.replace], pipeline: done.pipeline, scenarios: [...done.scenarios.add, ...done.scenarios.replace], skipped: done.skipped };
   }
 
   async $newAgent({ name, base, description, output, model, effort }: NewAgentParams) {

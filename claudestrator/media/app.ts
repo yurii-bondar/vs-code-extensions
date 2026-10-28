@@ -86,6 +86,8 @@ interface Views {
   const ICONS: Record<string, string> = {
     home: 'M3 10.5 12 3l9 7.5V21a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z',
     plus: 'M12 5v14M5 12h14',
+    download: 'M12 3v12m0 0-4-4m4 4 4-4M5 21h14',
+    upload: 'M12 15V3m0 0L8 7m4-4 4 4M5 21h14',
     play: 'M7 4.5v15l12-7.5z',
     stop: 'M6 6h12v12H6z',
     pause: 'M7 5h3v14H7zM14 5h3v14h-3z',
@@ -795,6 +797,8 @@ interface Views {
             ${editable ? `<div class="sc-foot">
               <button class="sc-new" data-action="sc-new">${icon('plus')}New scenario<span class="muted small">your own agents, order, models and effort</span></button>
               ${removed.map((id) => `<button class="sc-restore" data-action="sc-restore" data-id="${id}" title="${esc(SCENARIO_INFO[id]!.hint)}">${icon('refresh')}Bring back <b>${esc(SCENARIO_INFO[id]!.label)}</b></button>`).join('')}
+              <button class="sc-backup" data-action="backup-save" title="Save this project's agents, pipeline and scenarios to a file">${icon('download')}Save backup of agents &amp; scenarios</button>
+              <button class="sc-backup" data-action="backup-restore" title="Bring agents, pipeline and scenarios back from a backup file; ones with the same name are replaced">${icon('upload')}Restore from backup</button>
             </div>` : ''}</div>
         </span>`
       );
@@ -1249,6 +1253,27 @@ interface Views {
       await loadOverview();
       views.home.renderAgentsChips();
       toast(`${SCENARIO_INFO[el.dataset.id]!.label} is back`, 'ok');
+    },
+    'backup-save': async () => {
+      closeMenus();
+      const r = await attempt('backupConfig');
+      if (!r || !r.saved) return;
+      const parts = [r.agents ? plural(r.agents, 'agent') : '', r.pipeline ? 'the pipeline' : '', r.scenarios ? plural(r.scenarios, 'scenario') : ''].filter(Boolean);
+      toast(`${parts.join(', ')} saved to ${r.file!.split(/[\\/]/).pop()}`, 'ok');
+    },
+    'backup-restore': async () => {
+      closeMenus();
+      const r = await attempt('restoreConfigBackup');
+      if (!r || r.cancelled) return;
+      await loadOverview();
+      if (current && current.onConfig) current.onConfig();
+      if (S.route.name === 'home') {
+        views.home.renderAgentsChips();
+        views.home.preview();
+      }
+      const parts = [r.agents.length ? plural(r.agents.length, 'agent') : '', r.pipeline ? 'the pipeline' : '', r.scenarios.length ? plural(r.scenarios.length, 'scenario') : ''].filter(Boolean);
+      const left = r.skipped.length ? `; left out: ${r.skipped.map((x) => x.id).join(', ')}` : '';
+      toast(`Restored ${parts.join(', ')}${left}`, r.skipped.length ? 'warn' : 'ok');
     },
     'toggle-group': (el) => {
       const id = el.dataset.id;

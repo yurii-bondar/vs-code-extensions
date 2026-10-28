@@ -711,6 +711,11 @@ function updateAgentConfig(workspace: string, agent: string, patch: Record<strin
   });
 }
 
+/** Replaces everything the project layer says about an agent with `layer` (a backup restores agents this way). */
+function setAgentLayer(workspace: string, agent: string, layer: AgentLayer): string {
+  return editProjectConfig(workspace, (doc) => doc.setIn(['agents', agent], doc.createNode(defined(layer))));
+}
+
 /** Removes everything the project layer says about an agent: back to the user/built-in definition. */
 function resetAgentConfig(workspace: string, agent: string): string {
   return editProjectConfig(workspace, (doc) => doc.deleteIn(['agents', agent]));
@@ -940,6 +945,7 @@ export {
   readProjectLayer,
   updateAgentConfig,
   resetAgentConfig,
+  setAgentLayer,
   configRelative,
   withConfigRollback,
   saveCustomScenario,

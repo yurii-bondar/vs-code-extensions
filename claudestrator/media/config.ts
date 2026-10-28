@@ -165,7 +165,7 @@ interface Views {
         `<div class="page-head">
           <div><h1>${icon('users')}Agents & pipeline</h1>
           <p class="lead">Agents run top to bottom. What an agent <b>produces</b> decides how it is used: a <b>plan</b> waits for your approval, <b>code</b> runs once per repo of the plan and <b>tests</b> once across all of them (each switchable), with checks after them, and a <b>review</b> sends blocking findings back for a fix round.</p></div>
-          <div class="row"><button class="btn" data-action="open-config">${icon('edit')}config.yaml</button><button class="btn primary" data-action="agent-new-open">${icon('plus')}New agent</button></div>
+          <div class="row"><button class="btn" data-action="backup-save" title="Save agents, pipeline and scenarios to a file">${icon('download')}Save backup</button><button class="btn" data-action="backup-restore" title="Bring agents, pipeline and scenarios back from a backup file">${icon('upload')}Restore</button><button class="btn" data-action="open-config">${icon('edit')}config.yaml</button><button class="btn primary" data-action="agent-new-open">${icon('plus')}New agent</button></div>
         </div>
         <div class="card flow-card"><div class="flow-label muted small">A task goes through</div>${outlineHtml(c.outline, colors)}</div>
         ${warningsHtml(c.warnings)}

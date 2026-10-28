@@ -72,6 +72,7 @@ interface TerminalOptions {
   env?: Record<string, string>;
 }
 
+let savedFile: string | undefined;
 const settingsStore: Record<string, unknown> = { claudePath: FAKE, settingSources: ['project', 'local'], askPermissions: false, notifications: 'all', claudeConfigDir: '', workspaceFolder: '', nodePath: '', 'atlassian.site': '', 'atlassian.email': '' };
 const listeners: ((e: ConfigChange) => void)[] = [];
 class EventEmitter<T = void> {
@@ -131,7 +132,9 @@ const vscode = {
     showInformationMessage: async (msg: string) => log('info:', msg),
     showErrorMessage: async (msg: string) => log('error:', msg),
     showTextDocument: async (d: { uri?: FsUri; fsPath?: string }) => log('open', (d.uri || d).fsPath || d),
-    showOpenDialog: async (o?: { canSelectFolders?: boolean }) => (o && o.canSelectFolders ? [{ fsPath: elsewhere }] : undefined),
+    // A file picked for saving is the one offered; opening a file picks the last one saved.
+    showSaveDialog: async (o?: { defaultUri?: FsUri }) => (savedFile = o && o.defaultUri ? o.defaultUri.fsPath : undefined, savedFile ? { fsPath: savedFile } : undefined),
+    showOpenDialog: async (o?: { canSelectFolders?: boolean }) => (o && o.canSelectFolders ? [{ fsPath: elsewhere }] : savedFile ? [{ fsPath: savedFile }] : undefined),
     // A terminal with shellPath runs that process; exitStatus appears when it ends, like VS Code's.
     createTerminal: (o: TerminalOptions) => {
       const t: Terminal = { show() {}, sendText: (x) => log('terminal', o.name, x), dispose() { if (t.proc) t.proc.kill(); }, exitStatus: undefined };
