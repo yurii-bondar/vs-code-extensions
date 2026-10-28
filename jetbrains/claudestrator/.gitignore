@@ -1,0 +1,14 @@
+.gradle/
+build/
+.intellijPlatform/
+.kotlin/
+.idea/
+*.iml
+local.properties
+# signing material
+*.pem
+chain.crt
+private.pem
+private.pem.enc
+sidecar/node_modules/
+sidecar/dist/

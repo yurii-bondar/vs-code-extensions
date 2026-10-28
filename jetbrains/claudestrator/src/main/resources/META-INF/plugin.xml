@@ -1,0 +1,94 @@
+<idea-plugin>
+    <id>bondevn.claudestrator</id>
+    <name>Claudestrator</name>
+    <vendor url="https://github.com/yurii-bondar/vs-code-extensions">Yurii Bondar</vendor>
+
+    <description><![CDATA[
+        <p>A <b>Claude Code</b> agent pipeline inside your IDE: Claudestrator plans a task, waits for your approval,
+        then lets agents write the code and tests in each repository, review it with fix rounds, commit, push once
+        you confirm, and open draft pull requests.</p>
+
+        <ul>
+            <li><b>Plan, approve, build</b>: you stay in control at every checkpoint (plan, red checks, push).</li>
+            <li><b>Several repositories at once</b>, each with its own checks and base branch.</li>
+            <li><b>Readiness check</b> of a ticket against its acceptance criteria, and <b>audits</b> of a project for bugs
+                and bottlenecks.</li>
+            <li><b>Task list</b> grouped by what needs you, status bar with running tasks and Claude usage limits,
+                notifications.</li>
+            <li>The same dashboard and behaviour as the Claudestrator extension for VS Code.</li>
+        </ul>
+
+        <p><b>Requirements:</b> <a href="https://docs.claude.com/en/docs/claude-code">Claude Code</a> CLI, Git, and
+        Node.js 18 or newer on your <code>PATH</code> (or set its path in <i>Settings | Tools | Claudestrator</i>).
+        The GitHub CLI is needed to open pull requests. The IDE must have the bundled browser (JCEF), which every
+        standard JetBrains IDE ships with.</p>
+
+        <p>Claudestrator runs the Claude Code CLI you already have, under your own account. It sends nothing to the
+        plugin author and collects no telemetry.</p>
+    ]]></description>
+
+    <change-notes><![CDATA[First JetBrains release.]]></change-notes>
+
+    <!-- Platform modules only: the plugin loads in WebStorm, IntelliJ IDEA, PyCharm, GoLand and the other IDEs. -->
+    <depends>com.intellij.modules.platform</depends>
+    <!-- The dashboard is a browser page. Since 2026.2 JCEF is a plugin of its own, and its classes are visible only to plugins that say so. -->
+    <depends>com.intellij.modules.jcef</depends>
+    <depends optional="true" config-file="terminal-support.xml">org.jetbrains.plugins.terminal</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="Claudestrator" anchor="left" icon="/icons/toolwindow.svg"
+                    factoryClass="io.github.yuriibondar.claudestrator.ui.TasksToolWindowFactory"/>
+
+        <fileEditorProvider implementation="io.github.yuriibondar.claudestrator.ui.DashboardEditorProvider"/>
+
+        <postStartupActivity implementation="io.github.yuriibondar.claudestrator.StartupActivity"/>
+
+        <applicationService serviceImplementation="io.github.yuriibondar.claudestrator.settings.ClaudestratorSettings"/>
+        <projectService serviceImplementation="io.github.yuriibondar.claudestrator.settings.WorkspaceSettings"/>
+        <projectService serviceImplementation="io.github.yuriibondar.claudestrator.engine.EngineService"/>
+
+        <projectConfigurable parentId="tools" instance="io.github.yuriibondar.claudestrator.settings.ClaudestratorConfigurable"
+                             id="bondevn.claudestrator.settings" displayName="Claudestrator"/>
+
+        <notificationGroup id="Claudestrator" displayType="BALLOON"/>
+        <notificationGroup id="Claudestrator needs you" displayType="STICKY_BALLOON"/>
+
+        <statusBarWidgetFactory id="Claudestrator.Tasks" implementation="io.github.yuriibondar.claudestrator.ui.TasksStatusWidgetFactory"/>
+        <statusBarWidgetFactory id="Claudestrator.Limits" implementation="io.github.yuriibondar.claudestrator.ui.LimitsStatusWidgetFactory"/>
+    </extensions>
+
+    <actions>
+        <group id="Claudestrator.Menu" text="Claudestrator" popup="true" icon="/icons/toolwindow.svg">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <action id="Claudestrator.OpenDashboard" icon="AllIcons.Actions.PreviewDetails" class="io.github.yuriibondar.claudestrator.actions.OpenDashboardAction"
+                    text="Open Dashboard" description="Open the Claudestrator dashboard"/>
+            <action id="Claudestrator.NewTask" icon="AllIcons.General.Add" class="io.github.yuriibondar.claudestrator.actions.NewTaskAction"
+                    text="New Task…" description="Hand a task to a pipeline of Claude Code agents"/>
+            <action id="Claudestrator.CheckReadiness" class="io.github.yuriibondar.claudestrator.actions.CheckReadinessAction"
+                    text="Check a Task's Readiness…" description="Check a ticket against its acceptance criteria"/>
+            <action id="Claudestrator.Audit" class="io.github.yuriibondar.claudestrator.actions.AuditAction"
+                    text="Audit the Project…" description="Audit the project for bugs and bottlenecks"/>
+            <separator/>
+            <action id="Claudestrator.Agents" icon="AllIcons.Actions.Profile" class="io.github.yuriibondar.claudestrator.actions.AgentsAction"
+                    text="Agents &amp; Pipeline"/>
+            <action id="Claudestrator.Repos" class="io.github.yuriibondar.claudestrator.actions.ReposAction"
+                    text="Repositories &amp; Checks"/>
+            <action id="Claudestrator.DashboardSettings" class="io.github.yuriibondar.claudestrator.actions.DashboardSettingsAction"
+                    text="Dashboard Settings"/>
+            <action id="Claudestrator.Setup" class="io.github.yuriibondar.claudestrator.actions.SetupAction"
+                    text="Set Up This Project"/>
+            <action id="Claudestrator.OpenConfig" class="io.github.yuriibondar.claudestrator.actions.OpenConfigAction"
+                    text="Open config.yaml"/>
+            <separator/>
+            <action id="Claudestrator.CheckHealth" class="io.github.yuriibondar.claudestrator.actions.CheckHealthAction"
+                    text="Check Claude Code, Git and GitHub CLI"/>
+            <action id="Claudestrator.Refresh" icon="AllIcons.Actions.Refresh" class="io.github.yuriibondar.claudestrator.actions.RefreshAction"
+                    text="Refresh"/>
+        </group>
+
+        <action id="Claudestrator.NewTaskFromSelection" class="io.github.yuriibondar.claudestrator.actions.NewTaskFromSelectionAction"
+                text="Start a Claudestrator Task from Selection" description="Use the selected text as the task">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>
