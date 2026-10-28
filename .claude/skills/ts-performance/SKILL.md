@@ -8,8 +8,8 @@ description: Use when writing or reviewing performance-sensitive TypeScript/Node
 An extension runs inside the **extension host**, a Node process shared with every other extension in the window. A slow or blocking extension freezes the whole window, not one request. The bottlenecks here are:
 
 - **Activation** — most extensions activate on `onStartupFinished`; everything in `activate()` delays other extensions
-- **Large file scans** — session `.jsonl` transcripts (`claude-ctx-man/src/sessions.js`), task stores and transcripts (`claudestrator/src/core/store.js`) can reach tens of MB
-- **Refresh paths** — `FileSystemWatcher` events and `setInterval` ticks that rebuild tree views (`claudestrator/extension.js`, `claude-ctx-man/extension.js`)
+- **Large file scans** — session `.jsonl` transcripts (`claude-ctx-man/src/sessions.ts`), task stores and transcripts (`claudestrator/src/core/store.ts`) can reach tens of MB
+- **Refresh paths** — `FileSystemWatcher` events and `setInterval` ticks that rebuild tree views (`claudestrator/extension.ts`, `claude-ctx-man/extension.ts`)
 - **Child processes** — `git`, shell and `claude` calls from `src/core/git.js`, `statusline`
 - **Webview messaging** — `postMessage` between the extension and `media/*` scripts
 
