@@ -9,6 +9,7 @@ import { buildPipeline, outline, taskPipeline } from '../src/core/pipeline';
 import * as config from '../src/core/config';
 import { parseStageReport, reportLanguage } from '../src/core/prompt';
 import { guardBash } from '../src/core/guard';
+import { GitRepo } from '../src/core/git';
 import { parseHookRequest } from '../src/core/hookserver';
 import { plain } from '../src/core/gates';
 import { parseInvocation, classifyInput, extractAcceptanceCriteria, adfToText, detectScenario } from '../src/core/intake';
@@ -188,6 +189,26 @@ test('machine: without configured repos a plan may only name plain folders of th
   };
   for (const name of ['api', 'web-app', 'billing_v2', 'repo.js']) assert.ok(planWith(name).ok, name);
   for (const name of ['../other', '/Users/me/dotfiles', 'a/b', '..', '.hidden', 'x..y']) assert.equal(failed(planWith(name)).error.code, 'unknown_repo', name);
+});
+
+test('git: what a task branch publishes does not depend on what is checked out', async () => {
+  const dir = tmp('cs-branch-');
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 'a', GIT_AUTHOR_EMAIL: 'a@b', GIT_COMMITTER_NAME: 'a', GIT_COMMITTER_EMAIL: 'a@b' } });
+  git('init', '-q', '-b', 'main');
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'a\n');
+  git('add', '.');
+  git('commit', '-q', '-m', 'init');
+  git('switch', '-q', '-c', 'feat/x');
+  fs.writeFileSync(path.join(dir, 'b.txt'), 'b\n');
+  git('add', '.');
+  git('commit', '-q', '-m', 'work');
+  git('switch', '-q', 'main');
+  fs.writeFileSync(path.join(dir, 'c.txt'), 'other work on main\n');
+  const repo = new GitRepo(dir);
+  assert.deepEqual(await repo.branchChanges('main', 'feat/x'), ['b.txt'], 'the task branch changes b.txt, though main is checked out');
+  assert.deepEqual(await repo.changedFiles('main'), ['c.txt'], 'HEAD-based diff would have seen only what is on main');
+  assert.deepEqual(await repo.branchChanges('main', 'main'), []);
+  assert.match(git('log', '--format=%s', `${await repo.baseRef('main', 'feat/x')}..feat/x`), /work/);
 });
 
 test('machine: review limit, stop keeps the question, resume asks again', () => {

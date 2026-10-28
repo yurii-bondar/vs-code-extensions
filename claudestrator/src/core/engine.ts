@@ -784,10 +784,15 @@ class Engine extends EventEmitter {
     const config = this.config();
     const subject = commitSubject(s);
     const body = s.source.kind === 'jira' ? `Refs: ${s.taskId}` : '';
+    const branch = branchName(s) as string;
     const committed: string[] = [];
     for (const r of taskRepos(this.workspace, s, config, s.repos.map((x) => x.name))) {
       if (!(await r.git.isRepo())) continue;
       if ((await r.git.dirty()).length) {
+        // The work is committed on the task branch only: another branch checked out meanwhile (main, another task's)
+        // would get it instead.
+        const current = await r.git.branch();
+        if (current !== branch) throw new EngineError('wrong_branch', `${r.name} is on ${current || 'a detached HEAD'}, not the task branch ${branch}; switch back (git switch ${branch}) and try again`);
         await r.git.addAll();
         const c = await r.git.git('commit', '-m', subject, ...(body ? ['-m', body] : []));
         if (c.code !== 0) {
@@ -795,7 +800,7 @@ class Engine extends EventEmitter {
           return;
         }
       }
-      if ((await r.git.changedFiles(r.base)).length) committed.push(r.name);
+      if ((await r.git.branchChanges(r.base, branch)).length) committed.push(r.name);
     }
     this.dispatch(s.taskId, { type: 'committed', repos: committed });
   }
@@ -806,7 +811,7 @@ class Engine extends EventEmitter {
     const taskDir = this.svc.dir(s.taskId);
     const all = taskRepos(this.workspace, s, config, s.repos.map((r) => r.name));
     const repos: TaskRepo[] = [];
-    for (const r of all) if ((await r.git.changedFiles(r.base)).length) repos.push(r);
+    for (const r of all) if ((await r.git.branchChanges(r.base, branch)).length) repos.push(r);
     const prs = { ...s.prs };
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-pr-'));
     const bodyFile = (repo: string): string => {
@@ -820,6 +825,12 @@ class Engine extends EventEmitter {
         this.setLive(s.taskId, { phase: 'publishing', text: `Pushing ${r.name}` });
         const push = await r.git.git('push', '-u', 'origin', branch);
         if (push.code !== 0) throw new EngineError('push_failed', `${r.name}: ${push.stderr.trim()}`);
+        // A retry after a partial failure (or a Stop mid-publish) finds the PR it already opened.
+        const open = await exec('gh', ['pr', 'view', branch, '--json', 'url,state', '--jq', 'select(.state == "OPEN") | .url'], { cwd: r.dir, timeoutMs: 60000 });
+        if (open.code === 0 && /^https?:\/\//.test(open.stdout.trim())) {
+          prs[r.name] = open.stdout.trim();
+          continue;
+        }
         this.setLive(s.taskId, { phase: 'publishing', text: `Opening a draft PR in ${r.name}` });
         const pr = await exec('gh', ['pr', 'create', '--draft', '--base', r.base, '--head', branch, '--title', prTitle(s), '--body-file', bodyFile(r.name)], { cwd: r.dir, timeoutMs: 120000 });
         if (pr.code !== 0) throw new EngineError('pr_failed', `${r.name}: ${pr.stderr.trim() || pr.stdout.trim()}`);
@@ -1017,11 +1028,13 @@ class Engine extends EventEmitter {
         const config = this.config();
         const parts: string[] = [];
         const repos: { name: string; branch: string | null; base: string; files: number; dir: string }[] = [];
+        const branch = branchName(s) as string;
         for (const r of taskRepos(this.workspace, s, config, s.repos.map((x) => x.name))) {
-          const files = await r.git.changedFiles(r.base);
-          const log = await r.git.git('--no-pager', 'log', '--stat', '--format=%h %s', `${await r.git.baseRef(r.base)}..HEAD`);
-          repos.push({ name: r.name, branch: await r.git.branch(), base: r.base, files: files.length, dir: r.dir });
-          parts.push(`${r.name} (${await r.git.branch()} → ${r.base})\n${log.stdout.trim() || 'no commits'}`);
+          // What will be pushed is the task branch, whatever is checked out now.
+          const files = await r.git.branchChanges(r.base, branch);
+          const log = await r.git.git('--no-pager', 'log', '--stat', '--format=%h %s', `${await r.git.baseRef(r.base, branch)}..${branch}`);
+          repos.push({ name: r.name, branch, base: r.base, files: files.length, dir: r.dir });
+          parts.push(`${r.name} (${branch} → ${r.base})\n${log.stdout.trim() || 'no commits'}`);
         }
         return { format: 'log', text: parts.join('\n\n'), repos };
       }
