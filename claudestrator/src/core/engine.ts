@@ -149,6 +149,8 @@ class Engine extends EventEmitter {
   sessions: Map<string, ClaudeSession>;
   running: Set<string>;
   prepared: Set<string>;
+  /** The confirm-push question's context per task, with the checkpoint it was made for (`at`). */
+  pushContext = new Map<string, { at: string; value: CheckpointContext }>();
   lives: Map<string, Live>;
   errors: Map<string, { code: string; message: string; blocked?: BlockedRepo[]; at: string }>;
   permissions: Map<string, { request: PermissionRequest; resolve: (a: PermissionAnswer) => void }>;
@@ -729,6 +731,7 @@ class Engine extends EventEmitter {
         ...(this.home && { home: this.home }),
         task: { taskId, canPush: false },
         agent: true,
+        writeRoots,
         branchOf: branchSync,
         isRepoRoot: (dir) => fs.existsSync(path.join(dir, '.git')),
         readFile: (f) => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null),
@@ -738,8 +741,13 @@ class Engine extends EventEmitter {
     if (WRITE_TOOLS.has(tool)) {
       const target = String(input.file_path || input.notebook_path || input.path || '');
       if (!writeRoots.length) return blocked(`the ${step.agent} stage does not change files`);
+      if (path.resolve(cwd, target).split(path.sep).includes('.git')) return blocked(`${tool} into git metadata (.git) is not allowed; Claudestrator owns git`);
       if (!target || !writeRoots.some((root) => realInside(root, path.resolve(cwd, target)))) return blocked(`${tool} outside ${writeRoots.join(', ')} is not allowed: this stage works only in ${step.repo || 'the task\'s repos'}`);
     }
+    // Claude Code is started with the agent's tools; anything else reaching the hook is refused.
+    const agent = config.agents[step.agent];
+    const given = !agent || !agent.tools || agent.tools.some((t) => t === tool || t.startsWith(`${tool}(`)) || (tool.startsWith('mcp__') && agent.mcp !== false);
+    if (!given) return blocked(`${tool} is not one of the ${step.agent} agent's tools`);
     if (!this.askPermissions()) return { allow: true };
     const requestId = crypto.randomUUID();
     const request: PermissionRequest = { requestId, taskId, agent: step.agent, ...(step.repo && { repo: step.repo }), tool, input: summarizeInput(tool, input), at: Date.now() };
@@ -778,10 +786,15 @@ class Engine extends EventEmitter {
     const config = this.config();
     const subject = commitSubject(s);
     const body = s.source.kind === 'jira' ? `Refs: ${s.taskId}` : '';
+    const branch = branchName(s) as string;
     const committed: string[] = [];
     for (const r of taskRepos(this.workspace, s, config, s.repos.map((x) => x.name))) {
       if (!(await r.git.isRepo())) continue;
       if ((await r.git.dirty()).length) {
+        // The work is committed on the task branch only: another branch checked out meanwhile (main, another task's)
+        // would get it instead.
+        const current = await r.git.branch();
+        if (current !== branch) throw new EngineError('wrong_branch', `${r.name} is on ${current || 'a detached HEAD'}, not the task branch ${branch}; switch back (git switch ${branch}) and try again`);
         await r.git.addAll();
         const c = await r.git.git('commit', '-m', subject, ...(body ? ['-m', body] : []));
         if (c.code !== 0) {
@@ -789,7 +802,7 @@ class Engine extends EventEmitter {
           return;
         }
       }
-      if ((await r.git.changedFiles(r.base)).length) committed.push(r.name);
+      if ((await r.git.branchChanges(r.base, branch)).length) committed.push(r.name);
     }
     this.dispatch(s.taskId, { type: 'committed', repos: committed });
   }
@@ -800,7 +813,7 @@ class Engine extends EventEmitter {
     const taskDir = this.svc.dir(s.taskId);
     const all = taskRepos(this.workspace, s, config, s.repos.map((r) => r.name));
     const repos: TaskRepo[] = [];
-    for (const r of all) if ((await r.git.changedFiles(r.base)).length) repos.push(r);
+    for (const r of all) if ((await r.git.branchChanges(r.base, branch)).length) repos.push(r);
     const prs = { ...s.prs };
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-pr-'));
     const bodyFile = (repo: string): string => {
@@ -814,6 +827,12 @@ class Engine extends EventEmitter {
         this.setLive(s.taskId, { phase: 'publishing', text: `Pushing ${r.name}` });
         const push = await r.git.git('push', '-u', 'origin', branch);
         if (push.code !== 0) throw new EngineError('push_failed', `${r.name}: ${push.stderr.trim()}`);
+        // A retry after a partial failure (or a Stop mid-publish) finds the PR it already opened.
+        const open = await exec('gh', ['pr', 'view', branch, '--json', 'url,state', '--jq', 'select(.state == "OPEN") | .url'], { cwd: r.dir, timeoutMs: 60000 });
+        if (open.code === 0 && /^https?:\/\//.test(open.stdout.trim())) {
+          prs[r.name] = open.stdout.trim();
+          continue;
+        }
         this.setLive(s.taskId, { phase: 'publishing', text: `Opening a draft PR in ${r.name}` });
         const pr = await exec('gh', ['pr', 'create', '--draft', '--base', r.base, '--head', branch, '--title', prTitle(s), '--body-file', bodyFile(r.name)], { cwd: r.dir, timeoutMs: 120000 });
         if (pr.code !== 0) throw new EngineError('pr_failed', `${r.name}: ${pr.stderr.trim() || pr.stdout.trim()}`);
@@ -1008,16 +1027,24 @@ class Engine extends EventEmitter {
         return { format: 'log', text: g ? g.summary : cp.reason || '' };
       }
       case 'confirm-push': {
+        // Several git calls per repo, asked again on every refresh of the task screen; nothing they read changes while
+        // the same question is open.
+        const hit = this.pushContext.get(s.taskId);
+        if (hit && hit.at === cp.at) return hit.value;
         const config = this.config();
         const parts: string[] = [];
         const repos: { name: string; branch: string | null; base: string; files: number; dir: string }[] = [];
+        const branch = branchName(s) as string;
         for (const r of taskRepos(this.workspace, s, config, s.repos.map((x) => x.name))) {
-          const files = await r.git.changedFiles(r.base);
-          const log = await r.git.git('--no-pager', 'log', '--stat', '--format=%h %s', `${await r.git.baseRef(r.base)}..HEAD`);
-          repos.push({ name: r.name, branch: await r.git.branch(), base: r.base, files: files.length, dir: r.dir });
-          parts.push(`${r.name} (${await r.git.branch()} → ${r.base})\n${log.stdout.trim() || 'no commits'}`);
+          // What will be pushed is the task branch, whatever is checked out now.
+          const files = await r.git.branchChanges(r.base, branch);
+          const log = await r.git.git('--no-pager', 'log', '--stat', '--format=%h %s', `${await r.git.baseRef(r.base, branch)}..${branch}`);
+          repos.push({ name: r.name, branch, base: r.base, files: files.length, dir: r.dir });
+          parts.push(`${r.name} (${branch} → ${r.base})\n${log.stdout.trim() || 'no commits'}`);
         }
-        return { format: 'log', text: parts.join('\n\n'), repos };
+        const value: CheckpointContext = { format: 'log', text: parts.join('\n\n'), repos };
+        this.pushContext.set(s.taskId, { at: cp.at, value });
+        return value;
       }
       default:
         return { format: 'log', text: cp.reason || '' };
@@ -1030,6 +1057,7 @@ class Engine extends EventEmitter {
   }
 
   async remove(taskId: string): Promise<void> {
+    this.pushContext.delete(taskId);
     if (this.running.has(taskId)) await this.stop(taskId);
     this.svc.remove(taskId);
     this.errors.delete(taskId);

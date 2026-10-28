@@ -27,6 +27,7 @@ type FoundRepo = import('../src/core/wire').FoundRepo;
 type SuggestedGate = import('../src/core/wire').SuggestedGate;
 type AddedRepo = import('../src/core/wire').AddedRepo;
 type ConfigData = import('../src/core/wire').ConfigData;
+type LibraryView = import('../src/core/wire').LibraryView;
 type AgentView = import('../src/core/wire').AgentView;
 type Effective = import('../src/core/wire').Effective;
 type ReposData = import('../src/core/wire').ReposData;

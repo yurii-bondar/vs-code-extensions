@@ -7,6 +7,10 @@ const decide = (decision: 'allow' | 'deny', reason: string): never => {
   process.exit(0);
 };
 
+// Claude Code kills a hook that runs past its timeout (900 s, see writeHookSettings) and then goes on as if there were
+// no hook. Answer "deny" just before that, so an unanswered question never turns into a pass.
+setTimeout(() => decide('deny', 'Claudestrator did not answer in time'), 870_000).unref();
+
 let input = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (d) => (input += d));

@@ -2,6 +2,7 @@ package io.github.yuriibondar.claudestrator
 
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
+import com.google.gson.JsonPrimitive
 import com.intellij.ide.BrowserUtil
 import com.intellij.notification.Notification
 import com.intellij.notification.NotificationAction
@@ -27,13 +28,20 @@ import java.util.concurrent.ConcurrentHashMap
 internal class Notifier(private val project: Project, private val engine: EngineService) {
     private val permissions = ConcurrentHashMap<String, Notification>()
 
+    /** On the UI thread. */
     fun onEngineEvent(name: String, data: JsonElement?) {
+        // The one event whose data is not an object: the id of a permission answered elsewhere (the dashboard, a stop).
+        if (name == "permissionDone") {
+            (data as? JsonPrimitive)?.takeIf { it.isString }?.asString?.let { permissions.remove(it)?.expire() }
+            return
+        }
         val d = data as? JsonObject ?: return
         val taskId = d.str("taskId")
         val visible = DashboardEditorProvider.isVisible(project)
         when (name) {
             "checkpoint" -> if (ClaudestratorSettings.wants(NotificationKind.NEEDS_YOU) && !visible && taskId != null) {
-                val checkpoint = CHECKPOINT_TITLE[d.obj("checkpoint")?.str("id")] ?: "Your answer"
+                // The sidecar adds the title, from the engine's own table (describe.ts), so the two cannot drift apart.
+                val checkpoint = d.str("checkpointTitle") ?: "Your answer"
                 notify("Claudestrator needs you", "$taskId needs you: $checkpoint", d.str("title"), NotificationType.INFORMATION, "Claudestrator needs you") {
                     addAction(open("Open", taskId))
                 }
@@ -53,7 +61,6 @@ internal class Notifier(private val project: Project, private val engine: Engine
                 }
             }
             "permission" -> permission(d, taskId)
-            "permissionDone" -> (data.asJsonPrimitive?.takeIf { it.isString })?.asString?.let { permissions.remove(it)?.expire() }
         }
     }
 
@@ -93,17 +100,5 @@ internal class Notifier(private val project: Project, private val engine: Engine
         n.configure()
         n.notify(project)
         return n
-    }
-
-    private companion object {
-        /** `claudestrator/src/core/describe.ts`, CHECKPOINT_TITLE. */
-        val CHECKPOINT_TITLE = mapOf(
-            "approve-plan" to "Plan approval",
-            "gate-failure" to "Checks are red",
-            "agent-failure" to "An agent failed",
-            "review-limit" to "Review rounds used up",
-            "hook-failure" to "Commit failed",
-            "confirm-push" to "Confirm push",
-        )
     }
 }

@@ -15,6 +15,26 @@ interface ToolCall {
 type Decision = { allow: boolean; reason?: string };
 type Decide = (call: ToolCall) => Promise<Decision> | Decision;
 
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/**
+ * A line the hook sends: `{ token, payload: { tool_name, tool_input, cwd } }`, as Claude Code hands it to the hook.
+ * Null when it is not that shape: the server then denies, so a malformed call never passes as an unknown tool would.
+ */
+function parseHookRequest(line: string): { token: string; call: ToolCall } | null {
+  let data: unknown;
+  try {
+    data = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (!isRecord(data) || typeof data.token !== 'string' || !isRecord(data.payload)) return null;
+  const { tool_name: tool, tool_input: input, cwd } = data.payload;
+  if (typeof tool !== 'string' || !tool) return null;
+  if (input !== undefined && !isRecord(input)) return null;
+  return { token: data.token, call: { tool, input: input ?? {}, cwd: typeof cwd === 'string' ? cwd : '' } };
+}
+
 class HookServer {
   sessions: Map<string, Decide>;
   address: string;
@@ -71,10 +91,11 @@ class HookServer {
       buf = '';
       let reply: Decision;
       try {
-        const { token, payload } = JSON.parse(line) as { token: string; payload: { tool_name: string; tool_input?: Record<string, unknown>; cwd: string } };
-        const decide = this.sessions.get(token);
-        if (!decide) reply = { allow: false, reason: 'this agent session is no longer active in Claudestrator' };
-        else reply = await decide({ tool: payload.tool_name, input: payload.tool_input || {}, cwd: payload.cwd });
+        const request = parseHookRequest(line);
+        const decide = request && this.sessions.get(request.token);
+        if (!request) reply = { allow: false, reason: 'Claudestrator could not read the tool call' };
+        else if (!decide) reply = { allow: false, reason: 'this agent session is no longer active in Claudestrator' };
+        else reply = await decide(request.call);
       } catch (e) {
         reply = { allow: false, reason: `Claudestrator error: ${(e as Error).message}` };
       }
@@ -104,4 +125,4 @@ function writeHookSettings(file: string, { node, script }: { node?: string | nul
 }
 
 export type { Decide, Decision, ToolCall };
-export { HookServer, writeHookSettings };
+export { HookServer, writeHookSettings, parseHookRequest };

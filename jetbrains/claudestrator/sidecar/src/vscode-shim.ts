@@ -65,9 +65,9 @@ const workspace = {
     return {
       get: <T>(key: string): T | undefined => lookup(full(key)) as T | undefined,
       update: async (key: string, value: unknown): Promise<void> => {
-        const next = { ...settings, [full(key)]: value };
         await request('setSetting', { key: full(key), value });
-        setSettings(next, [full(key)]);
+        // Taken after the round trip: a change the IDE pushed meanwhile is kept, not overwritten with an old copy.
+        setSettings({ ...settings, [full(key)]: value }, [full(key)]);
       },
     };
   },
@@ -106,32 +106,64 @@ function globToRegExp(glob: string): RegExp {
   return new RegExp(`^${body}$`);
 }
 
+/** The folders of a glob before its first wildcard: `.orch/tasks` for the task logs, `.claudestrator` for the config. */
+function staticPrefix(glob: string): string {
+  const segments = glob.split('/');
+  const wild = segments.findIndex((seg) => /[*?[{]/.test(seg));
+  return segments.slice(0, wild === -1 ? segments.length - 1 : wild).join('/');
+}
+
+/** How often a folder that does not exist yet (`.orch/tasks` before the first task) is looked for. */
+const APPEAR_POLL_MS = 2000;
+
+/**
+ * Watches only the folder the pattern can match in, not the whole workspace: a recursive watch of the workspace would
+ * walk node_modules, .git and the agents' worktrees (on Linux, one inotify watch per folder). Recursive watching works
+ * on macOS, Windows and, from Node 20 (the minimum, see main.ts), Linux.
+ */
 function watchFiles(pattern: RelativePattern): FileSystemWatcher {
   const changed = new EventEmitter<Uri>();
   const created = new EventEmitter<Uri>();
   const deleted = new EventEmitter<Uri>();
-  const match = globToRegExp(pattern.pattern.replace(/\\/g, '/'));
+  const glob = pattern.pattern.replace(/\\/g, '/');
+  const match = globToRegExp(glob);
+  const prefix = staticPrefix(glob);
+  const dir = path.join(pattern.base, prefix);
   let watcher: fs.FSWatcher | undefined;
-  // Recursive watching is native on macOS and Windows and, since Node 20, on Linux.
-  try {
-    watcher = fs.watch(pattern.base, { recursive: true, persistent: false }, (_event, name) => {
-      if (!name) return;
-      const rel = name.toString().replace(/\\/g, '/');
-      if (!match.test(rel)) return;
-      const full = path.join(pattern.base, rel);
-      const uri = Uri.file(full);
-      // fs.watch does not say which it was; look.
-      fs.stat(full, (err) => (err ? deleted.fire(uri) : changed.fire(uri)));
-    });
-    watcher.on('error', () => undefined);
-  } catch (e) {
-    console.error('[sidecar] cannot watch', pattern.base, (e as Error).message);
+  let poll: NodeJS.Timeout | undefined;
+
+  const start = (): void => {
+    try {
+      watcher = fs.watch(dir, { recursive: true, persistent: false }, (_event, name) => {
+        if (!name) return;
+        const rel = [prefix, name.toString().replace(/\\/g, '/')].filter(Boolean).join('/');
+        if (!match.test(rel)) return;
+        const full = path.join(pattern.base, rel);
+        const uri = Uri.file(full);
+        // fs.watch does not say which it was; look. The engine treats a new file as a changed one.
+        fs.stat(full, (err) => (err ? deleted.fire(uri) : changed.fire(uri)));
+      });
+      watcher.on('error', (e) => console.error('[sidecar] watching', dir, 'failed:', e.message));
+    } catch (e) {
+      console.error('[sidecar] cannot watch', dir, (e as Error).message);
+    }
+  };
+  if (fs.existsSync(dir)) start();
+  else {
+    poll = setInterval(() => {
+      if (!fs.existsSync(dir)) return;
+      clearInterval(poll);
+      poll = undefined;
+      start();
+    }, APPEAR_POLL_MS);
+    poll.unref();
   }
   return {
     onDidChange: changed.event,
     onDidCreate: created.event,
     onDidDelete: deleted.event,
     dispose: () => {
+      if (poll) clearInterval(poll);
       watcher?.close();
       [changed, created, deleted].forEach((e) => e.dispose());
     },
@@ -159,6 +191,13 @@ interface OpenDialogOptions {
   canSelectMany?: boolean;
   defaultUri?: Uri;
   openLabel?: string;
+  title?: string;
+  filters?: Record<string, string[]>;
+}
+
+interface SaveDialogOptions {
+  defaultUri?: Uri;
+  saveLabel?: string;
   title?: string;
   filters?: Record<string, string[]>;
 }
@@ -199,9 +238,10 @@ class Terminal {
     void request('terminalSend', { id: this.id, text: withEnv(text, this.options.env) }).catch(() => undefined);
   }
 
+  /** As in VS Code, a disposed terminal is a closed one: `onDidCloseTerminal` fires (the engine waits for it). */
   dispose(): void {
     void request('terminalClose', { id: this.id }).catch(() => undefined);
-    terminals.delete(this.id);
+    terminalClosed(this.id, undefined);
   }
 }
 
@@ -235,6 +275,22 @@ interface Webview {
   onDidReceiveMessage: EventEmitter<unknown>['event'];
 }
 
+/** False while a panel is made for a dashboard the IDE already shows (after an engine restart): nothing to bring forward. */
+let revealPanels = true;
+
+function quietly<T>(fn: () => T): T {
+  revealPanels = false;
+  try {
+    return fn();
+  } finally {
+    revealPanels = true;
+  }
+}
+
+const revealDashboard = (): void => {
+  if (revealPanels) send({ type: 'revealDashboard' });
+};
+
 /** What the engine's DashboardPanel needs of a webview panel; the IDE shows the page and relays messages. */
 function createWebviewPanel(): unknown {
   const disposed = new EventEmitter<void>();
@@ -252,7 +308,7 @@ function createWebviewPanel(): unknown {
     },
     onDidReceiveMessage: received.event,
   };
-  send({ type: 'revealDashboard' });
+  revealDashboard();
   const panel = {
     webview,
     visible: true,
@@ -261,7 +317,7 @@ function createWebviewPanel(): unknown {
     iconPath: undefined as unknown,
     onDidDispose: disposed.event,
     onDidChangeViewState: viewState.event,
-    reveal: () => send({ type: 'revealDashboard' }),
+    reveal: revealDashboard,
     dispose: () => disposed.fire(),
   };
   panelDisposed = () => {
@@ -289,6 +345,10 @@ const window = {
   showOpenDialog: async (options: OpenDialogOptions = {}): Promise<Uri[] | undefined> => {
     const picked = await request<string[] | undefined>('openDialog', { ...options, defaultPath: options.defaultUri?.fsPath });
     return picked?.map(Uri.file);
+  },
+  showSaveDialog: async (options: SaveDialogOptions = {}): Promise<Uri | undefined> => {
+    const picked = await request<string | null>('saveDialog', { title: options.title, saveLabel: options.saveLabel, defaultPath: options.defaultUri?.fsPath, filters: options.filters });
+    return picked ? Uri.file(picked) : undefined;
   },
   createTerminal: (options: TerminalOptions): Terminal => new Terminal(options),
   onDidCloseTerminal: closeListeners.event,
@@ -406,6 +466,7 @@ export {
   setWorkspaceFolders,
   deliverPageMessage,
   closeDashboard,
+  quietly,
   terminalClosed,
 };
 export type { ExtensionContext };

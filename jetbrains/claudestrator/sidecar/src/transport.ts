@@ -56,7 +56,22 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   handlers.forEach((fn) => fn(msg));
 });
 
-// The plugin closed its end: nothing left to serve, and the engine's children must not outlive it.
-process.stdin.on('end', () => process.exit(0));
+/** What runs before the process exits; main.ts sets it to stop the engine's agents. */
+let beforeExit: () => Promise<void> = async () => undefined;
+/** Long enough for agents to stop cleanly, short enough not to hold up an IDE that is quitting. */
+const EXIT_GRACE_MS = 5000;
 
-export { send, request, onMessage };
+/** Runs `beforeExit`, for at most EXIT_GRACE_MS, then exits. */
+function exitCleanly(): void {
+  const timeout = new Promise<void>((resolve) => setTimeout(resolve, EXIT_GRACE_MS).unref());
+  void Promise.race([beforeExit().catch((e: Error) => console.error('[sidecar] stopping failed', e.message)), timeout]).finally(() => process.exit(0));
+}
+
+function onBeforeExit(fn: () => Promise<void>): void {
+  beforeExit = fn;
+}
+
+// The plugin closed its end (the IDE quit, or killed us): the engine's children must not outlive it.
+process.stdin.on('end', exitCleanly);
+
+export { send, request, onMessage, onBeforeExit, exitCleanly };

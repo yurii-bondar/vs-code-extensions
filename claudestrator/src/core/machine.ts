@@ -1,6 +1,6 @@
 // The task state machine. Pure: the same events always give the same state, and an illegal
 // event (a skipped approval, an extra review round, a push before it was confirmed) is rejected.
-import { CHECKPOINT_OPTIONS, INFO_EVENTS, JIRA_ONLY_OPTIONS, isBlocking } from './protocol';
+import { CHECKPOINT_OPTIONS, JIRA_ONLY_OPTIONS, isBlocking, isInfoEvent } from './protocol';
 import { onRepos } from './pipeline';
 import type { Checkpoint, CheckpointId, Finding, NextMode, Output, OrchEvent, PlanRepo, Stage, Step, StepRef, TaskState, Transition } from './types';
 
@@ -15,7 +15,7 @@ const describe = (s: StepRef): string => (s.repo ? `${s.agent} @ ${s.repo}` : s.
 const clone = <T>(v: T): T => (typeof structuredClone === 'function' ? structuredClone(v) : JSON.parse(JSON.stringify(v)));
 
 function transition(state: TaskState | null, event: OrchEvent): Transition {
-  if (INFO_EVENTS.has(event.type)) return state ? ok(state) : fail('no_task', 'the first event must be task_created');
+  if (isInfoEvent(event)) return state ? ok(state) : fail('no_task', 'the first event must be task_created');
   if (event.type === 'task_created') {
     if (state) return fail('already_created', `task ${state.taskId} already exists`);
     return ok(created(event));
@@ -73,8 +73,12 @@ function transition(state: TaskState | null, event: OrchEvent): Transition {
       s.prs = { ...s.prs, ...event.prs };
       finish(s, 'published');
       return ok(s);
+    default: {
+      // A new event type must be handled above; the compiler says so here.
+      const unhandled: never = event;
+      return fail('unknown_event', `unhandled event ${(unhandled as { type: string }).type}`);
+    }
   }
-  return fail('unknown_event', `unhandled event ${(event as { type: string }).type}`);
 }
 
 /** Folds a whole event log. A log that does not replay is corrupt, so this throws. */
@@ -131,9 +135,14 @@ function created(e: Ev<'task_created'>): TaskState {
   };
 }
 
+/**
+ * Repos a plan names that this task may not touch: with repos configured, any other; without, anything that is not a
+ * plain folder name of the workspace (`../other`, `/Users/me/dotfiles`), since the name becomes the path agents write in.
+ */
 function unknownRepos(s: TaskState, repos: PlanRepo[]): string[] {
-  if (s.knownRepos.length === 0) return [];
-  return repos.map((r) => r.name).filter((n) => !s.knownRepos.includes(n));
+  const names = repos.map((r) => r.name);
+  if (s.knownRepos.length === 0) return names.filter((n) => !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(n) || n.includes('..'));
+  return names.filter((n) => !s.knownRepos.includes(n));
 }
 
 function intakeCompleted(s: TaskState, e: Ev<'intake_completed'>): Transition {

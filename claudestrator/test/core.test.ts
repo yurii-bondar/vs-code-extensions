@@ -7,8 +7,12 @@ import * as path from 'path';
 import { transition, replay, nextAction, passSteps, stepRepos, editableFrom } from '../src/core/machine';
 import { buildPipeline, outline, taskPipeline } from '../src/core/pipeline';
 import * as config from '../src/core/config';
+import * as backups from '../src/core/backup';
+import * as libraries from '../src/core/library';
 import { parseStageReport, reportLanguage } from '../src/core/prompt';
 import { guardBash } from '../src/core/guard';
+import { GitRepo } from '../src/core/git';
+import { parseHookRequest } from '../src/core/hookserver';
 import { plain } from '../src/core/gates';
 import { parseInvocation, classifyInput, extractAcceptanceCriteria, adfToText, detectScenario } from '../src/core/intake';
 import { TaskService } from '../src/core/store';
@@ -17,9 +21,9 @@ import { buildArgs, limitsOf } from '../src/core/runner';
 import { Engine } from '../src/core/engine';
 import { resolveDefaults, effectiveFor, modelName } from '../src/core/defaults';
 import * as mcp from '../src/core/mcp';
-import { reposFromFolders } from '../src/core/setup';
+import { reposFromFolders, repoLayerOf } from '../src/core/setup';
 import { execFileSync } from 'child_process';
-import { parseReadiness, parseAudit } from '../src/core/protocol';
+import { parseReadiness, parseAudit, validateSetting } from '../src/core/protocol';
 import { renderReport, jiraText } from '../src/core/report';
 import type { Agent, Config, EventBody, EventOf, OrchEvent, Output, PlanMeta, PlanRepo, Source, Spec, StoredPipeline, TaskState } from '../src/core/types';
 import type { GuardContext, GuardVerdict } from '../src/core/guard';
@@ -179,6 +183,36 @@ test('machine: plan → approval → per-repo work → review fix round → comm
   assert.equal(s!.outcome, 'published');
 });
 
+test('machine: without configured repos a plan may only name plain folders of the workspace', () => {
+  const { pipeline } = defaultPipeline();
+  const planWith = (name: string) => {
+    const s = rpl(timed([createdEvent(pipeline, { knownRepos: [] }), { type: 'intake_completed', spec }, { type: 'stage_started', agent: 'planner' }]));
+    return tr(s, { type: 'stage_completed', agent: 'planner', artifact: 'p', plan: { ...PLAN, repos: [{ name, mode: 'full' }] }, at: at(50) });
+  };
+  for (const name of ['api', 'web-app', 'billing_v2', 'repo.js']) assert.ok(planWith(name).ok, name);
+  for (const name of ['../other', '/Users/me/dotfiles', 'a/b', '..', '.hidden', 'x..y']) assert.equal(failed(planWith(name)).error.code, 'unknown_repo', name);
+});
+
+test('git: what a task branch publishes does not depend on what is checked out', async () => {
+  const dir = tmp('cs-branch-');
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 'a', GIT_AUTHOR_EMAIL: 'a@b', GIT_COMMITTER_NAME: 'a', GIT_COMMITTER_EMAIL: 'a@b' } });
+  git('init', '-q', '-b', 'main');
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'a\n');
+  git('add', '.');
+  git('commit', '-q', '-m', 'init');
+  git('switch', '-q', '-c', 'feat/x');
+  fs.writeFileSync(path.join(dir, 'b.txt'), 'b\n');
+  git('add', '.');
+  git('commit', '-q', '-m', 'work');
+  git('switch', '-q', 'main');
+  fs.writeFileSync(path.join(dir, 'c.txt'), 'other work on main\n');
+  const repo = new GitRepo(dir);
+  assert.deepEqual(await repo.branchChanges('main', 'feat/x'), ['b.txt'], 'the task branch changes b.txt, though main is checked out');
+  assert.deepEqual(await repo.changedFiles('main'), ['c.txt'], 'HEAD-based diff would have seen only what is on main');
+  assert.deepEqual(await repo.branchChanges('main', 'main'), []);
+  assert.match(git('log', '--format=%s', `${await repo.baseRef('main', 'feat/x')}..feat/x`), /work/);
+});
+
 test('machine: review limit, stop keeps the question, resume asks again', () => {
   const { pipeline } = defaultPipeline();
   const events: EventBody[] = [createdEvent(pipeline, { knownRepos: [] }), { type: 'intake_completed', spec }, { type: 'stage_started', agent: 'planner' }, { type: 'stage_completed', agent: 'planner', artifact: 'p', plan: { ...PLAN, repos: [{ name: 'api', mode: 'full' }] } }];
@@ -317,6 +351,139 @@ test('reports: plan and verdict blocks are validated, nulls tolerated', () => {
   const v = failed(report('verdict', '```json\n{"status":"approved","summary":"s","findings":[{"severity":"major","problem":"p","line":null}]}\n```'));
   assert.match(v.error, /changes_requested exactly when/);
   assert.ok(report('code', 'anything').ok);
+});
+
+test('guard: a command is recognised behind paths, shell keywords, wrappers, eval, sh -lc and find -exec', () => {
+  const policy = { protectedBranches: ['main'], draftPrsOnly: true, forbidAiAttribution: false, allowNoVerify: false };
+  const ctx: GuardContext = { policy, cwd: '/ws/api', workspace: '/ws', home: '/home/u', agent: true, task: { taskId: 'T', canPush: false }, branchOf: () => 'feat/x', isRepoRoot: (d) => d === '/ws/api', readFile: () => null };
+  const refused = [
+    '/usr/bin/git push --force origin main',
+    'if true; then git push --force; fi',
+    'for b in a; do git push -f; done',
+    '{ git push -f; }',
+    '! git push -f',
+    'xargs git push -f',
+    'xargs -n 1 -I {} git push -f',
+    'timeout 60 git push -f',
+    'timeout -s KILL 60 git push -f',
+    'nice git push -f',
+    'nice -n 10 git push -f',
+    'env -i git push -f',
+    'env -u HOME FOO=1 git push -f',
+    'stdbuf -o L git push -f',
+    'eval "git push -f"',
+    'bash -lc "git push -f"',
+    'sh -ec "git push -f"',
+    'zsh -xc "git push -f"',
+    'git \\\n  push -f',
+    'echo "<<EOF"\ngit push -f',
+    'git -c alias.p="push --force" p origin main',
+    'git -c core.hooksPath=/dev/null status',
+    'git config core.hooksPath /dev/null',
+    'git config alias.p "push --force"',
+    'git p origin main',
+    'git remote set-url origin https://evil.example/x.git',
+    'git remote add evil https://evil.example/x.git',
+    'gh api --method=POST repos/o/r/issues',
+    'gh api -XPOST repos/o/r/issues',
+    'gh api repos/o/r/issues -f title=x',
+    'gh api repos/o/r/issues --input body.json',
+    'gh api -Ftitle=x repos/o/r/issues',
+    '/bin/rm -rf /home/u',
+    'D=/home/u; rm -rf $D',
+    'rm -rf "$TARGET"',
+    'rm -rf `pwd`/..',
+    'find /home/u -delete',
+    'find / -name x -delete',
+    'find . -exec git push -f {} \\;',
+    'find . -execdir rm -rf /home/u {} +',
+    'echo "$(git push -f)"',
+    'echo "`git push -f`"',
+    'X=$(git push -f)',
+  ];
+  for (const command of refused) assert.equal(guard(command, ctx).allow, false, `should be refused: ${command}`);
+
+  // What agents do all day keeps working.
+  const allowed = [
+    'git status',
+    'git diff main...HEAD -- src',
+    'git log --oneline -20',
+    'git add -A',
+    'git show HEAD:package.json',
+    'git config --get user.name',
+    'git config --list',
+    'git remote -v',
+    'git branch --show-current',
+    'npm test',
+    'timeout 600 npm test',
+    'nice -n 5 npm run lint',
+    'env CI=1 npm test',
+    'bash -lc "npm run lint && npm test"',
+    'if [ -f package.json ]; then npm ci; fi',
+    'find . -name "*.ts" -exec grep -l foo {} \\;',
+    'find . -name "*.log" -delete',
+    'ls | xargs -n 1 echo',
+    'gh pr view 12',
+    'gh api repos/o/r/pulls',
+    'gh api -X GET repos/o/r/pulls',
+    'rm -rf node_modules dist',
+    'rm -rf /tmp/build-cache',
+    'echo "git push --force"',
+    'cat <<EOF\ngit push -f\nEOF',
+  ];
+  for (const command of allowed) assert.equal(guard(command, ctx).allow, true, `should be allowed: ${command}`);
+});
+
+test('guard: an agent writes files only where its stage works or in a temp folder, never into .git', () => {
+  const policy = { protectedBranches: ['main'], draftPrsOnly: true, forbidAiAttribution: false, allowNoVerify: false };
+  const base: GuardContext = { policy, cwd: '/ws/api', workspace: '/ws', home: '/home/u', agent: true, task: { taskId: 'T', canPush: false }, branchOf: () => 'feat/x', isRepoRoot: (d) => d === '/ws/api' || d === '/ws/web', readFile: () => null };
+  const developer = { ...base, writeRoots: ['/ws/api'] };
+  const reviewer = { ...base, writeRoots: [] };
+  const check = (ctx: GuardContext, list: string[], allowed: boolean): void => {
+    for (const command of list) assert.equal(guard(command, ctx).allow, allowed, `${allowed ? 'should be allowed' : 'should be refused'} (${ctx.writeRoots!.length ? 'developer' : 'reviewer'}): ${command}`);
+  };
+  check(developer, [
+    'echo x >> /home/u/.zshrc',
+    'echo x>/ws/web/a.ts',
+    'sed -i "s/a/b/" /ws/web/x.ts',
+    'perl -pi -e "s/a/b/" /ws/web/x.ts',
+    'cp a.ts /ws/web/a.ts',
+    'cp -t /ws/web a.ts',
+    'mv /ws/api/a.ts /home/u/a.ts',
+    'touch /ws/web/x',
+    'mkdir -p /home/u/bin',
+    'ls | tee /home/u/list.txt',
+    'echo x > "$OUT"',
+    'dd if=/dev/zero of=/home/u/big bs=1 count=1',
+    'cat > .git/hooks/pre-push',
+    'echo x > /ws/api/.git/config',
+    'bash -c "echo x >> ~/.profile"',
+  ], false);
+  check(developer, [
+    'echo x > out.txt',
+    'echo x > /ws/api/src/new.ts',
+    'npm test > /tmp/log.txt 2>&1',
+    'npm test 2>/dev/null',
+    'npm test >&2',
+    'sed -i "s/a/b/" src/x.ts',
+    'sed -i.bak -e "s/a/b/" src/x.ts',
+    'cp src/a.ts src/b.ts',
+    'mkdir -p src/new && touch src/new/index.ts',
+    'ls 2>&1 | tee /tmp/x',
+    'echo "a > b"',
+    'git diff > /tmp/patch.diff',
+  ], true);
+  check(reviewer, ['sed -i "s/a/b/" src/x.ts', 'echo x > notes.md', 'cp a.ts b.ts', 'rm src/x.ts'], false);
+  check(reviewer, ['npm test', 'cat src/x.ts | grep foo', 'echo x > /tmp/notes.md', 'git log > /tmp/log'], true);
+});
+
+test('hook: a tool call that is not in the expected shape is refused, never passed as an unknown tool', () => {
+  const ok = parseHookRequest(JSON.stringify({ token: 't', payload: { tool_name: 'Bash', tool_input: { command: 'ls' }, cwd: '/ws' } }));
+  assert.deepEqual(ok, { token: 't', call: { tool: 'Bash', input: { command: 'ls' }, cwd: '/ws' } });
+  assert.deepEqual(parseHookRequest(JSON.stringify({ token: 't', payload: { tool_name: 'Read' } }))!.call, { tool: 'Read', input: {}, cwd: '' });
+  for (const bad of ['', 'not json', '[]', '{}', '{"token":"t"}', '{"token":"t","payload":{}}', '{"token":"t","payload":{"tool_name":""}}', '{"token":"t","payload":{"tool_name":5}}', '{"token":1,"payload":{"tool_name":"Bash"}}', '{"token":"t","payload":{"tool_name":"Bash","tool_input":"rm -rf /"}}']) {
+    assert.equal(parseHookRequest(bad), null, bad);
+  }
 });
 
 test('guard: agents never touch git history, destructive commands are refused', () => {
@@ -703,7 +870,7 @@ test('pipeline: runs switches a code or tests agent between once per repo and on
 test('scenarios: custom scenarios with their own agents, models and effort; built-in ones can be removed', () => {
   const hotfix: NonNullable<ConfigLayer['scenarios']>[string] = { label: 'Hotfix', description: 'Code and a quick review', agents: ['developer', { agent: 'reviewer', model: 'sonnet', effort: 'low' }] };
   const r = passed(resolve([config.builtinLayer(), layer({ scenarios: { hotfix, 'deep-audit': { agents: [{ agent: 'auditor', effort: 'max' }] }, readiness: false } })]));
-  assert.deepEqual(r.config.custom.hotfix, { id: 'hotfix', label: 'Hotfix', description: 'Code and a quick review', kind: 'deliver', agents: [{ name: 'developer' }, { name: 'reviewer', model: 'sonnet', effort: 'low' }] });
+  assert.deepEqual(r.config.custom.hotfix, { id: 'hotfix', label: 'Hotfix', description: 'Code and a quick review', kind: 'deliver', agents: [{ name: 'developer' }, { name: 'reviewer', model: 'sonnet', effort: 'low' }], source: 'project' });
   assert.equal(r.config.custom['deep-audit']!.kind, 'audit', 'the kind follows from the agents');
   assert.deepEqual(r.config.removedScenarios, ['readiness']);
   assert.deepEqual(r.config.scenarios.readiness, []);
@@ -744,4 +911,356 @@ test('scenarios: custom scenarios with their own agents, models and effort; buil
   assert.deepEqual(after.config.removedScenarios, []);
   config.removeScenario(ws, 'quick-fix');
   assert.deepEqual(Object.keys(passed(loadCfg({ workspace: ws, home: tmp('cs-h-') })).config.custom), []);
+});
+
+test('config edits from the dashboard: new scenarios and agents, kept only when the config still works', () => {
+  const ws = tmp('cs-edit-');
+  const home = tmp('cs-edit-h-');
+  const resolved = () => passed(loadCfg({ workspace: ws, home })).config;
+
+  // A scenario is named after its label; taken and reserved names get a number, labels stay unique.
+  assert.equal(config.saveCustomScenario({ workspace: ws, home, label: 'Quick fix', agents: [{ name: 'developer' }] }), 'quick-fix');
+  assert.equal(config.saveCustomScenario({ workspace: ws, home, label: 'Quick-fix!' }), 'quick-fix-2');
+  assert.equal(config.saveCustomScenario({ workspace: ws, home, label: 'Audit' }), 'audit-2', 'a built-in name is not taken');
+  assert.equal(config.saveCustomScenario({ workspace: ws, home, label: 'Перевірка' }), 'scenario', 'no Latin letters: a plain name');
+  assert.throws(() => config.saveCustomScenario({ workspace: ws, home, label: 'quick fix' }), /already exists/);
+  assert.throws(() => config.saveCustomScenario({ workspace: ws, home, label: '  ' }), /Give the scenario a name/);
+  assert.throws(() => config.saveCustomScenario({ workspace: ws, home, id: 'nope', label: 'X' }), /no scenario "nope"/);
+  assert.equal(config.saveCustomScenario({ workspace: ws, home, id: 'quick-fix', label: 'Quick fix', description: ' d ', agents: [{ name: 'developer' }, { name: 'reviewer', effort: 'low' }] }), 'quick-fix');
+  assert.deepEqual(resolved().custom['quick-fix']!.agents, [{ name: 'developer' }, { name: 'reviewer', effort: 'low' }]);
+
+  // A change that would break the config is undone, with the problem that names this scenario.
+  const before = fs.readFileSync(config.projectConfigFile(ws), 'utf8');
+  assert.throws(() => config.saveCustomScenario({ workspace: ws, home, id: 'quick-fix', label: 'Quick fix', agents: [{ name: 'developer' }, { name: 'auditor' }] }), /quick-fix.*mixes/);
+  assert.equal(fs.readFileSync(config.projectConfigFile(ws), 'utf8'), before);
+
+  // An agent based on another runs right after it, with its own instructions file.
+  const file = config.addAgent({ workspace: ws, home, name: 'security-reviewer', base: 'developer', description: 'Checks for injection' });
+  assert.equal(file, path.join(ws, config.CONFIG_DIR, config.PROMPTS_DIR, 'security-reviewer.md'));
+  assert.match(fs.readFileSync(file, 'utf8'), /Added to the instructions of "developer"/);
+  assert.deepEqual(resolved().pipeline, ['planner', 'developer', 'security-reviewer', 'tester', 'reviewer']);
+  // One that writes a readiness report joins that scenario, not the pipeline.
+  // Without a description an agent of its own would break the config: the old panel left it so, this undoes it.
+  assert.throws(() => config.addAgent({ workspace: ws, home, name: 'qa-check', output: 'readiness' }), /needs a description/);
+  assert.equal(fs.existsSync(path.join(ws, config.CONFIG_DIR, config.PROMPTS_DIR, 'qa-check.md')), false);
+  config.addAgent({ workspace: ws, home, name: 'qa-check', output: 'readiness', description: 'Checks QA notes' });
+  assert.deepEqual(resolved().scenarios.readiness, ['verifier', 'qa-check']);
+  assert.ok(!resolved().pipeline.includes('qa-check'));
+  assert.throws(() => config.addAgent({ workspace: ws, home, name: 'Bad Name' }), /lowercase/);
+  assert.throws(() => config.addAgent({ workspace: ws, home, name: 'developer' }), /already exists/);
+  // Based on an agent that does not exist: nothing is left behind, not even the instructions file.
+  assert.throws(() => config.addAgent({ workspace: ws, home, name: 'ghost', base: 'not-here' }));
+  assert.equal(fs.existsSync(path.join(ws, config.CONFIG_DIR, config.PROMPTS_DIR, 'ghost.md')), false);
+  assert.ok(!resolved().agents.ghost);
+});
+
+test('setup: a picked repo is written with only what differs from the defaults; settings are checked by shape', () => {
+  assert.deepEqual(repoLayerOf({ name: 'api', path: 'api' }), {});
+  assert.deepEqual(repoLayerOf({ name: 'api', path: 'services/api', role: 'REST API', baseBranch: 'develop', gates: [{ name: 'lint', cmd: 'npm run lint' }] }), { role: 'REST API', path: 'services/api', baseBranch: 'develop', gates: [{ name: 'lint', cmd: 'npm run lint' }] });
+  assert.deepEqual(repoLayerOf({ name: 'api', path: 'api', baseBranch: 'develop', gates: [] }, 'develop'), {}, 'the workspace base branch is the default');
+
+  assert.deepEqual(validateSetting('notifications', 'needsYou'), []);
+  assert.deepEqual(validateSetting('settingSources', ['project', 'local']), []);
+  assert.deepEqual(validateSetting('askPermissions', true), []);
+  assert.equal(validateSetting('notifications', 'loud').length, 1);
+  assert.equal(validateSetting('settingSources', ['everything']).length, 1);
+  assert.equal(validateSetting('askPermissions', 'yes').length, 1);
+  assert.equal(validateSetting('claudePath', { evil: true }).length, 1);
+  assert.match(validateSetting('constructor', 'x')[0]!, /unknown setting/, 'nothing reached through the prototype');
+  assert.match(validateSetting('editor.fontSize', 30)[0]!, /unknown setting/);
+});
+
+/** A library folder: one agent of its own with its instructions in prompts/, and a scenario that runs it. */
+function securityLibrary(dir: string = tmp('cs-lib-')): string {
+  fs.mkdirSync(path.join(dir, 'prompts'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'prompts', 'security.md'), 'Look for injection first.\n');
+  fs.writeFileSync(path.join(dir, 'library.yaml'), [
+    'agents:',
+    '  security-reviewer:',
+    '    extends: reviewer',
+    '    description: Reviews for security',
+    '    instructions: { mode: append, file: ./prompts/security.md }',
+    'scenarios:',
+    '  secure-delivery:',
+    '    label: Secure delivery',
+    '    agents: [planner, developer, security-reviewer]',
+    '',
+  ].join('\n'));
+  return dir;
+}
+
+const userConfig = (home: string, text: string): void => {
+  fs.mkdirSync(path.join(home, config.CONFIG_DIR), { recursive: true });
+  fs.writeFileSync(path.join(home, config.CONFIG_DIR, config.CONFIG_FILE), text);
+};
+
+test('libraries: agents and scenarios from a folder of their own merge in, a project changes them without touching the library', () => {
+  const lib = securityLibrary();
+  const home = tmp('cs-lib-h-');
+  const ws = tmp('cs-lib-ws-');
+  userConfig(home, `libraries: [${lib}]\n`);
+  const label = path.basename(lib);
+
+  const r = passed(loadCfg({ workspace: ws, home }));
+  const agent = r.config.agents['security-reviewer']!;
+  assert.ok(agent.layers.includes(`library:${label}`));
+  assert.match(agent.instructions, /Look for injection first/, 'instruction files resolve from the library folder');
+  assert.equal(r.config.custom['secure-delivery']!.source, `library:${label}`);
+  assert.deepEqual(r.config.pipeline, ['planner', 'developer', 'tester', 'reviewer'], 'a library agent is not run by default');
+  assert.ok(!r.warnings.some((w) => w.code === 'not_in_pipeline'), 'nor is it reported as never running');
+  assert.deepEqual(bp(r.config, { scenario: 'secure-delivery' }).stages.map((st) => st.agent), ['planner', 'developer', 'security-reviewer']);
+
+  // The project changes the library's agent; the library file stays as it was.
+  const before = fs.readFileSync(path.join(lib, 'library.yaml'), 'utf8');
+  config.updateAgentConfig(ws, 'security-reviewer', { model: 'opus' });
+  const changed = passed(loadCfg({ workspace: ws, home })).config.agents['security-reviewer']!;
+  assert.equal(changed.model, 'opus');
+  assert.deepEqual(changed.layers.filter((l) => l !== 'builtin'), [`library:${label}`, 'project']);
+  assert.equal(fs.readFileSync(path.join(lib, 'library.yaml'), 'utf8'), before);
+
+  // A library that is not there: a warning, the rest loads. One that holds more than agents and scenarios: an error.
+  userConfig(home, `libraries: [${lib}, ${path.join(lib, 'nope')}]\n`);
+  assert.ok(passed(loadCfg({ workspace: ws, home })).warnings.some((w) => w.code === 'library_missing'));
+  const bad = tmp('cs-lib-bad-');
+  fs.writeFileSync(path.join(bad, 'library.yaml'), 'repos:\n  api: {}\n');
+  userConfig(home, `libraries: [${bad}]\n`);
+  assert.match(failed(loadCfg({ workspace: ws, home })).errors[0]!.message, /only agents and scenarios/);
+
+  // Two libraries with the same agent: the later one wins, and that is said.
+  userConfig(home, `libraries: [${lib}, ${securityLibrary()}]\n`);
+  assert.ok(passed(loadCfg({ workspace: ws, home })).warnings.some((w) => w.code === 'library_conflict'));
+});
+
+test('libraries: added for you or for the project, removed only when nothing needs them, and a project moves its own into one', () => {
+  const home = tmp('cs-lib-h-');
+  const ws = tmp('cs-lib-ws-');
+  const where = { workspace: ws, home };
+
+  // A folder inside the workspace is listed relative to .claudestrator/, so it works in every clone.
+  const shared = path.join(ws, 'shared-agents');
+  assert.throws(() => libraries.addLibrary({ ...where, dir: shared, scope: 'project' }), /no library\.yaml/);
+  const added = libraries.addLibrary({ ...where, dir: shared, scope: 'project', create: true });
+  assert.deepEqual([added.scope, added.entry, added.exists], ['project', '../shared-agents', true]);
+  assert.match(fs.readFileSync(path.join(shared, 'library.yaml'), 'utf8'), /^# Claudestrator library/);
+  assert.throws(() => libraries.addLibrary({ ...where, dir: shared, scope: 'user' }), /already/);
+  // One elsewhere under home, for you: `~/…` in the user config.
+  const mine = path.join(home, 'my-agents');
+  fs.mkdirSync(mine);
+  securityLibrary(mine);
+  assert.equal(libraries.addLibrary({ ...where, dir: mine, scope: 'user' }).entry, '~/my-agents');
+  assert.deepEqual(libraries.listLibraries(where).map((l) => [l.label, l.scope, l.agents.join(), l.scenarios.join()]), [['my-agents', 'user', 'security-reviewer', 'secure-delivery'], ['shared-agents', 'project', '', '']]);
+
+  // While the project runs a library's agent, the library cannot go.
+  config.saveCustomScenario({ ...where, label: 'Careful', agents: [{ name: 'developer' }, { name: 'security-reviewer' }] });
+  const userFile = path.join(home, config.CONFIG_DIR, config.CONFIG_FILE);
+  const before = fs.readFileSync(userFile, 'utf8');
+  assert.throws(() => libraries.removeLibrary({ ...where, file: path.join(mine, 'library.yaml'), scope: 'user' }), /security-reviewer/);
+  assert.equal(fs.readFileSync(userFile, 'utf8'), before, 'the user config is as it was');
+  config.removeScenario(ws, 'careful');
+  libraries.removeLibrary({ ...where, file: path.join(mine, 'library.yaml'), scope: 'user' });
+  assert.deepEqual(libraries.listLibraries(where).map((l) => l.label), ['shared-agents']);
+
+  // The project's own scenario moves into the shared library, with the agent it needs and that agent's instructions.
+  config.addAgent({ ...where, name: 'perf-auditor', output: 'audit', description: 'Finds slow code' });
+  fs.writeFileSync(path.join(ws, config.CONFIG_DIR, config.PROMPTS_DIR, 'perf-auditor.md'), 'Measure before you judge.\n');
+  config.saveCustomScenario({ ...where, label: 'Perf audit', agents: [{ name: 'perf-auditor', effort: 'high' }] });
+  const moved = libraries.moveToLibrary({ ...where, library: path.join(shared, 'library.yaml'), scenarios: ['perf-audit'] });
+  assert.deepEqual(moved, { agents: ['perf-auditor'], scenarios: ['perf-audit'] });
+  assert.equal(fs.readFileSync(path.join(shared, 'prompts', 'perf-auditor.md'), 'utf8'), 'Measure before you judge.\n');
+  assert.match(fs.readFileSync(path.join(shared, 'library.yaml'), 'utf8'), /^agents:\n {2}perf-auditor:\n {4}/m, 'written as a person would, not on one line');
+  assert.equal(fs.existsSync(path.join(ws, config.CONFIG_DIR, config.PROMPTS_DIR, 'perf-auditor.md')), false, 'the project copy is gone');
+  const projectNow = config.readProjectLayer(ws);
+  assert.ok(!(projectNow.agents && projectNow.agents['perf-auditor']) && !(projectNow.scenarios && projectNow.scenarios['perf-audit']));
+  const after = passed(loadCfg({ workspace: ws, home })).config;
+  assert.equal(after.custom['perf-audit']!.source, 'library:shared-agents');
+  assert.match(after.agents['perf-auditor']!.instructions, /Measure before you judge/);
+  assert.throws(() => libraries.moveToLibrary({ ...where, library: '/nowhere/library.yaml', agents: ['developer'] }), /not one of this project's libraries/);
+  assert.throws(() => libraries.moveToLibrary({ ...where, library: path.join(shared, 'library.yaml'), agents: ['ghost'] }), /not defined in this project/);
+});
+
+/** A project with an agent of its own (its instructions in a file), a changed built-in agent, a pipeline and scenarios. */
+function projectWithAgents(): string {
+  const ws = tmp('cs-backup-');
+  const dir = path.join(ws, config.CONFIG_DIR);
+  fs.mkdirSync(path.join(dir, config.PROMPTS_DIR), { recursive: true });
+  fs.writeFileSync(path.join(dir, config.PROMPTS_DIR, 'security-reviewer.md'), 'Look for injection first.\n');
+  config.createProjectConfig(ws, {
+    agents: {
+      'security-reviewer': { extends: 'reviewer', description: 'Reviews for security', instructions: { mode: 'append', file: './prompts/security-reviewer.md' } },
+      developer: { model: 'opus', maxTurns: 40 },
+    },
+    pipeline: ['planner', 'developer', 'tester', 'security-reviewer'],
+    scenarios: { audit: false, hotfix: { label: 'Hotfix', agents: ['developer', { agent: 'security-reviewer', effort: 'low' }] } },
+  });
+  return ws;
+}
+
+const noBackup = { savedAt: undefined, agents: {}, files: {}, pipeline: undefined, scenarios: {} };
+
+test('backup: agents, pipeline and scenarios are saved as YAML with the instruction files, read back (JSON too), anything else is refused', () => {
+  const made = backups.createBackup({ workspace: projectWithAgents(), now: new Date('2026-10-28T12:00:00Z') });
+  assert.deepEqual([made.agents, made.scenarios, made.pipeline], [2, 2, true]);
+  assert.match(made.text, /^# Claudestrator backup/);
+  assert.match(made.text, /claudestrator-backup: 1/);
+  assert.match(made.text, /pipeline: \[ planner, developer, tester, security-reviewer \]/, 'a list of names stays on one line, written the way the extension writes config.yaml');
+  assert.match(made.text, /audit: false/);
+  assert.match(made.text, /files:\n\s+\.\/prompts\/security-reviewer\.md: \|\n\s+Look for injection first\./, 'the instruction file travels in the backup');
+
+  const parsed = backups.parseBackup(made.text);
+  assert.ok(parsed.ok);
+  assert.deepEqual(Object.keys(parsed.backup.agents).sort(), ['developer', 'security-reviewer']);
+  assert.deepEqual(parsed.backup.files, { './prompts/security-reviewer.md': 'Look for injection first.\n' });
+  assert.deepEqual(parsed.backup.pipeline, ['planner', 'developer', 'tester', 'security-reviewer']);
+  assert.deepEqual(Object.keys(parsed.backup.scenarios), ['audit', 'hotfix']);
+  assert.equal(parsed.backup.savedAt, '2026-10-28T12:00:00.000Z');
+
+  const { savedAt, ...asData } = parsed.backup;
+  assert.ok(savedAt);
+  assert.ok(backups.parseBackup(JSON.stringify({ [backups.MARKER]: 1, ...asData })).ok, 'a backup converted to JSON restores too');
+
+  const error = (t: string): string => {
+    const r = backups.parseBackup(t);
+    assert.ok(!r.ok, t);
+    return r.error;
+  };
+  assert.match(error('agents:\n  developer: {}\n'), /not a Claudestrator backup/, 'a config.yaml is not a backup');
+  assert.match(error('just some text'), /not a Claudestrator backup/);
+  assert.match(error('a: [1'), /not valid YAML or JSON/);
+  assert.match(error(`${backups.MARKER}: 2\nscenarios: {}`), /newer Claudestrator/);
+  assert.match(error(`${backups.MARKER}: 1`), /backup is empty/);
+  assert.match(error(`${backups.MARKER}: 1\nscenarios:\n  deliver: [developer]`), /reserved/);
+  assert.match(error(`${backups.MARKER}: 1\nagents:\n  Odd Name: {}\n`), /lowercase kebab-case/);
+  assert.match(error(`${backups.MARKER}: 1\nagents:\n  qa: {}\nfiles:\n  ../../evil.md: pwned\n`), /outside \.claudestrator/, 'a file may not leave .claudestrator/');
+  assert.match(error(`${backups.MARKER}: 1\nagents:\n  qa: {}\nfiles:\n  /etc/passwd: pwned\n`), /outside \.claudestrator/);
+  assert.match(error(`${backups.MARKER}: 1\nagents:\n  qa: {}\nfiles:\n  ./config.yaml: 'repos: {}'\n`), /outside \.claudestrator\/prompts/, 'a backup may not overwrite config.yaml');
+  assert.match(error(`${backups.MARKER}: 1\nagents:\n  qa: {}\nfiles:\n  ./prompts/qa.md: 5\n`), /"files" section/);
+
+  assert.throws(() => backups.createBackup({ workspace: tmp('cs-backup-'), now: new Date() }), /nothing to back up/);
+  const broken = tmp('cs-backup-');
+  fs.mkdirSync(path.join(broken, config.CONFIG_DIR));
+  fs.writeFileSync(config.projectConfigFile(broken), 'agents: [unclosed\n');
+  assert.throws(() => backups.createBackup({ workspace: broken, now: new Date() }), /does not parse/);
+});
+
+test('backup: restore into another project writes the agents with their instruction files, the pipeline and the scenarios', () => {
+  const parsed = backups.parseBackup(backups.createBackup({ workspace: projectWithAgents(), now: new Date() }).text);
+  assert.ok(parsed.ok);
+  const to = tmp('cs-backup-');
+  const home = tmp('cs-backup-h-');
+  config.setCustomScenario(to, 'mine', { label: 'Mine', agents: [{ name: 'developer' }] });
+
+  const plan = backups.previewRestore({ workspace: to, backup: parsed.backup, home });
+  assert.deepEqual(plan.agents, { add: ['security-reviewer', 'developer'], replace: [] });
+  assert.equal(plan.pipeline, true);
+  assert.deepEqual(plan.scenarios, { add: ['audit', 'hotfix'], replace: [] });
+  assert.deepEqual(plan.skipped, []);
+
+  backups.restoreBackup({ workspace: to, backup: parsed.backup, home });
+  assert.equal(fs.readFileSync(path.join(to, config.CONFIG_DIR, config.PROMPTS_DIR, 'security-reviewer.md'), 'utf8'), 'Look for injection first.\n');
+  const after = passed(loadCfg({ workspace: to, home }));
+  assert.equal(after.config.agents['security-reviewer']!.description, 'Reviews for security');
+  assert.match(after.config.agents['security-reviewer']!.instructions, /Look for injection first\./);
+  assert.equal(after.config.agents.developer!.model, 'opus');
+  assert.deepEqual(config.readProjectLayer(to).pipeline, ['planner', 'developer', 'tester', 'security-reviewer']);
+  assert.deepEqual(Object.keys(after.config.custom).sort(), ['hotfix', 'mine'], 'a scenario that is not in the backup is not touched');
+  assert.deepEqual(after.config.removedScenarios, ['audit']);
+
+  // The same backup again replaces what is there, an agent entirely, instruction file included.
+  config.updateAgentConfig(to, 'security-reviewer', { description: 'Edited by hand' });
+  fs.writeFileSync(path.join(to, config.CONFIG_DIR, config.PROMPTS_DIR, 'security-reviewer.md'), 'Edited too.\n');
+  assert.deepEqual(backups.previewRestore({ workspace: to, backup: parsed.backup, home }).agents.replace, ['security-reviewer', 'developer']);
+  backups.restoreBackup({ workspace: to, backup: parsed.backup, home });
+  assert.equal(passed(loadCfg({ workspace: to, home })).config.agents['security-reviewer']!.description, 'Reviews for security');
+  assert.equal(fs.readFileSync(path.join(to, config.CONFIG_DIR, config.PROMPTS_DIR, 'security-reviewer.md'), 'utf8'), 'Look for injection first.\n');
+});
+
+test('backup: what the project cannot run is left out and said so, a file outside .claudestrator/ is never written', () => {
+  const ws = tmp('cs-backup-');
+  const home = tmp('cs-backup-h-');
+  const backup = {
+    ...noBackup,
+    files: { './prompts/a.md': 'A\n' },
+    pipeline: ['planner', 'developer', 'ghost-agent'],
+    agents: {
+      a: { extends: 'reviewer', instructions: { mode: 'append', file: './prompts/a.md' } },
+      b: { extends: 'not-here' },
+      c: { extends: 'b' },
+      d: { extends: 'reviewer', instructions: { mode: 'append', file: './prompts/missing.md' } },
+      e: { extends: 'reviewer', instructions: { mode: 'append', file: '../escape.md' } },
+      f: { extends: 'reviewer', instructions: { mode: 'replace', file: './config.yaml' } },
+    },
+    scenarios: { s1: { agents: ['developer', 'c'] }, s2: { agents: ['developer', 'a'] } },
+  };
+  const plan = backups.previewRestore({ workspace: ws, backup, home });
+  assert.deepEqual(plan.agents, { add: ['a'], replace: [] });
+  assert.deepEqual(plan.skipped.map((x) => `${x.kind}:${x.id}`).sort(), ['agent:b', 'agent:c', 'agent:d', 'agent:e', 'agent:f', 'pipeline:pipeline', 'scenario:s1']);
+  assert.match(plan.skipped.find((x) => x.id === 'c')!.reason, /builds on the agent "b"/, 'an agent whose base was left out is left out too');
+  assert.match(plan.skipped.find((x) => x.id === 'd')!.reason, /not in the backup/);
+  assert.match(plan.skipped.find((x) => x.id === 'e')!.reason, /outside \.claudestrator/);
+  assert.match(plan.skipped.find((x) => x.kind === 'pipeline')!.reason, /"ghost-agent"/);
+  assert.deepEqual(plan.scenarios.add, ['s2']);
+
+  backups.restoreBackup({ workspace: ws, backup, home });
+  const after = passed(loadCfg({ workspace: ws, home }));
+  assert.ok(after.config.agents.a && !after.config.agents.b);
+  assert.equal(config.readProjectLayer(ws).pipeline, undefined, 'a pipeline naming an unknown agent is not written');
+  assert.equal(fs.existsSync(path.join(ws, 'escape.md')), false);
+  // A backup of which nothing can be restored writes nothing and says why.
+  const none = backups.restoreBackup({ workspace: ws, backup: { ...noBackup, agents: { x: { extends: 'nope' } } }, home });
+  assert.deepEqual(none.agents, { add: [], replace: [] });
+  assert.deepEqual(none.skipped.map((x) => x.id), ['x']);
+});
+
+test('backup: file paths mean the same on Windows and on macOS/Linux', () => {
+  // A backup names its files with `/`; one written on Windows with `\` is the same file.
+  assert.equal(backups.fileKey('./prompts/a.md'), 'prompts/a.md');
+  assert.equal(backups.fileKey('.\\prompts\\a.md'), 'prompts/a.md');
+  assert.equal(backups.fileKey('prompts/sub/../a.md'), 'prompts/a.md');
+  for (const bad of ['../x.md', '..\\x.md', 'prompts/../../x.md', '/etc/passwd', 'C:\\Windows\\x.md', 'c:/x.md', '.', '..', './config.yaml', 'config.yaml', 'prompts/../config.yaml', './notes.md', 'prompts']) assert.equal(backups.fileKey(bad), null, bad);
+
+  // The real folder check, with Windows paths (drive letters, `\`, another drive).
+  const dir = 'C:\\Users\\me\\ws\\.claudestrator';
+  assert.equal(backups.inside(dir, 'prompts/a.md', path.win32), 'C:\\Users\\me\\ws\\.claudestrator\\prompts\\a.md');
+  assert.equal(backups.inside(dir, '..\\evil.md', path.win32), null);
+  assert.equal(backups.inside(dir, 'D:\\evil.md', path.win32), null);
+  assert.equal(backups.inside(dir, '.', path.win32), null);
+  assert.equal(backups.inside('/ws/.claudestrator', 'prompts/a.md', path.posix), '/ws/.claudestrator/prompts/a.md');
+  assert.equal(backups.inside('/ws/.claudestrator', '../.claudestrator-other/x', path.posix), null, 'a sibling folder with the same prefix is outside');
+
+  // End to end: a Windows-made backup restores here, its agent finding its instruction file.
+  const text = `${backups.MARKER}: 1\nagents:\n  a:\n    extends: reviewer\n    instructions:\n      mode: append\n      file: .\\prompts\\a.md\nfiles:\n  .\\prompts\\a.md: A\n`;
+  const parsed = backups.parseBackup(text);
+  assert.ok(parsed.ok, parsed.ok ? '' : parsed.error);
+  const ws = tmp('cs-backup-');
+  const home = tmp('cs-backup-h-');
+  assert.deepEqual(backups.previewRestore({ workspace: ws, backup: parsed.backup, home }).agents.add, ['a']);
+  backups.restoreBackup({ workspace: ws, backup: parsed.backup, home });
+  assert.equal(fs.readFileSync(path.join(ws, config.CONFIG_DIR, 'prompts', 'a.md'), 'utf8'), 'A');
+  assert.deepEqual(config.readProjectLayer(ws).agents!.a!.instructions, { mode: 'append', file: './prompts/a.md' }, 'the config names the file with `/`');
+  assert.match(passed(loadCfg({ workspace: ws, home })).config.agents.a!.instructions, /A/);
+});
+
+test('backup: a restore that would break the config is undone, instruction files included', () => {
+  const home = tmp('cs-backup-h-');
+  const ws = projectWithAgents();
+  const file = config.projectConfigFile(ws);
+  const promptsDir = path.join(ws, config.CONFIG_DIR, config.PROMPTS_DIR);
+  const before = fs.readFileSync(file, 'utf8');
+  const backup = {
+    ...noBackup,
+    files: { './prompts/security-reviewer.md': 'CHANGED\n', './prompts/new-agent.md': 'x\n' },
+    agents: {
+      'new-agent': { extends: 'reviewer', instructions: { mode: 'append', file: './prompts/new-agent.md' } },
+      'security-reviewer': { extends: 'reviewer', instructions: { mode: 'replace', file: './prompts/security-reviewer.md' } },
+    },
+    scenarios: { odd: { agents: ['developer', 'auditor'] } },
+  };
+  assert.throws(() => backups.restoreBackup({ workspace: ws, backup, home }), /mixes agents/);
+  assert.equal(fs.readFileSync(file, 'utf8'), before, 'config.yaml is as it was');
+  assert.equal(fs.readFileSync(path.join(promptsDir, 'security-reviewer.md'), 'utf8'), 'Look for injection first.\n', 'an overwritten file is put back');
+  assert.equal(fs.existsSync(path.join(promptsDir, 'new-agent.md')), false, 'a new file is removed');
+
+  const empty = tmp('cs-backup-');
+  assert.throws(() => backups.restoreBackup({ workspace: empty, backup: { ...noBackup, scenarios: backup.scenarios }, home }), /mixes agents/);
+  assert.equal(fs.existsSync(config.projectConfigFile(empty)), false, 'a config that did not exist is not left behind');
 });

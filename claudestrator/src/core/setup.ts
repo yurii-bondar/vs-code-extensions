@@ -2,6 +2,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { FoundRepo, RepoGuess, SuggestedGate } from './wire';
+import type { RepoLayer } from './config';
+import type { Gate } from './types';
 
 const SKIP = new Set(['node_modules', '.git', '.orch', '.claudestrator', 'dist', 'build', 'out', 'vendor', 'target', '.venv', 'venv', '.next', '.nuxt', 'coverage']);
 
@@ -175,5 +177,18 @@ function reposFromFolders(root: string, folders: string[], taken: { names: strin
   return { repos, notRepos };
 }
 
+/**
+ * What config.yaml says about a repo picked in the setup wizard or from the detected list: only what differs from the
+ * defaults (path = its name, the workspace's base branch, no gates).
+ */
+function repoLayerOf(repo: { name: string; path: string; role?: string | undefined; baseBranch?: string | undefined; gates?: Gate[] | undefined }, workspaceBase = 'main'): RepoLayer {
+  return {
+    ...(repo.role && { role: repo.role }),
+    ...(repo.path !== repo.name && { path: repo.path }),
+    ...(repo.baseBranch && repo.baseBranch !== workspaceBase && { baseBranch: repo.baseBranch }),
+    ...(repo.gates && repo.gates.length && { gates: repo.gates }),
+  };
+}
+
 export type { FoundRepo, RepoGuess, SuggestedGate };
-export { findRepos, describeRepo, reposFromFolders, WORKSPACE_MAP, safeName };
+export { findRepos, describeRepo, reposFromFolders, repoLayerOf, WORKSPACE_MAP, safeName };

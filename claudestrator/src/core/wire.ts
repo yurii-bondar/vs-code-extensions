@@ -466,6 +466,15 @@ export interface SaveScenarioParams {
   agents?: ScenarioStep[] | undefined;
 }
 
+/** What "Restore from backup" did: what was written, and what was left out with the reason. */
+export interface BackupRestoreResult {
+  cancelled: boolean;
+  agents: string[];
+  pipeline: boolean;
+  scenarios: string[];
+  skipped: { kind: 'agent' | 'pipeline' | 'scenario'; id: string; reason: string }[];
+}
+
 export interface SetupParams {
   repos?: AddedRepo[] | undefined;
   language?: string | undefined;
@@ -565,6 +574,24 @@ interface ConfigBase {
   efforts: readonly string[];
   builtins: string[];
   languages: string[];
+  /** The libraries the user config and this project's config list. */
+  libraries: LibraryView[];
+}
+
+/** A library as the Agents page lists it (core/library.ts builds it). */
+export interface LibraryView {
+  /** The library.yaml (or the .yaml file the entry names). */
+  file: string;
+  label: string;
+  /** Which config lists it: the user's (all projects) or this project's (shared with the team). */
+  scope: 'user' | 'project';
+  /** As the config writes it. */
+  entry: string;
+  exists: boolean;
+  agents: string[];
+  scenarios: string[];
+  /** Why it could not be read, when it exists but does not parse. */
+  error?: string;
 }
 
 export type ConfigData =
@@ -772,6 +799,11 @@ export interface Rpc {
   saveScenario: { params: SaveScenarioParams; result: { id: string } };
   deleteScenario: { params: { id: string }; result: { deleted: boolean } };
   restoreScenario: { params: { id: string }; result: Void };
+  backupConfig: { params: void; result: { saved: boolean; file?: string; agents?: number; scenarios?: number; pipeline?: boolean } };
+  restoreConfigBackup: { params: void; result: BackupRestoreResult };
+  addLibrary: { params: void; result: { added: string | null } };
+  removeLibrary: { params: { file: string; scope: 'user' | 'project' }; result: { removed: boolean } };
+  moveToLibrary: { params: { library: string; agents?: string[]; scenarios?: string[] }; result: { moved: boolean; agents: string[]; scenarios: string[] } };
   setup: { params: SetupParams; result: { file: string } };
 }
 

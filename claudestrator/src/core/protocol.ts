@@ -2,7 +2,7 @@
 // for what agents hand back (plan and verdict blocks) and for config layers.
 // The on-disk formats match the claudestrator CLI and plugin, so both can work on the same tasks.
 
-import type { Audit, AuditFinding, CheckpointId, Effort, Finding, JsonObject, Output, ParseResult, PlanMeta, Readiness, ReadinessValue, ReadinessVerdict, ReportSeverity, Runs, Scenario, Severity, CriterionStatus } from './types';
+import type { Audit, AuditFinding, CheckpointId, Effort, Finding, JsonObject, OrchEvent, Output, ParseResult, PlanMeta, Readiness, ReadinessValue, ReadinessVerdict, ReportSeverity, Runs, Scenario, Severity, CriterionStatus } from './types';
 
 const OUTPUTS: Output[] = ['plan', 'code', 'tests', 'verdict', 'readiness', 'audit'];
 /**
@@ -42,7 +42,11 @@ const CHECKPOINT_OPTIONS: Record<CheckpointId, string[]> = {
 const JIRA_ONLY_OPTIONS = ['approve-post', 'push-comment'];
 
 /** Informational events: recorded for the UI and the audit trail, they never change state. */
-const INFO_EVENTS = new Set<string>(['agent_stopped', 'note', 'gates_ran', 'transition_rejected', 'jira_comment']);
+const INFO_EVENT_TYPES = ['agent_stopped', 'note', 'gates_ran', 'transition_rejected', 'jira_comment'] as const;
+const INFO_EVENTS = new Set<string>(INFO_EVENT_TYPES);
+type InfoEvent = Extract<OrchEvent, { type: (typeof INFO_EVENT_TYPES)[number] }>;
+/** Events that record what happened without changing the task's state. */
+const isInfoEvent = (e: OrchEvent): e is InfoEvent => INFO_EVENTS.has(e.type);
 
 const STATE_EVENTS = new Set<string>([
   'task_created', 'intake_completed', 'stage_started', 'stage_completed', 'stage_failed',
@@ -152,12 +156,38 @@ const scenariosLayer: Check = (v, p) => {
   });
 };
 
+/** What a library.yaml may hold: agents and scenarios, in the shape config.yaml has them. Nothing that is a project's own. */
+function validateLibraryLayer(raw: unknown): string[] {
+  if (kind(raw) !== 'object') return [`${at('')}: expected a map, got ${kind(raw)}`];
+  const extra = Object.keys(asRecord(raw)).filter((k) => k !== 'agents' && k !== 'scenarios');
+  if (extra.length) return [`a library holds only agents and scenarios, not ${extra.join(', ')}`];
+  return validateConfigLayer(raw);
+}
+
+/** The VS Code settings (`claudestrator.*`) the dashboard may change, and what each holds. */
+const SETTINGS: Record<string, Check> = {
+  claudePath: T.str(),
+  claudeConfigDir: T.str(),
+  nodePath: T.str(),
+  workspaceFolder: T.str(),
+  settingSources: T.arr(T.oneOf(['user', 'project', 'local'])),
+  askPermissions: T.bool(),
+  notifications: T.oneOf(['all', 'needsYou', 'off']),
+};
+
+/** Problems with a setting the page wants to write: an unknown key, or a value of the wrong shape. */
+function validateSetting(key: string, value: unknown): string[] {
+  const check = Object.prototype.hasOwnProperty.call(SETTINGS, key) ? SETTINGS[key] : undefined;
+  return check ? check(value, key) : [`unknown setting ${key}`];
+}
+
 const GATE = T.obj({ name: T.str(1), cmd: T.str(1), 'dir?': T.str(1), 'when?': T.str(1) });
 
 const CONFIG_LAYER = T.obj({
   'agents?': T.rec(agentName, T.obj(AGENT_LAYER)),
   'pipeline?': T.arr(agentName),
   'scenarios?': scenariosLayer,
+  'libraries?': T.arr(T.str(1)),
   'limits?': T.obj({ 'reviewRounds?': T.int(0, 20), 'gateAttempts?': T.int(1, 20), 'budgetUsd?': T.pos() }),
   'language?': T.str(1),
   'baseBranch?': T.str(1),
@@ -337,6 +367,9 @@ export {
   CHECKPOINT_OPTIONS,
   JIRA_ONLY_OPTIONS,
   INFO_EVENTS,
+  validateSetting,
+  validateLibraryLayer,
+  isInfoEvent,
   STATE_EVENTS,
   isBlocking,
   validateConfigLayer,

@@ -196,6 +196,8 @@ export interface CustomScenario {
   description?: string;
   kind: string | null;
   agents: ScenarioStep[];
+  /** The layer that defines it: `project`, `user`, or `library:<name>`. */
+  source: string;
 }
 
 export interface Limits {

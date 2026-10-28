@@ -36,8 +36,8 @@ When the extension's engine or page changes, nothing here changes unless the wir
 
 ## Requirements
 
-- An IDE based on IntelliJ Platform **2024.3 or newer** with JCEF (all standard builds).
-- **Node.js 18+** on the `PATH` of your login shell, or its path in the settings. It is not bundled, which keeps the plugin at ~450 KB.
+- An IDE based on IntelliJ Platform **2026.2 or newer** (`since-build` 262) with JCEF. From 2026.2 the embedded browser is a plugin of its own (`com.intellij.modules.jcef`), bundled with every standard IDE; older IDEs keep it in the core under no plugin id, so one build cannot serve both.
+- **Node.js 20+** on the `PATH` of your login shell, or its path in the settings. It is not bundled, which keeps the plugin at ~450 KB. 20 because the engine watches its task and config folders recursively, which Node supports on Linux only from 20.
 - The same tools as the extension: Claude Code CLI, Git, GitHub CLI.
 
 ## Build and run
@@ -58,7 +58,7 @@ The JDK that runs Gradle is any 17+; the build downloads JDK 21 for compiling.
 
 Marketplace rules this project is set up for: a unique plugin id, English description (≥ 40 chars), vendor, license, `since-build` with no upper bound, no bundled Kotlin stdlib, only platform modules as dependencies (so it loads in every IDE), a notification group for everything it shows, no work on the UI thread, a clean Plugin Verifier run.
 
-1. **Account and first upload.** Create the plugin at <https://plugins.jetbrains.com/plugin/add> and upload `build/distributions/claudestrator-0.1.0.zip` by hand. The first version is moderated (usually a few working days). Review the vendor entry (`plugin.xml` has a name and URL, no email: add one in the Marketplace profile if you want users to reach you).
+1. **Account and first upload.** Create the plugin at <https://plugins.jetbrains.com/plugin/add> and upload `build/distributions/claudestrator-<version>.zip` by hand. The first version is moderated (usually a few working days). Review the vendor entry (`plugin.xml` has a name and URL, no email: add one in the Marketplace profile if you want users to reach you).
 2. **Token.** Marketplace → profile → *My Tokens*. Export it as `PUBLISH_TOKEN`.
 3. **Signing** (required for `publishPlugin`):
    ```bash
@@ -69,13 +69,13 @@ Marketplace rules this project is set up for: a unique plugin id, English descri
    Then `CERTIFICATE_CHAIN` (contents of `chain.crt`), `PRIVATE_KEY` (contents of `private.pem`) and `PRIVATE_KEY_PASSWORD`. Keep the key out of git (`.gitignore` already skips it) and back it up: a plugin must keep being signed with the same chain.
 4. **Release.** Raise `pluginVersion` in `gradle.properties`, then `./gradlew signPlugin publishPlugin`. `PUBLISH_CHANNEL=eap` publishes to the early-access channel first.
 
-Marketplace asks for a stable plugin id: `io.github.yuriibondar.claudestrator` is permanent once published.
+Marketplace asks for a stable plugin id: `bondevn.claudestrator` (in `plugin.xml`) is permanent once published.
 
 ## Not done yet
 
 - **Releases are manual.** The VS Code extensions release with semantic-release per folder; this plugin has no pipeline yet (CI build + `verifyPlugin`, then `publishPlugin` on a tag).
 - **No automated tests** for the Kotlin side. The sidecar was exercised by hand over stdio (`init` → `dashboard` → page `boot` → `shutdown`); the engine's own tests stay in `claudestrator/`.
 - **Texts that name VS Code.** A few lines of the page mention VS Code (for example "kept in VS Code's secret storage"). They are the extension's strings; making them host-aware is a change in `claudestrator/media`.
-- **Windows and Linux** are untested; shell quoting for the "resume in terminal" command is written for POSIX shells and PowerShell.
+- **Windows and Linux** are untested; the "continue in terminal" command put on the clipboard is quoted for POSIX shells and PowerShell.
 - **JetBrains Gateway / remote development:** JCEF is limited there; the dashboard may not open.
 - **Command palette pickers** (`Answer…`, `Stop Task` without a selected task) exist as tree context menu items only.

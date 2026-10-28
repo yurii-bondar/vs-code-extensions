@@ -77,9 +77,10 @@ class GitRepo {
   }
 
   /** Where the task's changes start: merge-base with origin/<base>, else with <base>, else HEAD. */
-  async baseRef(base: string): Promise<string> {
+  /** Where `of` (HEAD, or a branch) left the base. */
+  async baseRef(base: string, of = 'HEAD'): Promise<string> {
     for (const ref of [`origin/${base}`, base]) {
-      const r = await this.git('merge-base', 'HEAD', ref);
+      const r = await this.git('merge-base', of, ref);
       if (r.code === 0) return r.stdout.trim();
     }
     return 'HEAD';
@@ -93,6 +94,18 @@ class GitRepo {
   async changedFiles(base: string): Promise<string[]> {
     const tracked = (await this.git('diff', '--name-only', await this.baseRef(base))).stdout.split('\n').filter(Boolean).filter((f) => !isOwn(f));
     return [...new Set([...tracked, ...(await this.untracked())])].sort();
+  }
+
+  /**
+   * Files a branch changes against the base, committed ones only: what pushing that branch publishes, whatever is
+   * checked out at the moment. `branch...base` diffs from their merge-base.
+   */
+  async branchChanges(base: string, branch: string): Promise<string[]> {
+    for (const ref of [`origin/${base}`, base]) {
+      const r = await this.git('diff', '--name-only', `${ref}...${branch}`);
+      if (r.code === 0) return r.stdout.split('\n').filter(Boolean).filter((f) => !isOwn(f));
+    }
+    return [];
   }
 
   /** Stat and full diff against the base, untracked files included as additions. */

@@ -53,6 +53,35 @@ function expand(p: string | null | undefined): string | null | undefined {
   return p ? path.resolve(String(p).replace(/^~(?=$|[\\/])/, HOME)) : p;
 }
 
+/**
+ * The signed-in email a `.claude.json` names, cached by the file's size and mtime: the file keeps per-project history and
+ * can be megabytes, and the account is asked for several times per refresh.
+ */
+const emails = new Map<string, { sig: string; email: string | undefined }>();
+
+function accountEmail(file: string): string | undefined {
+  let sig: string;
+  try {
+    const st = fs.statSync(file);
+    sig = `${st.size}:${st.mtimeMs}`;
+  } catch {
+    return undefined; // no such file
+  }
+  const hit = emails.get(file);
+  if (hit && hit.sig === sig) return hit.email;
+  let email: string | undefined;
+  try {
+    const data: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const acc = typeof data === 'object' && data !== null ? (data as { oauthAccount?: unknown }).oauthAccount : undefined;
+    const value = typeof acc === 'object' && acc !== null ? (acc as { emailAddress?: unknown }).emailAddress : undefined;
+    email = typeof value === 'string' ? value : undefined;
+  } catch {
+    email = undefined; // being written, or not JSON
+  }
+  emails.set(file, { sig, email });
+  return email;
+}
+
 /** Claude Code config folders (accounts): ~/.claude and ~/.claude-*. */
 function claudeAccounts(): { dir: string; label: string; email?: string }[] {
   const out: { dir: string; label: string; email?: string }[] = [];
@@ -73,15 +102,8 @@ function claudeAccounts(): { dir: string; label: string; email?: string }[] {
     if (!['projects', '.claude.json', 'settings.json'].some((f) => fs.existsSync(path.join(dir, f)))) continue;
     let email: string | undefined;
     for (const f of [path.join(dir, '.claude.json'), ...(name === '.claude' ? [path.join(HOME, '.claude.json')] : [])]) {
-      try {
-        const acc = JSON.parse(fs.readFileSync(f, 'utf8')).oauthAccount;
-        if (acc) {
-          email = acc.emailAddress;
-          break;
-        }
-      } catch {
-        // missing
-      }
+      email = accountEmail(f);
+      if (email !== undefined) break;
     }
     out.push({ dir, label: name === '.claude' ? 'default' : name.replace(/^\.claude-/, ''), ...(email && { email }) });
   }
