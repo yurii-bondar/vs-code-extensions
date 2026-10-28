@@ -19,7 +19,7 @@
         </ul>
 
         <p><b>Requirements:</b> <a href="https://docs.claude.com/en/docs/claude-code">Claude Code</a> CLI, Git, and
-        Node.js 18 or newer on your <code>PATH</code> (or set its path in <i>Settings | Tools | Claudestrator</i>).
+        Node.js 20 or newer on your <code>PATH</code> (or set its path in <i>Settings | Tools | Claudestrator</i>).
         The GitHub CLI is needed to open pull requests. The IDE must have the bundled browser (JCEF), which every
         standard JetBrains IDE ships with.</p>
 

@@ -7,7 +7,7 @@ export type Incoming =
   | { type: 'init'; workspaceFolders: string[]; settings: Settings; storageDir: string; extensionDir: string; version: string }
   | { type: 'settings'; settings: Settings; changed: string[] }
   | { type: 'page'; msg: unknown }
-  | { type: 'dashboard'; route?: unknown }
+  | { type: 'dashboard'; route?: unknown; reveal?: boolean }
   | { type: 'dashboardClosed' }
   | { type: 'call'; id: number; method: string; params?: Record<string, unknown> }
   | { type: 'res'; id: number; ok: boolean; data?: unknown; error?: string }

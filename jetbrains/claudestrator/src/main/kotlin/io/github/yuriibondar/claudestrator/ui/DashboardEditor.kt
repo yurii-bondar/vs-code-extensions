@@ -17,6 +17,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.util.Key
 import com.intellij.openapi.util.UserDataHolderBase
+import com.intellij.openapi.util.UserDataHolderEx
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.testFramework.LightVirtualFile
 import com.intellij.ui.components.JBLabel
@@ -39,6 +40,12 @@ import javax.swing.SwingConstants
 
 private val LOG = logger<DashboardEditor>()
 
+/** The project's value under `key`, made by `make` the first time; two threads asking at once get the same one. */
+private fun <T : Any> once(project: Project, key: Key<T>, make: () -> T): T =
+    project.getUserData(key)
+        ?: (project as? UserDataHolderEx)?.putUserDataIfAbsent(key, make())
+        ?: synchronized(project) { project.getUserData(key) ?: make().also { project.putUserData(key, it) } }
+
 /** The dashboard's tab. One per project; the file stands for it and has no content on disk. */
 class DashboardFile : LightVirtualFile("Claudestrator")
 
@@ -54,7 +61,7 @@ class DashboardEditorProvider : FileEditorProvider, DumbAware {
     companion object {
         private val FILE = Key.create<DashboardFile>("claudestrator.dashboardFile")
 
-        private fun file(project: Project): DashboardFile = project.getUserData(FILE) ?: DashboardFile().also { project.putUserData(FILE, it) }
+        private fun file(project: Project): DashboardFile = once(project, FILE) { DashboardFile() }
 
         /** Opens the tab, or brings it forward. */
         fun reveal(project: Project) {
@@ -63,6 +70,9 @@ class DashboardEditorProvider : FileEditorProvider, DumbAware {
 
         /** Whether the dashboard is what you are looking at; the notifications stay quiet then, as in VS Code. */
         fun isVisible(project: Project): Boolean = FileEditorManager.getInstance(project).selectedEditors.any { it is DashboardEditor }
+
+        /** Whether a dashboard tab is open, on any thread (a restarted engine re-attaches to it). */
+        fun hasOpenTab(project: Project): Boolean = DashboardEditor.openTabs(project).get() > 0
     }
 }
 
@@ -112,13 +122,18 @@ class DashboardEditor(private val project: Project, private val file: VirtualFil
         }
 
         b.jbCefClient.addLoadHandler(object : CefLoadHandlerAdapter() {
+            // A page that reloads (it can, in JCEF) gets the messages of the meantime once it is back, not into the void.
+            override fun onLoadStart(browser: CefBrowser, frame: CefFrame, transitionType: CefRequest.TransitionType) {
+                if (frame.isMain) synchronized(lock) { loaded = false }
+            }
+
             override fun onLoadEnd(browser: CefBrowser, frame: CefFrame, httpStatusCode: Int) {
                 if (!frame.isMain) return
-                val ready = synchronized(lock) {
+                synchronized(lock) {
                     loaded = true
-                    waiting.toList().also { waiting.clear() }
+                    waiting.forEach(::run)
+                    waiting.clear()
                 }
-                ready.forEach(::run)
             }
         }, b.cefBrowser)
 
@@ -142,15 +157,14 @@ class DashboardEditor(private val project: Project, private val file: VirtualFil
         b.loadHTML(PageHtml.build(enginePath, query.inject("s")))
     }
 
-    /** A message from the engine for the page; held until the page has loaded. */
+    /**
+     * A message from the engine for the page; held until the page has loaded. One lock around both paths, so a message
+     * that arrives while the held ones are being handed over cannot overtake them.
+     */
     private fun deliver(json: String) {
         synchronized(lock) {
-            if (!loaded) {
-                waiting.add(json)
-                return
-            }
+            if (loaded) run(json) else waiting.add(json)
         }
-        run(json)
     }
 
     private fun run(json: String) {
@@ -187,9 +201,9 @@ class DashboardEditor(private val project: Project, private val file: VirtualFil
         if (openTabs(project).decrementAndGet() == 0) engine.dashboardClosed()
     }
 
-    private companion object {
+    internal companion object {
         private val TABS = Key.create<AtomicInteger>("claudestrator.dashboardTabs")
 
-        fun openTabs(project: Project): AtomicInteger = project.getUserData(TABS) ?: AtomicInteger().also { project.putUserData(TABS, it) }
+        fun openTabs(project: Project): AtomicInteger = once(project, TABS) { AtomicInteger() }
     }
 }
