@@ -1,5 +1,12 @@
 .vscode/**
-release.config.cjs
 *.vsix
 test/**
+dist/test/**
+**/*.ts
+**/*.map
+src/**
+tsconfig.json
+eslint.config.mjs
+release.config.cjs
+.gitignore
 media/icon.svg
