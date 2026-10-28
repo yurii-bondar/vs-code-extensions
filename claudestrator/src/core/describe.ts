@@ -77,8 +77,11 @@ function describeEvent(e: OrchEvent): Described | null {
       return { tone: /^(error|run failed)/i.test(e.message) ? 'error' : 'dim', icon: 'info', text: e.message };
     case 'transition_rejected':
       return { tone: 'error', icon: 'warning', text: `Rejected ${e.event && (e.event as { type?: string }).type}: ${e.error}` };
-    default:
-      return null;
+    default: {
+      // Every event type has a line in the activity feed; a new one must get one here.
+      const unhandled: never = e;
+      return unhandled;
+    }
   }
 }
 

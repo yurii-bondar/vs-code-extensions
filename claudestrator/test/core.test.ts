@@ -19,9 +19,9 @@ import { buildArgs, limitsOf } from '../src/core/runner';
 import { Engine } from '../src/core/engine';
 import { resolveDefaults, effectiveFor, modelName } from '../src/core/defaults';
 import * as mcp from '../src/core/mcp';
-import { reposFromFolders } from '../src/core/setup';
+import { reposFromFolders, repoLayerOf } from '../src/core/setup';
 import { execFileSync } from 'child_process';
-import { parseReadiness, parseAudit } from '../src/core/protocol';
+import { parseReadiness, parseAudit, validateSetting } from '../src/core/protocol';
 import { renderReport, jiraText } from '../src/core/report';
 import type { Agent, Config, EventBody, EventOf, OrchEvent, Output, PlanMeta, PlanRepo, Source, Spec, StoredPipeline, TaskState } from '../src/core/types';
 import type { GuardContext, GuardVerdict } from '../src/core/guard';
@@ -910,3 +910,61 @@ test('scenarios: custom scenarios with their own agents, models and effort; buil
   config.removeScenario(ws, 'quick-fix');
   assert.deepEqual(Object.keys(passed(loadCfg({ workspace: ws, home: tmp('cs-h-') })).config.custom), []);
 });
+
+test('config edits from the dashboard: new scenarios and agents, kept only when the config still works', () => {
+  const ws = tmp('cs-edit-');
+  const home = tmp('cs-edit-h-');
+  const resolved = () => passed(loadCfg({ workspace: ws, home })).config;
+
+  // A scenario is named after its label; taken and reserved names get a number, labels stay unique.
+  assert.equal(config.saveCustomScenario({ workspace: ws, home, label: 'Quick fix', agents: [{ name: 'developer' }] }), 'quick-fix');
+  assert.equal(config.saveCustomScenario({ workspace: ws, home, label: 'Quick-fix!' }), 'quick-fix-2');
+  assert.equal(config.saveCustomScenario({ workspace: ws, home, label: 'Audit' }), 'audit-2', 'a built-in name is not taken');
+  assert.equal(config.saveCustomScenario({ workspace: ws, home, label: 'Перевірка' }), 'scenario', 'no Latin letters: a plain name');
+  assert.throws(() => config.saveCustomScenario({ workspace: ws, home, label: 'quick fix' }), /already exists/);
+  assert.throws(() => config.saveCustomScenario({ workspace: ws, home, label: '  ' }), /Give the scenario a name/);
+  assert.throws(() => config.saveCustomScenario({ workspace: ws, home, id: 'nope', label: 'X' }), /no scenario "nope"/);
+  assert.equal(config.saveCustomScenario({ workspace: ws, home, id: 'quick-fix', label: 'Quick fix', description: ' d ', agents: [{ name: 'developer' }, { name: 'reviewer', effort: 'low' }] }), 'quick-fix');
+  assert.deepEqual(resolved().custom['quick-fix']!.agents, [{ name: 'developer' }, { name: 'reviewer', effort: 'low' }]);
+
+  // A change that would break the config is undone, with the problem that names this scenario.
+  const before = fs.readFileSync(config.projectConfigFile(ws), 'utf8');
+  assert.throws(() => config.saveCustomScenario({ workspace: ws, home, id: 'quick-fix', label: 'Quick fix', agents: [{ name: 'developer' }, { name: 'auditor' }] }), /quick-fix.*mixes/);
+  assert.equal(fs.readFileSync(config.projectConfigFile(ws), 'utf8'), before);
+
+  // An agent based on another runs right after it, with its own instructions file.
+  const file = config.addAgent({ workspace: ws, home, name: 'security-reviewer', base: 'developer', description: 'Checks for injection' });
+  assert.equal(file, path.join(ws, config.CONFIG_DIR, config.PROMPTS_DIR, 'security-reviewer.md'));
+  assert.match(fs.readFileSync(file, 'utf8'), /Added to the instructions of "developer"/);
+  assert.deepEqual(resolved().pipeline, ['planner', 'developer', 'security-reviewer', 'tester', 'reviewer']);
+  // One that writes a readiness report joins that scenario, not the pipeline.
+  // Without a description an agent of its own would break the config: the old panel left it so, this undoes it.
+  assert.throws(() => config.addAgent({ workspace: ws, home, name: 'qa-check', output: 'readiness' }), /needs a description/);
+  assert.equal(fs.existsSync(path.join(ws, config.CONFIG_DIR, config.PROMPTS_DIR, 'qa-check.md')), false);
+  config.addAgent({ workspace: ws, home, name: 'qa-check', output: 'readiness', description: 'Checks QA notes' });
+  assert.deepEqual(resolved().scenarios.readiness, ['verifier', 'qa-check']);
+  assert.ok(!resolved().pipeline.includes('qa-check'));
+  assert.throws(() => config.addAgent({ workspace: ws, home, name: 'Bad Name' }), /lowercase/);
+  assert.throws(() => config.addAgent({ workspace: ws, home, name: 'developer' }), /already exists/);
+  // Based on an agent that does not exist: nothing is left behind, not even the instructions file.
+  assert.throws(() => config.addAgent({ workspace: ws, home, name: 'ghost', base: 'not-here' }));
+  assert.equal(fs.existsSync(path.join(ws, config.CONFIG_DIR, config.PROMPTS_DIR, 'ghost.md')), false);
+  assert.ok(!resolved().agents.ghost);
+});
+
+test('setup: a picked repo is written with only what differs from the defaults; settings are checked by shape', () => {
+  assert.deepEqual(repoLayerOf({ name: 'api', path: 'api' }), {});
+  assert.deepEqual(repoLayerOf({ name: 'api', path: 'services/api', role: 'REST API', baseBranch: 'develop', gates: [{ name: 'lint', cmd: 'npm run lint' }] }), { role: 'REST API', path: 'services/api', baseBranch: 'develop', gates: [{ name: 'lint', cmd: 'npm run lint' }] });
+  assert.deepEqual(repoLayerOf({ name: 'api', path: 'api', baseBranch: 'develop', gates: [] }, 'develop'), {}, 'the workspace base branch is the default');
+
+  assert.deepEqual(validateSetting('notifications', 'needsYou'), []);
+  assert.deepEqual(validateSetting('settingSources', ['project', 'local']), []);
+  assert.deepEqual(validateSetting('askPermissions', true), []);
+  assert.equal(validateSetting('notifications', 'loud').length, 1);
+  assert.equal(validateSetting('settingSources', ['everything']).length, 1);
+  assert.equal(validateSetting('askPermissions', 'yes').length, 1);
+  assert.equal(validateSetting('claudePath', { evil: true }).length, 1);
+  assert.match(validateSetting('constructor', 'x')[0]!, /unknown setting/, 'nothing reached through the prototype');
+  assert.match(validateSetting('editor.fontSize', 30)[0]!, /unknown setting/);
+});
+

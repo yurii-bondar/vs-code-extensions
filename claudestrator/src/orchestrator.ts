@@ -365,8 +365,10 @@ class Orchestrator {
         else env.CLAUDE_CONFIG_DIR = a.dir;
         const r = await exec(this.claudeCommand(), ['auth', 'status', '--json'], { cwd: os.homedir(), env, timeoutMs: 20000 });
         try {
-          const j = JSON.parse(r.stdout);
-          this.auth.set(a.dir, { loggedIn: Boolean(j.loggedIn), ...(j.email && { email: j.email }), ...(j.subscriptionType && { plan: j.subscriptionType }) });
+          const j: unknown = JSON.parse(r.stdout);
+          if (typeof j !== 'object' || j === null) return;
+          const { loggedIn, email, subscriptionType } = j as Record<string, unknown>;
+          this.auth.set(a.dir, { loggedIn: loggedIn === true, ...(typeof email === 'string' && email && { email }), ...(typeof subscriptionType === 'string' && subscriptionType && { plan: subscriptionType }) });
         } catch {
           // an older CLI without `auth status`: leave the state unknown
         }

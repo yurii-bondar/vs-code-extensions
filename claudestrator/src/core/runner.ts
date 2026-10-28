@@ -185,6 +185,8 @@ class ClaudeSession {
   args: string[];
   proc: ChildProcessWithoutNullStreams;
   settingsRequest: string;
+  /** Whether a message this session could not handle was already logged (once is enough to find the bug). */
+  reportedBadMessage = false;
   closing?: boolean;
   endReason?: string;
 
@@ -221,16 +223,22 @@ class ClaudeSession {
         const line = buf.slice(0, i);
         buf = buf.slice(i + 1);
         if (!line.startsWith('{')) continue;
-        let m: CliMessage;
+        let m: unknown;
         try {
           m = JSON.parse(line);
         } catch {
           continue;
         }
+        // Every field of a CLI message is optional and read with care; it only has to be an object.
+        if (typeof m !== 'object' || m === null || Array.isArray(m)) continue;
         try {
-          this.handle(m);
-        } catch {
-          // a malformed message must not kill the session
+          this.handle(m as CliMessage);
+        } catch (e) {
+          // A message we cannot handle must not kill the session, but a bug in handling it should be findable.
+          if (!this.reportedBadMessage) {
+            this.reportedBadMessage = true;
+            console.warn('[claudestrator] could not handle a message from Claude Code:', e);
+          }
         }
       }
     });

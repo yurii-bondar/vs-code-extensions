@@ -10,10 +10,10 @@ import * as cfg from './core/config';
 import { buildPipeline, outline, taskPipeline, fitsScenario } from './core/pipeline';
 import { editableFrom } from './core/machine';
 import { taskRepos, taskDiff } from './core/git';
-import { findRepos, describeRepo, reposFromFolders, WORKSPACE_MAP, safeName } from './core/setup';
+import { findRepos, describeRepo, reposFromFolders, repoLayerOf, WORKSPACE_MAP, safeName } from './core/setup';
 import { expand } from './core/env';
 import { effectiveFor } from './core/defaults';
-import { AGENT_COLORS, OUTPUTS, EFFORTS } from './core/protocol';
+import { AGENT_COLORS, OUTPUTS, EFFORTS, validateSetting } from './core/protocol';
 import { settings, type Orchestrator } from './orchestrator';
 import type { Engine } from './core/engine';
 import type { ComposerArgs, ConfigData, ConfigSummary, HealthSummary, NewAgentParams, PipelineEdit, Preview, ReposData, Route, Rpc, RpcHandlers, SaveScenarioParams, SettingsData, SetupParams, TaskScreen } from './core/wire';
@@ -21,11 +21,18 @@ import type { Agent, ScenarioStep, Gate, TaskState } from './core/types';
 import type { ConfigLayer, RepoLayer } from './core/config';
 
 /** A request from the page: `{ type: 'req', id, method, params }`. */
-interface PageMessage {
-  type?: string;
-  id?: number;
-  method?: string;
+interface PageRequest {
+  type: 'req';
+  id: number;
+  method: string;
   params?: unknown;
+}
+
+/** What arrives from the page is untyped: only a well-formed request is answered. */
+function isPageRequest(msg: unknown): msg is PageRequest {
+  if (typeof msg !== 'object' || msg === null) return false;
+  const m = msg as Record<string, unknown>;
+  return m.type === 'req' && typeof m.id === 'number' && typeof m.method === 'string' && /^[a-zA-Z]+$/.test(m.method);
 }
 
 /** A repo as the page sends it back from the setup wizard or the detected list. */
@@ -115,9 +122,11 @@ class DashboardPanel implements RpcHandlers {
     return this.panel.webview.postMessage(msg);
   }
 
-  async onMessage(msg: PageMessage | null | undefined): Promise<void> {
-    if (!msg || msg.type !== 'req') return;
-    const fn = (this as unknown as Record<string, Handler | undefined>)[`$${msg.method}`];
+  async onMessage(msg: unknown): Promise<void> {
+    if (!isPageRequest(msg)) return;
+    // Only the panel's own `$` handlers, never something reached through Object's prototype.
+    const name = `$${msg.method}`;
+    const fn = Object.prototype.hasOwnProperty.call(DashboardPanel.prototype, name) ? (this as unknown as Record<string, Handler | undefined>)[name] : undefined;
     try {
       if (!fn) throw new Error(`unknown request ${msg.method}`);
       const data = await fn.call(this, msg.params || {});
@@ -471,32 +480,7 @@ class DashboardPanel implements RpcHandlers {
    * its label. Returns its id.
    */
   async $saveScenario({ id, label, description, agents = [] }: SaveScenarioParams) {
-    const r = this.orch.config();
-    const taken = new Set(['deliver', 'readiness', 'audit', 'auto', ...(r.ok ? Object.keys(r.config.custom) : [])]);
-    const clean = String(label || '').trim();
-    if (!clean) throw new Error('Give the scenario a name');
-    if (id && !(r.ok && r.config.custom[id])) throw new Error(`There is no scenario "${id}"`);
-    if (r.ok && Object.values(r.config.custom).some((sc) => sc.id !== id && sc.label.toLowerCase() === clean.toLowerCase())) throw new Error(`A scenario called "${clean}" already exists`);
-    let newId = id;
-    if (!newId) {
-      // Latin letters make the id; a name in another script gets a numbered one.
-      const base = clean.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^[^a-z]+|-+$/g, '') || 'scenario';
-      newId = base;
-      for (let n = 2; taken.has(newId); n++) newId = `${base}-${n}`;
-    }
-    // Some mistakes (an unknown agent, code and report agents mixed) only show once the agents resolve: such a change
-    // would break every task, so the file goes back to what it was.
-    const file = cfg.projectConfigFile(this.root);
-    const before = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
-    cfg.setCustomScenario(this.root, newId, { label: clean, description: description && description.trim(), agents });
-    const after = this.orch.config();
-    if (!after.ok) {
-      if (before === null) fs.rmSync(file);
-      else fs.writeFileSync(file, before);
-      const mine = after.errors.filter((e) => e.message.includes(`"${newId}"`));
-      throw new Error((mine.length ? mine : after.errors).map((e) => e.message).join('; '));
-    }
-    return { id: newId };
+    return { id: cfg.saveCustomScenario({ workspace: this.root, id, label, description, agents }) };
   }
 
   async $deleteScenario({ id }: { id: string }) {
@@ -514,35 +498,10 @@ class DashboardPanel implements RpcHandlers {
   }
 
   async $newAgent({ name, base, description, output, model, effort }: NewAgentParams) {
-    if (!/^[a-z][a-z0-9-]*$/.test(name || '')) throw new Error('Use lowercase letters, digits and dashes, starting with a letter (e.g. security-reviewer)');
-    const r = this.orch.config();
-    if (r.ok && r.config.agents[name!]) throw new Error(`An agent called "${name}" already exists`);
-    const rel = `./${cfg.PROMPTS_DIR}/${name}.md`;
-    const file = path.join(this.root, cfg.CONFIG_DIR, cfg.PROMPTS_DIR, `${name}.md`);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    if (!fs.existsSync(file)) {
-      fs.writeFileSync(file, base ? `<!-- Added to the instructions of "${base}". Write what this agent should do differently or check in addition. -->\n\n` : `You are the ${name} stage.\n\nDescribe what this agent does, what it reads first and what its report must contain.\n`);
-    }
-    cfg.updateAgentConfig(this.root, name!, {
-      ...(base && { extends: base }),
-      ...(description && { description }),
-      ...(!base && { output: output || 'verdict' }),
-      ...(model && { model }),
-      ...(effort && { effort }),
-      instructions: { mode: base ? 'append' : 'replace', file: rel },
-    });
-    const now = this.orch.config();
-    // An agent based on a readiness or audit agent joins that scenario, not the delivery pipeline.
-    const scenario = now.ok && (base ? Object.keys(now.config.scenarios).find((sc) => now.config.scenarios[sc]!.includes(base)) : ['readiness', 'audit'].find((sc) => sc === output));
-    if (scenario && now.ok) cfg.setScenario(this.root, scenario, [...now.config.scenarios[scenario]!, name!]);
-    else if (now.ok) {
-      const pipeline = [...now.config.pipeline];
-      const at = base ? pipeline.indexOf(base) : -1;
-      pipeline.splice(at === -1 ? pipeline.length : at + 1, 0, name!);
-      cfg.setPipeline(this.root, pipeline);
-    }
+    const file = cfg.addAgent({ workspace: this.root, name, base, description, output, model, effort });
     await vscode.window.showTextDocument(vscode.Uri.file(file), { viewColumn: vscode.ViewColumn.Beside });
   }
+
 
   async $editInstructions({ name }: { name: string }) {
     const r = this.orch.config();
@@ -552,6 +511,8 @@ class DashboardPanel implements RpcHandlers {
   }
 
   async $setValue({ keyPath, value }: { keyPath: string[]; value: unknown }) {
+    // The value itself is checked by the config validator when it is written.
+    if (!Array.isArray(keyPath) || !keyPath.length || !keyPath.every((k) => typeof k === 'string' && k.length > 0)) throw new Error('invalid config path');
     cfg.setProjectValue(this.root, keyPath, value);
   }
 
@@ -625,14 +586,7 @@ class DashboardPanel implements RpcHandlers {
   }
 
   async $addDetected({ repos }: { repos: PickedRepo[] }) {
-    for (const d of repos) {
-      cfg.setRepo(this.root, safeName(d.name), {
-        ...(d.role && { role: d.role }),
-        ...(d.path !== d.name && { path: d.path }),
-        ...(d.baseBranch && d.baseBranch !== 'main' && { baseBranch: d.baseBranch }),
-        ...(d.gates && d.gates.length && { gates: d.gates }),
-      });
-    }
+    for (const d of repos) cfg.setRepo(this.root, safeName(d.name), repoLayerOf(d));
   }
 
   async $runGates({ name, force }: { name: string; force?: boolean }) {
@@ -644,15 +598,13 @@ class DashboardPanel implements RpcHandlers {
     if (!picked) return;
     const r = this.orch.config();
     const current = r.ok ? r.config.context : [];
-    const dir = path.join(this.root, cfg.CONFIG_DIR);
-    const all = [...new Set([...current, ...picked.map((u) => u.fsPath)])].map((f) => path.relative(dir, f).split(path.sep).join('/'));
+    const all = [...new Set([...current, ...picked.map((u) => u.fsPath)])].map((f) => cfg.configRelative(this.root, f));
     cfg.setProjectValue(this.root, ['context'], all);
   }
 
   async $removeContext({ file }: { file: string }) {
     const r = this.orch.config();
-    const dir = path.join(this.root, cfg.CONFIG_DIR);
-    const rest = (r.ok ? r.config.context : []).filter((f) => f !== file).map((f) => path.relative(dir, f).split(path.sep).join('/'));
+    const rest = (r.ok ? r.config.context : []).filter((f) => f !== file).map((f) => cfg.configRelative(this.root, f));
     cfg.setProjectValue(this.root, ['context'], rest.length ? rest : undefined);
   }
 
@@ -666,8 +618,7 @@ class DashboardPanel implements RpcHandlers {
     }
     const current = r.ok ? r.config.context : [];
     if (!current.includes(file)) {
-      const dir = path.join(this.root, cfg.CONFIG_DIR);
-      cfg.setProjectValue(this.root, ['context'], [...current, file].map((f) => path.relative(dir, f).split(path.sep).join('/')));
+      cfg.setProjectValue(this.root, ['context'], [...current, file].map((f) => cfg.configRelative(this.root, f)));
     }
     await vscode.window.showTextDocument(vscode.Uri.file(file));
   }
@@ -684,17 +635,7 @@ class DashboardPanel implements RpcHandlers {
       ...(language && language !== 'English' && { language }),
       ...(baseBranch && baseBranch !== 'main' && { baseBranch }),
       ...(gitMode && gitMode !== 'branch' && { git: { mode: gitMode } }),
-      repos: Object.fromEntries(
-        (repos || []).map((d) => [
-          safeName(d.name),
-          {
-            ...(d.role && { role: d.role }),
-            ...(d.path !== d.name && { path: d.path }),
-            ...(d.baseBranch && d.baseBranch !== (baseBranch || 'main') && { baseBranch: d.baseBranch }),
-            ...(d.gates && d.gates.length && { gates: d.gates }),
-          },
-        ])
-      ),
+      repos: Object.fromEntries((repos || []).map((d) => [safeName(d.name), repoLayerOf(d, baseBranch || 'main')])),
       ...(map && { context: ['./workspace.md'] }),
     };
     if (!Object.keys(layer.repos!).length) delete layer.repos;
@@ -728,8 +669,8 @@ class DashboardPanel implements RpcHandlers {
   }
 
   async $updateSetting({ key, value }: { key: string; value: unknown }) {
-    const allowed = ['claudePath', 'claudeConfigDir', 'settingSources', 'askPermissions', 'notifications', 'workspaceFolder', 'nodePath'];
-    if (!allowed.includes(key)) throw new Error(`unknown setting ${key}`);
+    const issues = validateSetting(key, value);
+    if (issues.length) throw new Error(`invalid setting: ${issues.join('; ')}`);
     await settings().update(key, value, vscode.ConfigurationTarget.Global);
     if (key === 'claudePath' || key === 'nodePath') await this.orch.refreshHealth();
     else if (key === 'settingSources') this.orch.refreshDefaults(true);

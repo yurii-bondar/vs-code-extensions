@@ -1456,8 +1456,15 @@ interface Views {
       case 'permissionDone':
         loadOverview().then(() => current && current.onPermission && current.onPermission());
         return;
-      default:
+      case 'output':
+      case 'live':
         if (current && current.onPush) current.onPush(msg);
+        return;
+      default: {
+        // A new host message must be handled above; the compiler says so here.
+        const unhandled: never = msg;
+        return unhandled;
+      }
     }
   });
 

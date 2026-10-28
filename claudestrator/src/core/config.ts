@@ -818,6 +818,109 @@ function ensureInstructionsFile(workspace: string, agentName: string, resolved?:
   return file;
 }
 
+// ---------- changes that must leave a working config ----------
+
+/** A path inside .claudestrator/, as config.yaml writes it: relative, with `/` (`./workspace.md` is `workspace.md`). */
+function configRelative(workspace: string, file: string): string {
+  return path.relative(path.join(workspace, CONFIG_DIR), file).split(path.sep).join('/');
+}
+
+/**
+ * Runs `change` on the project and keeps it only if the config still resolves. Otherwise config.yaml, and every file
+ * `change` named through `remember` before writing it, go back to what they were, and the problems are thrown: a config
+ * that does not resolve would stop every task. `explain` picks the problems worth showing (all of them by default).
+ */
+function withConfigRollback<T>({ workspace, home, explain }: { workspace: string; home?: string | undefined; explain?: (errors: Diagnostic[]) => Diagnostic[] }, change: (remember: (file: string) => void) => T): T {
+  const configFile = projectConfigFile(workspace);
+  const saved = new Map<string, string | null>();
+  const remember = (file: string): void => {
+    if (!saved.has(file)) saved.set(file, fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null);
+  };
+  remember(configFile);
+  try {
+    const result = change(remember);
+    const after = loadConfig({ workspace, home });
+    if (!after.ok) {
+      const shown = explain ? explain(after.errors) : after.errors;
+      throw new Error((shown.length ? shown : after.errors).map((e) => e.message).join('; '));
+    }
+    return result;
+  } catch (e) {
+    for (const [file, content] of saved) {
+      if (content === null) fs.rmSync(file, { force: true });
+      else fs.writeFileSync(file, content);
+    }
+    throw e;
+  }
+}
+
+/** Scenario ids nobody can take: the delivery pipeline, the composer's "pick for me", and the built-in reports. */
+const RESERVED_SCENARIOS = ['deliver', 'auto', ...Object.keys(SCENARIO_OUTPUT)];
+
+/**
+ * Creates or changes a custom scenario. Without `id` a new one is named after its label (`Quick fix` → `quick-fix`,
+ * `-2` for a taken one; a label without Latin letters gets `scenario`). Labels are unique, ignoring case. Returns the id.
+ */
+function saveCustomScenario({ workspace, home, id, label, description, agents = [] }: { workspace: string; home?: string | undefined; id?: string | undefined; label?: string | undefined; description?: string | undefined; agents?: ScenarioStep[] | undefined }): string {
+  const r = loadConfig({ workspace, home });
+  const custom = r.ok ? r.config.custom : {};
+  const clean = String(label || '').trim();
+  if (!clean) throw new Error('Give the scenario a name');
+  if (id && !custom[id]) throw new Error(`There is no scenario "${id}"`);
+  if (Object.values(custom).some((sc) => sc.id !== id && sc.label.toLowerCase() === clean.toLowerCase())) throw new Error(`A scenario called "${clean}" already exists`);
+  let newId = id;
+  if (!newId) {
+    const taken = new Set([...RESERVED_SCENARIOS, ...Object.keys(custom)]);
+    const base = clean.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^[^a-z]+|-+$/g, '') || 'scenario';
+    newId = base;
+    for (let n = 2; taken.has(newId); n++) newId = `${base}-${n}`;
+  }
+  const finalId = newId;
+  // Some mistakes (an unknown agent, code and report agents mixed) only show once the agents resolve.
+  withConfigRollback({ workspace, home, explain: (errors) => errors.filter((e) => e.message.includes(`"${finalId}"`)) }, () =>
+    setCustomScenario(workspace, finalId, { label: clean, description: description && description.trim(), agents })
+  );
+  return finalId;
+}
+
+/**
+ * Adds an agent of the project's own, with its instructions file under prompts/ (kept if it is there already). One
+ * based on another (`base`) adds to that agent's instructions and runs right after it; one based on a readiness or
+ * audit agent joins that report scenario. Returns the instructions file, for the user to write.
+ */
+function addAgent({ workspace, home, name, base, description, output, model, effort }: { workspace: string; home?: string | undefined; name?: string | undefined; base?: string | undefined; description?: string | undefined; output?: Output | undefined; model?: string | undefined; effort?: Effort | undefined }): string {
+  if (!name || !/^[a-z][a-z0-9-]*$/.test(name)) throw new Error('Use lowercase letters, digits and dashes, starting with a letter (e.g. security-reviewer)');
+  const before = loadConfig({ workspace, home });
+  if (before.ok && before.config.agents[name]) throw new Error(`An agent called "${name}" already exists`);
+  const file = path.join(workspace, CONFIG_DIR, PROMPTS_DIR, `${name}.md`);
+  return withConfigRollback({ workspace, home }, (remember) => {
+    remember(file);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    if (!fs.existsSync(file)) {
+      fs.writeFileSync(file, base ? `<!-- Added to the instructions of "${base}". Write what this agent should do differently or check in addition. -->\n\n` : `You are the ${name} stage.\n\nDescribe what this agent does, what it reads first and what its report must contain.\n`);
+    }
+    updateAgentConfig(workspace, name, {
+      ...(base && { extends: base }),
+      ...(description && { description }),
+      ...(!base && { output: output || 'verdict' }),
+      ...(model && { model }),
+      ...(effort && { effort }),
+      instructions: { mode: base ? 'append' : 'replace', file: `./${PROMPTS_DIR}/${name}.md` },
+    });
+    const now = loadConfig({ workspace, home });
+    if (!now.ok) return file; // the rollback reports it
+    const scenario = base ? Object.keys(now.config.scenarios).find((sc) => now.config.scenarios[sc]!.includes(base)) : Object.keys(SCENARIO_OUTPUT).find((sc) => SCENARIO_OUTPUT[sc] === output);
+    if (scenario) setScenario(workspace, scenario, [...now.config.scenarios[scenario]!, name]);
+    else {
+      const pipeline = [...now.config.pipeline];
+      const at = base ? pipeline.indexOf(base) : -1;
+      pipeline.splice(at === -1 ? pipeline.length : at + 1, 0, name);
+      setPipeline(workspace, pipeline);
+    }
+    return file;
+  });
+}
+
 export type { AgentLayer, ConfigLayer, Flags, Layer, RepoLayer, ResolveResult, ScenarioStepLayer };
 export {
   CONFIG_DIR,
@@ -837,6 +940,11 @@ export {
   readProjectLayer,
   updateAgentConfig,
   resetAgentConfig,
+  configRelative,
+  withConfigRollback,
+  saveCustomScenario,
+  addAgent,
+  RESERVED_SCENARIOS,
   setPipeline,
   setScenario,
   setCustomScenario,
