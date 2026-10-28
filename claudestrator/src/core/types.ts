@@ -282,6 +282,8 @@ export interface RecordedVerdict {
   artifact: string;
   status: Verdict['status'];
   findings: Finding[];
+  /** The diff this verdict was given had no changed file in any repo. */
+  emptyDiff?: boolean;
 }
 
 export interface ReviewState {
@@ -289,6 +291,8 @@ export interface ReviewState {
   maxRounds: number;
   fixing: boolean;
   fixRepos: string[];
+  /** Review rounds in a row whose diff was empty: the fix rounds are changing nothing. */
+  emptyRounds: number;
   verdicts: RecordedVerdict[];
   lastVerdicts: RecordedVerdict[];
   openFindings: Finding[];
@@ -407,6 +411,8 @@ export type OrchEvent = EventBase &
         readiness?: Readiness;
         audit?: Audit;
         gates?: 'none' | 'pass' | 'fail';
+        /** A verdict stage: the diff it reviewed had no changed file in any repo. */
+        emptyDiff?: boolean;
       }
     | { type: 'stage_failed'; agent: string; repo?: string; error: string }
     | { type: 'checkpoint_answered'; id: string; option: string; feedback?: string }

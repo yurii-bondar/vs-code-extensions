@@ -221,8 +221,11 @@ async function prepareRepos(workspace: string, state: TaskState, config: RepoLoo
   return { ok: true, branch, repos: results };
 }
 
-/** The combined diff of a task's repos against their bases, untracked files included: what a reviewer reads. */
-async function taskDiff(repos: TaskRepo[]): Promise<{ text: string; repos: { repo: string; files: number; branch: string | null }[] }> {
+/**
+ * The combined diff of a task's repos against their bases, untracked files included: what a reviewer reads.
+ * `empty` is true when no repo has a changed file: there is nothing to review.
+ */
+async function taskDiff(repos: TaskRepo[]): Promise<{ text: string; empty: boolean; repos: { repo: string; files: number; branch: string | null }[] }> {
   const parts: string[] = [];
   const stats: { repo: string; files: number; branch: string | null }[] = [];
   for (const { name, git, base } of repos) {
@@ -234,7 +237,7 @@ async function taskDiff(repos: TaskRepo[]): Promise<{ text: string; repos: { rep
     stats.push({ repo: name, files: (await git.changedFiles(base)).length, branch });
     parts.push(`################ ${name} (${branch} vs ${base})\n${await git.diff(base)}`);
   }
-  return { text: `${parts.join('\n\n')}\n`, repos: stats };
+  return { text: `${parts.join('\n\n')}\n`, empty: stats.length > 0 && stats.every((r) => r.files === 0), repos: stats };
 }
 
 /** Removes a finished task's worktrees. Refuses a worktree with uncommitted work unless `force`. */

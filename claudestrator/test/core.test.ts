@@ -191,6 +191,56 @@ test('machine: review limit, stop keeps the question, resume asks again', () => 
   assert.equal(s.checkpoint!.id, 'approve-plan');
 });
 
+/** A one-repo task whose reviewer asks for changes in every round; `emptyDiffs[i]` says whether round i + 1 had nothing to review. */
+function reviewedRounds(emptyDiffs: boolean[], reviewRounds: number): TaskState {
+  const { pipeline } = defaultPipeline();
+  const events: EventBody[] = [
+    { ...createdEvent(pipeline, { knownRepos: [] }), limits: { reviewRounds, gateAttempts: 3 } },
+    { type: 'intake_completed', spec },
+    { type: 'stage_started', agent: 'planner' },
+    { type: 'stage_completed', agent: 'planner', artifact: 'p', plan: { ...PLAN, repos: [{ name: 'api', mode: 'full' }] } },
+    { type: 'checkpoint_answered', id: 'approve-plan', option: 'approve' },
+  ];
+  emptyDiffs.forEach((empty, i) => {
+    const r = i + 1;
+    events.push(
+      { type: 'stage_started', agent: 'developer', repo: 'api' },
+      { type: 'stage_completed', agent: 'developer', repo: 'api', artifact: `reports/r${r}/developer-api.md`, gates: 'pass' },
+      { type: 'stage_started', agent: 'tester' },
+      { type: 'stage_completed', agent: 'tester', artifact: `reports/r${r}/tester.md`, gates: 'pass' },
+      { type: 'stage_started', agent: 'reviewer' },
+      { type: 'stage_completed', agent: 'reviewer', artifact: `reviews/r${r}/reviewer.md`, verdict: { status: 'changes_requested', summary: 'x', findings: [{ severity: 'major', repo: 'api', problem: 'nothing is implemented' }] }, ...(empty && { emptyDiff: true }) },
+    );
+  });
+  return rpl(timed(events));
+}
+
+test('machine: two review rounds in a row with an empty diff stop the loop before the round limit', () => {
+  // The limit would allow five rounds; the agents changed nothing twice, so a third fix round is not started.
+  const s = reviewedRounds([true, true], 5);
+  assert.equal(s.status, 'waiting');
+  assert.equal(s.checkpoint!.id, 'review-limit');
+  assert.match(s.checkpoint!.reason!, /diff was empty in 2 review rounds/);
+  assert.equal(s.review.round, 2, 'no further fix round was started');
+  assert.equal(s.review.emptyRounds, 2);
+});
+
+test('machine: a round with changes between two empty ones resets the count', () => {
+  const s = reviewedRounds([true, false, true], 5);
+  assert.equal(s.checkpoint, null);
+  assert.equal(s.review.round, 4, 'the fix rounds go on while the diffs are not empty twice in a row');
+  assert.equal(s.review.emptyRounds, 1);
+});
+
+test('machine: one empty round is not enough, and a round limit still applies', () => {
+  const once = reviewedRounds([true], 5);
+  assert.equal(once.checkpoint, null);
+  assert.equal(once.review.round, 2);
+  const limit = reviewedRounds([false, false], 2);
+  assert.equal(limit.checkpoint!.id, 'review-limit');
+  assert.match(limit.checkpoint!.reason!, /still has blocking findings/);
+});
+
 test('machine: a failed agent opens agent-failure and retry runs the same step', () => {
   const { pipeline } = defaultPipeline();
   let s = rpl(timed([createdEvent(pipeline), { type: 'intake_completed', spec }, { type: 'stage_started', agent: 'planner' }, { type: 'stage_failed', agent: 'planner', error: 'boom' }]));
