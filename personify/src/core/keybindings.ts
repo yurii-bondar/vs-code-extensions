@@ -94,6 +94,17 @@ const edit = (text: string, path: jsonc.JSONPath, value: unknown, extra: Partial
   jsonc.applyEdits(text, jsonc.modify(text, path, value, { ...FORMAT, ...extra }));
 const append = (text: string, entry: JsonObject): string => edit(text, [-1], entry, { isArrayInsertion: true });
 
+// jsonc-parser 3.3.1 removes the last element of an array up to two characters before the end, as if a line break
+// came before `]`. In a one-line file (`…}]`) that leaves a stray `}`, so put the line break there first.
+function removeAt(text: string, index: number): string {
+  const tree = jsonc.parseTree(text, [], PARSE);
+  const count = tree?.type === 'array' ? (tree.children?.length ?? 0) : 0;
+  const close = tree ? tree.offset + tree.length - 1 : -1;
+  const lastOfMany = count > 1 && index === count - 1;
+  const safe = lastOfMany && !/\s/.test(text.charAt(close - 1)) ? `${text.slice(0, close)}\n${text.slice(close)}` : text;
+  return edit(safe, [index], undefined);
+}
+
 function entry({ key, command, when, args }: { key: string; command: string; when: string; args?: unknown }): JsonObject {
   const out: JsonObject = { key, command };
   if (when) out.when = when;
@@ -117,7 +128,7 @@ export function applyEdit(text: string, list: readonly unknown[], change: Keybin
     }
     case 'remove':
       checkEntry(list, change.index, change.command);
-      return edit(text, [change.index], undefined);
+      return removeAt(text, change.index);
     case 'disableDefault':
       return append(text, entry({ key: change.key, command: `-${change.command}`, when: change.when }));
     // Changing a default = disable the original + add the new one.
@@ -132,7 +143,7 @@ export function applyEdit(text: string, list: readonly unknown[], change: Keybin
       for (let i = list.length - 1; i >= 0; i--) {
         const item = list[i];
         const c = isRecord(item) ? item.command : undefined;
-        if (c === change.command || c === `-${change.command}`) next = edit(next, [i], undefined);
+        if (c === change.command || c === `-${change.command}`) next = removeAt(next, i);
       }
       return next;
     }
