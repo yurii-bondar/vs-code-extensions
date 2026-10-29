@@ -1,11 +1,12 @@
 // Go tokens, mapped to the scopes of VS Code's built-in Go grammar.
 // Semantic selectors only take effect when gopls semantic tokens are on ("gopls": { "ui.semanticTokens": true }).
 
-const item = (id, label, example, scopes, semantic = [], hint) => ({ id, label, example, scopes, semantic, hint });
+import { tokenItem as item } from './types';
+import type { Language } from './types';
 
 const GOPLS_HINT = 'Needs gopls semantic tokens: "gopls": { "ui.semanticTokens": true }.';
 
-module.exports = {
+export const GO: Language = {
   id: 'go',
   title: 'Go',
   short: 'Go',

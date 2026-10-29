@@ -1,4 +1,12 @@
 .vscode/**
 *.vsix
 **/*.personify-backup
+test/**
+dist/test/**
+**/*.ts
+**/*.map
+src/**
+tsconfig*.json
+eslint.config.mjs
 release.config.cjs
+.gitignore
