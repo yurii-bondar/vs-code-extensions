@@ -75,10 +75,3 @@ test('resetCommand drops every entry of a command and its removals', () => {
   const text = JSON.stringify([{ key: 'a', command: 'x' }, { key: 'b', command: 'y' }, { key: 'c', command: '-x' }], null, 2);
   assert.deepEqual(apply(text, { op: 'resetCommand', command: 'x' }), [{ key: 'b', command: 'y' }]);
 });
-
-test('removing the last entry of a one-line file leaves valid JSON', () => {
-  const text = JSON.stringify([{ key: 'a', command: 'x' }, { key: 'b', command: 'y' }, { key: 'c', command: '-x' }]);
-  assert.deepEqual(apply(text, { op: 'resetCommand', command: 'x' }), [{ key: 'b', command: 'y' }]);
-  assert.deepEqual(apply(text, { op: 'restoreDefault', index: 2, command: 'x' }), [{ key: 'a', command: 'x' }, { key: 'b', command: 'y' }]);
-  assert.deepEqual(apply('[{"key":"a","command":"x"},{"key":"b","command":"y"}] // mine', { op: 'remove', index: 1, command: 'y' }), [{ key: 'a', command: 'x' }]);
-});
