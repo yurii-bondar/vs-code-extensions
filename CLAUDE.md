@@ -4,7 +4,7 @@ Monorepo of five VS Code extensions, each a self-contained folder with its own `
 
 | Folder | Extension | Notes |
 |---|---|---|
-| `personify/` | Personify | settings panel (hotkeys, colors, fonts, syntax); webview in `media/main.js` |
+| `personify/` | Personify | settings panel (hotkeys, colors, fonts, syntax); settings and keybindings logic in `src/core/`, catalog in `src/catalog/`, webview in `media/main.ts` |
 | `claude-ctx-man/` | Claude Ctx Man | accounts/sessions tree, statusline (`src/`, `statusline/`) |
 | `claudestrator/` | Claudestrator | orchestrator; engine in `src/core/`, hook in `hook/`, tests in `test/` |
 | `go-to-project/` | Go to Project | `extension.js` + `lib.js`, tests in `test/` |
@@ -12,7 +12,7 @@ Monorepo of five VS Code extensions, each a self-contained folder with its own `
 
 The root `package.json` is release tooling only (semantic-release + `semantic-release-monorepo`). It has no app code.
 
-**Current state.** `claudestrator/`, `claude-ctx-man/` and `scriptor/` are TypeScript (strict, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`): host code in `extension.ts` and `src/`, webview scripts in `media/*.ts` (plain scripts with their own `tsconfig.webview.json`), tests in `test/`. Build output goes to `dist/` (git-ignored, `main` is `./dist/extension.js`). In each: `npm run build`, `npm run typecheck`, `npm run lint`, `npm test` (builds, then `node --test dist/test/*.test.js`). `personify/` and `go-to-project/` are still plain CommonJS JavaScript with `node --test test/*.test.js`.
+**Current state.** `claudestrator/`, `claude-ctx-man/`, `scriptor/` and `personify/` are TypeScript (strict, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`): host code in `extension.ts` and `src/`, webview scripts in `media/*.ts` (plain scripts with their own `tsconfig.webview.json`), tests in `test/`. Build output goes to `dist/` (git-ignored, `main` is `./dist/extension.js`). In each: `npm run build`, `npm run typecheck`, `npm run lint`, `npm test` (builds, then `node --test dist/test/*.test.js`). `go-to-project/` is still plain CommonJS JavaScript with `node --test test/*.test.js`.
 
 `claude-ctx-man/statusline/render.ts` is special: Install copies its compiled `dist/statusline/render.js` to `~/.ctx-man/statusline.js`, where Claude Code runs it alone. It must stay one self-contained file that loads only Node's own modules; its imports from `statusline/types.ts` are `import type` (erased).
 
@@ -31,7 +31,7 @@ Everything is adapted to this repo and lives in `.claude/`:
 
 The only git hook is husky's `commit-msg` (`.husky/commit-msg`), which strips AI-attribution trailers from commit messages. The root `npm install` activates it through the `prepare` script (`core.hooksPath` becomes `.husky/_`), so run it once after cloning. There is no pre-commit hook and no pre-commit version bump. CI's `pr-title` check is paused (`workflow_dispatch` only), so verify PR titles by hand.
 
-## Writing code today (JavaScript)
+## Writing code today (JavaScript, `go-to-project/`)
 
 Until the migration, hold new `.js` to the intent of `typescript.md` and `principles.md`:
 - Match the surrounding style (CommonJS, existing naming and comment density).
@@ -45,7 +45,7 @@ Until the migration, hold new `.js` to the intent of `typescript.md` and `princi
 
 Rules to apply from the first TS commit:
 
-1. **Per-extension migration**, one extension per PR, matching the release model. Order: `go-to-project` (smallest, has tests) → `personify` → `claude-ctx-man` → `claudestrator`. Done so far: `claudestrator`, `claude-ctx-man`.
+1. **Per-extension migration**, one extension per PR, matching the release model. Order: `go-to-project` (smallest, has tests) → `personify` → `claude-ctx-man` → `claudestrator`. Done so far: `claudestrator`, `claude-ctx-man`, `personify`.
 2. **`tsconfig`**: `strict: true`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes` (required by `typescript.md`), `noImplicitReturns`, target matching the VS Code engine's Node (check `engines.vscode`). Prefer one shared `tsconfig.base.json` at the root that each extension extends.
 3. **Types**: `@types/vscode` pinned to the same range as `engines.vscode`. `@types/node`.
 4. **No `any`.** Type JSON from disk, hook payloads and webview messages as `unknown` and narrow them at the boundary. Webview messages are a discriminated union with an exhaustive `switch` and a `never` default.
