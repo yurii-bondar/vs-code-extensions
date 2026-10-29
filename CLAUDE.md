@@ -24,7 +24,7 @@ Everything is adapted to this repo and lives in `.claude/`:
 |---|---|
 | `rules/git.md` | commit format with extension scope, semantic-release behaviour (no manual version/CHANGELOG edits), no AI attribution |
 | `rules/typescript.md` | strict tsconfig, no `any`, boundaries of this repo (`~/.claude*` files, hook payloads, webview messages, VS Code config), branded IDs |
-| `rules/principles.md` | SOLID/KISS/DRY/YAGNI applied to extensions: thin `extension.js`, injectable fs/git/clock seams, disposables |
+| `rules/principles.md` | SOLID/KISS/DRY/YAGNI applied to extensions: thin `extension.ts`, injectable fs/git/clock seams, disposables |
 | `skills/ts-performance` | extension-host hot paths: cheap activation, no `*Sync` in the host, streaming `.jsonl`, debounced watchers, cache by mtime, webview messaging |
 
 `principles.md` and `typescript.md` apply to new `.ts`; existing `.js` follows them in spirit until migrated. `ts-performance` is loaded only for the hot paths listed in its description, and readability wins elsewhere.

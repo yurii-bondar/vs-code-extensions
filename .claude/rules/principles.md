@@ -9,7 +9,7 @@ Design principles for the TypeScript/Node.js VS Code extensions in this repo. Lo
 ### S — Single Responsibility
 Every module, class, or function is responsible for one thing. If you struggle to name a type in one word — it does too much.
 
-In extensions: `extension.js` only wires `activate()` — commands, views, watchers, disposables. Logic that does not need the `vscode` API (parsing, config, git, store) lives in separate modules (`lib.js`, `src/core/`) so it runs under `node --test`. A webview script renders; it does not read files.
+In extensions: `extension.ts` only wires `activate()` — commands, views, watchers, disposables. Logic that does not need the `vscode` API (parsing, config, git, store) lives in `src/core/`, which does not import `vscode`, so it runs under `node --test` against the build. A webview script renders; it does not read files.
 
 ### O — Open/Closed
 Code is open for extension via interfaces and composition, closed for modification. Add new types — do not break existing ones.
@@ -85,7 +85,7 @@ function openSession({ id, dir, resume = false, newWindow = false }: OpenSession
 - Every piece of logic exists in one place. Duplication is a source of bugs.
 - But: do not abstract prematurely. Three similar lines do not always require a function — wait for the fourth.
 - DRY applies to *knowledge and logic*, not syntax. Similar-looking code may express different things.
-- Across extensions: the four folders ship independently, so there is no shared runtime package. Duplicating a small helper (for example reading `oauthAccount` from `.claude.json`) between extensions is acceptable. Extract it only when the copies must change together; then decide deliberately where the shared code lives, because it has to be bundled into each `.vsix`.
+- Across extensions: the five folders ship independently, so there is no shared runtime package. Duplicating a small helper (for example reading `oauthAccount` from `.claude.json`) between extensions is acceptable. Extract it only when the copies must change together; then decide deliberately where the shared code lives, because it has to be bundled into each `.vsix`.
 
 ---
 

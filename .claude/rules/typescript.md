@@ -6,7 +6,7 @@ paths:
 
 # TypeScript
 
-Always-on for every `.ts` in the extension folders, not just in hot-path code. The repo is plain JavaScript today and is being migrated to TypeScript one extension at a time; hold new `.js` to the same intent (one type per value, boundaries validated). Performance-specific rules live in the `ts-performance` skill.
+Always-on for every `.ts` in the extension folders, not just in hot-path code. Every extension is TypeScript. Performance-specific rules live in the `ts-performance` skill.
 
 ## Safety
 
