@@ -12,7 +12,7 @@ Monorepo of five VS Code extensions, each a self-contained folder with its own `
 
 The root `package.json` is release tooling only (semantic-release + `semantic-release-monorepo`). It has no app code.
 
-**Current state.** All five extensions are TypeScript (strict, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`): host code in `extension.ts` and `src/`, webview scripts in `media/*.ts` (plain scripts with their own `tsconfig.webview.json`), tests in `test/`. Build output goes to `dist/` (git-ignored, `main` is `./dist/extension.js`). In each: `npm run build`, `npm run typecheck`, `npm run lint`, `npm test` (builds, then `node --test dist/test/*.test.js`).
+**Current state.** All five extensions are TypeScript (strict, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`): host code in `extension.ts` and `src/`, webview scripts in `media/*.ts` (plain scripts with their own `tsconfig.webview.json`), tests in `test/`. Compiler options live in the root `tsconfig.base.json`; each extension's `tsconfig.json` extends it and sets only `outDir`, `rootDir`, `include` and `exclude` (paths in a config resolve against the file that sets them, so they cannot move to the base). Build output goes to `dist/` (git-ignored, `main` is `./dist/extension.js`). In each: `npm run build`, `npm run typecheck`, `npm run lint`, `npm test` (builds, then `node --test dist/test/*.test.js`).
 
 `claude-ctx-man/statusline/render.ts` is special: Install copies its compiled `dist/statusline/render.js` to `~/.ctx-man/statusline.js`, where Claude Code runs it alone. It must stay one self-contained file that loads only Node's own modules; its imports from `statusline/types.ts` are `import type` (erased).
 
@@ -45,7 +45,7 @@ Hold every change to `typescript.md` and `principles.md`:
 
 ## TypeScript migration (done)
 
-The rules the migration followed, kept for reference. Still open: the shared `tsconfig.base.json` (each extension has its own `tsconfig.json`).
+The rules the migration followed, kept for reference.
 
 1. **Per-extension migration**, one extension per PR, matching the release model. Order: `go-to-project` (smallest, has tests) → `personify` → `claude-ctx-man` → `claudestrator`. Done: all of them (`scriptor` was written in TypeScript from the start).
 2. **`tsconfig`**: `strict: true`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes` (required by `typescript.md`), `noImplicitReturns`, target matching the VS Code engine's Node (check `engines.vscode`). Prefer one shared `tsconfig.base.json` at the root that each extension extends.
