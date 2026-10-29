@@ -3,11 +3,12 @@
 // selectors (suffixed with every language below) so the color wins whether or not
 // semantic highlighting is on.
 
-const item = (id, label, example, scopes, semantic = [], hint) => ({ id, label, example, scopes, semantic, hint });
+import { tokenItem as item } from './types';
+import type { Language } from './types';
 
 const SEMANTIC_HINT = 'With semantic highlighting on, TypeScript may color some of these as plain variables.';
 
-module.exports = {
+export const JSTS: Language = {
   id: 'jsts',
   title: 'JavaScript / TypeScript',
   short: 'JS / TS',

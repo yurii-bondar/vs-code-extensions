@@ -1,10 +1,11 @@
-const vscode = require('vscode');
-const { PersonifyPanel } = require('./src/panel');
-const { KeybindingStore } = require('./src/keybindings');
+import * as vscode from 'vscode';
+import { PersonifyPanel } from './src/panel';
+import { KeybindingStore } from './src/keybindings';
+import type { Tab } from './src/core/types';
 
-function activate(context) {
-  const store = new KeybindingStore(context);
-  const open = (tab) => PersonifyPanel.show(context, store, tab);
+export function activate(context: vscode.ExtensionContext): void {
+  const store = new KeybindingStore(context.globalStorageUri);
+  const open = (tab?: Tab): void => PersonifyPanel.show(context, store, tab);
 
   context.subscriptions.push(
     vscode.commands.registerCommand('personify.open', () => open()),
@@ -17,8 +18,9 @@ function activate(context) {
   status.text = '$(paintcan) Personify';
   status.tooltip = 'Customize hotkeys, colors, fonts and syntax';
   status.command = 'personify.open';
-  const syncStatus = () => {
-    if (vscode.workspace.getConfiguration('personify').get('showStatusBarItem')) status.show();
+  const syncStatus = (): void => {
+    // Any value but false shows it, as the default does.
+    if (vscode.workspace.getConfiguration('personify').get<unknown>('showStatusBarItem') !== false) status.show();
     else status.hide();
   };
   syncStatus();
@@ -30,6 +32,4 @@ function activate(context) {
   );
 }
 
-function deactivate() {}
-
-module.exports = { activate, deactivate };
+export function deactivate(): void {}

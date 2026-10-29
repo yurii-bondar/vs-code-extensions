@@ -1,18 +1,23 @@
 // What the Appearance tab can edit. `color` items live in workbench.colorCustomizations,
 // `setting` items are plain VS Code settings.
 
+import type { Area, BooleanSetting, ColorItem, EnumSetting, FontSetting, NoteItem, NumberSetting } from './types';
+
 const FONT_WEIGHTS = ['normal', 'bold', '100', '200', '300', '400', '500', '600', '700', '800', '900'];
 
-const color = (key, label, desc) => ({ kind: 'color', key, label, desc });
-const setting = (key, label, type, extra = {}) => ({ kind: 'setting', key, label, type, ...extra });
-const note = (text) => ({ kind: 'note', text });
+const color = (key: string, label: string, desc = ''): ColorItem => ({ kind: 'color', key, label, desc });
+const note = (text: string): NoteItem => ({ kind: 'note', text });
+const number = (key: string, label: string, { min, max, step, unit = '', hint = '' }: { min: number; max: number; step: number; unit?: string; hint?: string }): NumberSetting => ({ kind: 'setting', type: 'number', key, label, hint, min, max, step, unit });
+const font = (key: string, label: string, hint = ''): FontSetting => ({ kind: 'setting', type: 'font', key, label, hint });
+const choice = (key: string, label: string, options: readonly string[]): EnumSetting => ({ kind: 'setting', type: 'enum', key, label, hint: '', options });
+const toggle = (key: string, label: string, hint = ''): BooleanSetting => ({ kind: 'setting', type: 'boolean', key, label, hint });
 
-const ansi = (bright) =>
+const ansi = (bright: boolean): ColorItem[] =>
   ['Black', 'Red', 'Green', 'Yellow', 'Blue', 'Magenta', 'Cyan', 'White'].map((name) =>
     color(`terminal.ansi${bright ? 'Bright' : ''}${name}`, `${bright ? 'Bright ' : ''}${name.toLowerCase()}`)
   );
 
-module.exports = [
+export const AREAS: readonly Area[] = [
   {
     id: 'sidebar',
     title: 'Sidebar',
@@ -39,9 +44,9 @@ module.exports = [
           color('list.inactiveSelectionBackground', 'Selected row (sidebar not focused)'),
           color('list.focusOutline', 'Focus outline'),
           color('tree.indentGuidesStroke', 'Indent guides'),
-          setting('workbench.tree.indent', 'Indent per level', 'number', { min: 0, max: 40, step: 1, unit: 'px' }),
-          setting('workbench.tree.renderIndentGuides', 'Show indent guides', 'enum', { options: ['none', 'onHover', 'always'] }),
-          setting('explorer.compactFolders', 'Compact single-child folders', 'boolean'),
+          number('workbench.tree.indent', 'Indent per level', { min: 0, max: 40, step: 1, unit: 'px' }),
+          choice('workbench.tree.renderIndentGuides', 'Show indent guides', ['none', 'onHover', 'always']),
+          toggle('explorer.compactFolders', 'Compact single-child folders'),
         ],
       },
       {
@@ -64,14 +69,14 @@ module.exports = [
           color('activityBar.activeBorder', 'Active indicator'),
           color('activityBarBadge.background', 'Badge background'),
           color('activityBarBadge.foreground', 'Badge text'),
-          setting('workbench.sideBar.location', 'Sidebar position', 'enum', { options: ['left', 'right'] }),
+          choice('workbench.sideBar.location', 'Sidebar position', ['left', 'right']),
         ],
       },
       {
         title: 'Font',
         items: [
           note('VS Code has no separate font family or size setting for the sidebar: it uses the system UI font. Zoom level scales the whole window, sidebar included.'),
-          setting('window.zoomLevel', 'Window zoom level', 'number', { min: -5, max: 5, step: 0.5 }),
+          number('window.zoomLevel', 'Window zoom level', { min: -5, max: 5, step: 0.5 }),
         ],
       },
     ],
@@ -85,12 +90,12 @@ module.exports = [
       {
         title: 'Font',
         items: [
-          setting('editor.fontFamily', 'Font family', 'font'),
-          setting('editor.fontSize', 'Font size', 'number', { min: 6, max: 40, step: 1, unit: 'px' }),
-          setting('editor.fontWeight', 'Font weight', 'enum', { options: FONT_WEIGHTS }),
-          setting('editor.lineHeight', 'Line height', 'number', { min: 0, max: 60, step: 1, unit: 'px', hint: '0 = automatic' }),
-          setting('editor.letterSpacing', 'Letter spacing', 'number', { min: -5, max: 10, step: 0.1, unit: 'px' }),
-          setting('editor.fontLigatures', 'Font ligatures', 'boolean', { hint: 'Needs a font with ligatures, e.g. Fira Code' }),
+          font('editor.fontFamily', 'Font family'),
+          number('editor.fontSize', 'Font size', { min: 6, max: 40, step: 1, unit: 'px' }),
+          choice('editor.fontWeight', 'Font weight', FONT_WEIGHTS),
+          number('editor.lineHeight', 'Line height', { min: 0, max: 60, step: 1, unit: 'px', hint: '0 = automatic' }),
+          number('editor.letterSpacing', 'Letter spacing', { min: -5, max: 10, step: 0.1, unit: 'px' }),
+          toggle('editor.fontLigatures', 'Font ligatures', 'Needs a font with ligatures, e.g. Fira Code'),
         ],
       },
       {
@@ -106,9 +111,9 @@ module.exports = [
           color('editor.findMatchBackground', 'Current search match'),
           color('editor.findMatchHighlightBackground', 'Other search matches'),
           color('editorCursor.foreground', 'Cursor'),
-          setting('editor.cursorStyle', 'Cursor style', 'enum', { options: ['line', 'block', 'underline', 'line-thin', 'block-outline', 'underline-thin'] }),
-          setting('editor.cursorBlinking', 'Cursor blinking', 'enum', { options: ['blink', 'smooth', 'phase', 'expand', 'solid'] }),
-          setting('editor.renderLineHighlight', 'Highlight current line', 'enum', { options: ['none', 'gutter', 'line', 'all'] }),
+          choice('editor.cursorStyle', 'Cursor style', ['line', 'block', 'underline', 'line-thin', 'block-outline', 'underline-thin']),
+          choice('editor.cursorBlinking', 'Cursor blinking', ['blink', 'smooth', 'phase', 'expand', 'solid']),
+          choice('editor.renderLineHighlight', 'Highlight current line', ['none', 'gutter', 'line', 'all']),
         ],
       },
       {
@@ -122,8 +127,8 @@ module.exports = [
           color('editorWhitespace.foreground', 'Whitespace dots'),
           color('editorBracketMatch.background', 'Matching bracket'),
           color('editorRuler.foreground', 'Rulers'),
-          setting('editor.bracketPairColorization.enabled', 'Colorize bracket pairs', 'boolean', { hint: 'Overrides bracket colors from the Syntax tab' }),
-          setting('editor.minimap.enabled', 'Show minimap', 'boolean'),
+          toggle('editor.bracketPairColorization.enabled', 'Colorize bracket pairs', 'Overrides bracket colors from the Syntax tab'),
+          toggle('editor.minimap.enabled', 'Show minimap'),
           color('minimap.background', 'Minimap background'),
         ],
       },
@@ -159,12 +164,12 @@ module.exports = [
       {
         title: 'Font',
         items: [
-          setting('terminal.integrated.fontFamily', 'Font family', 'font', { hint: 'Empty = same as the editor' }),
-          setting('terminal.integrated.fontSize', 'Font size', 'number', { min: 6, max: 40, step: 1, unit: 'px' }),
-          setting('terminal.integrated.fontWeight', 'Font weight', 'enum', { options: FONT_WEIGHTS }),
-          setting('terminal.integrated.fontWeightBold', 'Bold font weight', 'enum', { options: FONT_WEIGHTS }),
-          setting('terminal.integrated.lineHeight', 'Line height', 'number', { min: 1, max: 3, step: 0.1, hint: 'Multiplier of the font size' }),
-          setting('terminal.integrated.letterSpacing', 'Letter spacing', 'number', { min: 0, max: 10, step: 1, unit: 'px' }),
+          font('terminal.integrated.fontFamily', 'Font family', 'Empty = same as the editor'),
+          number('terminal.integrated.fontSize', 'Font size', { min: 6, max: 40, step: 1, unit: 'px' }),
+          choice('terminal.integrated.fontWeight', 'Font weight', FONT_WEIGHTS),
+          choice('terminal.integrated.fontWeightBold', 'Bold font weight', FONT_WEIGHTS),
+          number('terminal.integrated.lineHeight', 'Line height', { min: 1, max: 3, step: 0.1, hint: 'Multiplier of the font size' }),
+          number('terminal.integrated.letterSpacing', 'Letter spacing', { min: 0, max: 10, step: 1, unit: 'px' }),
         ],
       },
       {
@@ -176,9 +181,9 @@ module.exports = [
           color('terminalCursor.foreground', 'Cursor'),
           color('terminalCursor.background', 'Text under block cursor'),
           color('terminal.border', 'Split pane border'),
-          setting('terminal.integrated.cursorStyle', 'Cursor style', 'enum', { options: ['block', 'line', 'underline'] }),
-          setting('terminal.integrated.cursorBlinking', 'Cursor blinking', 'boolean'),
-          setting('terminal.integrated.minimumContrastRatio', 'Minimum contrast ratio', 'number', { min: 1, max: 21, step: 0.5, hint: '1 = keep exact colors' }),
+          choice('terminal.integrated.cursorStyle', 'Cursor style', ['block', 'line', 'underline']),
+          toggle('terminal.integrated.cursorBlinking', 'Cursor blinking'),
+          number('terminal.integrated.minimumContrastRatio', 'Minimum contrast ratio', { min: 1, max: 21, step: 0.5, hint: '1 = keep exact colors' }),
         ],
       },
       { title: 'ANSI colors', items: ansi(false) },

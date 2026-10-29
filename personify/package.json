@@ -35,7 +35,15 @@
     "go",
     "color theme"
   ],
-  "main": "./extension.js",
+  "main": "./dist/extension.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.webview.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.webview.json",
+    "lint": "eslint .",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "package": "npx @vscode/vsce package",
+    "vscode:prepublish": "npm run build"
+  },
   "activationEvents": [
     "onStartupFinished"
   ],
@@ -80,5 +88,13 @@
   },
   "dependencies": {
     "jsonc-parser": "^3.3.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/node": "^22.20.5",
+    "@types/vscode": "~1.85.0",
+    "eslint": "^9.39.5",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.72.1"
   }
 }
