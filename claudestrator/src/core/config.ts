@@ -4,8 +4,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as YAML from 'yaml';
-import { validateConfigLayer, validateAgentPatch, validateLibraryLayer, SCENARIO_OUTPUT } from './protocol';
-import type { Agent, Config, CustomScenario, Diagnostic, Effort, Gate, GitMode, Output, Policy, RepoConfig, Runs, ScenarioStep } from './types';
+import { validateConfigLayer, validateAgentPatch, validateLibraryLayer, SCENARIO_OUTPUT, JIRA_KEY } from './protocol';
+import type { Agent, Config, CustomScenario, Diagnostic, Effort, Gate, GitMode, GroupType, Output, Policy, RepoConfig, Runs, ScenarioStep, TaskGroup, TaskInstruction } from './types';
 
 // ---------- the shapes of a config layer, as written in config.yaml ----------
 
@@ -35,6 +35,9 @@ interface CustomScenarioLayer {
   agents: ScenarioStepLayer[];
 }
 
+type GroupLayer = Omit<TaskGroup, 'id'>;
+type InstructionLayer = Omit<TaskInstruction, 'id'>;
+
 interface RepoLayer {
   role?: string;
   path?: string;
@@ -57,6 +60,8 @@ interface ConfigLayer {
   git?: { mode?: GitMode };
   editor?: string;
   context?: string[];
+  groups?: Record<string, GroupLayer>;
+  instructions?: Record<string, InstructionLayer>;
 }
 
 interface Layer {
@@ -93,6 +98,8 @@ interface Merged {
   jira: NonNullable<ConfigLayer['jira']>;
   policy: Partial<Policy>;
   scenarios: Record<string, ScenarioEntry>;
+  groups: Record<string, GroupLayer>;
+  instructions: Record<string, InstructionLayer>;
   origins: Record<string, unknown>;
   pipeline?: { names: string[]; source: string };
   language?: string;
@@ -411,7 +418,7 @@ function toOp(layer: Layer, input: InstructionsInput | undefined): InstructionOp
 }
 
 function mergeLayers(layers: Layer[]): Merged {
-  const merged: Merged = { agents: new Map(), limits: {}, repos: new Map(), jira: {}, policy: {}, scenarios: {}, origins: {} };
+  const merged: Merged = { agents: new Map(), limits: {}, repos: new Map(), jira: {}, policy: {}, scenarios: {}, groups: {}, instructions: {}, origins: {} };
   for (const layer of layers) {
     const c = layer.config;
     for (const [name, agent] of Object.entries(c.agents ?? {})) {
@@ -424,6 +431,9 @@ function mergeLayers(layers: Layer[]): Merged {
     if (c.pipeline) merged.pipeline = { names: [...c.pipeline], source: layer.name };
     // A later layer replaces a whole scenario: its list, `false` (removed) or a custom scenario.
     for (const [name, value] of Object.entries(c.scenarios ?? {})) merged.scenarios[name] = { value: clone(value), source: layer.name };
+    // Groups and instructions too: a later layer replaces the whole entry.
+    Object.assign(merged.groups, clone(c.groups ?? {}));
+    Object.assign(merged.instructions, clone(c.instructions ?? {}));
     if (c.limits) merged.limits = { ...merged.limits, ...defined(c.limits) };
     if (c.language) merged.language = c.language;
     if (c.baseBranch) merged.baseBranch = c.baseBranch;
@@ -525,6 +535,15 @@ function resolveConfig(layers: Layer[], opts: { flags?: Flags | undefined; readF
     repos[name] = { name, ...(repo.role && { role: repo.role }), path: repo.path ?? name, baseBranch: repo.baseBranch ?? baseBranch, gates: repo.gates ?? [] };
   }
 
+  // A group ticks only instructions that exist; one it names that is gone is left out, not an error.
+  const groups: Record<string, TaskGroup> = {};
+  for (const [id, g] of Object.entries(merged.groups)) {
+    const ticks = g.defaultInstructions ?? [];
+    for (const x of ticks.filter((t) => !merged.instructions[t])) diags.push({ level: 'warning', code: 'unknown_instruction', message: `group "${id}" ticks the instruction "${x}", which is not defined; it is left out` });
+    const known = ticks.filter((t) => merged.instructions[t]);
+    groups[id] = { id, type: g.type, label: g.label, ...(g.jira && { jira: g.jira }), ...(g.instructions && { instructions: g.instructions }), ...(known.length && { defaultInstructions: known }) };
+  }
+
   const errors = diags.filter((d) => d.level === 'error');
   const warnings = diags.filter((d) => d.level === 'warning');
   if (errors.length > 0) return { ok: false, errors, warnings };
@@ -557,6 +576,8 @@ function resolveConfig(layers: Layer[], opts: { flags?: Flags | undefined; readF
       context,
       git: { mode: merged.gitMode ?? 'branch' },
       ...(merged.editor && { editor: merged.editor }),
+      groups,
+      instructions: Object.fromEntries(Object.entries(merged.instructions).map(([id, x]) => [id, { id, label: x.label, text: x.text }])),
     },
   };
 }
@@ -928,6 +949,14 @@ function withConfigRollback<T>({ workspace, home, explain }: { workspace: string
   }
 }
 
+/** A new entry's id, made from its name: `Quick fix` → `quick-fix`, `-2` for a taken one, `fallback` for a name without Latin letters. */
+function idFromLabel(label: string, taken: Set<string>, fallback: string): string {
+  const base = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^[^a-z]+|-+$/g, '') || fallback;
+  let id = base;
+  for (let n = 2; taken.has(id); n++) id = `${base}-${n}`;
+  return id;
+}
+
 /** Scenario ids nobody can take: the delivery pipeline, the composer's "pick for me", and the built-in reports. */
 const RESERVED_SCENARIOS = ['deliver', 'auto', ...Object.keys(SCENARIO_OUTPUT)];
 
@@ -942,19 +971,85 @@ function saveCustomScenario({ workspace, home, id, label, description, agents = 
   if (!clean) throw new Error('Give the scenario a name');
   if (id && !custom[id]) throw new Error(`There is no scenario "${id}"`);
   if (Object.values(custom).some((sc) => sc.id !== id && sc.label.toLowerCase() === clean.toLowerCase())) throw new Error(`A scenario called "${clean}" already exists`);
-  let newId = id;
-  if (!newId) {
-    const taken = new Set([...RESERVED_SCENARIOS, ...Object.keys(custom)]);
-    const base = clean.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^[^a-z]+|-+$/g, '') || 'scenario';
-    newId = base;
-    for (let n = 2; taken.has(newId); n++) newId = `${base}-${n}`;
-  }
-  const finalId = newId;
+  const finalId = id || idFromLabel(clean, new Set([...RESERVED_SCENARIOS, ...Object.keys(custom)]), 'scenario');
   // Some mistakes (an unknown agent, code and report agents mixed) only show once the agents resolve.
   withConfigRollback({ workspace, home, explain: (errors) => errors.filter((e) => e.message.includes(`"${finalId}"`)) }, () =>
     setCustomScenario(workspace, finalId, { label: clean, description: description && description.trim(), agents })
   );
   return finalId;
+}
+
+const ENTRY_NAMES = { groups: 'group', instructions: 'instruction' } as const;
+type EntrySection = keyof typeof ENTRY_NAMES;
+
+/**
+ * Writes a group or an instruction to the project config. Without `id` a new one gets an id from its name; names are
+ * unique within the section, ignoring case. Returns the id.
+ */
+function saveEntry(workspace: string, section: EntrySection, existing: Record<string, { id: string; label: string }>, id: string | undefined, value: GroupLayer | InstructionLayer): string {
+  const what = ENTRY_NAMES[section];
+  if (!value.label) throw new Error(`Give the ${what} a name`);
+  if (id && !existing[id]) throw new Error(`There is no ${what} "${id}"`);
+  if (Object.values(existing).some((x) => x.id !== id && x.label.toLowerCase() === value.label.toLowerCase())) throw new Error(`A ${what} called "${value.label}" already exists`);
+  const finalId = id || idFromLabel(value.label, new Set(Object.keys(existing)), what);
+  editProjectConfig(workspace, (doc) => doc.setIn([section, finalId], doc.createNode(defined(value))));
+  return finalId;
+}
+
+interface SaveGroupArgs {
+  workspace: string;
+  home?: string | undefined;
+  id?: string | undefined;
+  type: GroupType;
+  label: string;
+  jira?: string | undefined;
+  instructions?: string | undefined;
+  defaultInstructions?: string[] | undefined;
+}
+
+/**
+ * Creates or changes a task group: an epic, a story or a plain group, with an optional Jira key (`cp-123` is written
+ * `CP-123`), optional instructions for every task in it, and the instructions it ticks when picked. Returns its id.
+ */
+function saveGroup({ workspace, home, id, type, label, jira, instructions, defaultInstructions = [] }: SaveGroupArgs): string {
+  const r = loadConfig({ workspace, home });
+  const ticks = [...new Set(defaultInstructions)];
+  const missing = ticks.filter((x) => !(r.ok && r.config.instructions[x]));
+  if (missing.length) throw new Error(`There is no instruction ${missing.map((x) => `"${x}"`).join(', ')}`);
+  const key = (jira || '').trim().toUpperCase();
+  if (key && !JIRA_KEY.test(key)) throw new Error(`"${jira}" is not a Jira key (e.g. CP-123)`);
+  const text = (instructions || '').trim();
+  const value: GroupLayer = { type, label: label.trim(), ...(key && { jira: key }), ...(text && { instructions: text }), ...(ticks.length && { defaultInstructions: ticks }) };
+  return saveEntry(workspace, 'groups', r.ok ? r.config.groups : {}, id, value);
+}
+
+/** Creates or changes an instruction tasks can pick. Returns its id. */
+function saveInstruction({ workspace, home, id, label, text }: { workspace: string; home?: string | undefined; id?: string | undefined; label: string; text: string }): string {
+  const r = loadConfig({ workspace, home });
+  if (!text.trim()) throw new Error('Write the instruction');
+  return saveEntry(workspace, 'instructions', r.ok ? r.config.instructions : {}, id, { label: label.trim(), text: text.trim() });
+}
+
+/**
+ * Deletes a group or an instruction from the project config; a deleted instruction is no longer ticked by the project's
+ * groups. One only your user config has is not this project's to delete.
+ */
+function removeEntry(workspace: string, section: EntrySection, id: string): string {
+  const layer = readProjectLayer(workspace);
+  if (!(layer[section] || {})[id]) throw new Error(`The ${ENTRY_NAMES[section]} "${id}" is not in this project's config.yaml; it comes from ~/${CONFIG_DIR}/${CONFIG_FILE}`);
+  return editProjectConfig(workspace, (doc) => {
+    doc.deleteIn([section, id]);
+    if (section === 'instructions') {
+      for (const [gid, g] of Object.entries(layer.groups ?? {})) {
+        const rest = (g.defaultInstructions ?? []).filter((x) => x !== id);
+        if (rest.length === (g.defaultInstructions ?? []).length) continue;
+        if (rest.length) doc.setIn(['groups', gid, 'defaultInstructions'], doc.createNode(rest));
+        else doc.deleteIn(['groups', gid, 'defaultInstructions']);
+      }
+    }
+    const node = doc.getIn([section], true) as YamlCollection | undefined;
+    if (node && node.items && node.items.length === 0) doc.deleteIn([section]);
+  });
 }
 
 /**
@@ -995,7 +1090,7 @@ function addAgent({ workspace, home, name, base, description, output, model, eff
   });
 }
 
-export type { AgentLayer, ConfigLayer, Flags, Layer, RepoLayer, ResolveResult, ScenarioStepLayer };
+export type { AgentLayer, ConfigLayer, EntrySection, Flags, GroupLayer, InstructionLayer, Layer, RepoLayer, ResolveResult, ScenarioStepLayer };
 export {
   CONFIG_DIR,
   CONFIG_FILE,
@@ -1025,6 +1120,9 @@ export {
   configRelative,
   withConfigRollback,
   saveCustomScenario,
+  saveGroup,
+  saveInstruction,
+  removeEntry,
   addAgent,
   RESERVED_SCENARIOS,
   setPipeline,

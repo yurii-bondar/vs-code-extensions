@@ -104,6 +104,8 @@ function created(e: Ev<'task_created'>): TaskState {
     scenario: e.scenario ?? 'deliver',
     /** A custom scenario the task came from; `scenario` is then what it runs as. */
     ...(e.scenarioName && { scenarioName: e.scenarioName, scenarioLabel: e.scenarioLabel }),
+    ...(e.group && { group: e.group }),
+    instructions: e.instructions ?? [],
     auto: e.auto,
     pipeline: e.pipeline,
     knownRepos: e.knownRepos,

@@ -7,7 +7,7 @@ import { replay, transition, nextAction, TASK_FILES } from './machine';
 import { deriveTaskId } from './intake';
 import type { TaskEntry } from './view';
 import type { NextAction } from './machine';
-import type { Config, Effort, EventBody, EventOf, OrchEvent, NewEvent, Pipeline, Source, TaskState } from './types';
+import type { Config, Effort, EventBody, EventOf, OrchEvent, NewEvent, Pipeline, Source, TaskGroup, TaskInstruction, TaskState } from './types';
 import type { TranscriptItem } from './wire';
 
 const ORCH_DIR = '.orch';
@@ -109,6 +109,8 @@ interface StartRequest {
   scenario?: string | undefined;
   scenarioName?: string | undefined;
   scenarioLabel?: string | undefined;
+  group?: TaskGroup | undefined;
+  instructions?: TaskInstruction[] | undefined;
   auto: boolean;
   pipeline: Pick<Pipeline, 'mode' | 'stages' | 'reviewLoop'>;
   config: Pick<Config, 'limits' | 'repos' | 'context' | 'git'>;
@@ -229,6 +231,8 @@ class TaskService {
       source: req.source,
       ...(scenario !== 'deliver' && { scenario }),
       ...(req.scenarioName && { scenarioName: req.scenarioName, scenarioLabel: req.scenarioLabel }),
+      ...(req.group && { group: req.group }),
+      ...(req.instructions && req.instructions.length && { instructions: req.instructions }),
       auto: req.auto,
       pipeline: { mode: req.pipeline.mode, stages: req.pipeline.stages, reviewLoop: req.pipeline.reviewLoop },
       limits: { reviewRounds: req.config.limits.reviewRounds, gateAttempts: req.config.limits.gateAttempts },

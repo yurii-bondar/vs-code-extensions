@@ -13,6 +13,7 @@ export type ReadinessVerdict = 'ready' | 'not_ready' | 'needs_check';
 export type GitMode = 'branch' | 'worktree';
 export type CheckpointId = 'approve-plan' | 'gate-failure' | 'agent-failure' | 'review-limit' | 'hook-failure' | 'confirm-push';
 export type NextMode = 'initial' | 'retry' | 'replan' | 'fix';
+export type GroupType = 'epic' | 'story' | 'group';
 
 /** Untyped JSON as it comes from disk, the CLI or an agent. Narrow before use. */
 export type JsonObject = Record<string, unknown>;
@@ -200,6 +201,25 @@ export interface CustomScenario {
   source: string;
 }
 
+/** What a task belongs to: an epic, a story or a plain group, optionally with its Jira issue. */
+export interface TaskGroup {
+  id: string;
+  type: GroupType;
+  label: string;
+  jira?: string;
+  /** What every agent of every task in the group follows, before the task's own instructions. */
+  instructions?: string;
+  /** Ids of instructions the composer ticks when the group is picked; a task can still untick them. */
+  defaultInstructions?: string[];
+}
+
+/** Instructions the user wrote once and picks per task; every agent of the task gets them. */
+export interface TaskInstruction {
+  id: string;
+  label: string;
+  text: string;
+}
+
 export interface Limits {
   reviewRounds: number;
   gateAttempts: number;
@@ -229,6 +249,8 @@ export interface Config {
   context: string[];
   git: { mode: GitMode };
   editor?: string;
+  groups: Record<string, TaskGroup>;
+  instructions: Record<string, TaskInstruction>;
 }
 
 export interface Diagnostic {
@@ -330,6 +352,10 @@ export interface TaskState {
   scenario: string;
   scenarioName?: string;
   scenarioLabel?: string | undefined;
+  /** The group as it was when the task started. */
+  group?: TaskGroup;
+  /** The instructions as they were when the task started: editing one later does not change a running task. */
+  instructions: TaskInstruction[];
   auto: boolean;
   pipeline: StoredPipeline;
   knownRepos: string[];
@@ -392,6 +418,8 @@ export type OrchEvent = EventBase &
         scenario?: string;
         scenarioName?: string;
         scenarioLabel?: string | undefined;
+        group?: TaskGroup;
+        instructions?: TaskInstruction[];
         auto: boolean;
         pipeline: StoredPipeline;
         knownRepos: string[];

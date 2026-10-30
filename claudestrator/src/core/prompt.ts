@@ -2,7 +2,7 @@
 import * as path from 'path';
 import { parsePlanMeta, parseVerdict, parseReadiness, parseAudit } from './protocol';
 import type { RunAction } from './machine';
-import type { Audit, NextMode, Output, ParseResult, PlanMeta, Readiness, TaskState, Verdict } from './types';
+import type { Audit, GroupType, NextMode, Output, ParseResult, PlanMeta, Readiness, TaskState, Verdict } from './types';
 
 /** Outputs whose report ends with a JSON block a program validates. */
 const JSON_OUTPUTS = new Set(['plan', 'verdict', 'readiness', 'audit']);
@@ -12,6 +12,8 @@ const AGENT_ONLY_OUTPUTS = new Set<Output>(['code', 'tests', 'verdict']);
 
 /** The language a stage writes its report in: the task's language when a human reads it, English when only agents do. */
 const reportLanguage = (output: Output, language: string): string => (AGENT_ONLY_OUTPUTS.has(output) ? 'English' : language);
+
+const GROUP_TYPE: Record<GroupType, string> = { epic: 'epic', story: 'story', group: 'group of tasks' };
 
 const MODE: Record<NextMode, string> = {
   initial: "initial: do this stage's work for the first time.",
@@ -51,6 +53,7 @@ function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, 
     `Mode: ${MODE[next.mode]}`,
     `Review round: ${next.round}.`,
   ];
+  if (state.group) lines.push(`Part of the ${GROUP_TYPE[state.group.type]} "${state.group.label}"${state.group.jira ? ` (Jira ${state.group.jira})` : ''}.`);
   if (next.step.repo) lines.push(`Repository: ${next.step.repo} at ${repoDir}. Work only there.`);
   if (workRepos && workRepos.length) {
     lines.push('', 'Repositories of this task (cover the changes in every one of them; work only there):', ...workRepos.map((r) => `- ${r.name} at ${r.dir}`));
@@ -62,6 +65,12 @@ function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, 
     lines.push('', `Jira issue: ${state.source.key}. Search branches, commits and PRs for this key.`);
   }
   lines.push('', 'Read these files first, in this order:', ...inputs.map((p) => `- ${p}`));
+  // The group's instructions first: they hold for every task in it, the task's own add to them.
+  const instructions = [...(state.group && state.group.instructions ? [{ label: `For every task in "${state.group.label}"`, text: state.group.instructions }] : []), ...state.instructions];
+  if (instructions.length) {
+    lines.push('', "The user's instructions for this task, verbatim. Follow them in this stage's work:");
+    for (const x of instructions) lines.push('', `### ${x.label}`, x.text);
+  }
   if (next.feedback) lines.push('', 'Feedback from the user, verbatim:', next.feedback);
   lines.push('', `Write your report in ${reportLanguage(next.output, language)}. Code, identifiers and anything a program reads stay in English.`);
   if (JSON_OUTPUTS.has(next.output)) lines.push('End your reply with the fenced ```json block your instructions describe; a program validates it.');

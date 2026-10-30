@@ -100,6 +100,7 @@ class TaskTree implements vscode.TreeDataProvider<TreeNode> {
     const md = new vscode.MarkdownString(undefined, true);
     md.appendMarkdown(`**${escapeMd(c.title)}**\n\n`);
     md.appendMarkdown(`\`${c.taskId}\` · ${escapeMd(c.status.label)}${live ? ` · ${escapeMd(live)}` : ''}\n\n`);
+    if (c.group) md.appendMarkdown(`$(folder) ${escapeMd(c.group.label)}${c.group.jira ? ` · ${escapeMd(c.group.jira)}` : ''}\n\n`);
     if (c.checkpoint) md.appendMarkdown(`$(bell) ${escapeMd(c.checkpoint.hint)}\n\n`);
     if (c.error) md.appendMarkdown(`$(error) ${escapeMd(c.error.message)}\n\n`);
     if (c.branch) md.appendMarkdown(`$(git-branch) \`${c.branch}\`${c.repos.length ? ` in ${c.repos.join(', ')}` : ''}\n\n`);

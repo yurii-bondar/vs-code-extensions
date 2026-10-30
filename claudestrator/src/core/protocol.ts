@@ -2,7 +2,7 @@
 // for what agents hand back (plan and verdict blocks) and for config layers.
 // The on-disk formats match the claudestrator CLI and plugin, so both can work on the same tasks.
 
-import type { Audit, AuditFinding, CheckpointId, Effort, Finding, JsonObject, OrchEvent, Output, ParseResult, PlanMeta, Readiness, ReadinessValue, ReadinessVerdict, ReportSeverity, Runs, Scenario, Severity, CriterionStatus } from './types';
+import type { Audit, AuditFinding, CheckpointId, Effort, Finding, GroupType, JsonObject, OrchEvent, Output, ParseResult, PlanMeta, Readiness, ReadinessValue, ReadinessVerdict, ReportSeverity, Runs, Scenario, Severity, CriterionStatus } from './types';
 
 const OUTPUTS: Output[] = ['plan', 'code', 'tests', 'verdict', 'readiness', 'audit'];
 /**
@@ -28,6 +28,10 @@ const RUNS: Runs[] = ['per-repo', 'all-repos'];
 const AGENT_COLORS = ['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'pink', 'cyan'];
 const AGENT_NAME = /^[a-z][a-z0-9-]*$/;
 const PLAN_TYPES = ['feat', 'fix', 'chore', 'refactor'];
+/** What a task group is. */
+const GROUP_TYPES: GroupType[] = ['epic', 'story', 'group'];
+/** A Jira issue key, as a group names it: `CP-123`. */
+const JIRA_KEY = /^[A-Z][A-Z0-9]+-\d+$/;
 const SEVERITIES: Severity[] = ['blocker', 'major', 'minor'];
 
 /** Where a human must decide. Ids are shared with the CLI and the plugin. */
@@ -181,6 +185,11 @@ function validateSetting(key: string, value: unknown): string[] {
   return check ? check(value, key) : [`unknown setting ${key}`];
 }
 
+/** Ids of groups and instructions in config.yaml, made from their names. */
+const entryId = T.re(SCENARIO_ID, 'ids are lowercase kebab-case and start with a letter');
+const GROUP = T.obj({ type: T.oneOf(GROUP_TYPES), label: T.str(1, 80), 'jira?': T.re(JIRA_KEY, 'a Jira key looks like CP-123'), 'instructions?': T.str(1), 'defaultInstructions?': T.arr(entryId) });
+const INSTRUCTION = T.obj({ label: T.str(1, 80), text: T.str(1) });
+
 const GATE = T.obj({ name: T.str(1), cmd: T.str(1), 'dir?': T.str(1), 'when?': T.str(1) });
 
 const CONFIG_LAYER = T.obj({
@@ -197,6 +206,8 @@ const CONFIG_LAYER = T.obj({
   'git?': T.obj({ 'mode?': T.oneOf(['branch', 'worktree']) }),
   'editor?': T.str(1),
   'context?': T.arr(T.str(1)),
+  'groups?': T.rec(entryId, GROUP),
+  'instructions?': T.rec(entryId, INSTRUCTION),
 });
 
 const validateConfigLayer = (v: unknown): string[] => CONFIG_LAYER(v ?? {}, '');
@@ -364,6 +375,8 @@ export {
   EFFORTS,
   AGENT_NAME,
   PLAN_TYPES,
+  GROUP_TYPES,
+  JIRA_KEY,
   CHECKPOINT_OPTIONS,
   JIRA_ONLY_OPTIONS,
   INFO_EVENTS,

@@ -13,6 +13,7 @@ import type {
   Gap,
   GatesStatus,
   GitMode,
+  GroupType,
   Output,
   Pipeline,
   PlanMeta,
@@ -25,6 +26,8 @@ import type {
   SpecLink,
   Step,
   StoredPipeline,
+  TaskGroup,
+  TaskInstruction,
 } from './types';
 import type { Chip } from './pipeline';
 
@@ -243,6 +246,7 @@ export interface Card {
   source: TaskSource | null;
   scenario: string;
   scenarioLabel?: string;
+  group?: TaskGroup;
   result?: { kind: string; verdict?: string; met?: number; total?: number; counts?: Record<string, number> };
   status: Status;
   checkpoint: { id: string; title: string | undefined; hint: string | undefined } | null;
@@ -379,6 +383,7 @@ export type TaskDetail = Omit<Card, 'result'> & {
   gitMode: GitMode;
   effort: Record<string, Effort>;
   model: Record<string, string>;
+  instructions: TaskInstruction[];
   pipeline: StoredPipeline;
   plan: PlanMeta | null;
   spec: { title: string; acceptanceCriteria: string[]; links: SpecLink[] } | null;
@@ -437,6 +442,10 @@ export interface ComposerArgs {
   key?: string | undefined;
   effort?: Record<string, string>;
   scenario?: string | undefined;
+  /** The id of the group the task belongs to. */
+  group?: string | undefined;
+  /** The ids of the instructions every agent of the task gets. */
+  instructions?: string[] | undefined;
 }
 
 /** What a composer input would do, without creating anything. */
@@ -458,6 +467,21 @@ export type Preview =
       problem?: string;
       outline?: Chip[];
     };
+
+export interface SaveGroupParams {
+  id?: string | undefined;
+  type: GroupType;
+  label: string;
+  jira?: string | undefined;
+  instructions?: string | undefined;
+  defaultInstructions?: string[] | undefined;
+}
+
+export interface SaveInstructionParams {
+  id?: string | undefined;
+  label: string;
+  text: string;
+}
 
 export interface SaveScenarioParams {
   id?: string | undefined;
@@ -537,6 +561,8 @@ export type ConfigSummary =
       language: string;
       gitMode: GitMode;
       jiraProjects: string[];
+      groups: TaskGroup[];
+      instructions: TaskInstruction[];
     }
   | { ok: false; errors: string[]; warnings: string[] };
 
@@ -801,6 +827,10 @@ export interface Rpc {
   saveScenario: { params: SaveScenarioParams; result: { id: string } };
   deleteScenario: { params: { id: string }; result: { deleted: boolean } };
   restoreScenario: { params: { id: string }; result: Void };
+  saveGroup: { params: SaveGroupParams; result: { id: string } };
+  deleteGroup: { params: { id: string }; result: { deleted: boolean } };
+  saveInstruction: { params: SaveInstructionParams; result: { id: string } };
+  deleteInstruction: { params: { id: string }; result: { deleted: boolean } };
   backupConfig: { params: void; result: { saved: boolean; file?: string; agents?: number; scenarios?: number; pipeline?: boolean } };
   restoreConfigBackup: { params: void; result: BackupRestoreResult };
   addLibrary: { params: void; result: { added: string | null } };
