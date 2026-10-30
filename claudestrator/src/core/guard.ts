@@ -576,4 +576,4 @@ function checkRm(args: string[], dir: string, ctx: GuardContext): Verdict {
 }
 
 export type { GuardContext, Verdict as GuardVerdict };
-export { guardBash, simpleCommands };
+export { guardBash, simpleCommands, AI_CREDIT };

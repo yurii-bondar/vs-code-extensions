@@ -1071,7 +1071,7 @@ class Engine extends EventEmitter {
     this.setLive(s.taskId, { phase: 'committing', text: 'Committing' });
     const config = this.config();
     await this.ensureSandbox(config);
-    const subject = commitSubject(s);
+    const subject = commitSubject(s, config.policy.forbidAiAttribution);
     const body = s.source.kind === 'jira' ? `Refs: ${s.taskId}` : '';
     const branch = branchName(s) as string;
     const committed: string[] = [];
@@ -1141,7 +1141,7 @@ class Engine extends EventEmitter {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-pr-'));
     const bodyFile = (repo: string): string => {
       const f = path.join(tmp, `${repo}.md`);
-      fs.writeFileSync(f, prBody(this.svc.state(s.taskId), repo, taskDir, config.language, prs));
+      fs.writeFileSync(f, prBody({ state: this.svc.state(s.taskId), repo, taskDir, language: config.language, prs, forbidAttribution: config.policy.forbidAiAttribution }));
       return f;
     };
     try {
@@ -1161,7 +1161,7 @@ class Engine extends EventEmitter {
           continue;
         }
         this.setLive(s.taskId, { phase: 'publishing', text: `Opening a draft PR in ${r.name}` });
-        const pr = await exec('gh', ['pr', 'create', '--draft', '--base', r.base, '--head', branch, '--title', prTitle(s), '--body-file', bodyFile(r.name)], { cwd: r.dir, timeoutMs: 120000 });
+        const pr = await exec('gh', ['pr', 'create', '--draft', '--base', r.base, '--head', branch, '--title', prTitle(s, config.policy.forbidAiAttribution), '--body-file', bodyFile(r.name)], { cwd: r.dir, timeoutMs: 120000 });
         if (pr.code !== 0) throw new EngineError('pr_failed', `${r.name}: ${pr.stderr.trim() || pr.stdout.trim()}`);
         prs[r.name] = pr.stdout.trim().split('\n').reverse().find((l) => /^https?:\/\//.test(l.trim()))?.trim() || pr.stdout.trim();
       }
