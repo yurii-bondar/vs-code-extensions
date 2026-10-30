@@ -48,6 +48,12 @@ function limitsOf(info: RateLimitInfo | null | undefined): Limits | null {
 }
 const STDERR_KEEP = 8000;
 
+/** What a result's error subtype means, for the step's failure message. */
+const RESULT_ERRORS: Record<string, string> = {
+  error_max_turns: 'the agent used up its turns (maxTurns)',
+  error_max_budget_usd: "the task's budget ran out (limits.budgetUsd)",
+};
+
 /** What the runner asks of its host: the CLI to run, what it supports, and where its settings come from. */
 interface RunnerOptions {
   command(): string;
@@ -61,7 +67,7 @@ interface RunnerOptions {
 }
 
 /** The part of an agent definition a session needs. */
-type SessionAgent = Pick<Agent, 'instructions' | 'model'> & Partial<Pick<Agent, 'effort' | 'tools' | 'disallowedTools' | 'mcp'>>;
+type SessionAgent = Pick<Agent, 'instructions' | 'model'> & Partial<Pick<Agent, 'effort' | 'tools' | 'disallowedTools' | 'mcp' | 'maxTurns'>>;
 
 interface SessionRequest {
   agent: SessionAgent;
@@ -148,6 +154,7 @@ function buildArgs(req: Pick<SessionRequest, 'agent' | 'additionalDirectories' |
   if (a.instructions) args.push('--append-system-prompt', a.instructions);
   if (a.model && a.model !== 'inherit') args.push('--model', a.model);
   if (a.effort && has('--effort')) args.push('--effort', a.effort);
+  if (a.maxTurns && has('--max-turns')) args.push('--max-turns', String(a.maxTurns));
   if (a.tools && has('--tools')) args.push('--tools', a.tools.join(','));
   const disallowed = [...ALWAYS_DISALLOWED, ...(a.disallowedTools || [])];
   args.push('--disallowedTools', disallowed.join(','));
@@ -405,7 +412,7 @@ class ClaudeSession {
         const r: TurnResult = {
           ok,
           report: m.subtype === 'success' ? m.result || '' : '',
-          ...(!ok && { error: m.subtype === 'success' ? `the agent reported an error${m.result ? `: ${String(m.result).slice(0, 500)}` : ''}` : `${m.subtype}${errors ? `: ${errors}` : ''}` }),
+          ...(!ok && { error: m.subtype === 'success' ? `the agent reported an error${m.result ? `: ${String(m.result).slice(0, 500)}` : ''}` : `${RESULT_ERRORS[m.subtype ?? ''] ?? m.subtype}${errors ? `: ${errors}` : ''}` }),
           ...this.totals(),
         };
         out({ type: 'turn_end', ok, costUsd: this.costUsd, turns: this.turns });

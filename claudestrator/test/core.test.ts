@@ -577,6 +577,9 @@ test('config: effort is validated and inherited along extends', () => {
   const args = buildArgs({ agent: { model: 'opus', effort: 'low', instructions: 'x' } as Agent }, { flags: () => new Set(['--effort']), settingSources: () => null, hookSettings: () => '/h.json' } as RunnerOptions);
   assert.equal(args[args.indexOf('--effort') + 1], 'low');
   assert.ok(!buildArgs({ agent: { effort: 'low' } as Agent }, { flags: () => new Set(), settingSources: () => null, hookSettings: () => '/h' } as RunnerOptions).includes('--effort'), 'old CLIs without --effort still run');
+  const turns = buildArgs({ agent: { maxTurns: 40 } as Agent }, { flags: () => new Set(['--max-turns']), settingSources: () => null, hookSettings: () => '/h' } as RunnerOptions);
+  assert.equal(turns[turns.indexOf('--max-turns') + 1], '40', "an agent's maxTurns reaches Claude Code");
+  assert.ok(!buildArgs({ agent: {} as Agent }, { flags: () => new Set(['--max-turns']), settingSources: () => null, hookSettings: () => '/h' } as RunnerOptions).includes('--max-turns'), 'no cap unless the agent sets one');
   assert.deepEqual(limitsOf({ rateLimitType: 'seven_day', utilization: 0.5, resetsAt: 9 }), { fiveHour: undefined, sevenDay: { pct: 50, resetsAt: 9, status: undefined } });
 });
 
