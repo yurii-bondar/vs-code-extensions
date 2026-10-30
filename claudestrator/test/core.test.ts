@@ -16,7 +16,8 @@ import { parseHookRequest } from '../src/core/hookserver';
 import { plain } from '../src/core/gates';
 import { parseInvocation, classifyInput, extractAcceptanceCriteria, adfToText, detectScenario } from '../src/core/intake';
 import { TaskService } from '../src/core/store';
-import { stepsOf } from '../src/core/view';
+import { stepsOf, summary } from '../src/core/view';
+import type { ViewEngine } from '../src/core/view';
 import { buildArgs, limitsOf } from '../src/core/runner';
 import { Engine } from '../src/core/engine';
 import { resolveDefaults, effectiveFor, modelName } from '../src/core/defaults';
@@ -1347,4 +1348,22 @@ test('backup: a restore that would break the config is undone, instruction files
   const empty = tmp('cs-backup-');
   assert.throws(() => backups.restoreBackup({ workspace: empty, backup: { ...noBackup, scenarios: backup.scenarios }, home }), /mixes agents/);
   assert.equal(fs.existsSync(config.projectConfigFile(empty)), false, 'a config that did not exist is not left behind');
+});
+
+test('view: a task whose log does not replay gets a whole card, so the list and the sidebar still show the rest', () => {
+  const ws = tmp('cs-corrupt-');
+  const { pipeline, config: cfg } = defaultPipeline();
+  const svc = new TaskService({ workspace: ws });
+  const ok = svc.start({ input: 'x', source: { kind: 'text', text: 'x' }, auto: false, pipeline, config: cfg });
+  const bad = path.join(ws, '.orch', 'tasks', 'T-BROKEN');
+  fs.mkdirSync(bad, { recursive: true });
+  fs.writeFileSync(path.join(bad, 'events.ndjson'), '{"seq":1,"type":"stage_started","agent":"x","at":"2026-01-01T00:00:00.000Z"}\n');
+  const entries = svc.list();
+  assert.deepEqual(entries.map((e) => e.taskId).sort(), [ok.taskId, 'T-BROKEN'].sort());
+  const corrupt = entries.find((e) => e.corrupt)!;
+  const card = summary({} as ViewEngine, corrupt);
+  assert.equal(card.status.key, 'corrupt');
+  assert.match(card.error!.message!, /log cannot be read: event #1 \(stage_started\) does not replay/);
+  assert.deepEqual([card.mini, card.repos, card.progress], [[], [], { done: 0, total: 0 }], 'what the list and the tree read is there');
+  assert.ok(!Number.isNaN(Date.parse(card.updatedAt)));
 });

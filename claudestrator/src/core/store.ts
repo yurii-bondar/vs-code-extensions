@@ -346,10 +346,10 @@ class TaskService {
         try {
           return { taskId: d.name, state: this.state(d.name) };
         } catch (e) {
-          return { taskId: d.name, corrupt: true, error: (e as Error).message };
+          return { taskId: d.name, corrupt: true, error: (e as Error).message, at: signatureTime(path.join(this.dir(d.name), TASK_FILES.events)) };
         }
       })
-      .sort((a, b) => ((b.state && b.state.updatedAt) || '').localeCompare((a.state && a.state.updatedAt) || ''));
+      .sort((a, b) => ((b.state && b.state.updatedAt) || b.at || '').localeCompare((a.state && a.state.updatedAt) || a.at || ''));
   }
 
   remove(taskId: string): void {
@@ -473,6 +473,15 @@ class TaskService {
 }
 
 export type { DispatchResult, StartRequest, TranscriptItem };
+/** When a file last changed, as an ISO time; the epoch when it is gone. */
+function signatureTime(file: string): string {
+  try {
+    return fs.statSync(file).mtime.toISOString();
+  } catch {
+    return new Date(0).toISOString();
+  }
+}
+
 /** Size and mtime of a file, or '' when it is gone: enough to tell whether it changed since. */
 function signature(file: string): string {
   try {

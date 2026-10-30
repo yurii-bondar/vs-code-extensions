@@ -30,6 +30,8 @@ interface TaskEntry {
   state?: TaskState;
   corrupt?: boolean;
   error?: string;
+  /** For a corrupt one: when its log last changed, since no state says so. */
+  at?: string;
 }
 
 const VERDICT_LABEL: Record<string, string> = { ready: 'Ready', not_ready: 'Not ready', needs_check: 'Needs a human check' };
@@ -200,10 +202,37 @@ function derive(engine: ViewEngine, taskId: string, state: TaskState, running: b
   return derived;
 }
 
+/** The card of a task whose log does not replay: every field a card has, so a list shows it beside the others. */
+function corruptCard(taskId: string, error: string | undefined, at = new Date(0).toISOString()): Card {
+  return {
+    taskId,
+    title: taskId,
+    source: null,
+    scenario: 'deliver',
+    status: statusOf(null, { corrupt: true }),
+    checkpoint: null,
+    live: null,
+    error: { message: `its log cannot be read: ${error || 'unknown error'}` },
+    stopReason: undefined,
+    round: 0,
+    maxRounds: 0,
+    phase: 'done',
+    outcome: undefined,
+    prs: {},
+    branch: null,
+    repos: [],
+    cost: 0,
+    createdAt: at,
+    updatedAt: at,
+    progress: { done: 0, total: 0 },
+    mini: [],
+  };
+}
+
 /** A compact card for lists and the tree. */
 function summary(engine: ViewEngine, entry: TaskEntry): Card {
   const taskId = entry.taskId;
-  if (entry.corrupt) return { taskId, title: taskId, status: statusOf(null, { corrupt: true }), error: { message: entry.error }, steps: [], cost: 0 } as unknown as Card;
+  if (entry.corrupt) return corruptCard(taskId, entry.error, entry.at);
   const state = entry.state!;
   const running = engine.isRunning(taskId);
   const error = engine.lastError(taskId);
