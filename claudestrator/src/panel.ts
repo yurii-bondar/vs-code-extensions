@@ -256,6 +256,7 @@ class DashboardPanel implements RpcHandlers {
     return {
       root: this.root,
       rootName: this.root ? path.basename(this.root) : null,
+      languages: LANGUAGES,
       hasConfig: this.orch.hasProjectConfig(),
       config: this.root ? this.configSummary() : null,
       health: this.healthSummary(),

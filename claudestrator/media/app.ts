@@ -1280,7 +1280,7 @@ interface Views {
             <h3>How agents work</h3>
             <div class="field-row">
               <label class="field"><span>Language of plans, reviews and PR descriptions</span>
-                <select class="input" data-change="setup-lang">${['English', 'Ukrainian', 'German', 'French', 'Spanish', 'Polish'].map((l) => `<option ${l === this.prefs.language ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+                <select class="input" data-change="setup-lang">${o!.languages.map((l) => `<option ${l === this.prefs.language ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
             </div>
             <div class="radio-cards">
               <label class="radio-card ${this.prefs.gitMode === 'branch' ? 'on' : ''}"><input type="radio" name="gitmode" value="branch" data-change="setup-git" ${this.prefs.gitMode === 'branch' ? 'checked' : ''}><b>${icon('branch')}Branch in your checkout</b><span>Agents switch your repos to the task branch. Simple; your repos must be clean, one task at a time.</span></label>

@@ -594,6 +594,8 @@ export interface Overview {
   mcp: McpSummary;
   defaults: DefaultsView | null;
   permissions: PermissionRequest[];
+  /** Languages offered for plans, reports and PR texts. */
+  languages: string[];
 }
 
 /** An agent in the agents page, without its (long) instructions. */
