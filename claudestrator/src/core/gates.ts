@@ -1,11 +1,16 @@
 // Gates: a repo's lint/typecheck/test commands, run against its changes after a code or tests stage.
 import * as fs from 'fs';
 import * as path from 'path';
-import { exec, getChildEnv, GitRepo } from './git';
+import { spawn } from 'child_process';
+import { getChildEnv, GitRepo } from './git';
 import type { RepoConfig } from './types';
 import type { GateResult, RepoGates } from './wire';
 
 const TAIL_LINES = 40;
+/** Output kept per gate: the end of it, which is where a failure shows. */
+const KEEP_CHARS = 4 * 1024 * 1024;
+/** How long a gate gets after SIGTERM before its process group is killed. */
+const KILL_GRACE_MS = 3000;
 // Gate commands print plain text: colour codes are noise in the tail an agent reads, and some tools only colour on a terminal anyway.
 const PLAIN_ENV = { NO_COLOR: '1', FORCE_COLOR: '0' };
 const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`, 'g');
@@ -25,11 +30,76 @@ function shellCommand(cmd: string): [string, string[]] {
   return [fs.existsSync('/bin/bash') ? '/bin/bash' : '/bin/sh', ['-c', cmd]];
 }
 
+interface ShellRun {
+  code: number;
+  output: string;
+  /** Why it was killed: it ran out of time, or the task was stopped. */
+  killed?: 'timeout' | 'stopped';
+}
+
+/**
+ * Runs a gate command in a process group of its own, so a timeout or a stopped task ends everything it started
+ * (test workers, a dev server), not only the shell. stdout and stderr are kept in one text, in the order they arrive.
+ */
+function runShell(cmd: string, { cwd, env, timeoutMs, signal }: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; signal?: AbortSignal | undefined }): Promise<ShellRun> {
+  return new Promise((resolve) => {
+    const [bin, args] = shellCommand(cmd);
+    const win = process.platform === 'win32';
+    let output = '';
+    let killed: ShellRun['killed'];
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(bin, args, { cwd, env, detached: !win, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    } catch (e) {
+      return resolve({ code: 127, output: (e as Error).message });
+    }
+    const keep = (d: string): void => {
+      output += d;
+      if (output.length > 2 * KEEP_CHARS) output = output.slice(-KEEP_CHARS);
+    };
+    child.stdout!.setEncoding('utf8').on('data', keep);
+    child.stderr!.setEncoding('utf8').on('data', keep);
+    const killTree = (sig: NodeJS.Signals): void => {
+      if (child.pid === undefined) return;
+      try {
+        if (win) spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true });
+        else process.kill(-child.pid, sig);
+      } catch {
+        // already gone
+      }
+    };
+    let grace: NodeJS.Timeout | undefined;
+    const kill = (why: NonNullable<ShellRun['killed']>): void => {
+      if (killed) return;
+      killed = why;
+      killTree('SIGTERM');
+      grace = setTimeout(() => killTree('SIGKILL'), KILL_GRACE_MS);
+    };
+    const timer = setTimeout(() => kill('timeout'), timeoutMs);
+    const onAbort = (): void => kill('stopped');
+    if (signal) {
+      if (signal.aborted) onAbort();
+      else signal.addEventListener('abort', onAbort, { once: true });
+    }
+    child.on('error', (e) => keep(`${(e as NodeJS.ErrnoException).code === 'ENOENT' ? `${bin}: not found` : e.message}\n`));
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      clearTimeout(grace);
+      if (signal) signal.removeEventListener('abort', onAbort);
+      // The shell is gone; anything it left in its group goes too.
+      if (!win && killed) killTree('SIGKILL');
+      const note = killed === 'timeout' ? `\nkilled after ${Math.round(timeoutMs / 1000)}s` : killed === 'stopped' ? '\nstopped with the task' : '';
+      resolve({ code: killed === 'timeout' ? 124 : killed === 'stopped' ? 130 : code ?? 1, output: output + note, ...(killed && { killed }) });
+    });
+  });
+}
+
 /**
  * Runs a repo's gates. A repo without changes is skipped, and so is a gate whose `when` prefix matches
- * no changed file (unless `force`). Logs go to `logDir`. `onGate(name)` reports progress.
+ * no changed file (unless `force`). Logs go to `logDir`. `onGate(name)` reports progress. `signal` stops the gate
+ * that runs and skips the rest.
  */
-async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = false, onGate }: { repo: RepoConfig; dir: string; logDir: string; timeoutMs?: number; force?: boolean | undefined; onGate?: ((name: string) => void) | undefined }): Promise<RepoGates> {
+async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = false, onGate, signal }: { repo: RepoConfig; dir: string; logDir: string; timeoutMs?: number; force?: boolean | undefined; onGate?: ((name: string) => void) | undefined; signal?: AbortSignal | undefined }): Promise<RepoGates> {
   const git = new GitRepo(dir);
   if (!(await git.isRepo())) {
     return { repo: repo.name, status: 'fail', results: [{ repo: repo.name, gate: '(repo)', status: 'fail' }], summary: `FAIL ${repo.name}: not a git repo at ${dir}` };
@@ -43,6 +113,11 @@ async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = fal
   const results: GateResult[] = [];
   const lines: string[] = [];
   for (const gate of repo.gates) {
+    if (signal && signal.aborted) {
+      results.push({ repo: repo.name, gate: gate.name, status: 'skipped' });
+      lines.push(`SKIP ${repo.name} ${gate.name}: the task was stopped`);
+      continue;
+    }
     if (!force && gate.when && !changed.some((f) => f.startsWith(gate.when!))) {
       results.push({ repo: repo.name, gate: gate.name, status: 'skipped' });
       lines.push(`SKIP ${repo.name} ${gate.name}: nothing under ${gate.when}`);
@@ -51,11 +126,10 @@ async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = fal
     if (onGate) onGate(gate.name);
     const cwd = path.join(dir, gate.dir ?? '.');
     const started = Date.now();
-    const [bin, args] = shellCommand(gate.cmd);
-    const r = await exec(bin, args, { cwd, timeoutMs, env: { ...getChildEnv(), ...PLAIN_ENV } });
+    const r = await runShell(gate.cmd, { cwd, timeoutMs, env: { ...getChildEnv(), ...PLAIN_ENV }, signal });
     const ms = Date.now() - started;
     const log = path.join(logDir, `${slug(repo.name)}.${slug(gate.name)}.log`);
-    const output = plain(`${r.stdout}${r.stderr}`);
+    const output = plain(r.output);
     fs.writeFileSync(log, `$ (cd ${path.relative(dir, cwd) || '.'} && ${gate.cmd})\n${output}\nexit ${r.code}\n`);
     if (r.code === 0) {
       results.push({ repo: repo.name, gate: gate.name, status: 'pass', log, ms });
@@ -71,4 +145,4 @@ async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = fal
 }
 
 export type { GateResult, RepoGates };
-export { plain, runGates, shellCommand };
+export { plain, runGates, runShell, shellCommand };

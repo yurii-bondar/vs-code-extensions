@@ -156,6 +156,8 @@ class Engine extends EventEmitter {
   mcpIntake: () => McpIntake | null;
   askPermissions: () => boolean;
   sessions: Map<string, ClaudeSession>;
+  /** Stops the gates a task runs right now; Stop aborts it. */
+  gateRuns = new Map<string, AbortController>();
   running: Set<string>;
   prepared: Set<string>;
   /** The confirm-push question's context per task, with the checkpoint it was made for (`at`). */
@@ -662,17 +664,24 @@ class Engine extends EventEmitter {
       if (targets.length) {
         for (let attempt = 1; ; attempt++) {
           const runs: RepoGates[] = [];
-          for (const r of targets) {
-            this.setLive(taskId, { phase: 'gates', step, key, text: `Running gates in ${r.name}` });
-            runs.push(
-              await runGates({
-                repo: config.repos[r.name]!,
-                dir: r.dir,
-                logDir: path.join(taskDir, 'gates', `r${state.review.round}`),
-                onGate: (name) => this.setLive(taskId, { phase: 'gates', step, key, text: `Gate "${name}" in ${r.name} (attempt ${attempt})` }),
-              })
-            );
-            if (stopped()) return;
+          const abort = new AbortController();
+          this.gateRuns.set(taskId, abort);
+          try {
+            for (const r of targets) {
+              this.setLive(taskId, { phase: 'gates', step, key, text: `Running gates in ${r.name}` });
+              runs.push(
+                await runGates({
+                  repo: config.repos[r.name]!,
+                  dir: r.dir,
+                  logDir: path.join(taskDir, 'gates', `r${state.review.round}`),
+                  onGate: (name) => this.setLive(taskId, { phase: 'gates', step, key, text: `Gate "${name}" in ${r.name} (attempt ${attempt})` }),
+                  signal: abort.signal,
+                })
+              );
+              if (stopped()) return;
+            }
+          } finally {
+            this.gateRuns.delete(taskId);
           }
           const g: { status: GatesStatus; summary: string; results: { gate: string; status: GatesStatus; ms: number | undefined }[] } = {
             status: runs.some((x) => x.status === 'fail') ? 'fail' : runs.some((x) => x.status === 'pass') ? 'pass' : 'skipped',
@@ -1036,6 +1045,8 @@ class Engine extends EventEmitter {
     const s = this.svc.state(taskId);
     if (s.status !== 'stopped' && s.status !== 'done') this.dispatch(taskId, { type: 'stopped', reason });
     this.denyPermissions(taskId, 'the task was stopped');
+    const gates = this.gateRuns.get(taskId);
+    if (gates) gates.abort();
     const session = this.sessions.get(taskId);
     if (session) await session.interrupt();
   }
