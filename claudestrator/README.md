@@ -88,7 +88,7 @@ First time in a workspace, *Set up this workspace* finds the git repos and sugge
 - **Git.**
   - In *branch* mode the repos switch to `<type>/<KEY>-<slug>` and must be clean first. In *worktree* mode each task gets `.orch/worktrees/<task>/<repo>` from `origin/<base>`, and your checkouts are never touched.
   - The engine makes one commit per repo. It pushes and opens draft PRs with `gh` only after you confirm, and the PRs link to each other.
-- **Guard.** Every tool call of an agent goes first to the extension, over a `PreToolUse` http hook on `127.0.0.1` with a token only that agent session holds; no process starts per call. It always blocks:
+- **Guard.** Every tool call of an agent goes first to the extension, over a `PreToolUse` http hook on `127.0.0.1` with a token only that agent session holds; no process starts per call. A guard that cannot answer (VS Code closed, a timeout) blocks the call. It always blocks:
   - git writes by agents (commit, push, switch, stash, reset…) and non-read `gh` calls;
   - force-push, pushes to protected branches, `--no-verify`, merging PRs, non-draft PRs, AI attribution (if the policy says so) and destructive `rm -r`;
   - edits outside the repo of the current step (read-only stages edit nothing).

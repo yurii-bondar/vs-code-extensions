@@ -1,8 +1,11 @@
 // The guard's HTTP endpoint: only a live session's token gets an answer from its policy; anything else is denied.
 import test from 'node:test';
 import * as assert from 'node:assert/strict';
+import * as fs from 'fs';
+import * as path from 'path';
 
 import { HookServer, TOKEN_ENV } from '../src/core/hookserver';
+import { workspace, harness, runTask } from './helpers/e2e';
 import type { ToolCall } from '../src/core/hookserver';
 
 async function post(url: string, body: string, token?: string): Promise<{ status: number; decision?: string; reason?: string }> {
@@ -53,8 +56,30 @@ test('hooks: the settings send every tool call to the server with the token from
   try {
     const [entry] = server.settings().PreToolUse;
     assert.equal(entry!.matcher, '*');
-    assert.deepEqual(entry!.hooks[0], { type: 'http', url: server.url, headers: { Authorization: `Bearer $${TOKEN_ENV}` }, allowedEnvVars: [TOKEN_ENV], timeout: 900 });
+    assert.deepEqual(entry!.hooks[0], { type: 'http', url: server.url, headers: { Authorization: `Bearer $${TOKEN_ENV}` }, allowedEnvVars: [TOKEN_ENV], timeout: 900, onFailure: 'block' });
   } finally {
     server.dispose();
+  }
+});
+
+test('hooks: a guard that cannot answer blocks the tool call', async () => {
+  // A guard whose server is gone: what an agent sees when VS Code closed or the extension restarted.
+  const gone = new HookServer();
+  await gone.listen();
+  const unreachable = gone.settings();
+  gone.dispose();
+  const failOpen = { PreToolUse: unreachable.PreToolUse.map((e) => ({ ...e, hooks: e.hooks.map(({ onFailure: _drop, ...h }) => h) })) };
+
+  for (const [hooks, written] of [[unreachable, false], [failOpen, true]] as const) {
+    const ws = workspace(['api'], 'repos:\n  api: {}\npipeline: [planner, developer]\n');
+    const h = await harness(ws, { FAKE_REPOS: 'api' });
+    h.engine.agentSettings = () => ({ hooks });
+    try {
+      const { taskId } = h.engine.start({ text: 'Do a thing', auto: true });
+      await runTask(h.engine, taskId);
+      assert.equal(fs.existsSync(path.join(ws, 'api', 'feature.txt')), written, written ? 'without onFailure: block the call goes on unguarded' : 'with it, nothing is written');
+    } finally {
+      h.hooks.dispose();
+    }
   }
 });

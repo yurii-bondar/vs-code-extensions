@@ -77,11 +77,15 @@ class HookServer {
     this.sessions.delete(token);
   }
 
-  /** The `hooks` part of an agent's settings: every tool call goes to this server first. */
+  /**
+   * The `hooks` part of an agent's settings: every tool call goes to this server first. A guard that cannot answer
+   * (VS Code gone, a timeout, an error) blocks the call: by default Claude Code would go on without it, and an allow
+   * rule in the repo's own settings could then let a push or an edit through.
+   */
   settings(): { PreToolUse: { matcher: string; hooks: Record<string, unknown>[] }[] } {
     if (!this.url) throw new Error('the guard server is not listening');
     return {
-      PreToolUse: [{ matcher: '*', hooks: [{ type: 'http', url: this.url, headers: { Authorization: `Bearer $${TOKEN_ENV}` }, allowedEnvVars: [TOKEN_ENV], timeout: HOOK_TIMEOUT_S }] }],
+      PreToolUse: [{ matcher: '*', hooks: [{ type: 'http', url: this.url, headers: { Authorization: `Bearer $${TOKEN_ENV}` }, allowedEnvVars: [TOKEN_ENV], timeout: HOOK_TIMEOUT_S, onFailure: 'block' }] }],
     };
   }
 
