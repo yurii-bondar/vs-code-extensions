@@ -400,7 +400,7 @@ interface Views {
 
   function headerHtml(d: TaskScreen) {
     const k = d.status.key;
-    const canResume = ['stopped', 'failed', 'interrupted', 'ready'].includes(k);
+    const canResume = d.status.resumable;
     const live = k === 'running' ? d.live : null;
     const since = live ? (live.since ?? Date.now()) : 0;
     return `<header class="task-header">

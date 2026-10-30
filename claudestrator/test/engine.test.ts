@@ -142,6 +142,7 @@ test('engine: dirty checkouts block branch mode, stop interrupts a hanging agent
     assert.equal(h.engine.lastError(taskId)!.code, 'repos_not_ready');
     assert.equal((h.engine.lastError(taskId)!.blocked as { problem: string }[])[0]!.problem, 'uncommitted changes');
     assert.equal(view.summary(h.engine, { taskId, state: h.engine.svc.state(taskId) }).status.key, 'failed');
+    assert.equal(view.summary(h.engine, { taskId, state: h.engine.svc.state(taskId) }).status.resumable, true, 'a failed run is resumed from where it is');
 
     fs.rmSync(path.join(ws, 'api', 'wip.txt'));
     setChildEnv({ ...getChildEnv(), FAKE_HANG: 'developer' });

@@ -152,7 +152,15 @@ function stepsOf(events: OrchEvent[], state: TaskState, { running }: { running: 
   return [...steps, ...upcoming];
 }
 
-function statusOf(state: TaskState | null, { running, error, corrupt, asking }: { running?: boolean; error?: unknown; corrupt?: boolean; asking?: boolean }): Status {
+/** What Resume runs from where it is. */
+const RESUMABLE = new Set(['stopped', 'failed', 'interrupted', 'ready']);
+
+function statusOf(state: TaskState | null, flags: { running?: boolean; error?: unknown; corrupt?: boolean; asking?: boolean }): Status {
+  const status = baseStatus(state, flags);
+  return { ...status, resumable: RESUMABLE.has(status.key) };
+}
+
+function baseStatus(state: TaskState | null, { running, error, corrupt, asking }: { running?: boolean; error?: unknown; corrupt?: boolean; asking?: boolean }): Omit<Status, 'resumable'> {
   if (corrupt) return { key: 'corrupt', label: 'Unreadable', tone: 'error', group: 'attention' };
   if (running && asking) return { key: 'running', label: 'Asks your permission', tone: 'warn', group: 'attention' };
   if (running) return { key: 'running', label: 'Running', tone: 'accent', group: 'running' };

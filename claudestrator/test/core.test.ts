@@ -1408,6 +1408,7 @@ test('view: a task whose log does not replay gets a whole card, so the list and 
   const corrupt = entries.find((e) => e.corrupt)!;
   const card = summary({} as ViewEngine, corrupt);
   assert.equal(card.status.key, 'corrupt');
+  assert.equal(card.status.resumable, false, 'there is nothing to resume');
   assert.match(card.error!.message!, /log cannot be read: event #1 \(stage_started\) does not replay/);
   assert.deepEqual([card.mini, card.repos, card.progress], [[], [], { done: 0, total: 0 }], 'what the list and the tree read is there');
   assert.ok(!Number.isNaN(Date.parse(card.updatedAt)));

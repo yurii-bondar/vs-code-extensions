@@ -92,7 +92,7 @@ class TaskTree implements vscode.TreeDataProvider<TreeNode> {
     const [icon, color] = STATUS_ICON[c.status.key] || STATUS_ICON.ready!;
     item.iconPath = new vscode.ThemeIcon(icon, new vscode.ThemeColor(color));
     const tags = ['task', c.status.key];
-    if (['stopped', 'failed', 'interrupted', 'ready'].includes(c.status.key)) tags.push('resumable');
+    if (c.status.resumable) tags.push('resumable');
     if (c.status.key === 'running') tags.push('stoppable');
     if (c.status.key === 'waiting') tags.push('waiting');
     item.contextValue = tags.join(' ');

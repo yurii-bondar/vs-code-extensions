@@ -20,7 +20,7 @@ import { AGENT_COLORS, OUTPUTS, EFFORTS, validateSetting } from './core/protocol
 import { parsePageRequest, openable, SESSION_ID } from './core/requests';
 import { settings, type Orchestrator } from './orchestrator';
 import type { Engine } from './core/engine';
-import type { ComposerArgs, ConfigData, ConfigSummary, HealthSummary, NewAgentParams, PipelineEdit, Preview, ReposData, Route, Rpc, RpcHandlers, SaveGroupParams, SaveInstructionParams, SaveScenarioParams, SettingsData, SetupParams, TaskScreen } from './core/wire';
+import type { BlockedRepo, ComposerArgs, ConfigData, HostMessage, ConfigSummary, HealthSummary, NewAgentParams, PipelineEdit, Preview, ReposData, Route, Rpc, RpcHandlers, SaveGroupParams, SaveInstructionParams, SaveScenarioParams, SettingsData, SetupParams, TaskScreen } from './core/wire';
 import type { Agent, ScenarioStep, Gate, TaskState } from './core/types';
 import type { ConfigLayer, RepoLayer } from './core/config';
 
@@ -34,6 +34,12 @@ interface PickedRepo {
 }
 
 type Handler = (params: unknown) => Promise<unknown>;
+
+/** Whether a path exists, without blocking the extension host. */
+const exists = (p: string): Promise<boolean> => fs.promises.access(p).then(
+  () => true,
+  () => false
+);
 
 /** How often streamed agent output goes to the page. */
 const OUTPUT_MS = 50;
@@ -89,14 +95,31 @@ class DashboardPanel implements RpcHandlers {
     }, null, this.disposables);
     this.panel.webview.onDidReceiveMessage((msg) => this.onMessage(msg), null, this.disposables);
 
-    orch.onEngine(({ name, data: payload }) => {
-      const data = payload as Record<string, unknown>;
-      if (name === 'output') this.queueOutput(payload as OutputPush);
-      else if (name === 'live') this.post({ type: 'live', ...data });
-      else if (name === 'permission') this.post({ type: 'permission', request: data });
-      else if (name === 'permissionDone') this.post({ type: 'permissionDone', requestId: data });
-      else if (name === 'mcpLogin') this.post({ type: 'toast', kind: data.kind || (data.ok ? 'ok' : 'error'), text: data.message });
-      else if (name === 'log' && data.level !== 'info') this.post({ type: 'toast', kind: data.level === 'error' ? 'error' : 'warn', text: data.message, taskId: data.taskId });
+    orch.onEngine((e) => {
+      switch (e.name) {
+        case 'output':
+          return this.queueOutput({ type: 'output', ...e.data });
+        case 'live':
+          return void this.post({ type: 'live', ...e.data });
+        case 'permission':
+          return void this.post({ type: 'permission', request: e.data });
+        case 'permissionDone':
+          return void this.post({ type: 'permissionDone', requestId: e.data });
+        case 'mcpLogin':
+          return void this.post({ type: 'toast', kind: e.data.kind, text: e.data.message });
+        case 'log':
+          if (e.data.level !== 'info') this.post({ type: 'toast', kind: e.data.level === 'error' ? 'error' : 'warn', text: e.data.message, taskId: e.data.taskId });
+          return;
+        case 'changed':
+        case 'checkpoint':
+        case 'finished':
+        case 'limits':
+          return; // the page reads these again on `changed`
+        default: {
+          const unhandled: never = e;
+          return unhandled;
+        }
+      }
     }, null, this.disposables);
     // A hidden panel keeps its page (retainContextWhenHidden), but reloading it on every change would be wasted work.
     orch.onDidChange(() => {
@@ -134,7 +157,7 @@ class DashboardPanel implements RpcHandlers {
     this.disposables.forEach((d) => d.dispose());
   }
 
-  post(msg: Record<string, unknown>): Thenable<boolean> {
+  post(msg: HostMessage): Thenable<boolean> {
     return this.panel.webview.postMessage(msg);
   }
 
@@ -153,7 +176,7 @@ class DashboardPanel implements RpcHandlers {
       const data = await handler.call(this, params ?? {});
       this.post({ type: 'res', id, ok: true, data });
     } catch (err) {
-      const e = err as Error & { code?: string; blocked?: object };
+      const e = err as Error & { code?: string; blocked?: BlockedRepo[] };
       this.post({ type: 'res', id, ok: false, error: e.message || String(e), code: e.code, ...(e.blocked && { blocked: e.blocked }) });
     }
   }
@@ -344,7 +367,7 @@ class DashboardPanel implements RpcHandlers {
   async $openFile({ taskId, file, preview }: { taskId?: string; file: string; preview?: boolean }): Promise<unknown> {
     const abs = taskId ? this.engine.svc.artifactFile(taskId, file) : file;
     if (!taskId && !openable(abs, this.openableRoots())) throw new Error(`${file} is outside the workspace and its repos; open it yourself if you need it`);
-    if (!fs.existsSync(abs)) throw new Error(`${path.basename(abs)} does not exist (yet)`);
+    if (!(await exists(abs))) throw new Error(`${path.basename(abs)} does not exist (yet)`);
     const uri = vscode.Uri.file(abs);
     if (preview && abs.endsWith('.md')) return vscode.commands.executeCommand('markdown.showPreviewToSide', uri);
     const doc = await vscode.workspace.openTextDocument(uri);
@@ -415,7 +438,7 @@ class DashboardPanel implements RpcHandlers {
     const dir = this.orch.account().dir;
     const terminal = vscode.window.createTerminal({
       name: `Claude · ${step.agent}${step.repo ? `@${step.repo}` : ''}`,
-      cwd: step.cwd && fs.existsSync(step.cwd) ? step.cwd : this.root,
+      cwd: step.cwd && (await exists(step.cwd)) ? step.cwd : this.root,
       env: { CLAUDE_CONFIG_DIR: dir || null },
       iconPath: new vscode.ThemeIcon('sparkle'),
     });
@@ -569,7 +592,7 @@ class DashboardPanel implements RpcHandlers {
       title: 'Save backup of agents, pipeline and scenarios',
     });
     if (!uri) return { saved: false };
-    fs.writeFileSync(uri.fsPath, backup.text);
+    await fs.promises.writeFile(uri.fsPath, backup.text);
     return { saved: true, file: uri.fsPath, agents: backup.agents, scenarios: backup.scenarios, pipeline: backup.pipeline };
   }
 
@@ -578,7 +601,7 @@ class DashboardPanel implements RpcHandlers {
     const nothing = { cancelled: true, agents: [], pipeline: false, scenarios: [], skipped: [] };
     const [uri] = (await vscode.window.showOpenDialog({ canSelectMany: false, defaultUri: vscode.Uri.file(this.root), openLabel: 'Restore', title: 'Restore from backup', filters: { 'Claudestrator backup': ['yaml', 'yml', 'json'] } })) || [];
     if (!uri) return nothing;
-    const parsed = backups.parseBackup(fs.readFileSync(uri.fsPath, 'utf8'));
+    const parsed = backups.parseBackup(await fs.promises.readFile(uri.fsPath, 'utf8'));
     if (!parsed.ok) throw new Error(parsed.error);
     const plan = backups.previewRestore({ workspace: this.root, backup: parsed.backup });
     const count = plan.agents.add.length + plan.agents.replace.length + plan.scenarios.add.length + plan.scenarios.replace.length + (plan.pipeline ? 1 : 0);
@@ -608,8 +631,7 @@ class DashboardPanel implements RpcHandlers {
     const [uri] = (await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: false, defaultUri: vscode.Uri.file(this.root), openLabel: 'Use as a library', title: 'A folder of agents and scenarios (library.yaml)' })) || [];
     if (!uri) return none;
     const name = path.basename(uri.fsPath);
-    const exists = fs.existsSync(path.join(uri.fsPath, cfg.LIBRARY_FILE));
-    if (!exists) {
+    if (!(await exists(path.join(uri.fsPath, cfg.LIBRARY_FILE)))) {
       const create = await vscode.window.showInformationMessage(`${name} has no ${cfg.LIBRARY_FILE}. Start a library there?`, { modal: true, detail: `An empty ${cfg.LIBRARY_FILE} is written; move agents and scenarios into it from the Agents page, or write them as in config.yaml.` }, 'Start a library');
       if (!create) return none;
     }
@@ -655,9 +677,9 @@ class DashboardPanel implements RpcHandlers {
 
   async $openConfig({ which }: { which: string }) {
     const file = which === 'user' ? cfg.userConfigFile() : cfg.projectConfigFile(this.root);
-    if (!fs.existsSync(file)) {
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, `# Claudestrator ${which === 'user' ? 'user' : 'workspace'} config. Later layers override earlier ones field by field:\n# built-in defaults → ~/.claudestrator/config.yaml → <workspace>/.claudestrator/config.yaml\n{}\n`);
+    if (!(await exists(file))) {
+      await fs.promises.mkdir(path.dirname(file), { recursive: true });
+      await fs.promises.writeFile(file, `# Claudestrator ${which === 'user' ? 'user' : 'workspace'} config. Later layers override earlier ones field by field:\n# built-in defaults → ~/.claudestrator/config.yaml → <workspace>/.claudestrator/config.yaml\n{}\n`);
     }
     await vscode.window.showTextDocument(vscode.Uri.file(file));
   }
@@ -676,7 +698,7 @@ class DashboardPanel implements RpcHandlers {
       errors: r.ok ? [] : r.errors.map((e) => e.message),
       repos: Object.values(configured).map((x) => ({ ...x, status: status.find((s) => s.name === x.name), suggested: describeRepo(path.resolve(this.root, x.path)).gates })),
       detected,
-      context: r.ok ? r.config.context.map((f) => ({ file: f, rel: path.relative(this.root, f), exists: fs.existsSync(f), ref: path.relative(ctxDir, f) })) : [],
+      context: r.ok ? await Promise.all(r.config.context.map(async (f) => ({ file: f, rel: path.relative(this.root, f), exists: await exists(f), ref: path.relative(ctxDir, f) }))) : [],
       baseBranch: r.ok ? r.config.baseBranch : 'main',
     };
   }
@@ -748,10 +770,10 @@ class DashboardPanel implements RpcHandlers {
   async $createWorkspaceMap() {
     const file = path.join(this.root, cfg.CONFIG_DIR, 'workspace.md');
     const r = this.orch.config();
-    if (!fs.existsSync(file)) {
+    if (!(await exists(file))) {
       const repos = r.ok ? Object.values(r.config.repos).map((x) => ({ name: x.name, path: x.path, ...describeRepo(path.resolve(this.root, x.path)) })) : [];
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, WORKSPACE_MAP(repos));
+      await fs.promises.mkdir(path.dirname(file), { recursive: true });
+      await fs.promises.writeFile(file, WORKSPACE_MAP(repos));
     }
     const current = r.ok ? r.config.context : [];
     if (!current.includes(file)) {
@@ -779,7 +801,7 @@ class DashboardPanel implements RpcHandlers {
     const file = cfg.createProjectConfig(this.root, layer, ' Claudestrator workspace config. Edit it here or in the Claudestrator dashboard.\n Layers: built-in defaults → ~/.claudestrator/config.yaml → this file.');
     if (map) {
       const mapFile = path.join(this.root, cfg.CONFIG_DIR, 'workspace.md');
-      if (!fs.existsSync(mapFile)) fs.writeFileSync(mapFile, WORKSPACE_MAP(repos || []));
+      if (!(await exists(mapFile))) await fs.promises.writeFile(mapFile, WORKSPACE_MAP(repos || []));
     }
     return { file };
   }

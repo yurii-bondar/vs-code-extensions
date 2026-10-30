@@ -18,7 +18,7 @@ import type { Defaults } from './core/defaults';
 import type { Probe, StatuslineSnapshot } from './core/env';
 import type { TaskEntry } from './core/view';
 import type { Diagnostic } from './core/types';
-import type { Account, AccountEntry, LimitWindow, StoredLimits, PermissionRequest } from './core/wire';
+import type { Account, AccountEntry, EngineEvent, LimitWindow, StoredLimits, PermissionRequest } from './core/wire';
 
 const SECRET_KEY = 'claudestrator.atlassianToken';
 
@@ -55,10 +55,6 @@ interface AuthInfo {
 type ConfigResult = Extract<ResolveResult, { ok: true }> | { ok: false; errors: { message: string }[]; warnings: Diagnostic[] };
 
 /** An event of the engine, re-emitted with its name. */
-interface EngineEvent {
-  name: string;
-  data: unknown;
-}
 // What a current Claude Code accepts; used until the real `claude --help` has been read.
 const DEFAULT_FLAGS = ['--include-partial-messages', '--tools', '--setting-sources', '--max-budget-usd', '--max-turns', '--json-schema', '--name', '--effort', '--mcp-config', '--strict-mcp-config'];
 
@@ -204,7 +200,8 @@ class Orchestrator {
     for (const name of ['changed', 'output', 'live', 'log', 'checkpoint', 'finished', 'permission', 'permissionDone', 'limits']) {
       engine.on(name, (data: object) => {
         if (name === 'changed' && engine !== this.engine && !engine.running.size) this.retired = this.retired.filter((e) => e !== engine);
-        this._onEngine.fire({ name, data });
+        // The engine is a plain EventEmitter; what it emits under each name is EngineEvent's.
+        this._onEngine.fire({ name, data } as EngineEvent);
         if (name === 'limits') this.context.globalState.update(this.limitsKey(), { ...data, source: 'agents' });
         if (['changed', 'live', 'permission', 'permissionDone', 'limits'].includes(name)) this.fire();
       });
@@ -386,7 +383,7 @@ class Orchestrator {
       if (sub) sub.dispose();
       this.claudeLoginTerminal = null;
       this.refreshAuth().then(() => {
-        const ok = this.account().loggedIn;
+        const ok = this.account().loggedIn === true;
         this._onEngine.fire({ name: 'mcpLogin', data: { ok, kind: ok ? 'ok' : 'info', message: ok ? `Signed in to Claude as ${this.account().email || this.account().label}` : 'The Claude sign-in did not finish' } });
         if (ok) this.onAccountChanged();
       });

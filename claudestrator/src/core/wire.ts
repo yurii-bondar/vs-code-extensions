@@ -28,6 +28,7 @@ import type {
   StoredPipeline,
   TaskGroup,
   TaskInstruction,
+  TaskState,
 } from './types';
 import type { Chip } from './pipeline';
 
@@ -230,6 +231,8 @@ export interface Status {
   label: string;
   tone: string;
   group: string;
+  /** Whether Resume runs it from where it is (stopped, failed, interrupted or ready). */
+  resumable: boolean;
 }
 
 export interface TaskSource {
@@ -505,6 +508,19 @@ export interface SetupParams {
   map?: boolean | undefined;
   baseBranch?: string | undefined;
 }
+
+/** What the engine emits, as the orchestrator hands it on to the editor and the page. */
+export type EngineEvent =
+  | { name: 'changed'; data: string }
+  | { name: 'output'; data: { taskId: string; key: string; item: TranscriptItem } }
+  | { name: 'live'; data: { taskId: string; live: Live | null } }
+  | { name: 'log'; data: { level: string; message: string; taskId?: string } }
+  | { name: 'checkpoint'; data: { taskId: string; checkpoint: Checkpoint; title: string } }
+  | { name: 'finished'; data: { taskId: string; state: TaskState } }
+  | { name: 'permission'; data: PermissionRequest }
+  | { name: 'permissionDone'; data: string }
+  | { name: 'limits'; data: StoredLimits }
+  | { name: 'mcpLogin'; data: { ok: boolean; kind: string; message: string; server?: string } };
 
 /** What the host pushes to a task screen while an agent works. */
 export type TaskPush =
