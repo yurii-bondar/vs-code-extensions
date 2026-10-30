@@ -229,6 +229,7 @@ VS Code settings (`claudestrator.*`):
 npm install
 npm test          # state machine, config, guard, intake, and the engine end to end against a fake Claude CLI and real git repos
 npm run preview   # the dashboard in a browser at http://127.0.0.1:4780, on the real engine with a fake agent
+npm run test:live # one small task on haiku against your installed Claude Code: guard, sandbox, commit (a few cents)
 ```
 
 Press F5 in VS Code to run the extension. To package, run `npx @vscode/vsce package` and install the `.vsix`.
