@@ -34,8 +34,12 @@ const REPORT_RETRIES = 2;
 /** What Claude Code says when its own sign-in is missing or expired (not an MCP server's). */
 const CLAUDE_AUTH = /Failed to authenticate|OAuth (session|token) (has )?expired|Invalid API key|Please run \/login|not logged in|authentication_error/i;
 const INTAKE_KEY = '0000-intake';
-/** MCP tools an intake session may call: reading only (Atlassian: getJiraIssue, search, fetch, getConfluencePage, …). */
-const MCP_READ = /^(get|search|fetch|lookup|list|read|atlassianUserInfo)/i;
+/**
+ * MCP tools that only read, by the verb their name starts with (getJiraIssue, search_code, list_issues, read_file,
+ * Atlassian's discover and executeRead). Anything else an MCP server offers may change something outside the repos
+ * (merge a PR, move an issue, write a file), so an agent calls it only when its `tools` name it.
+ */
+const MCP_READ = /^(?:(?:get|search|fetch|lookup|list|read|discover)(?=$|[_A-Z])|executeRead$|atlassianUserInfo$)/;
 /** The one write a Jira comment session may make (Atlassian: addCommentToJiraIssue). */
 const MCP_COMMENT = /^addComment/i;
 const COMMENT_TIMEOUT_MS = 4 * 60000;
@@ -116,6 +120,16 @@ interface SessionUsage {
 }
 
 const stepLabel = (s: { agent: string; repo?: string | undefined }): string => (s.repo ? `${s.agent} @ ${s.repo}` : s.agent);
+
+/** The tool's own name, after `mcp__<server>__`. */
+const mcpAction = (tool: string): string => tool.split('__').pop() || '';
+
+/** Whether a `tools` entry names an MCP tool, as Claude Code's rules do: the tool, `mcp__<server>`, or `mcp__<server>__*`. */
+function mcpRuleCovers(rule: string, tool: string): boolean {
+  if (rule === tool) return true;
+  if (rule.endsWith('__*')) return tool.startsWith(rule.slice(0, -1));
+  return /^mcp__[^*]+$/.test(rule) && rule.split('__').length === 2 && tool.startsWith(`${rule}__`);
+}
 
 /** The account's window that Claude Code reported as used up and not yet reset: agents started now would fail at once. */
 function usedUpWindow(limits: EngineLimits | null, now: number): string | null {
@@ -543,8 +557,7 @@ class Engine extends EventEmitter {
     const agent = { name: 'intake', description: 'Reads the task source', model: 'haiku', effort: 'low' as const, instructions: INTAKE_INSTRUCTIONS, output: 'plan' };
     const hook = this.hooks.register(async ({ tool }) => {
       if (READ_TOOLS.has(tool) || tool === 'ToolSearch') return { allow: true };
-      const action = tool.startsWith('mcp__') ? tool.split('__').pop() : '';
-      if (action && MCP_READ.test(action)) return { allow: true };
+      if (tool.startsWith('mcp__') && MCP_READ.test(mcpAction(tool))) return { allow: true };
       emitItem({ type: 'blocked', tool, reason: 'reading the ticket only reads: this tool could change something' });
       return { allow: false, reason: 'Claudestrator: the intake only reads; use the get/search/fetch tools' };
     });
@@ -847,8 +860,12 @@ class Engine extends EventEmitter {
     }
     // Claude Code is started with the agent's tools; anything else reaching the hook is refused.
     const agent = config.agents[step.agent];
-    const given = !agent || !agent.tools || agent.tools.some((t) => t === tool || t.startsWith(`${tool}(`)) || (tool.startsWith('mcp__') && agent.mcp !== false);
-    if (!given) return blocked(`${tool} is not one of the ${step.agent} agent's tools`);
+    if (tool.startsWith('mcp__')) {
+      if (agent && agent.mcp === false) return blocked(`${tool}: the ${step.agent} agent runs without MCP servers`);
+      if (!MCP_READ.test(mcpAction(tool)) && !(agent && agent.tools && agent.tools.some((rule) => mcpRuleCovers(rule, tool)))) {
+        return blocked(`${tool} may change something outside the repos; the ${step.agent} agent calls it only when its tools name it (tools: [${tool}])`);
+      }
+    } else if (agent && agent.tools && !agent.tools.some((t) => t === tool || t.startsWith(`${tool}(`))) return blocked(`${tool} is not one of the ${step.agent} agent's tools`);
     if (!this.askPermissions()) return { allow: true };
     const requestId = crypto.randomUUID();
     const request: PermissionRequest = { requestId, taskId, agent: step.agent, ...(step.repo && { repo: step.repo }), tool, input: summarizeInput(tool, input), at: Date.now() };
@@ -1003,7 +1020,7 @@ class Engine extends EventEmitter {
     let posted = 0;
     const hook = this.hooks.register(async ({ tool }) => {
       if (tool === 'ToolSearch') return { allow: true };
-      const action = tool.startsWith('mcp__') ? tool.split('__').pop() : '';
+      const action = tool.startsWith('mcp__') ? mcpAction(tool) : '';
       if (action && MCP_COMMENT.test(action) && posted === 0) {
         posted += 1;
         return { allow: true };

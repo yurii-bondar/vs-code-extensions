@@ -91,7 +91,8 @@ First time in a workspace, *Set up this workspace* finds the git repos and sugge
 - **Guard.** Every tool call of an agent goes first to the extension, over a `PreToolUse` http hook on `127.0.0.1` with a token only that agent session holds; no process starts per call. A guard that cannot answer (VS Code closed, a timeout) blocks the call. It always blocks:
   - git writes by agents (commit, push, switch, stash, reset…) and non-read `gh` calls;
   - force-push, pushes to protected branches, `--no-verify`, merging PRs, non-draft PRs, AI attribution (if the policy says so) and destructive `rm -r`;
-  - edits outside the repo of the current step (read-only stages edit nothing).
+  - edits outside the repo of the current step (read-only stages edit nothing);
+  - MCP tools that may change something (merge a PR, move an issue, write a file): an agent reads through its MCP servers (`get…`, `search…`, `list…`, `read…`), and calls any other MCP tool only when its `tools` name it (`mcp__github__create_issue`, the whole server as `mcp__github`, or `mcp__github__*`).
 
   With *Ask me* on, you also approve every edit and command from the dashboard or a notification; a question nobody answers in 14 minutes is denied.
 - **Jira comments** (*Approve & post to Jira*, *Push, open PRs & comment in Jira*, *Post to Jira*) go over REST with an API token, else through the account's Atlassian MCP server: a short haiku session whose guard allows only the read tools and one add-comment call. Each attempt is in the activity log and the *Jira comments* card; a failed one shows a banner with *Post again*.

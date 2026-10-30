@@ -189,7 +189,8 @@ function buildArgs(req: Pick<SessionRequest, 'agent' | 'additionalDirectories' |
   if (a.model && a.model !== 'inherit') args.push('--model', a.model);
   if (a.effort && has('--effort')) args.push('--effort', a.effort);
   if (a.maxTurns && has('--max-turns')) args.push('--max-turns', String(a.maxTurns));
-  if (a.tools && has('--tools')) args.push('--tools', a.tools.join(','));
+  // --tools picks from the built-in set; an MCP tool an agent lists is for the guard, which allows it.
+  if (a.tools && has('--tools')) args.push('--tools', a.tools.filter((t) => !t.startsWith('mcp__')).join(','));
   const disallowed = [...ALWAYS_DISALLOWED, ...(a.disallowedTools || [])];
   args.push('--disallowedTools', disallowed.join(','));
   const sources = opts.settingSources();
