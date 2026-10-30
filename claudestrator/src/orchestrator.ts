@@ -81,6 +81,8 @@ class Orchestrator {
   hooks: HookServer;
   health: Health | null;
   engine: Engine | null;
+  /** Engines replaced while their tasks ran (the workspace folder changed): kept until those end, so closing the window stops them too. */
+  retired: Engine[] = [];
   root: string | null;
   token: string | undefined;
   watchers: vscode.FileSystemWatcher[];
@@ -183,6 +185,7 @@ class Orchestrator {
     if (this.engine && root === this.root) return;
     this.root = root;
     this.disposeWatchers();
+    if (this.engine && this.engine.running.size) this.retired.push(this.engine);
     if (!root) {
       this.engine = null;
       this.fire();
@@ -207,8 +210,10 @@ class Orchestrator {
       mcpIntake: () => this.mcpIntakeServer(),
       askPermissions: () => settings().get('askPermissions') === true,
     });
+    const engine = this.engine;
     for (const name of ['changed', 'output', 'live', 'log', 'checkpoint', 'finished', 'permission', 'permissionDone', 'limits']) {
-      this.engine.on(name, (data: object) => {
+      engine.on(name, (data: object) => {
+        if (name === 'changed' && engine !== this.engine && !engine.running.size) this.retired = this.retired.filter((e) => e !== engine);
         this._onEngine.fire({ name, data });
         if (name === 'limits') this.context.globalState.update(this.limitsKey(), { ...data, source: 'agents' });
         if (['changed', 'live', 'permission', 'permissionDone', 'limits'].includes(name)) this.fire();
@@ -552,6 +557,11 @@ class Orchestrator {
   }
 
   /** Every task as a list entry, guarded against a task folder vanishing mid-read. */
+  /** Stops every running agent, also those of an engine that was replaced; their tasks resume from the same step. */
+  async stopAll(): Promise<void> {
+    await Promise.all([...(this.engine ? [this.engine] : []), ...this.retired].map((e) => e.stopAll()));
+  }
+
   list(): TaskEntry[] {
     if (!this.engine) return [];
     try {

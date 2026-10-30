@@ -235,7 +235,7 @@ function activate(context: vscode.ExtensionContext) {
 
 async function deactivate(): Promise<void> {
   // Agents are child processes of this window; stop them cleanly so their tasks resume from the same step.
-  if (orch && orch.engine) await orch.engine.stopAll();
+  if (orch) await orch.stopAll();
 }
 
 export { activate, deactivate };
