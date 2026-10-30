@@ -5,7 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { EventEmitter } from 'events';
-import { loadConfig } from './config';
+import { loadConfig, configPaths } from './config';
 import { EFFORTS, SCENARIOS } from './protocol';
 import { buildPipeline, scenarioKind, taskPipeline, fitsScenario, onRepos } from './pipeline';
 import { nextAction, runOf, artifactPath, branchName, sameStep, editableFrom, stepRepos, TASK_FILES, type NextAction, type RunAction } from './machine';
@@ -622,7 +622,7 @@ class Engine extends EventEmitter {
    * itself: deny rules for secrets and pushes, and the sandbox around shell commands (writes only in `writeRoots`).
    */
   agentSettings({ writeRoots, cwd, config }: { writeRoots: string[]; cwd: string; config: Config }): Record<string, unknown> {
-    return sessionSettings({ hooks: this.hooks.settings(), guard: this.hooks.host(), writeRoots, cwd, sandbox: config.policy.sandbox, network: config.policy.network });
+    return sessionSettings({ hooks: this.hooks.settings(), guard: this.hooks.host(), writeRoots, protect: configPaths(this.workspace, config), cwd, sandbox: config.policy.sandbox, network: config.policy.network });
   }
 
   spentUsd(taskId: string): number {
@@ -851,6 +851,7 @@ class Engine extends EventEmitter {
     // StructuredOutput is how an agent hands over its report's data (--json-schema): nothing it reaches.
     if (READ_TOOLS.has(tool) || tool === 'StructuredOutput') return { allow: true };
     const cwd = writeRoots.length === 1 ? writeRoots[0]! : this.workspace;
+    const protect = configPaths(this.workspace, config);
     if (tool === 'Bash') {
       const d = guardBash(String(input.command || ''), {
         policy: config.policy,
@@ -861,6 +862,7 @@ class Engine extends EventEmitter {
         task: { taskId, canPush: false },
         agent: true,
         writeRoots,
+        protect,
         branchOf: branchAt,
         isRepoRoot: (dir) => fs.existsSync(path.join(dir, '.git')),
         readFile: (f) => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null),
@@ -872,6 +874,7 @@ class Engine extends EventEmitter {
       if (!writeRoots.length) return blocked(`the ${step.agent} stage does not change files`);
       if (path.resolve(cwd, target).split(path.sep).includes('.git')) return blocked(`${tool} into git metadata (.git) is not allowed; Claudestrator owns git`);
       if (!target || !writeRoots.some((root) => realInside(root, path.resolve(cwd, target)))) return blocked(`${tool} outside ${writeRoots.join(', ')} is not allowed: this stage works only in ${step.repo || 'the task\'s repos'}`);
+      if (protect.some((p) => realInside(p, path.resolve(cwd, target)))) return blocked(`${tool} of ${target}: Claudestrator's config and task state are not an agent's to change`);
     }
     // Claude Code is started with the agent's tools; anything else reaching the hook is refused.
     const agent = config.agents[step.agent];

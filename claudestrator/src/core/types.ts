@@ -257,6 +257,8 @@ export interface Config {
   editor?: string;
   groups: Record<string, TaskGroup>;
   instructions: Record<string, TaskInstruction>;
+  /** Every file the config is read from: config and library files (also where none is yet), instruction and context files. */
+  sources: string[];
 }
 
 export interface Diagnostic {

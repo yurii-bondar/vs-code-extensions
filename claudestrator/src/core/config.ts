@@ -5,6 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as YAML from 'yaml';
 import { validateConfigLayer, validateAgentPatch, validateLibraryLayer, SCENARIO_OUTPUT, JIRA_KEY } from './protocol';
+import { ORCH_DIR } from './store';
 import type { Agent, Config, CustomScenario, Diagnostic, Effort, Gate, GitMode, GroupType, Output, Policy, RepoConfig, Runs, ScenarioStep, TaskGroup, TaskInstruction } from './types';
 
 // ---------- the shapes of a config layer, as written in config.yaml ----------
@@ -68,6 +69,8 @@ interface Layer {
   name: string;
   baseDir: string;
   config: ConfigLayer;
+  /** The file it was read from; the built-in layer has none. */
+  file?: string | undefined;
 }
 
 /** One piece of an agent's instructions: inline text or a file, and how it combines with what came before. */
@@ -332,14 +335,14 @@ function loadLayerFile(file: string, name: string): { layer?: Layer; diagnostics
   }
   const issues = validateConfigLayer(raw);
   if (issues.length) return { diagnostics: issues.map((m) => ({ level: 'error', code: 'config_invalid', source: file, message: `${name} config: ${m}` })) };
-  return { layer: { name, baseDir: path.dirname(file), config: raw }, diagnostics: [] };
+  return { layer: { name, baseDir: path.dirname(file), config: raw, file }, diagnostics: [] };
 }
 
 /**
  * The layers in order: built-in, the libraries (those the user config lists, then the project's), the user config,
  * the project config. A later layer wins field by field, so a project can change what a library defines.
  */
-function loadLayers({ workspace, home = os.homedir() }: { workspace: string; home?: string }): { layers: Layer[]; diagnostics: Diagnostic[] } {
+function loadLayers({ workspace, home = os.homedir() }: { workspace: string; home?: string }): { layers: Layer[]; diagnostics: Diagnostic[]; files: string[] } {
   const diagnostics: Diagnostic[] = [];
   const own: Layer[] = [];
   const files: [string, string][] = [['user', userConfigFile(home)], ['project', projectConfigFile(workspace)]];
@@ -364,7 +367,8 @@ function loadLayers({ workspace, home = os.homedir() }: { workspace: string; hom
       if (r.layer) libraries.push(r.layer);
     }
   }
-  return { layers: [builtinLayer(), ...libraries, ...own], diagnostics };
+  // Every file a layer comes from or would come from: one created later is a new config too.
+  return { layers: [builtinLayer(), ...libraries, ...own], diagnostics, files: [...files.map(([, file]) => file), ...seen] };
 }
 
 const LIBRARY_FILE = 'library.yaml';
@@ -398,7 +402,7 @@ function loadLibraryFile(file: string, label: string): { layer?: Layer; diagnost
   }
   const issues = validateLibraryLayer(raw);
   if (issues.length) return { diagnostics: issues.map((m) => ({ level: 'error', code: 'library_invalid', source: file, message: `library "${label}": ${m}` })) };
-  return { layer: { name: `${LIBRARY_PREFIX}${label}`, baseDir: path.dirname(file), config: raw as ConfigLayer }, diagnostics: [] };
+  return { layer: { name: `${LIBRARY_PREFIX}${label}`, baseDir: path.dirname(file), config: raw as ConfigLayer, file }, diagnostics: [] };
 }
 
 // ---------- merging ----------
@@ -466,7 +470,13 @@ function applyFlags(merged: Merged, flags: Flags, diagnostics: Diagnostic[]): vo
 // ---------- resolving ----------
 
 function resolveConfig(layers: Layer[], opts: { flags?: Flags | undefined; readFile?: ReadFile | undefined } = {}): ResolveResult {
-  const read: ReadFile = opts.readFile ?? ((p) => fs.readFileSync(p, 'utf8'));
+  const readFile: ReadFile = opts.readFile ?? ((p) => fs.readFileSync(p, 'utf8'));
+  // The files the config is made of besides its layers: instruction and context files.
+  const sources = new Set(layers.flatMap((l) => (l.file ? [l.file] : [])));
+  const read: ReadFile = (p) => {
+    sources.add(p);
+    return readFile(p);
+  };
   const diags: Diagnostic[] = [];
   const merged = mergeLayers(layers);
   applyFlags(merged, opts.flags ?? {}, diags);
@@ -581,6 +591,7 @@ function resolveConfig(layers: Layer[], opts: { flags?: Flags | undefined; readF
       ...(merged.editor && { editor: merged.editor }),
       groups,
       instructions: Object.fromEntries(Object.entries(merged.instructions).map(([id, x]) => [id, { id, label: x.label, text: x.text }])),
+      sources: [...sources],
     },
   };
 }
@@ -731,11 +742,21 @@ function resolvePipeline(pipeline: Merged['pipeline'], drafts: Map<string, Draft
 
 /** Loads every layer and resolves it. */
 function loadConfig({ workspace, home, flags, readFile }: { workspace: string; home?: string | undefined; flags?: Flags | undefined; readFile?: ReadFile | undefined }): ResolveResult {
-  const { layers, diagnostics } = loadLayers({ workspace, ...(home && { home }) });
+  const { layers, diagnostics, files } = loadLayers({ workspace, ...(home && { home }) });
   const loadErrors = diagnostics.filter((d) => d.level === 'error');
   if (loadErrors.length) return { ok: false, errors: loadErrors, warnings: diagnostics.filter((d) => d.level === 'warning') };
   const r = resolveConfig(layers, { flags, readFile });
+  if (r.ok) r.config.sources = [...new Set([...files, ...r.config.sources])];
   return { ...r, warnings: [...diagnostics, ...r.warnings] };
+}
+
+/**
+ * What agents never change, whatever their stage: the workspace's config folder, the task state, and every file the
+ * config comes from (library and instruction files may sit inside a repo). An agent that could would turn its own
+ * sandbox off or add a gate the next stage runs, and that change never shows in a diff.
+ */
+function configPaths(workspace: string, config: Pick<Config, 'sources'>): string[] {
+  return [...new Set([path.join(workspace, CONFIG_DIR), path.join(workspace, ORCH_DIR, 'tasks'), path.join(workspace, ORCH_DIR, 'current'), ...config.sources.map((f) => path.resolve(f))])];
 }
 
 // ---------- editing the project layer ----------
@@ -1109,6 +1130,7 @@ export {
   mergeLayers,
   resolveConfig,
   loadConfig,
+  configPaths,
   readProjectLayer,
   updateAgentConfig,
   resetAgentConfig,

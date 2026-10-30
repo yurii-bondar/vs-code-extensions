@@ -23,6 +23,8 @@ interface GuardContext {
    * Empty: a stage that changes nothing. Undefined: not checked (not an agent's stage).
    */
   writeRoots?: string[] | undefined;
+  /** What a command never writes, inside the write roots too: Claudestrator's config and task state. */
+  protect?: string[] | undefined;
   branchOf(dir: string): string | null;
   isRepoRoot(dir: string): boolean;
   readFile(file: string): string | null;
@@ -142,6 +144,7 @@ function checkWrites(targets: string[], cmd: string, dir: string, ctx: GuardCont
     if (/\$(?!\{?HOME\}?(\/|$))|`/.test(t)) return deny(`${cmd} writes to ${t}: spell out the path instead of a variable`);
     const abs = resolveIn(dir, t, ctx);
     if (abs.split(path.sep).includes('.git')) return deny(`${cmd} would write into git metadata (${abs}); Claudestrator owns git`);
+    if ((ctx.protect || []).some((p) => within(abs, path.resolve(p)))) return deny(`${cmd} writes ${abs}: Claudestrator's config and task state are not an agent's to change`);
     if (TEMP_DIRS().some((tmp) => within(abs, tmp))) continue;
     if (roots.some((root) => within(abs, root))) continue;
     return deny(roots.length ? `${cmd} writes ${abs}, outside ${roots.join(', ')}: this stage works only there` : `${cmd} writes ${abs}: this stage does not change files (a temp folder is fine)`);

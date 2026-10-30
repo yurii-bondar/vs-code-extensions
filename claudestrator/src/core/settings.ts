@@ -52,6 +52,8 @@ interface SessionSettingsArgs {
   guard: string;
   /** Where the session may write; empty for a stage that changes nothing. */
   writeRoots: string[];
+  /** What it never writes, inside its write roots too: Claudestrator's config and task state (`configPaths`). */
+  protect: string[];
   /** The session's working directory: the sandbox lets a session write there unless told not to. */
   cwd: string;
   /** `policy.sandbox`: run the agents' shell commands in Claude Code's sandbox. */
@@ -60,11 +62,14 @@ interface SessionSettingsArgs {
   network: string[];
 }
 
+/** An absolute path in Claude Code's rule syntax, where `//` is the filesystem root: `/ws/x` → `//ws/x`. */
+const ruleRoot = (abs: string): string => `/${abs.split(path.sep).join('/').replace(/^\/*/, '/')}`;
+
 /** One session's settings. */
-function sessionSettings({ hooks, guard, writeRoots, cwd, sandbox, network }: SessionSettingsArgs): Record<string, unknown> {
+function sessionSettings({ hooks, guard, writeRoots, protect, cwd, sandbox, network }: SessionSettingsArgs): Record<string, unknown> {
   return {
     hooks,
-    permissions: { deny: [...SECRET_FILES.map((f) => `Read(${f})`), ...DENIED_COMMANDS] },
+    permissions: { deny: [...SECRET_FILES.map((f) => `Read(${f})`), ...protect.flatMap((p) => [`Edit(${ruleRoot(p)})`, `Edit(${ruleRoot(p)}/**)`]), ...DENIED_COMMANDS] },
     ...(sandbox && {
       sandbox: {
         enabled: true,
@@ -74,7 +79,7 @@ function sessionSettings({ hooks, guard, writeRoots, cwd, sandbox, network }: Se
           denyRead: SECRET_PATHS,
           // Git metadata is Claudestrator's (a hook or core.fsmonitor written there would run on its next git call),
           // and a stage that changes nothing writes nowhere but a temp folder.
-          denyWrite: [...writeRoots.map((r) => path.join(r, '.git')), ...(writeRoots.length ? [] : [cwd])],
+          denyWrite: [...writeRoots.map((r) => path.join(r, '.git')), ...protect, ...(writeRoots.length ? [] : [cwd])],
         },
         network: { allowedDomains: [...new Set([guard, ...REGISTRIES, ...network])] },
       },
