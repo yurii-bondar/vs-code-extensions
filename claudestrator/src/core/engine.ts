@@ -39,6 +39,8 @@ const MCP_READ = /^(get|search|fetch|lookup|list|read|atlassianUserInfo)/i;
 /** The one write a Jira comment session may make (Atlassian: addCommentToJiraIssue). */
 const MCP_COMMENT = /^addComment/i;
 const COMMENT_TIMEOUT_MS = 4 * 60000;
+/** An agent that shows no sign of work this long is stopped. Longer than any one tool call (Bash allows 10 minutes). */
+const STALL_MS = 20 * 60000;
 
 const COMMENT_INSTRUCTIONS = `You post exactly one comment on one Jira issue and do nothing else.
 Use the MCP tool that adds a comment to a Jira issue (e.g. addCommentToJiraIssue). If a tool needs a cloud id, look it up with the tool that lists accessible Atlassian resources.
@@ -79,6 +81,8 @@ interface EngineOptions {
   mcpIntake?: (() => McpIntake | null) | undefined;
   askPermissions?: (() => boolean) | undefined;
   now?: (() => Date) | undefined;
+  /** How long an agent may show no sign of work before it is stopped. */
+  stallMs?: number | undefined;
 }
 
 interface PermissionAnswer {
@@ -169,6 +173,9 @@ class Engine extends EventEmitter {
   liveUsage: Map<string, UsageItem & { key: string }>;
   limits: EngineLimits | null;
   svc: TaskService;
+  stallMs: number;
+  /** When each task's agent last showed a sign of work: any output, a tool call, a question to you. */
+  activity = new Map<string, number>();
 
   constructor(opts: EngineOptions) {
     super();
@@ -191,6 +198,7 @@ class Engine extends EventEmitter {
     /** The account's latest 5-hour and weekly limits, as agents last saw them. */
     this.limits = null;
     this.svc = new TaskService({ workspace: opts.workspace, now: opts.now, onAppend: (taskId) => this.emit('changed', taskId) });
+    this.stallMs = opts.stallMs ?? STALL_MS;
   }
 
   /** Always read fresh: an edited instruction applies to the very next agent run. */
@@ -473,12 +481,44 @@ class Engine extends EventEmitter {
   emitter(taskId: string, key: string): (item: TranscriptItem) => void {
     return (item) => {
       const t = Date.now();
+      this.activity.set(taskId, t);
       const stamped = { ...item, t };
       if (item.type === 'usage') this.liveUsage.set(taskId, { ...item, t, key });
       else if (item.type !== 'text_delta' && item.type !== 'thinking') this.svc.appendTranscript(taskId, key, stamped);
       if (item.type === 'turn_end') this.liveCost.set(taskId, (item.costUsd as number | undefined) || 0);
       this.emit('output', { taskId, key, item: stamped });
     };
+  }
+
+  /**
+   * The agent's next turn. An agent that shows no sign of work for `stallMs` (a question waiting for you does not
+   * count) is interrupted, and the turn fails with that reason: a hung MCP server or network never keeps a task
+   * "working" forever.
+   */
+  async turnOf(taskId: string, session: Pick<ClaudeSession, 'turn' | 'interrupt'>): Promise<TurnResult> {
+    this.activity.set(taskId, Date.now());
+    let timer: NodeJS.Timeout | undefined;
+    const every = Math.max(50, Math.min(30000, Math.floor(this.stallMs / 4)));
+    const stalled = new Promise<true>((resolve) => {
+      const check = (): void => {
+        if (this.pendingPermissions(taskId).length) this.activity.set(taskId, Date.now());
+        if (Date.now() - (this.activity.get(taskId) ?? 0) >= this.stallMs) return resolve(true);
+        timer = setTimeout(check, every);
+      };
+      timer = setTimeout(check, every);
+    });
+    const turn = session.turn();
+    try {
+      const first = await Promise.race([turn, stalled]);
+      if (first !== true) return first;
+    } finally {
+      clearTimeout(timer);
+    }
+    const minutes = Math.max(1, Math.round(this.stallMs / 60000));
+    this.log('warn', `The agent showed no sign of work for ${minutes} min; stopping it`, taskId);
+    await session.interrupt();
+    const t = await turn;
+    return { ...t, ok: false, error: `the agent showed no sign of work for ${minutes} min and was stopped (a hung tool, MCP server or network?)` };
   }
 
   /**
@@ -511,7 +551,7 @@ class Engine extends EventEmitter {
     this.sessions.set(s.taskId, session);
     let t: TurnResult = { ok: false, report: '' };
     try {
-      t = await session.turn();
+      t = await this.turnOf(s.taskId, session);
       let parsed: RawTicket | null = null;
       for (let i = 0; ; i++) {
         if (this.svc.state(s.taskId).status === 'stopped') throw new EngineError('stopped', 'stopped');
@@ -526,7 +566,7 @@ class Engine extends EventEmitter {
         }
         if (i >= 1) throw new EngineError('fetch_failed', `could not read ${src.kind === 'jira' ? src.key : 'the page'} via ${via.server}: ${block.ok ? 'the reply has no title' : block.error}. ${t.report.slice(0, 300)}`);
         session.send(`I need the ticket as the fenced json block your instructions describe (with a title). ${block.ok ? '' : block.error}`, { from: 'orchestrator' });
-        t = await session.turn();
+        t = await this.turnOf(s.taskId, session);
       }
       const ticket = parsed!;
       const list = (v: unknown): string[] => (Array.isArray(v) ? v.map(String).filter(Boolean) : []);
@@ -548,6 +588,7 @@ class Engine extends EventEmitter {
       this.hooks.unregister(hook.token);
       this.liveUsage.delete(s.taskId);
       this.liveCost.delete(s.taskId);
+      this.activity.delete(s.taskId);
       const u: SessionUsage = session.usage ? session.usage() : {};
       this.svc.record(s.taskId, { type: 'agent_stopped', agent: 'intake', payload: { costUsd: t.costUsd || session.costUsd || 0, turns: t.turns || session.turns || 0, sessionId: t.sessionId || session.sessionId, cwd: this.workspace, transcript: INTAKE_KEY, ...(u.model && { model: u.model }), ...(u.effort && { effort: u.effort }) } });
     }
@@ -653,7 +694,7 @@ class Engine extends EventEmitter {
     let t: TurnResult = { ok: false, report: '' };
     const stopped = (): boolean => this.svc.state(taskId).status === 'stopped';
     try {
-      t = await session.turn();
+      t = await this.turnOf(taskId, session);
       if (stopped()) return;
       if (!t.ok) return void fail(t.error || 'the agent failed');
 
@@ -701,7 +742,7 @@ class Engine extends EventEmitter {
           const red = runs.filter((x) => x.status === 'fail').map((x) => x.repo).join(', ');
           session.send(`Gates failed in ${red} (attempt ${attempt} of ${config.limits.gateAttempts}). Fix the causes below. Do not weaken, skip or delete tests or lint rules. Then reply with your full report again.\n\n${g.summary}`, { from: 'orchestrator' });
           this.setLive(taskId, { phase: 'agent', step, key, text: `${label} is fixing red gates in ${where.includes(',') ? red : where}` });
-          t = await session.turn();
+          t = await this.turnOf(taskId, session);
           if (stopped()) return;
           if (!t.ok) return void fail(t.error || 'the agent failed while fixing gates');
         }
@@ -711,7 +752,7 @@ class Engine extends EventEmitter {
       for (let i = 0; !parsed.ok && i < REPORT_RETRIES; i++) {
         this.setLive(taskId, { phase: 'agent', step, key, text: `${label} is correcting its report` });
         session.send(`Your report could not be read: ${parsed.error}. Reply again with the complete, corrected report.`, { from: 'orchestrator' });
-        t = await session.turn();
+        t = await this.turnOf(taskId, session);
         if (stopped()) return;
         if (!t.ok) return void fail(t.error || 'the agent failed while correcting its report');
         parsed = parseStageReport(stage.output, t.report);
@@ -740,6 +781,7 @@ class Engine extends EventEmitter {
       this.denyPermissions(taskId, 'the agent session ended');
       this.liveCost.delete(taskId);
       this.liveUsage.delete(taskId);
+      this.activity.delete(taskId);
       const u: SessionUsage = session.usage ? session.usage() : {};
       this.svc.record(taskId, {
         type: 'agent_stopped',
