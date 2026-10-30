@@ -1443,3 +1443,28 @@ test("env: Claude Code's big JSON files are parsed once per change, and looked a
   assert.equal(readJsonFresh(file, t + 12000), undefined, 'a file caught mid-write is no value, not an error');
   assert.equal(readJsonFresh(path.join(path.dirname(file), 'none.json'), t), undefined);
 });
+
+test('store: an append keeps the cached state and events current, and a write by another process is still seen', () => {
+  const ws = tmp('cs-store-');
+  const { pipeline, config: cfg } = defaultPipeline();
+  const svc = new TaskService({ workspace: ws });
+  const { taskId } = svc.start({ input: 'x', source: { kind: 'text', text: 'x' }, auto: false, pipeline, config: cfg });
+  const file = path.join(ws, '.orch', 'tasks', taskId, 'events.ndjson');
+  const before = svc.state(taskId);
+  svc.record(taskId, { type: 'note', message: 'one' });
+  const after = svc.state(taskId);
+  assert.notEqual(after, before, 'a new log is a new state object: what the dashboard derives from it is cached by it');
+  assert.deepEqual(after, before);
+  assert.deepEqual(svc.events(taskId).map((e) => e.seq), [1, 2]);
+  const r = svc.dispatch(taskId, { type: 'intake_completed', spec: { id: taskId, source: { kind: 'text', text: 'x' }, title: 'x', description: '', acceptanceCriteria: [], links: [] } });
+  assert.ok(r.ok);
+  assert.equal(svc.state(taskId), r.state, 'the state the transition made, without a replay');
+  // The claudestrator CLI appends to the same log: the signature changes, and it is read again.
+  fs.appendFileSync(file, `${JSON.stringify({ seq: 4, type: 'note', message: 'from the CLI', at: new Date().toISOString() })}\n`);
+  assert.equal(svc.events(taskId).at(-1)!.type, 'note');
+  assert.equal(svc.record(taskId, { type: 'note', message: 'two' }).seq, 5, 'numbered after it');
+  // A torn line left by a crash is cut and the next event numbered from what is whole.
+  fs.appendFileSync(file, '{"seq":6,"type":"no');
+  assert.equal(svc.record(taskId, { type: 'note', message: 'three' }).seq, 6);
+  assert.deepEqual(fs.readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l).seq), [1, 2, 3, 4, 5, 6]);
+});

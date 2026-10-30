@@ -288,7 +288,7 @@ function detail(engine: ViewEngine, taskId: string): TaskDetail {
     result: resultOf(state),
     comments: events.filter((e) => e.type === 'jira_comment').map((e) => ({ seq: e.seq, at: e.at, key: e.key, what: e.what, ok: e.ok, via: e.via, ...(e.error && { error: e.error }) })),
     answers: state.answers,
-    steps: stepsOf(events, state, { running }),
+    steps: derive(engine, taskId, state, running).steps,
     events: events.flatMap((e): FeedEvent[] => {
       const d = describeEvent(e);
       return d && d.text ? [{ seq: e.seq, at: e.at, type: e.type, ...d }] : [];

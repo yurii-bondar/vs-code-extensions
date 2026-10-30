@@ -35,10 +35,11 @@ function holderGone(file: string): boolean {
 
 /**
  * Cross-process mutex on a lock file (O_EXCL create). Synchronous on purpose: it is held only for a
- * read-transition-append, which takes milliseconds, so the wait is short; a lock left by a crashed process is taken
- * over at once instead of after `staleMs`.
+ * read-transition-append, which takes milliseconds, so the wait is short. Within this process calls never overlap; only
+ * the claudestrator CLI or plugin can hold it, and the extension host waits for them at most `timeoutMs`. A lock left
+ * by a crashed process is taken over at once, one older than `staleMs` (a holder that hangs) as well.
  */
-function withLock<T>(file: string, fn: () => T, { timeoutMs = 10000, staleMs = 10000 }: { timeoutMs?: number; staleMs?: number } = {}): T {
+function withLock<T>(file: string, fn: () => T, { timeoutMs = 2000, staleMs = 5000 }: { timeoutMs?: number; staleMs?: number } = {}): T {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const started = Date.now();
   for (;;) {
@@ -102,19 +103,33 @@ class EventStore {
       });
   }
 
-  append(event: NewEvent): OrchEvent {
+  /** Appends an event as number `seq` when the caller knows how many there are, else counts them. */
+  append(event: NewEvent, seq?: number): OrchEvent {
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    this.cutTornTail();
-    const stored = { seq: this.readAll().length + 1, ...event } as OrchEvent;
+    const torn = this.cutTornTail();
+    const stored = { seq: seq !== undefined && !torn ? seq : this.readAll().length + 1, ...event } as OrchEvent;
     fs.appendFileSync(this.file, `${JSON.stringify(stored)}\n`);
     return stored;
   }
 
-  cutTornTail(): void {
-    if (!this.exists()) return;
+  /** Cuts a torn last line off, and says whether there was one. Only its last byte is read when there is none. */
+  cutTornTail(): boolean {
+    let fd: number;
+    try {
+      fd = fs.openSync(this.file, 'r');
+    } catch {
+      return false;
+    }
+    try {
+      const size = fs.fstatSync(fd).size;
+      const last = Buffer.alloc(1);
+      if (size === 0 || (fs.readSync(fd, last, 0, 1, size - 1) === 1 && last[0] === 0x0a)) return false;
+    } finally {
+      fs.closeSync(fd);
+    }
     const buf = fs.readFileSync(this.file);
-    if (buf.length === 0 || buf[buf.length - 1] === 0x0a) return;
     fs.truncateSync(this.file, buf.lastIndexOf(0x0a) + 1);
+    return true;
   }
 }
 
@@ -145,7 +160,8 @@ class TaskService {
   currentFile: string;
   now: () => Date;
   onAppend: ((taskId: string, event: OrchEvent) => void) | undefined;
-  cache: Map<string, { size: number; mtimeMs: number; state: TaskState }>;
+  /** Each task's state and events, with the signature of the log they were read from. */
+  cache: Map<string, { sig: string; state: TaskState; events: OrchEvent[] }>;
   /** The events file's signature right after this process's last append to it, per task. */
   written = new Map<string, string>();
   /** Transcript lines not written yet, per file, and the write in flight per file: one file's lines stay in order. */
@@ -194,18 +210,25 @@ class TaskService {
   }
 
   store(taskId: string): EventStore {
-    const file = path.join(this.dir(taskId), TASK_FILES.events);
-    const store = new EventStore(file);
-    const notify = this.onAppend;
-    const append = store.append.bind(store);
-    store.append = (event: NewEvent): OrchEvent => {
-      const stored = append(event);
-      this.cache.delete(taskId);
-      this.written.set(taskId, signature(file));
-      if (notify) notify(taskId, stored);
-      return stored;
-    };
-    return store;
+    return new EventStore(path.join(this.dir(taskId), TASK_FILES.events));
+  }
+
+  /**
+   * Appends to a task's log. When the cached state was read from the log as it was, it follows the append (`next`, or
+   * the same state for an informational event) instead of being replayed from the file on the next read.
+   */
+  append(taskId: string, event: NewEvent, next?: TaskState): OrchEvent {
+    const store = this.store(taskId);
+    const hit = this.cache.get(taskId);
+    const current = hit && hit.sig === signature(store.file) ? hit : undefined;
+    const stored = store.append(event, current ? current.events.length + 1 : undefined);
+    const sig = signature(store.file);
+    this.written.set(taskId, sig);
+    // A new object for a new log, also when nothing changed: what is derived from a state is cached by it.
+    if (current && stored.seq === current.events.length + 1) this.cache.set(taskId, { sig, state: next ?? { ...current.state }, events: [...current.events, stored] });
+    else this.cache.delete(taskId);
+    if (this.onAppend) this.onAppend(taskId, stored);
+    return stored;
   }
 
   /**
@@ -269,13 +292,15 @@ class TaskService {
     const id = taskId;
     return this.locked(id, () => {
       if (this.exists(id)) return { taskId: id, created: false, state: this.state(id) };
-      this.store(id).append(event);
+      this.append(id, event);
       return { taskId: id, created: true, state: r.state };
     });
   }
 
+  /** The task's events, read once per change of its log; callers do not change the array. */
   events(taskId: string): OrchEvent[] {
-    return this.store(taskId).readAll();
+    this.state(taskId);
+    return this.cache.get(taskId)!.events;
   }
 
   finished(taskId: string): boolean {
@@ -286,19 +311,16 @@ class TaskService {
     }
   }
 
-  /** Replays the log; cached by file size and mtime because the UI asks often. */
+  /** Replays the log; cached by its size and mtime because the UI asks often. */
   state(taskId: string): TaskState {
     const file = path.join(this.dir(taskId), TASK_FILES.events);
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(file);
-    } catch {
-      throw new Error(`no task "${taskId}"`);
-    }
+    const sig = signature(file);
+    if (!sig) throw new Error(`no task "${taskId}"`);
     const hit = this.cache.get(taskId);
-    if (hit && hit.size === stat.size && hit.mtimeMs === stat.mtimeMs) return hit.state;
-    const state = replay(this.events(taskId));
-    this.cache.set(taskId, { size: stat.size, mtimeMs: stat.mtimeMs, state });
+    if (hit && hit.sig === sig) return hit.state;
+    const events = this.store(taskId).readAll();
+    const state = replay(events);
+    this.cache.set(taskId, { sig, state, events });
     return state;
   }
 
@@ -312,7 +334,8 @@ class TaskService {
   }
 
   dispatchUnlocked(taskId: string, body: EventBody): DispatchResult {
-    const state = this.exists(taskId) ? replay(this.events(taskId)) : null;
+    // Under the lock the cached state is current unless another process appended, which its signature shows.
+    const state = this.exists(taskId) ? this.state(taskId) : null;
     if (!body || typeof body.type !== 'string' || !STATE_EVENTS.has(body.type)) {
       return this.reject(taskId, state, body, { code: 'invalid_event', message: `unknown event type ${body && (body as { type?: string }).type}` });
     }
@@ -320,20 +343,20 @@ class TaskService {
     const event = { ...body, at: this.now().toISOString() } as NewEvent;
     const r = transition(state, event as OrchEvent);
     if (!r.ok) return this.reject(taskId, state, body, r.error);
-    const stored = this.store(taskId).append(event);
+    const stored = this.append(taskId, event, r.state);
     if (r.state.status === 'done' && this.current() === taskId) this.clearCurrent();
     return { ok: true, event: stored, state: r.state, next: nextAction(r.state) };
   }
 
   reject(taskId: string, state: TaskState | null, body: unknown, error: { code: string; message: string }): DispatchResult {
-    if (state) this.store(taskId).append({ type: 'transition_rejected', event: body, code: error.code, error: error.message, at: this.now().toISOString() });
+    if (state) this.append(taskId, { type: 'transition_rejected', event: body, code: error.code, error: error.message, at: this.now().toISOString() });
     return { ok: false, error, state };
   }
 
   /** Appends an informational event. These never change state, so no transition runs. */
   record(taskId: string, body: EventBody): OrchEvent {
     if (!INFO_EVENTS.has(body.type)) throw new Error(`${body.type} is not informational; use dispatch()`);
-    return this.locked(taskId, () => this.store(taskId).append({ ...body, at: this.now().toISOString() } as NewEvent));
+    return this.locked(taskId, () => this.append(taskId, { ...body, at: this.now().toISOString() } as NewEvent));
   }
 
   /** Every task folder, newest first. A log that does not replay shows up as `corrupt` instead of hiding. */
