@@ -239,8 +239,9 @@ class DashboardPanel implements RpcHandlers {
   async $start(p: ComposerArgs) {
     await this.orch.ensureReady();
     if (!(this.orch.health && this.orch.health.claude.ok)) {
-      const go = await vscode.window.showWarningMessage('Claude Code CLI was not found, so agents cannot run.', { modal: true, detail: 'Install Claude Code, or set its path in Claudestrator → Settings. The task is created either way and you can run it later.' }, 'Create Task Anyway');
-      if (!go) throw Object.assign(new Error('Claude Code CLI not found'), { code: 'cancelled' });
+      const problem = (this.orch.health && this.orch.health.claude.error) || 'Claude Code CLI was not found';
+      const go = await vscode.window.showWarningMessage(`${problem}, so agents cannot run.`, { modal: true, detail: 'Install or update Claude Code, or set its path in Claudestrator → Settings. The task is created either way and you can run it later.' }, 'Create Task Anyway');
+      if (!go) throw Object.assign(new Error(problem), { code: 'cancelled' });
     }
     const r = this.engine.start(p);
     this.engine.launch(r.taskId);

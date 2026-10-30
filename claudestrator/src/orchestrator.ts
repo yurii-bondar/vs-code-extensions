@@ -193,6 +193,7 @@ class Orchestrator {
     }
     const runner = new ClaudeRunner({
       command: () => (this.health && this.health.claude && this.health.claude.path) || expand(settings().get<string>('claudePath') || '') || 'claude',
+      version: () => (this.health && this.health.claude ? this.health.claude.version : undefined),
       flags: () => new Set((this.health && this.health.claude && this.health.claude.flags) || DEFAULT_FLAGS),
       settingSources: () => settings().get<string[]>('settingSources') || null,
       hookSettings: () => this.hookSettingsFile,

@@ -5,7 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { execFile } from 'child_process';
 import { exec, launch, setShim, type ExecResult } from './git';
-import { parseFlags } from './runner';
+import { parseFlags, versionProblem } from './runner';
 
 const HOME = os.homedir();
 const isWin = process.platform === 'win32';
@@ -182,8 +182,10 @@ async function probe(settings: { claudePath?: string; nodePath?: string } = {}):
     claude.version = v.stdout.trim().split('\n')[0] || undefined;
     const h = await run(claudePath, ['--help'], 15000, env);
     claude.flags = [...parseFlags(h.stdout + h.stderr)];
-    claude.ok = v.code === 0;
-    if (!claude.ok) claude.error = (v.stderr || v.stdout).trim().slice(0, 300) || `exit ${v.code}`;
+    const tooOld = v.code === 0 ? versionProblem(claude.version) : null;
+    claude.ok = v.code === 0 && !tooOld;
+    if (tooOld) claude.error = tooOld;
+    else if (!claude.ok) claude.error = (v.stderr || v.stdout).trim().slice(0, 300) || `exit ${v.code}`;
   } else claude.error = claudePath ? `${claudePath} does not exist` : 'not found on PATH';
 
   const nodePath = settings.nodePath ? expand(settings.nodePath) : which('node', PATH);

@@ -204,7 +204,7 @@ VS Code settings (`claudestrator.*`):
 
 ## Requirements
 
-- Claude Code CLI, logged in (`claude --version`).
+- Claude Code CLI 2.1.302 or newer, logged in (`claude --version`; `claude update`). Older versions do not honour what guards the agents, so they do not start.
 - Git. GitHub CLI (`gh auth login`) only to open PRs.
 - Node.js on `PATH` for the guard hook (otherwise VS Code's own runtime is used).
 

@@ -1,10 +1,32 @@
 // Runs one pipeline agent as a Claude Code CLI session (`claude -p` with stream-json in and out).
 // The session stays open, so gate output or a report correction goes back into the same conversation.
+// The `get_settings` and `initialize` control requests are not documented: what they answer only fills in the status
+// line and the model list, and a CLI that does not answer them still runs. Everything a run depends on (hook
+// `onFailure`, `user_message_uuids`, headless denials) is documented and needs MIN_CLAUDE_VERSION.
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import * as crypto from 'crypto';
 import { getChildEnv, launch } from './git';
 import type { TranscriptItem } from './store';
 import type { Agent } from './types';
+
+/**
+ * The oldest Claude Code the engine runs: 2.1.302 denies in -p a call nobody approved, 2.1.295 honours a hook's
+ * `onFailure: "block"` (a guard that cannot answer blocks the call), 2.1.259 names the messages a result answers.
+ */
+const MIN_CLAUDE_VERSION = '2.1.302';
+
+/** Why a Claude Code version cannot run agents (`2.1.290 (Claude Code)`), or null when it can or is not a release number. */
+function versionProblem(version: string | undefined): string | null {
+  const m = (version || '').match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!m) return null;
+  const have = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const need = MIN_CLAUDE_VERSION.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if (have[i]! > need[i]!) return null;
+    if (have[i]! < need[i]!) return `Claude Code ${m[0]} is older than ${MIN_CLAUDE_VERSION}, which Claudestrator needs to guard the agents; update it (claude update)`;
+  }
+  return null;
+}
 
 /** Tools an agent never gets in an unattended run: nobody answers them. */
 const ALWAYS_DISALLOWED = ['AskUserQuestion', 'ExitPlanMode'];
@@ -59,6 +81,8 @@ const RESULT_ERRORS: Record<string, string> = {
 /** What the runner asks of its host: the CLI to run, what it supports, and where its settings come from. */
 interface RunnerOptions {
   command(): string;
+  /** The CLI's `--version`, when known: an older CLI than MIN_CLAUDE_VERSION does not start. */
+  version?(): string | undefined;
   /** What this CLI version supports. */
   flags(): Set<string>;
   settingSources(): string[] | null;
@@ -144,6 +168,8 @@ class ClaudeRunner {
   }
 
   start(req: SessionRequest): ClaudeSession {
+    const problem = versionProblem(this.opts.version && this.opts.version());
+    if (problem) throw new Error(problem);
     return new ClaudeSession(req, this.opts);
   }
 }
@@ -450,4 +476,4 @@ function parseFlags(helpText: string): Set<string> {
 }
 
 export type { CliMessage, Limit, Limits, RunnerOptions, SessionRequest, TurnResult };
-export { ClaudeRunner, ClaudeSession, buildArgs, parseFlags, limitsOf };
+export { ClaudeRunner, ClaudeSession, buildArgs, parseFlags, limitsOf, versionProblem, MIN_CLAUDE_VERSION };

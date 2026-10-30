@@ -4,7 +4,7 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
 
-import { ClaudeSession } from '../src/core/runner';
+import { ClaudeRunner, ClaudeSession, versionProblem } from '../src/core/runner';
 import type { RunnerOptions } from '../src/core/runner';
 import type { TranscriptItem } from '../src/core/store';
 
@@ -62,4 +62,15 @@ test('runner: stopping an agent ends its turn cleanly, and a CLI that ignores th
   const killed = await deaf.s.turn();
   assert.equal(killed.ok, false);
   assert.match(killed.error!, /session ended|stopped/);
+});
+
+test('runner: a Claude Code older than the guard needs does not start', () => {
+  assert.equal(versionProblem('2.1.314 (Claude Code)'), null);
+  assert.equal(versionProblem('2.1.302 (Claude Code)'), null);
+  assert.equal(versionProblem('3.0.0'), null);
+  assert.equal(versionProblem(undefined), null, 'unknown: the probe has not run yet');
+  assert.match(versionProblem('2.1.295 (Claude Code)')!, /2\.1\.295 is older than 2\.1\.302.*claude update/);
+  assert.match(versionProblem('1.9.999')!, /older/);
+  const runner = new ClaudeRunner({ command: () => FAKE, version: () => '2.0.1 (Claude Code)', flags: () => new Set(), settingSources: () => null, hookSettings: () => '{}', env: () => ({}) });
+  assert.throws(() => runner.start({ agent: { model: 'sonnet', instructions: '' }, prompt: 'hi', cwd: __dirname, onOutput: () => {} }), /older than/);
 });
