@@ -51,7 +51,7 @@ interface ConfigLayer {
   scenarios?: Record<string, string[] | false | CustomScenarioLayer>;
   /** Folders (or files) of agents and scenarios kept apart from this config, merged in before it. */
   libraries?: string[];
-  limits?: { reviewRounds?: number; gateAttempts?: number; budgetUsd?: number };
+  limits?: { reviewRounds?: number; gateAttempts?: number; budgetUsd?: number; parallelTasks?: number };
   language?: string;
   baseBranch?: string;
   repos?: Record<string, RepoLayer>;
@@ -562,6 +562,7 @@ function resolveConfig(layers: Layer[], opts: { flags?: Flags | undefined; readF
         reviewRounds: merged.limits.reviewRounds ?? 2,
         gateAttempts: merged.limits.gateAttempts ?? 3,
         ...(merged.limits.budgetUsd !== undefined && { budgetUsd: merged.limits.budgetUsd }),
+        ...(merged.limits.parallelTasks !== undefined && { parallelTasks: merged.limits.parallelTasks }),
       },
       language: merged.language ?? 'English',
       baseBranch,

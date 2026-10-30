@@ -397,10 +397,20 @@ class Engine extends EventEmitter {
     }
   }
 
+  /** `limits.parallelTasks` caps how many tasks run agents at once; one more waits until you resume it. */
+  checkCapacity(taskId: string): void {
+    const cap = this.config().limits.parallelTasks;
+    const others = [...this.running].filter((id) => id !== taskId);
+    if (cap !== undefined && others.length >= cap) {
+      throw new EngineError('busy', `${others.join(', ')} ${others.length === 1 ? 'is' : 'are'} running, as many tasks as limits.parallelTasks (${cap}) allows; resume ${taskId} when one of them finishes`);
+    }
+  }
+
   /** Drives the task until it is done, stopped or waiting for you. */
   async run(taskId: string): Promise<TaskState | undefined> {
     if (this.running.has(taskId)) throw new EngineError('already_running', `task ${taskId} is already running`);
     this.checkExclusive(taskId);
+    this.checkCapacity(taskId);
     this.running.add(taskId);
     this.emit('changed', taskId);
     try {

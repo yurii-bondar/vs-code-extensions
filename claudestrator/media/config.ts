@@ -694,6 +694,7 @@ interface Views {
             <label class="field"><span>Review rounds ${tag(['limits', 'reviewRounds'])}</span><input class="input" type="number" min="0" max="20" data-change="set-number" data-path="limits.reviewRounds" value="${cfg ? cfg.limits.reviewRounds : 2}"><small class="muted">fix rounds before you are asked</small></label>
             <label class="field"><span>Check attempts ${tag(['limits', 'gateAttempts'])}</span><input class="input" type="number" min="1" max="20" data-change="set-number" data-path="limits.gateAttempts" value="${cfg ? cfg.limits.gateAttempts : 3}"><small class="muted">red checks fed back to the agent</small></label>
             <label class="field"><span>Budget per task, $ ${tag(['limits', 'budgetUsd'])}</span><input class="input" type="number" min="0" step="1" data-change="set-number" data-path="limits.budgetUsd" value="${cfg && cfg.limits.budgetUsd !== undefined ? cfg.limits.budgetUsd : ''}" placeholder="no limit"><small class="muted">the task stops when spent</small></label>
+            <label class="field"><span>Tasks at once ${tag(['limits', 'parallelTasks'])}</span><input class="input" type="number" min="1" max="20" step="1" data-change="set-number" data-path="limits.parallelTasks" value="${cfg && cfg.limits.parallelTasks !== undefined ? cfg.limits.parallelTasks : ''}" placeholder="no cap"><small class="muted">more wait for you to resume them</small></label>
           </div>
         </section>
 

@@ -197,7 +197,7 @@ const CONFIG_LAYER = T.obj({
   'pipeline?': T.arr(agentName),
   'scenarios?': scenariosLayer,
   'libraries?': T.arr(T.str(1)),
-  'limits?': T.obj({ 'reviewRounds?': T.int(0, 20), 'gateAttempts?': T.int(1, 20), 'budgetUsd?': T.pos() }),
+  'limits?': T.obj({ 'reviewRounds?': T.int(0, 20), 'gateAttempts?': T.int(1, 20), 'budgetUsd?': T.pos(), 'parallelTasks?': T.int(1, 20) }),
   'language?': T.str(1),
   'baseBranch?': T.str(1),
   'repos?': T.rec(T.str(1), T.obj({ 'role?': T.str(1), 'path?': T.str(1), 'baseBranch?': T.str(1), 'gates?': T.arr(GATE) })),

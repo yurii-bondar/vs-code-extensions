@@ -224,6 +224,8 @@ export interface Limits {
   reviewRounds: number;
   gateAttempts: number;
   budgetUsd?: number;
+  /** How many tasks may run agents at once; unset: no cap. */
+  parallelTasks?: number;
 }
 
 export interface Policy {
