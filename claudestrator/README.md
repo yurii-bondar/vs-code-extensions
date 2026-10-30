@@ -14,6 +14,48 @@ Besides delivering a change, two read-only scenarios end with a report instead o
 
 The orchestration is code, not a prompt: a pure state machine decides what runs next and rejects anything out of order (no skipped approval, no extra review round, no push before you confirm). Each agent is a `claude -p` session of your installed Claude Code CLI, under your login and account.
 
+## Screenshots
+
+**A task in plain words, with its group, instructions and the pipeline it will run**
+
+![A task in plain words, with its group, instructions and the pipeline it will run](https://raw.githubusercontent.com/yurii-bondar/vs-code-extensions/main/claudestrator/media/screenshots/01-new-task.png)
+
+**The plan waits for your approval; nothing has changed in your repos yet**
+
+![The plan waits for your approval; nothing has changed in your repos yet](https://raw.githubusercontent.com/yurii-bondar/vs-code-extensions/main/claudestrator/media/screenshots/02-plan-approval.png)
+
+**Agents at work: developer per repo, then the tester across all of them**
+
+![Agents at work: developer per repo, then the tester across all of them](https://raw.githubusercontent.com/yurii-bondar/vs-code-extensions/main/claudestrator/media/screenshots/03-running.png)
+
+**The reviewer found a blocker: a fix round**
+
+![The reviewer found a blocker: a fix round](https://raw.githubusercontent.com/yurii-bondar/vs-code-extensions/main/claudestrator/media/screenshots/04-fix-round.png)
+
+**Everything is committed locally; the push and the draft PRs wait for you**
+
+![Everything is committed locally; the push and the draft PRs wait for you](https://raw.githubusercontent.com/yurii-bondar/vs-code-extensions/main/claudestrator/media/screenshots/05-confirm-push.png)
+
+**Tasks grouped by what needs you**
+
+![Tasks grouped by what needs you](https://raw.githubusercontent.com/yurii-bondar/vs-code-extensions/main/claudestrator/media/screenshots/06-tasks.png)
+
+**Agents and the pipeline: models, effort, order**
+
+![Agents and the pipeline: models, effort, order](https://raw.githubusercontent.com/yurii-bondar/vs-code-extensions/main/claudestrator/media/screenshots/07-agents.png)
+
+**Scenarios: Deliver, Check readiness, Audit and your own**
+
+![Scenarios: Deliver, Check readiness, Audit and your own](https://raw.githubusercontent.com/yurii-bondar/vs-code-extensions/main/claudestrator/media/screenshots/08-scenarios.png)
+
+**Repos and the checks that run after each agent**
+
+![Repos and the checks that run after each agent](https://raw.githubusercontent.com/yurii-bondar/vs-code-extensions/main/claudestrator/media/screenshots/09-repos.png)
+
+**A group (epic, story) with its Jira key and the instructions it brings**
+
+![A group (epic, story) with its Jira key and the instructions it brings](https://raw.githubusercontent.com/yurii-bondar/vs-code-extensions/main/claudestrator/media/screenshots/10-groups.png)
+
 ## Using it
 
 - **New task**: the activity-bar icon, `⌘⌥N`, or *Start a Task from Selection* in an editor. Type what you want in plain words. Below the box you see what it was recognised as (free text, Jira issue, Confluence page), the task id, and the exact pipeline it will run. Click an agent chip to skip it for this task, or turn on *Skip plan approval*. The effort part of a chip (`medium ▾`) changes that agent's effort for this task only; *Effort: … ▾* sets it for every agent. In the text, `--effort high` or `--effort developer=max,tester=low` does the same. The choice is saved with the task and wins over the agents' settings.
