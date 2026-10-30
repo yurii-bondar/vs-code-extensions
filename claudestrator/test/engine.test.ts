@@ -370,17 +370,22 @@ test('engine: an audit finds bugs and bottlenecks, rates them and reports; a Jir
   }
 });
 
-/** A repo of `ws` with a bare origin it is pushed to, a pre-push hook, and a gh that opens PRs: what publishing needs. */
-function remoteSetup(ws: string, hook: string) {
-  const remote = path.join(ws, 'remote.git');
-  git(ws, 'init', '-q', '--bare', remote);
-  const api = path.join(ws, 'api');
-  git(api, 'remote', 'add', 'origin', remote);
-  git(api, 'push', '-q', 'origin', 'main');
+/**
+ * Repos of `ws` with a bare origin each, a pre-push hook in the first, and a gh that opens PRs (`gh pr edit` answers
+ * with `edit`): what publishing needs.
+ */
+function remoteSetup(ws: string, hook: string, { repos = ['api'], edit = 'exit 0' }: { repos?: string[]; edit?: string } = {}) {
+  for (const name of repos) {
+    const bare = path.join(ws, `${name}-remote.git`);
+    git(ws, 'init', '-q', '--bare', bare);
+    git(path.join(ws, name), 'remote', 'add', 'origin', bare);
+    git(path.join(ws, name), 'push', '-q', 'origin', 'main');
+  }
+  const api = path.join(ws, repos[0]!);
   fs.writeFileSync(path.join(api, '.git', 'hooks', 'pre-push'), hook, { mode: 0o755 });
   const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-gh-'));
-  fs.writeFileSync(path.join(bin, 'gh'), '#!/bin/sh\ncase "$1 $2" in "pr view") exit 1;; "pr create") echo https://github.com/acme/api/pull/7;; *) exit 0;; esac\n', { mode: 0o755 });
-  return { remote, api, path: `${bin}${path.delimiter}${process.env.PATH}` };
+  fs.writeFileSync(path.join(bin, 'gh'), `#!/bin/sh\ncase "$1 $2" in "pr view") exit 1;; "pr create") echo "https://github.com/acme/$(basename "$PWD")/pull/7";; "pr edit") ${edit};; *) exit 0;; esac\n`, { mode: 0o755 });
+  return { remote: path.join(ws, `${repos[0]}-remote.git`), api, path: `${bin}${path.delimiter}${process.env.PATH}` };
 }
 
 test('engine: checks and git hooks get no credential of yours, and the pre-push hook runs once, before git pushes', async () => {
@@ -455,6 +460,25 @@ test('engine: an agent that cannot start is a failed step to retry, and one stop
     assert.ok(!fs.existsSync(path.join(ws, 'api', 'feature.txt')), 'and changed nothing');
   } finally {
     h.engine.runner = real;
+    h.hooks.dispose();
+  }
+});
+
+test('engine: when a PR description cannot list the other PRs, the PRs stay opened and the log says so', async () => {
+  const ws = workspace(['api', 'web'], 'pipeline: [planner, developer]\nrepos:\n  api: {}\n  web: {}\n');
+  const { path: PATH } = remoteSetup(ws, '#!/bin/sh\nexit 0\n', { repos: ['api', 'web'], edit: 'echo "HTTP 502: Bad Gateway" >&2; exit 1' });
+  const h = await harness(ws, { FAKE_REPOS: 'api,web', PATH });
+  const warnings: string[] = [];
+  h.engine.on('log', (l: { level: string; message: string }) => l.level === 'warn' && warnings.push(l.message));
+  try {
+    const { taskId } = h.engine.start({ text: 'Add the feature', auto: true });
+    await runTask(h.engine, taskId);
+    await h.engine.answer(taskId, 'confirm-push', 'push');
+    const s = await waitFor(() => (h.engine.isRunning(taskId) ? null : h.engine.svc.state(taskId)));
+    assert.equal(s.outcome, 'published', JSON.stringify(h.engine.lastError(taskId)));
+    assert.deepEqual(Object.keys(s.prs).sort(), ['api', 'web']);
+    assert.ok(warnings.some((w) => /pull\/7 was opened, but its description could not list the other PRs: HTTP 502/.test(w)), warnings.join('\n'));
+  } finally {
     h.hooks.dispose();
   }
 });

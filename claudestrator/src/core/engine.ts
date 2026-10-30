@@ -1166,7 +1166,12 @@ class Engine extends EventEmitter {
         prs[r.name] = pr.stdout.trim().split('\n').reverse().find((l) => /^https?:\/\//.test(l.trim()))?.trim() || pr.stdout.trim();
       }
       // Every body lists the others, so link them once all exist.
-      if (Object.keys(prs).length > 1) for (const r of repos) await exec('gh', ['pr', 'edit', prs[r.name]!, '--body-file', bodyFile(r.name)], { cwd: r.dir, timeoutMs: 120000 });
+      if (Object.keys(prs).length > 1) {
+        for (const r of repos) {
+          const edit = await exec('gh', ['pr', 'edit', prs[r.name]!, '--body-file', bodyFile(r.name)], { cwd: r.dir, timeoutMs: 120000 });
+          if (edit.code !== 0) this.log('warn', `${prs[r.name]} was opened, but its description could not list the other PRs: ${(edit.stderr || edit.stdout).trim().split('\n').pop() || `gh exited with ${edit.code}`}`, s.taskId);
+        }
+      }
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
