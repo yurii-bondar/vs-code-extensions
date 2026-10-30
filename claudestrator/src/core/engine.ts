@@ -170,26 +170,35 @@ function usedUpWindow(limits: EngineLimits | null, now: number): string | null {
 }
 const transcriptKey = (seq: number, step: { agent: string; repo?: string | undefined }): string => `${String(seq).padStart(4, '0')}-${step.agent}${step.repo ? `-${step.repo.replace(/[^A-Za-z0-9._-]/g, '_')}` : ''}`;
 
-function realInside(root: string, target: string): boolean {
-  const real = (p: string): string => {
-    let cur = path.resolve(p);
+/**
+ * Whether `target` is `root` or inside it once symlinks are followed (a link in the repo to `~/.ssh` is outside it). A
+ * path that does not exist yet is taken from its nearest existing folder. Asked on every tool call that writes, so it
+ * never blocks the extension host.
+ */
+async function realInside(root: string, target: string): Promise<boolean> {
+  const real = async (p: string): Promise<string> => {
     const rest: string[] = [];
-    while (!fs.existsSync(cur)) {
-      const parent = path.dirname(cur);
-      if (parent === cur) break;
-      rest.unshift(path.basename(cur));
-      cur = parent;
-    }
-    try {
-      return path.join(fs.realpathSync(cur), ...rest);
-    } catch {
-      return path.resolve(p);
+    for (let cur = path.resolve(p); ; ) {
+      try {
+        return path.join(await fs.promises.realpath(cur), ...rest);
+      } catch {
+        const parent = path.dirname(cur);
+        if (parent === cur) return path.resolve(p);
+        rest.unshift(path.basename(cur));
+        cur = parent;
+      }
     }
   };
-  const r = real(root);
-  const t = real(target);
+  const [r, t] = await Promise.all([real(root), real(target)]);
   return t === r || t.startsWith(r + path.sep);
 }
+
+/** Whether some element passes an async test, and the elements that pass one. */
+const someAsync = async <T>(xs: T[], test: (x: T) => Promise<boolean>): Promise<boolean> => (await Promise.all(xs.map(test))).some(Boolean);
+const filterAsync = async <T>(xs: T[], test: (x: T) => Promise<boolean>): Promise<T[]> => {
+  const keep = await Promise.all(xs.map(test));
+  return xs.filter((_, i) => keep[i]);
+};
 
 /**
  * Events: 'changed' (taskId), 'output' ({ taskId, key, item }), 'live' ({ taskId, live }),
@@ -803,7 +812,7 @@ class Engine extends EventEmitter {
       ...(REPORT_SCHEMAS[stage.output] && { jsonSchema: REPORT_SCHEMAS[stage.output] }),
       // Only the repos a stage writes are working directories; it reads the task folder, the workspace and other repos
       // through the guard, which allows reading.
-      additionalDirectories: [...new Set(writeRoots)].filter((d) => !realInside(cwd, d)),
+      additionalDirectories: await filterAsync([...new Set(writeRoots)], async (d) => !(await realInside(cwd, d))),
       env: this.agentEnv(hook.env, config),
       name: `claudestrator ${taskId} · ${label}`,
       onOutput: emitItem,
@@ -973,7 +982,7 @@ class Engine extends EventEmitter {
     if (tool === 'Bash') {
       const d = guardBash(String(input.command || ''), {
         policy: config.policy,
-        cwd: call.cwd && fs.existsSync(call.cwd) ? call.cwd : cwd,
+        cwd: call.cwd && (await fs.promises.access(call.cwd).then(() => true, () => false)) ? call.cwd : cwd,
         workspace: this.workspace,
         repoDirs: Object.values(config.repos).map((r) => path.resolve(this.workspace, r.path)),
         ...(this.home && { home: this.home }),
@@ -991,8 +1000,8 @@ class Engine extends EventEmitter {
       const target = String(input.file_path || input.notebook_path || input.path || '');
       if (!writeRoots.length) return blocked(`the ${step.agent} stage does not change files`);
       if (path.resolve(cwd, target).split(path.sep).includes('.git')) return blocked(`${tool} into git metadata (.git) is not allowed; Claudestrator owns git`);
-      if (!target || !writeRoots.some((root) => realInside(root, path.resolve(cwd, target)))) return blocked(`${tool} outside ${writeRoots.join(', ')} is not allowed: this stage works only in ${step.repo || 'the task\'s repos'}`);
-      if (protect.some((p) => realInside(p, path.resolve(cwd, target)))) return blocked(`${tool} of ${target}: Claudestrator's config and task state are not an agent's to change`);
+      if (!target || !(await someAsync(writeRoots, (root) => realInside(root, path.resolve(cwd, target))))) return blocked(`${tool} outside ${writeRoots.join(', ')} is not allowed: this stage works only in ${step.repo || 'the task\'s repos'}`);
+      if (await someAsync(protect, (p) => realInside(p, path.resolve(cwd, target)))) return blocked(`${tool} of ${target}: Claudestrator's config and task state are not an agent's to change`);
     }
     // Claude Code is started with the agent's tools; anything else reaching the hook is refused.
     const agent = config.agents[step.agent];

