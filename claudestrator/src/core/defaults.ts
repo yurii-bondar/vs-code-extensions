@@ -55,6 +55,7 @@ function handshake(command: string, args: string[], { cwd, env, timeoutMs = 2000
     proc.on('error', () => finish(null));
     proc.on('exit', () => finish(got.s ? { applied: got.s.applied || {}, models: (got.i && got.i.models) || [], account: got.i && got.i.account } : null));
     proc.stdin!.on('error', () => {});
+    proc.stdout!.setEncoding('utf8');
     let buf = '';
     proc.stdout!.on('data', (d) => {
       buf += d;

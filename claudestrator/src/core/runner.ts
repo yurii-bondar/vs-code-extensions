@@ -254,6 +254,10 @@ class ClaudeSession {
     this.proc.on('error', (e: NodeJS.ErrnoException) => this.end(e.code === 'ENOENT' ? `Claude Code CLI not found (${opts.command()}). Set "claudestrator.claudePath" or install Claude Code.` : e.message));
     this.proc.on('exit', (code, signal) => this.end(this.exitMessage(code, signal)));
     this.proc.stdin.on('error', () => {}); // EPIPE after the process died; reported through 'exit'
+    // Decoded as a stream: a pipe may cut a line inside a multi-byte character (Cyrillic, emoji), and decoding each
+    // chunk on its own would turn both halves into U+FFFD in plans, reports and Jira comments.
+    this.proc.stdout.setEncoding('utf8');
+    this.proc.stderr.setEncoding('utf8');
     this.proc.stderr.on('data', (d) => {
       this.stderr = (this.stderr + d).slice(-STDERR_KEEP);
     });

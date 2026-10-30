@@ -74,3 +74,15 @@ test('runner: a Claude Code older than the guard needs does not start', async ()
   const runner = new ClaudeRunner({ command: () => FAKE, version: () => '2.0.1 (Claude Code)', flags: () => new Set(), settingSources: () => null, env: () => ({}) });
   await assert.rejects(runner.start({ agent: { model: 'sonnet', instructions: '' }, prompt: 'hi', cwd: __dirname, settings: {}, onOutput: () => {} }), /older than/);
 });
+
+test('runner: text cut inside a multi-byte character by the pipe arrives intact', async () => {
+  const { s, items } = session('utf8', 'План готовий: перевірка критеріїв 🚀', 20);
+  try {
+    const t = await s.turn();
+    assert.equal(t.report, 'answer to: План готовий: перевірка критеріїв 🚀');
+    assert.ok(!t.report.includes('�'), 'no replacement characters');
+    assert.ok(items.some((i) => i.type === 'turn_end'));
+  } finally {
+    s.close();
+  }
+});
