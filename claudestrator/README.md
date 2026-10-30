@@ -213,6 +213,8 @@ VS Code settings (`claudestrator.*`):
 | `workspaceFolder` | Folder with the repos and `.claudestrator/`. Empty: the first workspace folder. |
 | `atlassian.site`, `atlassian.email` | Jira/Confluence connection. The API token goes in secret storage (Settings screen). `ATLASSIAN_SITE`, `ATLASSIAN_EMAIL` and `ATLASSIAN_API_TOKEN` work too. |
 
+`claudePath`, `claudeConfigDir` and `atlassian.*` are read from your user (or remote machine) settings only: a repo's `.vscode/settings.json` cannot send your token to another host or run another CLI.
+
 ## Requirements
 
 - Claude Code CLI 2.1.302 or newer, logged in (`claude --version`; `claude update`). Older versions do not honour what guards the agents, so they do not start.

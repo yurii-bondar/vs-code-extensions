@@ -304,11 +304,13 @@
       "properties": {
         "claudestrator.claudePath": {
           "type": "string",
+          "scope": "machine",
           "default": "",
           "markdownDescription": "Path to the Claude Code CLI. Empty: found on your login shell's `PATH` (e.g. `~/.local/bin/claude`)."
         },
         "claudestrator.claudeConfigDir": {
           "type": "string",
+          "scope": "machine",
           "default": "",
           "markdownDescription": "Claude Code account (config folder, used as `CLAUDE_CONFIG_DIR`) the agents run under, e.g. `~/.claude-alt`. Empty: your default account."
         },
@@ -355,11 +357,13 @@
         },
         "claudestrator.atlassian.site": {
           "type": "string",
+          "scope": "machine",
           "default": "",
           "markdownDescription": "Atlassian site for Jira and Confluence, e.g. `acme.atlassian.net`. The API token is stored in VS Code's secret storage (set it in Claudestrator → Settings)."
         },
         "claudestrator.atlassian.email": {
           "type": "string",
+          "scope": "machine",
           "default": "",
           "description": "Email of the Atlassian account the API token belongs to."
         }
