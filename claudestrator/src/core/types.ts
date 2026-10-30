@@ -258,7 +258,6 @@ export interface Config {
   policy: Policy;
   context: string[];
   git: { mode: GitMode };
-  editor?: string;
   groups: Record<string, TaskGroup>;
   instructions: Record<string, TaskInstruction>;
   /** Every file the config is read from: config and library files (also where none is yet), instruction and context files. */

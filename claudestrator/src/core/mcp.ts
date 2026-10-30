@@ -1,9 +1,8 @@
 // MCP servers as Claude Code sees them: what is configured (from its config files, names only), the health
-// check (`claude mcp list`), details (`claude mcp get`, secrets masked) and a fresh sign-in (`claude mcp login`).
+// check (`claude mcp list`) and details (`claude mcp get`, secrets masked). Signing in runs in a terminal.
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { spawn, type ChildProcess } from 'child_process';
 import { exec } from './git';
 import { readJsonFresh } from './env';
 import type { McpServer } from './wire';
@@ -148,36 +147,6 @@ const isMcpName = (name: string): boolean => /^[A-Za-z0-9 _.:@-]{1,100}$/.test(n
 /** HTTP, SSE and claude.ai connectors sign in with OAuth; stdio servers do not. */
 const canLogin = (s: McpServer): boolean => !s.missing && (s.scope === 'claude.ai' || ['http', 'sse', 'ws'].includes(s.transport as string));
 
-/** `claude mcp login <name>`: opens the provider's sign-in page; resolves with the exit code. */
-function mcpLogin({ command, workspace, env, name, onLine, timeoutMs = 10 * 60000 }: { command: string; workspace: string; env?: NodeJS.ProcessEnv | undefined; name: string; onLine?: ((line: string) => void) | undefined; timeoutMs?: number }): { done: Promise<number>; cancel: () => boolean | undefined } {
-  let proc: ChildProcess | undefined;
-  const done = new Promise<number>((resolve) => {
-    const child = spawn(command, ['mcp', 'login', name], { cwd: workspace, ...(env !== undefined && { env }), stdio: ['ignore', 'pipe', 'pipe'] });
-    proc = child;
-    const timer = setTimeout(() => child.kill('SIGTERM'), timeoutMs);
-    for (const stream of [child.stdout!, child.stderr!]) {
-      let buf = '';
-      stream.on('data', (d) => {
-        buf += d;
-        let i: number;
-        while ((i = buf.indexOf('\n')) >= 0) {
-          const l = buf.slice(0, i).trim();
-          buf = buf.slice(i + 1);
-          if (l && onLine) onLine(l);
-        }
-      });
-    }
-    child.on('error', () => {
-      clearTimeout(timer);
-      resolve(127);
-    });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      resolve(code ?? 1);
-    });
-  });
-  return { done, cancel: () => proc && proc.kill('SIGTERM') };
-}
 
 /**
  * The account's user-scope MCP servers as an `--mcp-config` file, for agents that run without the `user` setting
@@ -212,4 +181,4 @@ async function writeUserMcpConfig(file: string, configDir?: string | null): Prom
 const mcpConfigs = new Map<string, { sig: string; result: string | null }>();
 
 export type { McpServer };
-export { writeUserMcpConfig, configuredMcpServers, parseMcpList, mergeMcp, checkMcpServers, redactMcpDetails, isMcpName, canLogin, mcpLogin };
+export { writeUserMcpConfig, configuredMcpServers, parseMcpList, mergeMcp, checkMcpServers, redactMcpDetails, isMcpName, canLogin };

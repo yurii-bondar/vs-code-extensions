@@ -59,6 +59,7 @@ interface ConfigLayer {
   jira?: { allowedProjects?: string[] };
   policy?: Partial<Policy>;
   git?: { mode?: GitMode };
+  /** The claudestrator CLI's; the extension leaves it to it. */
   editor?: string;
   context?: string[];
   groups?: Record<string, GroupLayer>;
@@ -108,7 +109,6 @@ interface Merged {
   language?: string;
   baseBranch?: string;
   gitMode?: GitMode;
-  editor?: string;
   context?: string[];
 }
 
@@ -317,7 +317,6 @@ const BUILTIN: BuiltinConfig = {
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 const builtinLayer = (): Layer => ({ name: 'built-in', baseDir: '/', config: clone(BUILTIN) });
 const builtinAgentNames = (): string[] => Object.keys(BUILTIN.agents);
-const builtinInstructions = (name: string): InstructionsInput | undefined => BUILTIN.agents[name] && BUILTIN.agents[name]!.instructions;
 
 const projectConfigFile = (workspace: string): string => path.join(workspace, CONFIG_DIR, CONFIG_FILE);
 const userConfigFile = (home: string = os.homedir()): string => path.join(home, CONFIG_DIR, CONFIG_FILE);
@@ -458,7 +457,6 @@ function mergeLayers(layers: Layer[]): Merged {
     if (c.jira && c.jira.allowedProjects) merged.jira = { allowedProjects: [...c.jira.allowedProjects] };
     if (c.policy) merged.policy = { ...merged.policy, ...defined(c.policy) };
     if (c.git && c.git.mode) merged.gitMode = c.git.mode;
-    if (c.editor) merged.editor = c.editor;
     if (c.context) merged.context = c.context.map((f) => path.resolve(layer.baseDir, f));
   }
   return merged;
@@ -604,7 +602,6 @@ function resolveConfig(layers: Layer[], opts: { flags?: Flags | undefined; readF
       },
       context,
       git: { mode: merged.gitMode ?? 'branch' },
-      ...(merged.editor && { editor: merged.editor }),
       groups,
       instructions: Object.fromEntries(Object.entries(merged.instructions).map(([id, x]) => [id, { id, label: x.label, text: x.text }])),
       sources: [...sources],
@@ -1195,7 +1192,6 @@ export {
   BUILTIN,
   builtinLayer,
   builtinAgentNames,
-  builtinInstructions,
   projectConfigFile,
   userConfigFile,
   loadLayerFile,

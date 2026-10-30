@@ -720,10 +720,8 @@ shadcn: npx shadcn mcp - ⏸ Pending approval
   const env = { ...process.env, FAKE_STATE: state };
   let r = await mcp.checkMcpServers({ command: fake, workspace: ws, configDir: cfg, env });
   assert.equal(r.servers.find((s) => s.name === 'Atlassian')!.state, 'needs_auth');
-  const lines: string[] = [];
-  const code = await mcp.mcpLogin({ command: fake, workspace: ws, env, name: 'Atlassian', onLine: (l) => lines.push(l) }).done;
-  assert.equal(code, 0);
-  assert.match(lines.join('\n'), /https:\/\/auth\.example\.com/);
+  // Signing in happens in a terminal (`claude mcp login`); the next check sees it.
+  fs.writeFileSync(path.join(state, 'mcp-signed-in'), '');
   r = await mcp.checkMcpServers({ command: fake, workspace: ws, configDir: cfg, env });
   assert.equal(r.servers.find((s) => s.name === 'Atlassian')!.state, 'connected', 'connected after signing in');
 });

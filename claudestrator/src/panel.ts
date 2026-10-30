@@ -81,7 +81,6 @@ class DashboardPanel implements RpcHandlers {
     this.panel.webview.html = this.html(media, scripts);
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
     this.panel.onDidChangeViewState((e) => {
-      vscode.commands.executeCommand('setContext', 'claudestratorPanelFocus', e.webviewPanel.active);
       // What changed while the panel was hidden is refreshed once, as it shows again.
       if (e.webviewPanel.visible && this.missedChange) {
         this.missedChange = false;
@@ -132,7 +131,6 @@ class DashboardPanel implements RpcHandlers {
   dispose(): void {
     clearTimeout(this.outputTimer);
     DashboardPanel.current = undefined;
-    vscode.commands.executeCommand('setContext', 'claudestratorPanelFocus', false);
     this.disposables.forEach((d) => d.dispose());
   }
 
