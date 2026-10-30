@@ -1396,3 +1396,36 @@ test('view: streamed text of one step merges into one message, other items keep 
   queueOutput(q, delta('b', '!'));
   assert.deepEqual(q.map((m) => [m.key, m.item.type, 'text' in m.item ? m.item.text : '']), [['a', 'text_delta', 'Reading the file'], ['a', 'tool_use', ''], ['a', 'text_delta', 'Done'], ['b', 'text_delta', 'other step!']]);
 });
+
+test('config: read again only when a file it comes from changes, and a path to a device is refused, not read', () => {
+  const home = tmp('cs-home-');
+  const ws = tmp('cs-ws-');
+  const dir = path.join(ws, '.claudestrator');
+  fs.mkdirSync(path.join(dir, 'prompts'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'prompts', 'dev.md'), 'Be brief.\n');
+  fs.writeFileSync(path.join(dir, 'config.yaml'), 'agents:\n  developer: { instructions: { mode: append, file: ./prompts/dev.md } }\nlanguage: German\n');
+  const load = () => passed(config.loadConfig({ workspace: ws, home })).config;
+  const first = load();
+  assert.match(first.agents.developer!.instructions, /Be brief\.$/);
+  const again = load();
+  assert.deepEqual(again, first);
+  again.language = 'mutated';
+  assert.equal(load().language, 'German', 'a caller changing its copy changes nobody else\'s');
+
+  fs.writeFileSync(path.join(dir, 'prompts', 'dev.md'), 'Be very brief.\n');
+  assert.match(load().agents.developer!.instructions, /Be very brief\.$/, 'an instruction file changed');
+  fs.writeFileSync(path.join(dir, 'config.yaml'), 'agents:\n  developer: { instructions: { mode: append, file: ./prompts/dev.md } }\nlanguage: Ukrainian\n');
+  assert.equal(load().language, 'Ukrainian', 'the config file changed');
+  fs.mkdirSync(path.join(home, '.claudestrator'));
+  fs.writeFileSync(path.join(home, '.claudestrator', 'config.yaml'), 'limits: { reviewRounds: 5 }\n');
+  assert.equal(load().limits.reviewRounds, 5, 'a user config that did not exist before');
+
+  if (fs.existsSync('/dev/zero')) {
+    fs.writeFileSync(path.join(dir, 'config.yaml'), 'context: [/dev/zero]\n');
+    const r = config.loadConfig({ workspace: ws, home });
+    assert.ok(r.ok && r.warnings.some((w) => w.code === 'context_missing' && w.source === '/dev/zero'), 'a context file that cannot be read is a warning, not a hang');
+    fs.writeFileSync(path.join(dir, 'config.yaml'), 'agents:\n  developer: { instructions: { file: /dev/zero } }\n');
+    const bad = config.loadConfig({ workspace: ws, home });
+    assert.ok(!bad.ok && bad.errors.some((e) => /not a regular file/.test(e.message)), 'instructions from a device are an error, not a hang');
+  }
+});

@@ -324,12 +324,26 @@ const userConfigFile = (home: string = os.homedir()): string => path.join(home, 
 
 // ---------- loading ----------
 
+/** The largest config, instruction or context file read: anything bigger is a mistake, not a prompt. */
+const MAX_FILE = 1024 * 1024;
+
+/**
+ * Reads a config, instruction or context file: a regular file of at most MAX_FILE. A path a config names may point
+ * anywhere, and `/dev/zero` or a FIFO would otherwise hang the extension host for every extension in the window.
+ */
+function readBounded(file: string): string {
+  const st = fs.statSync(file);
+  if (!st.isFile()) throw new Error(`${file} is not a regular file`);
+  if (st.size > MAX_FILE) throw new Error(`${file} is larger than ${MAX_FILE / 1024} KB`);
+  return fs.readFileSync(file, 'utf8');
+}
+
 /** A missing file is not an error: that layer simply does not exist. */
 function loadLayerFile(file: string, name: string): { layer?: Layer; diagnostics: Diagnostic[] } {
   if (!fs.existsSync(file)) return { diagnostics: [] };
   let raw: ConfigLayer;
   try {
-    raw = YAML.parse(fs.readFileSync(file, 'utf8')) ?? {};
+    raw = YAML.parse(readBounded(file)) ?? {};
   } catch (e) {
     return { diagnostics: [{ level: 'error', code: 'yaml_invalid', source: file, message: `${file}: ${(e as Error).message}` }] };
   }
@@ -396,7 +410,7 @@ function loadLibraryFile(file: string, label: string): { layer?: Layer; diagnost
   if (!fs.existsSync(file)) return { diagnostics: [{ level: 'warning', code: 'library_missing', source: file, message: `library "${label}" is not at ${file}; its agents and scenarios are not loaded` }] };
   let raw: unknown;
   try {
-    raw = YAML.parse(fs.readFileSync(file, 'utf8')) ?? {};
+    raw = YAML.parse(readBounded(file)) ?? {};
   } catch (e) {
     return { diagnostics: [{ level: 'error', code: 'yaml_invalid', source: file, message: `${file}: ${(e as Error).message}` }] };
   }
@@ -470,7 +484,7 @@ function applyFlags(merged: Merged, flags: Flags, diagnostics: Diagnostic[]): vo
 // ---------- resolving ----------
 
 function resolveConfig(layers: Layer[], opts: { flags?: Flags | undefined; readFile?: ReadFile | undefined } = {}): ResolveResult {
-  const readFile: ReadFile = opts.readFile ?? ((p) => fs.readFileSync(p, 'utf8'));
+  const readFile: ReadFile = opts.readFile ?? readBounded;
   // The files the config is made of besides its layers: instruction and context files.
   const sources = new Set(layers.flatMap((l) => (l.file ? [l.file] : [])));
   const read: ReadFile = (p) => {
@@ -743,7 +757,39 @@ function resolvePipeline(pipeline: Merged['pipeline'], drafts: Map<string, Draft
 }
 
 /** Loads every layer and resolves it. */
+/** Size and mtime of each file, '' for one that is not there: equal signatures, the same config. */
+const signatureOf = (files: string[]): string =>
+  files
+    .map((f) => {
+      try {
+        const st = fs.statSync(f);
+        return `${f}:${st.size}:${st.mtimeMs}`;
+      } catch {
+        return `${f}:`;
+      }
+    })
+    .join('\n');
+
+/** Configs already read, by workspace, home and flags, with the signature of the files they came from. */
+const loaded = new Map<string, { signature: string; sources: string[]; result: ResolveResult }>();
+
+/**
+ * The config, read again only when one of the files it comes from changed: the engine and the dashboard ask for it on
+ * every stage and screen refresh, and reading means parsing every layer and reading every instruction file.
+ */
 function loadConfig({ workspace, home, flags, readFile }: { workspace: string; home?: string | undefined; flags?: Flags | undefined; readFile?: ReadFile | undefined }): ResolveResult {
+  if (readFile) return readConfig({ workspace, home, flags, readFile });
+  const key = JSON.stringify([workspace, home ?? null, flags ?? null]);
+  const hit = loaded.get(key);
+  if (hit && signatureOf(hit.sources) === hit.signature) return structuredClone(hit.result);
+  const result = readConfig({ workspace, home, flags });
+  // A config with errors names no files; it is read again next time.
+  if (result.ok) loaded.set(key, { signature: signatureOf(result.config.sources), sources: result.config.sources, result: structuredClone(result) });
+  else loaded.delete(key);
+  return result;
+}
+
+function readConfig({ workspace, home, flags, readFile }: { workspace: string; home?: string | undefined; flags?: Flags | undefined; readFile?: ReadFile | undefined }): ResolveResult {
   const { layers, diagnostics, files } = loadLayers({ workspace, ...(home && { home }) });
   const loadErrors = diagnostics.filter((d) => d.level === 'error');
   if (loadErrors.length) return { ok: false, errors: loadErrors, warnings: diagnostics.filter((d) => d.level === 'warning') };
