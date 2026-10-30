@@ -110,14 +110,34 @@ async function checkMcpServers({ command, workspace, configDir, env }: { command
 
 const SECRETISH = /(token|secret|key|password|authorization|bearer|cookie)/i;
 
-/** `claude mcp get` can print env vars and headers: keep their names, mask their values. */
+const MASK = '••••';
+
+/** Secrets inside a line that is not itself a secret's: an argument, a variable, a URL, a token by its known prefix. */
+function maskInline(line: string): string {
+  return (
+    line
+      .replace(/(Bearer\s+)\S+/gi, `$1${MASK}`)
+      // --api-key glsa_…, --token=…
+      .replace(/(--?[\w-]*(?:token|secret|key|password|passwd|auth)[\w-]*)(=|\s+)(?!-)(\S+)/gi, `$1$2${MASK}`)
+      // DATABASE_PASSWORD=…, X_API_KEY=… in a list of variables
+      .replace(/\b([A-Za-z0-9_]*(?:TOKEN|SECRET|KEY|PASSWORD|PASSWD)[A-Za-z0-9_]*)=([^\s&]+)/gi, `$1=${MASK}`)
+      // postgres://admin:hunter2@db, https://user:pat@host
+      .replace(/(\w+:\/\/[^\s/:@]+):[^\s/@]+@/g, `$1:${MASK}@`)
+      // ?access_token=…, &key=…, &sig=…
+      .replace(/([?&](?:access_token|token|api_?key|key|secret|password|sig|signature|auth|code)=)[^&\s]+/gi, `$1${MASK}`)
+      // ghp_…, github_pat_…, glsa_…, sk-…, xoxb-…: tokens whatever they stand next to
+      .replace(/\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|glsa_\w{20,}|sk-[A-Za-z0-9_-]{20,}|xox[abprs]-[\w-]{10,})/g, MASK)
+  );
+}
+
+/** `claude mcp get` can print env vars, headers, arguments and URLs: keep the names, mask the values. */
 function redactMcpDetails(text: string): string {
   return text
     .split('\n')
     .map((line) => {
       const m = line.match(/^(\s*[^:=\s][^:=]*?)\s*([:=])\s*(.+)$/);
-      if (!m || !SECRETISH.test(m[1]!)) return line.replace(/(Bearer\s+)\S+/gi, '$1••••');
-      return `${m[1]}${m[2]} ••••`;
+      if (!m || !SECRETISH.test(m[1]!)) return maskInline(line);
+      return `${m[1]}${m[2]} ${MASK}`;
     })
     .join('\n');
 }

@@ -703,6 +703,15 @@ shadcn: npx shadcn mcp - ⏸ Pending approval
 
   const masked = mcp.redactMcpDetails('  Authorization: Bearer abc.def\n  API_TOKEN=supersecret\n  URL: https://x');
   assert.ok(!/abc\.def|supersecret/.test(masked) && /URL: https:\/\/x/.test(masked));
+  const details = mcp.redactMcpDetails([
+    '  Command: npx',
+    '  Args: -y @grafana/mcp --url https://grafana.acme.io --api-key glsa_0123456789abcdefghijABCDEF --verbose',
+    '  Environment: DATABASE_URL=postgres://admin:hunter2@db:5432/app SENTRY_AUTH_TOKEN=sntrys_abc LOG_LEVEL=debug',
+    '  URL: https://mcp.acme.io/sse?access_token=eyJabc.def&region=eu',
+    '  Note: uses ghp_0123456789abcdefghijABCDEFGHIJ',
+  ].join('\n'));
+  for (const secret of ['glsa_0123', 'hunter2', 'sntrys_abc', 'eyJabc', 'ghp_0123']) assert.ok(!details.includes(secret), `${secret} masked:\n${details}`);
+  for (const kept of ['--url https://grafana.acme.io', '--verbose', 'postgres://admin:', 'LOG_LEVEL=debug', 'region=eu', 'Command: npx']) assert.ok(details.includes(kept), `${kept} kept:\n${details}`);
   assert.equal(mcp.isMcpName('Atlassian'), true);
   assert.equal(mcp.isMcpName('x; rm -rf /'), false);
 
