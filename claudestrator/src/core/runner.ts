@@ -266,6 +266,9 @@ class ClaudeSession {
   /** `from`: 'you' (a message typed in the UI) or 'orchestrator' (gate output, report corrections). */
   send(text: string, { echo = true, from = 'you' }: { echo?: boolean; from?: string } = {}): void {
     if (this.ended || this.proc.stdin.destroyed) throw new Error('the agent session has ended');
+    // A result nobody waited for answers an earlier message (one you typed while the gates ran): the next turn is
+    // the answer to this one, never that.
+    this.results = [];
     const uuid = crypto.randomUUID();
     this.pending.add(uuid);
     if (echo) this.req.onOutput({ type: 'user', text, from });
@@ -388,7 +391,9 @@ class ClaudeSession {
         return;
       }
       case 'result': {
-        const answered = m.user_message_uuids || (m.user_message_uuid ? [m.user_message_uuid] : [...this.pending]);
+        // Without the uuids a result answers at least the oldest message still open; taking it for all of them would
+        // hand the answer to a message typed mid-turn to the next turn.
+        const answered = m.user_message_uuids || (m.user_message_uuid ? [m.user_message_uuid] : [...this.pending].slice(0, 1));
         for (const u of answered) this.pending.delete(u);
         // total_cost_usd is cumulative for the session; num_turns counts this run only.
         if (typeof m.total_cost_usd === 'number') this.costUsd = m.total_cost_usd;
