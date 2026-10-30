@@ -16,7 +16,8 @@ import { parseHookRequest } from '../src/core/hookserver';
 import { plain } from '../src/core/gates';
 import { parseInvocation, classifyInput, extractAcceptanceCriteria, adfToText, detectScenario } from '../src/core/intake';
 import { TaskService } from '../src/core/store';
-import { stepsOf, summary } from '../src/core/view';
+import { stepsOf, summary, queueOutput } from '../src/core/view';
+import type { OutputPush } from '../src/core/view';
 import type { ViewEngine } from '../src/core/view';
 import { buildArgs, limitsOf } from '../src/core/runner';
 import { Engine } from '../src/core/engine';
@@ -1383,4 +1384,15 @@ test('config: what the project config relaxes of your safety policy is said, not
   const said = project("policy: { sandbox: false, network: ['*'], protectedBranches: [main], forbidAiAttribution: false, allowNoVerify: true, draftPrsOnly: false }\njira: { allowedProjects: [CP, OPS] }\n");
   for (const m of [/turns the sandbox off/, /reach any host/, /no longer protects master/, /allows AI attribution/, /git hooks be skipped/, /not as drafts|instead of as drafts/, /Jira projects you did not \(OPS\)/]) assert.ok(said.some((x) => m.test(x)), `${m}: ${said.join(' | ')}`);
   assert.deepEqual(project("policy: { sandbox: true, protectedBranches: [main, master, release], network: [npm.acme.corp] }\njira: { allowedProjects: [CP] }\n"), [], 'tightening it says nothing');
+});
+
+test('view: streamed text of one step merges into one message, other items keep their order', () => {
+  const q: OutputPush[] = [];
+  const delta = (key: string, text: string): OutputPush => ({ type: 'output', taskId: 'T', key, item: { type: 'text_delta', text } });
+  for (const piece of ['Rea', 'ding ', 'the file']) queueOutput(q, delta('a', piece));
+  queueOutput(q, { type: 'output', taskId: 'T', key: 'a', item: { type: 'tool_use', id: '1', name: 'Read', input: {} } });
+  queueOutput(q, delta('a', 'Done'));
+  queueOutput(q, delta('b', 'other step'));
+  queueOutput(q, delta('b', '!'));
+  assert.deepEqual(q.map((m) => [m.key, m.item.type, 'text' in m.item ? m.item.text : '']), [['a', 'text_delta', 'Reading the file'], ['a', 'tool_use', ''], ['a', 'text_delta', 'Done'], ['b', 'text_delta', 'other step!']]);
 });

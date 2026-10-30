@@ -6,7 +6,7 @@ import { transcriptKey } from './engine';
 import { resultOf } from './report';
 import type { OrchEvent, Source, StepRef, TaskState } from './types';
 
-import type { Card, FeedEvent, Live, PermissionRequest, Status, StepItem, TaskDetail, TaskError, TaskSource, UsageItem } from './wire';
+import type { Card, FeedEvent, Live, PermissionRequest, Status, StepItem, TaskDetail, TaskError, TaskPush, TaskSource, UsageItem } from './wire';
 /** The part of the engine the UI models read. */
 interface ViewEngine {
   isRunning(taskId: string): boolean;
@@ -301,5 +301,18 @@ function detail(engine: ViewEngine, taskId: string): TaskDetail {
   };
 }
 
-export type { Card, Status, StepItem, TaskEntry, TaskError, ViewEngine };
-export { summary, detail, stepsOf, statusOf, CHECKPOINT_HINT };
+type OutputPush = Extract<TaskPush, { type: 'output' }>;
+
+/**
+ * Queues one streamed item for the page. Text the agent writes arrives a few characters at a time: consecutive pieces
+ * of one step merge into one message, so the host posts a handful of messages per flush instead of one per token.
+ */
+function queueOutput(queue: OutputPush[], push: OutputPush): void {
+  const last = queue[queue.length - 1];
+  if (last && push.item.type === 'text_delta' && last.item.type === 'text_delta' && last.taskId === push.taskId && last.key === push.key) {
+    last.item = { ...last.item, text: last.item.text + push.item.text };
+  } else queue.push({ ...push, item: { ...push.item } as OutputPush['item'] });
+}
+
+export type { Card, OutputPush, Status, StepItem, TaskEntry, TaskError, ViewEngine };
+export { summary, detail, stepsOf, statusOf, queueOutput, CHECKPOINT_HINT };

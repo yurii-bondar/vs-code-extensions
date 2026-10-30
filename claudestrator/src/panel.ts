@@ -6,6 +6,7 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import * as os from 'os';
 import * as view from './core/view';
+import type { OutputPush } from './core/view';
 import * as cfg from './core/config';
 import * as backups from './core/backup';
 import * as libraries from './core/library';
@@ -34,6 +35,8 @@ interface PickedRepo {
 
 type Handler = (params: unknown) => Promise<unknown>;
 
+/** How often streamed agent output goes to the page. */
+const OUTPUT_MS = 50;
 const LANGUAGES = ['English', 'Ukrainian', 'German', 'French', 'Spanish', 'Polish', 'Portuguese', 'Italian', 'Japanese', 'Chinese'];
 
 class DashboardPanel implements RpcHandlers {
@@ -45,6 +48,11 @@ class DashboardPanel implements RpcHandlers {
   disposables: vscode.Disposable[];
   panel: vscode.WebviewPanel;
   missedChange = false;
+  /** Streamed output not posted yet, and the timer that posts it. */
+  outputQueue: OutputPush[] = [];
+  outputTimer: NodeJS.Timeout | undefined;
+  /** Steps whose text pieces went unposted while the panel was hidden: none goes until their whole text has. */
+  missedText = new Set<string>();
 
   static show(context: vscode.ExtensionContext, orch: Orchestrator, route?: Route): DashboardPanel {
     if (DashboardPanel.current) {
@@ -84,7 +92,7 @@ class DashboardPanel implements RpcHandlers {
 
     orch.onEngine(({ name, data: payload }) => {
       const data = payload as Record<string, unknown>;
-      if (name === 'output') this.post({ type: 'output', ...data });
+      if (name === 'output') this.queueOutput(payload as OutputPush);
       else if (name === 'live') this.post({ type: 'live', ...data });
       else if (name === 'permission') this.post({ type: 'permission', request: data });
       else if (name === 'permissionDone') this.post({ type: 'permissionDone', requestId: data });
@@ -100,7 +108,29 @@ class DashboardPanel implements RpcHandlers {
     vscode.workspace.onDidChangeConfiguration((e) => e.affectsConfiguration('claudestrator') && this.post({ type: 'config' }), null, this.disposables);
   }
 
+  /**
+   * Streamed output goes to the page every OUTPUT_MS, text pieces of a step merged. A hidden panel gets no text
+   * pieces: the transcript keeps the whole text, which the page gets as the agent finishes the message.
+   */
+  queueOutput(push: OutputPush): void {
+    if (push.item.type === 'text_delta') {
+      // Pieces missed while hidden would leave the next ones mid-sentence; the step's whole text comes next anyway.
+      if (!this.panel.visible) this.missedText.add(push.key);
+      if (this.missedText.has(push.key)) return;
+    } else if (push.item.type === 'text') this.missedText.delete(push.key);
+    view.queueOutput(this.outputQueue, push);
+    if (!this.outputTimer) this.outputTimer = setTimeout(() => this.flushOutput(), OUTPUT_MS);
+  }
+
+  flushOutput(): void {
+    this.outputTimer = undefined;
+    const batch = this.outputQueue;
+    this.outputQueue = [];
+    for (const push of batch) this.post(push);
+  }
+
   dispose(): void {
+    clearTimeout(this.outputTimer);
     DashboardPanel.current = undefined;
     vscode.commands.executeCommand('setContext', 'claudestratorPanelFocus', false);
     this.disposables.forEach((d) => d.dispose());
