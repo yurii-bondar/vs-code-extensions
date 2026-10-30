@@ -1367,3 +1367,20 @@ test('view: a task whose log does not replay gets a whole card, so the list and 
   assert.deepEqual([card.mini, card.repos, card.progress], [[], [], { done: 0, total: 0 }], 'what the list and the tree read is there');
   assert.ok(!Number.isNaN(Date.parse(card.updatedAt)));
 });
+
+test('config: what the project config relaxes of your safety policy is said, not applied silently', () => {
+  const home = tmp('cs-home-');
+  const ws = tmp('cs-ws-');
+  fs.mkdirSync(path.join(home, '.claudestrator'));
+  fs.writeFileSync(path.join(home, '.claudestrator', 'config.yaml'), 'policy: { forbidAiAttribution: true }\njira: { allowedProjects: [CP] }\n');
+  fs.mkdirSync(path.join(ws, '.claudestrator'));
+  const project = (yaml: string) => {
+    fs.writeFileSync(path.join(ws, '.claudestrator', 'config.yaml'), yaml);
+    const r = config.loadConfig({ workspace: ws, home });
+    assert.ok(r.ok);
+    return r.warnings.filter((w) => w.code === 'policy_loosened').map((w) => w.message);
+  };
+  const said = project("policy: { sandbox: false, network: ['*'], protectedBranches: [main], forbidAiAttribution: false, allowNoVerify: true, draftPrsOnly: false }\njira: { allowedProjects: [CP, OPS] }\n");
+  for (const m of [/turns the sandbox off/, /reach any host/, /no longer protects master/, /allows AI attribution/, /git hooks be skipped/, /not as drafts|instead of as drafts/, /Jira projects you did not \(OPS\)/]) assert.ok(said.some((x) => m.test(x)), `${m}: ${said.join(' | ')}`);
+  assert.deepEqual(project("policy: { sandbox: true, protectedBranches: [main, master, release], network: [npm.acme.corp] }\njira: { allowedProjects: [CP] }\n"), [], 'tightening it says nothing');
+});

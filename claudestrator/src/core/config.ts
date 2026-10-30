@@ -749,7 +749,32 @@ function loadConfig({ workspace, home, flags, readFile }: { workspace: string; h
   if (loadErrors.length) return { ok: false, errors: loadErrors, warnings: diagnostics.filter((d) => d.level === 'warning') };
   const r = resolveConfig(layers, { flags, readFile });
   if (r.ok) r.config.sources = [...new Set([...files, ...r.config.sources])];
-  return { ...r, warnings: [...diagnostics, ...r.warnings] };
+  return { ...r, warnings: [...diagnostics, ...loosened(layers), ...r.warnings] };
+}
+
+/**
+ * What the project config relaxes of the safety the layers under it (yours, its libraries, the defaults) set. A repo
+ * someone else wrote can carry that file, and the dashboard's Safety switches write it too: either way it is said
+ * wherever the config's warnings show, not applied silently.
+ */
+function loosened(layers: Layer[]): Diagnostic[] {
+  const project = layers.find((l) => l.name === 'project');
+  if (!project) return [];
+  const under = mergeLayers(layers.filter((l) => l !== project));
+  const was = { sandbox: true, allowNoVerify: false, draftPrsOnly: true, forbidAiAttribution: false, protectedBranches: ['main', 'master'], ...under.policy };
+  const p = project.config.policy ?? {};
+  const out: string[] = [];
+  if (p.sandbox === false && was.sandbox) out.push("turns the sandbox off: agents' commands, checks and git hooks run without it");
+  if (p.network && p.network.includes('*')) out.push('lets sandboxed commands reach any host (network: "*")');
+  if (p.allowNoVerify === true && !was.allowNoVerify) out.push('lets git hooks be skipped (allowNoVerify)');
+  if (p.draftPrsOnly === false && was.draftPrsOnly) out.push('opens PRs ready for review instead of as drafts');
+  if (p.forbidAiAttribution === false && was.forbidAiAttribution) out.push('allows AI attribution in commits and PRs');
+  const unprotected = p.protectedBranches ? was.protectedBranches.filter((b) => !p.protectedBranches!.includes(b)) : [];
+  if (unprotected.length) out.push(`no longer protects ${unprotected.join(', ')}`);
+  const projects = project.config.jira && project.config.jira.allowedProjects;
+  const allowed = under.jira.allowedProjects ?? [];
+  if (projects && allowed.length && (!projects.length || projects.some((k) => !allowed.includes(k)))) out.push(projects.length ? `allows Jira projects you did not (${projects.filter((k) => !allowed.includes(k)).join(', ')})` : 'allows every Jira project, where your config allows some');
+  return out.map((m) => ({ level: 'warning', code: 'policy_loosened', source: project.file, message: `the project's config (${CONFIG_DIR}/${CONFIG_FILE}) ${m}` }));
 }
 
 /**

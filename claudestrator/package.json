@@ -29,6 +29,12 @@
   ],
   "icon": "media/icon.png",
   "main": "./dist/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Claudestrator runs agents, checks and git hooks that a workspace's config and repos define."
+    }
+  },
   "activationEvents": [
     "onStartupFinished"
   ],
