@@ -159,6 +159,11 @@ test('engine: dirty checkouts block branch mode, stop interrupts a hanging agent
     s = await waitFor(() => (!h.engine.isRunning(taskId) && h.engine.svc.state(taskId).checkpoint ? h.engine.svc.state(taskId) : null), 30000);
     assert.equal(s.checkpoint!.id, 'confirm-push');
     assert.equal(only(h.engine.svc.events(taskId), 'stage_started').filter((e) => e.agent === 'developer').length, 1, 'resume continued the same step');
+    const devKey = view.detail(h.engine, taskId).steps.find((st) => st.agent === 'developer')!.key!;
+    const prompts = h.engine.svc.readTranscript(taskId, devKey).filter((i) => i.type === 'prompt').map((i) => text(i.text));
+    assert.equal(prompts.length, 2, 'the rerun shows in the transcript');
+    assert.doesNotMatch(prompts[0]!, /was interrupted/);
+    assert.match(prompts[1]!, /An earlier run of this step was interrupted[^\n]*git status and git diff first/, 'and tells the agent its repo may hold part of the work');
   } finally {
     h.hooks.dispose();
   }

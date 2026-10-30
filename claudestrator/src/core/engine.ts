@@ -798,12 +798,13 @@ class Engine extends EventEmitter {
       this.setLive(taskId, { phase: 'preparing', step, text: `Listing the PRs on GitHub for ${s.source.key}` });
       prsPath = await this.listPrs(taskId, s.source.key, readRepos);
     }
-    const prompt = buildAgentPrompt({ state, next: run, taskDir, language: config.language, ...(repoDir && { repoDir }), ...(workRepos.length && { workRepos }), ...(diffPath && { diffPath }), ...(prsPath && { prsPath }), ...(readRepos.length && { repos: readRepos }) });
+    const prompt = buildAgentPrompt({ state, next: run, taskDir, language: config.language, ...(repoDir && { repoDir }), ...(workRepos.length && { workRepos }), ...(diffPath && { diffPath }), ...(prsPath && { prsPath }), ...(next.kind === 'running' && { rerun: true }), ...(readRepos.length && { repos: readRepos }) });
     // A stage that writes starts in the repo it writes (the first of them for a stage across repos): Claude Code's
     // sandbox lets a session write its working directories, so the workspace around the repos is never one of them.
     const cwd = repoDir || (workRepos.length ? workRepos[0]!.dir : this.workspace);
     const emitItem = this.emitter(taskId, key);
-    if (next.kind === 'run') emitItem({ type: 'prompt', text: prompt });
+    // A rerun of an interrupted step says so in its transcript too.
+    emitItem({ type: 'prompt', text: prompt });
 
     const writeRoots = stage.scope === 'repo' ? [repoDir as string] : workRepos.map((r) => r.dir);
     const gated = (stage.scope === 'repo' ? [step.repo] : workRepos.map((r) => r.name)).some((n) => n && config.repos[n] && config.repos[n]!.gates.length);

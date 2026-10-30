@@ -43,10 +43,12 @@ interface PromptArgs {
   diffPath?: string | undefined;
   /** For a readiness check of a Jira issue: the PRs GitHub has for it, as Claudestrator listed them. */
   prsPath?: string | undefined;
+  /** The step ran before and did not finish (stopped, or VS Code closed): its repos may hold part of its work. */
+  rerun?: boolean | undefined;
   repos?: PromptRepo[] | undefined;
 }
 
-function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, diffPath, prsPath, repos }: PromptArgs): string {
+function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, diffPath, prsPath, rerun, repos }: PromptArgs): string {
   const inputs = next.inputs.map((p) => path.resolve(taskDir, p));
   if (diffPath) inputs.push(diffPath);
   if (prsPath) inputs.push(prsPath);
@@ -56,6 +58,7 @@ function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, 
     `Mode: ${MODE[next.mode]}`,
     `Review round: ${next.round}.`,
   ];
+  if (rerun) lines.push('', 'An earlier run of this step was interrupted before it finished (stopped, or VS Code closed). Its repositories may already hold part of its work: look at git status and git diff first, keep what is right and finish the rest.');
   if (state.group) lines.push(`Part of the ${GROUP_TYPE[state.group.type]} "${state.group.label}"${state.group.jira ? ` (Jira ${state.group.jira})` : ''}.`);
   if (next.step.repo) lines.push(`Repository: ${next.step.repo} at ${repoDir}. Work only there.`);
   if (workRepos && workRepos.length) {
