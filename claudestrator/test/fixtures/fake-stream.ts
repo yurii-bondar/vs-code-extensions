@@ -5,7 +5,9 @@
 //   utf8      the result line is written in two chunks split inside a multi-byte character
 //   interrupt a control_request interrupt ends the turn at once, as Claude Code does
 //   hang      user messages are never answered
+//   child     starts a long `sleep` in the background, as an agent's dev server would, and prints its pid
 import * as readline from 'readline';
+import { spawn } from 'child_process';
 
 interface Incoming {
   type?: string;
@@ -46,6 +48,10 @@ function next(): void {
 }
 
 out({ type: 'system', subtype: 'init', session_id: `fake-${process.pid}`, model: 'claude-sonnet-5-5' });
+if (modes.has('child')) {
+  const child = spawn('sleep', ['60'], { stdio: 'ignore' });
+  out({ type: 'assistant', message: { content: [{ type: 'text', text: `child ${child.pid}` }] }, parent_tool_use_id: null });
+}
 readline.createInterface({ input: process.stdin }).on('line', (line) => {
   const m = JSON.parse(line) as Incoming;
   if (m.type === 'control_request') {

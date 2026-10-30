@@ -274,9 +274,14 @@ class ClaudeSession {
     delete env.CLAUDECODE;
     for (const name of GITHUB_TOKENS) delete env[name];
     const [file, argv] = launch(opts.command(), this.args);
-    this.proc = spawn(file, argv, { cwd: req.cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    // A process group of its own: stopping the agent stops what it started too (a dev server, a watcher, MCP servers).
+    this.proc = spawn(file, argv, { cwd: req.cwd, env, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
     this.proc.on('error', (e: NodeJS.ErrnoException) => this.end(e.code === 'ENOENT' ? `Claude Code CLI not found (${opts.command()}). Set "claudestrator.claudePath" or install Claude Code.` : e.message));
-    this.proc.on('exit', (code, signal) => this.end(this.exitMessage(code, signal)));
+    this.proc.on('exit', (code, signal) => {
+      // What the agent left running in the background goes with the session.
+      this.signal('SIGTERM');
+      this.end(this.exitMessage(code, signal));
+    });
     this.proc.stdin.on('error', () => {}); // EPIPE after the process died; reported through 'exit'
     // Decoded as a stream: a pipe may cut a line inside a multi-byte character (Cyrillic, emoji), and decoding each
     // chunk on its own would turn both halves into U+FFFD in plans, reports and Jira comments.
@@ -356,11 +361,29 @@ class ClaudeSession {
     } catch {
       // stdin is gone; the signals below still stop it
     }
+    this.escalate(STOP_GRACE_MS);
+  }
+
+  /** SIGTERM after `afterMs` if the CLI has not ended, SIGKILL STOP_GRACE_MS later: to its whole process group. */
+  escalate(afterMs: number): void {
     setTimeout(() => {
       if (this.ended) return;
-      this.proc.kill('SIGTERM');
-      setTimeout(() => !this.ended && this.proc.kill('SIGKILL'), STOP_GRACE_MS).unref();
-    }, STOP_GRACE_MS).unref();
+      this.signal('SIGTERM');
+      setTimeout(() => !this.ended && this.signal('SIGKILL'), STOP_GRACE_MS).unref();
+    }, afterMs).unref();
+  }
+
+  /** Signals the CLI and everything in its process group; on Windows, its process tree (taskkill /t) for a kill. */
+  signal(sig: NodeJS.Signals): void {
+    const pid = this.proc.pid;
+    if (pid === undefined) return;
+    try {
+      if (process.platform !== 'win32') process.kill(-pid, sig);
+      else if (sig === 'SIGKILL') spawn('taskkill', ['/pid', String(pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true });
+      else this.proc.kill(sig);
+    } catch {
+      // already gone
+    }
   }
 
   close(): void {
@@ -371,7 +394,7 @@ class ClaudeSession {
     } catch {
       // already closed
     }
-    setTimeout(() => !this.ended && this.proc.kill('SIGTERM'), 5000).unref();
+    this.escalate(STOP_GRACE_MS);
   }
 
   deliver(r: TurnResult): void {

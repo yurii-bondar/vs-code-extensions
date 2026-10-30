@@ -102,3 +102,23 @@ test('runner: with structured output the report is what the agent wrote after it
     s.close();
   }
 });
+
+test('runner: stopping an agent stops what it started in the background too', { skip: process.platform === 'win32' }, async () => {
+  const { s, items } = session('hang,child', 'start the dev server', 10000);
+  const alive = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  for (let i = 0; i < 100 && !items.some((x) => x.type === 'text'); i++) await new Promise((r) => setTimeout(r, 20));
+  const text = items.find((x) => x.type === 'text');
+  const pid = Number(String(text && 'text' in text ? text.text : '').replace('child ', ''));
+  assert.ok(pid > 0 && alive(pid), 'the agent started something');
+  void s.interrupt();
+  await s.turn();
+  for (let i = 0; i < 100 && alive(pid); i++) await new Promise((r) => setTimeout(r, 50));
+  assert.equal(alive(pid), false, 'it went with the agent');
+});
