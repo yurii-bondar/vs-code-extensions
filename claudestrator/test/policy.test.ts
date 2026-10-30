@@ -27,7 +27,7 @@ function policy(configYaml: string) {
 
 test('policy: an agent with MCP servers reads through them, and changes nothing through them unless its tools say so', async () => {
   const may = policy('repos:\n  api: {}\nagents:\n  developer: { mcp: true }\n');
-  for (const tool of ['mcp__Atlassian__getJiraIssue', 'mcp__Atlassian__searchJiraIssuesUsingJql', 'mcp__github__get_file_contents', 'mcp__github__list_pull_requests', 'mcp__claude_ai_Atlassian_MCP__executeRead', 'mcp__Atlassian__atlassianUserInfo', 'mcp__filesystem__read_file']) {
+  for (const tool of ['mcp__gitlab__get_merge_request', 'mcp__github__get_workflow_run', 'mcp__github__list_commits', 'mcp__github__get_pull_request_comments', 'mcp__github__list_deploy_keys', 'mcp__Atlassian__getJiraIssue', 'mcp__Atlassian__searchJiraIssuesUsingJql', 'mcp__github__get_file_contents', 'mcp__github__list_pull_requests', 'mcp__claude_ai_Atlassian_MCP__executeRead', 'mcp__Atlassian__atlassianUserInfo', 'mcp__filesystem__read_file']) {
     assert.equal(await may('planner', tool), true, `planner: ${tool}`);
   }
   for (const [agent, tool] of [
@@ -38,6 +38,10 @@ test('policy: an agent with MCP servers reads through them, and changes nothing 
     ['auditor', 'mcp__claude_ai_Atlassian_MCP__executeWrite'],
     ['developer', 'mcp__github__create_pull_request'],
     ['planner', 'mcp__db__getaway_drop_table'],
+    ['planner', 'mcp__editor__search_and_replace'],
+    ['planner', 'mcp__jira__getOrCreateIssue'],
+    ['planner', 'mcp__fs__read_and_write_file'],
+    ['auditor', 'mcp__db__get_or_delete_rows'],
   ]) {
     assert.equal(await may(agent!, tool!), false, `${agent}: ${tool}`);
   }

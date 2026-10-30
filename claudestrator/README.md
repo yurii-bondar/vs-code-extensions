@@ -92,7 +92,7 @@ First time in a workspace, *Set up this workspace* finds the git repos and sugge
   - git writes by agents (commit, push, switch, stash, reset…) and non-read `gh` calls;
   - force-push, pushes to protected branches, `--no-verify`, merging PRs, non-draft PRs, AI attribution (if the policy says so) and destructive `rm -r`;
   - edits outside the repo of the current step (read-only stages edit nothing), and edits of Claudestrator's own config, libraries, instruction files and task state, also in a workspace that is itself the repo (Claude Code's deny rules and sandbox refuse them too);
-  - MCP tools that may change something (merge a PR, move an issue, write a file): an agent reads through its MCP servers (`get…`, `search…`, `list…`, `read…`), and calls any other MCP tool only when its `tools` name it (`mcp__github__create_issue`, the whole server as `mcp__github`, or `mcp__github__*`);
+  - MCP tools that may change something (merge a PR, move an issue, write a file): an agent reads through its MCP servers (`get…`, `search…`, `list…`, `read…`, unless another word of the name writes: `search_and_replace`, `getOrCreateIssue`), and calls any other MCP tool only when its `tools` name it (`mcp__github__create_issue`, the whole server as `mcp__github`, or `mcp__github__*`);
   - `WebFetch` and `WebSearch`, which reach any host from Claude Code itself, unless the agent's `tools` name them;
   - publishing a package (`npm publish`, `twine upload`, `cargo publish`…) and reading the keychain (`security find-generic-password`).
 

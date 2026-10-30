@@ -40,11 +40,29 @@ const REPORT_RETRIES = 2;
 const CLAUDE_AUTH = /Failed to authenticate|OAuth (session|token) (has )?expired|Invalid API key|Please run \/login|not logged in|authentication_error/i;
 const INTAKE_KEY = '0000-intake';
 /**
- * MCP tools that only read, by the verb their name starts with (getJiraIssue, search_code, list_issues, read_file,
- * Atlassian's discover and executeRead). Anything else an MCP server offers may change something outside the repos
- * (merge a PR, move an issue, write a file), so an agent calls it only when its `tools` name it.
+ * MCP tools that only read, by the words of their name: it starts with a reading verb (getJiraIssue, search_code,
+ * list_issues, read_file, Atlassian's discover) and no word of it writes (search_and_replace, getOrCreateIssue,
+ * read_and_write_file are writes). Anything else an MCP server offers may change something outside the repos (merge
+ * a PR, move an issue, write a file), and MCP servers run outside the sandbox, so an agent calls it only when its
+ * `tools` name it. Nouns that look like verbs (get_merge_request, get_workflow_run, list_deploy_keys) still read.
  */
-const MCP_READ = /^(?:(?:get|search|fetch|lookup|list|read|discover)(?=$|[_A-Z])|executeRead$|atlassianUserInfo$)/;
+const MCP_READ_VERBS = new Set(['get', 'search', 'fetch', 'lookup', 'list', 'read', 'discover']);
+const MCP_WRITE_WORDS = new Set(['create', 'update', 'upsert', 'delete', 'remove', 'replace', 'write', 'edit', 'set', 'add', 'insert', 'modify', 'move', 'rename', 'transition', 'assign', 'approve', 'close', 'drop', 'truncate', 'revoke', 'grant', 'invite', 'cancel', 'restart', 'kill', 'enable', 'disable', 'reset', 'save', 'mutate', 'transfer', 'send', 'upload', 'publish', 'apply', 'put', 'execute']);
+const MCP_READ_TOOLS = new Set(['executeRead', 'atlassianUserInfo']);
+
+/** The words of a tool name: `getOrCreate_issue-v2` → get, or, create, issue, v2. */
+const nameWords = (name: string): string[] =>
+  name
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .split(/[\s_.-]+/)
+    .map((w) => w.toLowerCase())
+    .filter(Boolean);
+
+function mcpReads(action: string): boolean {
+  if (MCP_READ_TOOLS.has(action)) return true;
+  const words = nameWords(action);
+  return MCP_READ_VERBS.has(words[0] ?? '') && !words.some((w) => MCP_WRITE_WORDS.has(w));
+}
 /** The one write a Jira comment session may make (Atlassian: addCommentToJiraIssue). */
 const MCP_COMMENT = /^addComment/i;
 const COMMENT_TIMEOUT_MS = 4 * 60000;
@@ -574,7 +592,7 @@ class Engine extends EventEmitter {
     const agent = { name: 'intake', description: 'Reads the task source', model: 'haiku', effort: 'low' as const, instructions: INTAKE_INSTRUCTIONS, output: 'plan' };
     const hook = this.hooks.register(async ({ tool }) => {
       if (READ_TOOLS.has(tool) || tool === 'ToolSearch') return { allow: true };
-      if (tool.startsWith('mcp__') && MCP_READ.test(mcpAction(tool))) return { allow: true };
+      if (tool.startsWith('mcp__') && mcpReads(mcpAction(tool))) return { allow: true };
       emitItem({ type: 'blocked', tool, reason: 'reading the ticket only reads: this tool could change something' });
       return { allow: false, reason: 'Claudestrator: the intake only reads; use the get/search/fetch tools' };
     });
@@ -982,7 +1000,7 @@ class Engine extends EventEmitter {
     if (WEB_TOOLS.has(tool) && !named(tool)) return blocked(`${tool} reaches any host, outside the sandbox; the ${step.agent} agent uses it only when its tools name it (tools: [${tool}])`);
     if (tool.startsWith('mcp__')) {
       if (agent && agent.mcp === false) return blocked(`${tool}: the ${step.agent} agent runs without MCP servers`);
-      if (!MCP_READ.test(mcpAction(tool)) && !(agent && agent.tools && agent.tools.some((rule) => mcpRuleCovers(rule, tool)))) {
+      if (!mcpReads(mcpAction(tool)) && !(agent && agent.tools && agent.tools.some((rule) => mcpRuleCovers(rule, tool)))) {
         return blocked(`${tool} may change something outside the repos; the ${step.agent} agent calls it only when its tools name it (tools: [${tool}])`);
       }
     } else if (agent && agent.tools && !named(tool)) return blocked(`${tool} is not one of the ${step.agent} agent's tools`);
@@ -1186,7 +1204,7 @@ class Engine extends EventEmitter {
         posted += 1;
         return { allow: true };
       }
-      if (action && MCP_READ.test(action)) return { allow: true };
+      if (action && mcpReads(action)) return { allow: true };
       append({ type: 'blocked', tool, reason: 'a Jira comment session only posts that one comment' });
       return { allow: false, reason: posted ? 'Claudestrator: the comment is already posted; stop and report' : 'Claudestrator: only the add-comment and read tools are allowed here' };
     });
