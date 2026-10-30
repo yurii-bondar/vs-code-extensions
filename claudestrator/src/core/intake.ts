@@ -390,6 +390,29 @@ interface AtlassianAuth {
 
 type FetchImpl = typeof globalThis.fetch;
 
+interface ClientOptions {
+  fetch?: FetchImpl;
+  /** How long one request may take. */
+  timeoutMs?: number;
+  /** Waits between attempts; tests pass one that does not wait. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/** Attempts per request: the first one and two retries. */
+const ATTEMPTS = 3;
+/** Statuses that mean "try again later": the request was not handled. */
+const RETRY_STATUS = new Set([429, 502, 503, 504]);
+/** A POST that may have reached the server is never sent twice (a comment would be posted twice): only these say it was not. */
+const RETRY_STATUS_POST = new Set([429, 503]);
+
+/** Seconds from a Retry-After header (seconds or an HTTP date), capped so a request never waits long. */
+function retryAfterMs(header: string | null, fallbackMs: number): number {
+  if (!header) return fallbackMs;
+  const s = Number(header);
+  const ms = Number.isFinite(s) ? s * 1000 : Date.parse(header) - Date.now();
+  return Number.isFinite(ms) && ms >= 0 ? Math.min(ms, 30000) : fallbackMs;
+}
+
 /** The Jira and Confluence replies, as far as this client reads them. */
 interface JiraIssueReply {
   key: string;
@@ -415,29 +438,56 @@ class AtlassianClient {
   auth: AtlassianAuth;
   base: string;
   fetch: FetchImpl;
+  timeoutMs: number;
+  sleep: (ms: number) => Promise<void>;
 
-  constructor(auth: AtlassianAuth, fetchImpl?: FetchImpl) {
+  constructor(auth: AtlassianAuth, { fetch = globalThis.fetch, timeoutMs = 30000, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }: ClientOptions = {}) {
     this.auth = auth;
     this.base = `https://${auth.site.replace(/^https?:\/\//, '').replace(/\/+$/, '')}`;
-    this.fetch = fetchImpl || globalThis.fetch;
+    this.fetch = fetch;
+    this.timeoutMs = timeoutMs;
+    this.sleep = sleep;
   }
 
   get site(): string {
     return this.base.slice('https://'.length);
   }
 
+  /**
+   * One REST call with a timeout. A GET is tried again after a network error, a timeout or a "try later" status;
+   * a POST only after a status that says the server did not handle it.
+   */
   async request<T = unknown>(method: string, pathAndQuery: string, body?: unknown): Promise<T> {
-    const res = await this.fetch(`${this.base}${pathAndQuery}`, {
-      method,
-      headers: {
-        Authorization: `Basic ${Buffer.from(`${this.auth.email}:${this.auth.token}`).toString('base64')}`,
-        Accept: 'application/json',
-        ...(body !== undefined && { 'Content-Type': 'application/json' }),
-      },
-      ...(body !== undefined && { body: JSON.stringify(body) }),
-    });
-    if (!res.ok) throw new Error(`${method} ${pathAndQuery}: ${res.status} ${res.statusText}`);
-    return (await res.json()) as T;
+    const retryable = method === 'GET' ? RETRY_STATUS : RETRY_STATUS_POST;
+    for (let attempt = 1; ; attempt++) {
+      const backoff = 1000 * 2 ** (attempt - 1);
+      let res: Response;
+      try {
+        res = await this.fetch(`${this.base}${pathAndQuery}`, {
+          method,
+          headers: {
+            Authorization: `Basic ${Buffer.from(`${this.auth.email}:${this.auth.token}`).toString('base64')}`,
+            Accept: 'application/json',
+            ...(body !== undefined && { 'Content-Type': 'application/json' }),
+          },
+          ...(body !== undefined && { body: JSON.stringify(body) }),
+          signal: AbortSignal.timeout(this.timeoutMs),
+        });
+      } catch (e) {
+        const timedOut = (e as Error).name === 'TimeoutError' || (e as Error).name === 'AbortError';
+        if (method === 'GET' && attempt < ATTEMPTS) {
+          await this.sleep(backoff);
+          continue;
+        }
+        throw new Error(`${method} ${pathAndQuery}: ${timedOut ? `no answer in ${Math.round(this.timeoutMs / 1000)}s` : (e as Error).message}`);
+      }
+      if (!res.ok && retryable.has(res.status) && attempt < ATTEMPTS) {
+        await this.sleep(retryAfterMs(res.headers.get('retry-after'), backoff));
+        continue;
+      }
+      if (!res.ok) throw new Error(`${method} ${pathAndQuery}: ${res.status} ${res.statusText}`);
+      return (await res.json()) as T;
+    }
   }
 
   async myself(): Promise<{ name: string | undefined; email: string | undefined }> {
