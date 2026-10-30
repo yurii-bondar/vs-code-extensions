@@ -15,7 +15,7 @@ import { readJsonFresh } from '../src/core/env';
 import { GitRepo } from '../src/core/git';
 import { parseHookRequest } from '../src/core/hookserver';
 import { plain } from '../src/core/gates';
-import { parseInvocation, classifyInput, extractAcceptanceCriteria, adfToText, detectScenario } from '../src/core/intake';
+import { parseInvocation, storageToText, classifyInput, extractAcceptanceCriteria, adfToText, detectScenario } from '../src/core/intake';
 import { TaskService } from '../src/core/store';
 import { stepsOf, summary, queueOutput } from '../src/core/view';
 import type { OutputPush } from '../src/core/view';
@@ -560,6 +560,11 @@ test('intake: invocations, sources and acceptance criteria', () => {
   assert.equal(classify('Add a cap https://x.y/z').kind, 'text');
   assert.deepEqual(extractAcceptanceCriteria('Intro\n\n## Acceptance criteria\n- one\n- two\n  continued\n\n## Notes\n- not this'), ['one', 'two continued']);
   assert.equal(adfToText({ type: 'doc', content: [{ type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'AC' }] }, { type: 'bulletList', content: [{ type: 'listItem', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'a' }] }] }] }] }), '## AC\n\n- a');
+  // One malformed node does not fail the whole ticket.
+  assert.equal(adfToText({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Due ' }, { type: 'date', attrs: { timestamp: 'soon' } }, { type: 'date', attrs: { timestamp: '1767225600000' } }] }] }), 'Due 2026-01-01');
+  assert.equal(storageToText('<p>A &#99999999; B &#x1F680; &amp; &bogus;</p>'), 'A &#99999999; B 🚀 & &bogus;');
+  assert.equal(classify('https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=../../x').kind, 'text', 'a page id is digits');
+  assert.equal((classify('https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=4242') as Extract<Source, { kind: 'confluence' }>).pageId, '4242');
 });
 
 test('store: tasks persist, rejections are logged, torn tails are ignored', () => {

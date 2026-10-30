@@ -159,7 +159,9 @@ function classifyInput(input: string, { embedded = false, projects = [] }: { emb
     const key = (browse && browse[1]) || (selected && JIRA_KEY.test(selected) ? selected : undefined);
     if (key) return { kind: 'jira', key, site: url.host };
     const page = url.pathname.match(/\/wiki\/.*\/pages\/(\d+)/);
-    const pageId = (page && page[1]) || url.searchParams.get('pageId') || undefined;
+    // A page id is digits: from the path, or a `?pageId=` that is one (it becomes part of the task id).
+    const query = url.searchParams.get('pageId');
+    const pageId = (page && page[1]) || (query && /^\d+$/.test(query) ? query : undefined);
     if (url.pathname.startsWith('/wiki/') && pageId) return { kind: 'confluence', pageId, url: text };
   }
   return { kind: 'text', text };
@@ -315,7 +317,7 @@ function inline(n: AdfNode): string {
     case 'blockCard':
       return String((n.attrs && n.attrs.url) ?? '');
     case 'date':
-      return n.attrs && n.attrs.timestamp ? new Date(Number(n.attrs.timestamp)).toISOString().slice(0, 10) : '';
+      return dateOf(n.attrs && n.attrs.timestamp);
     default:
       return kids(n).map(inline).join('');
   }
@@ -364,6 +366,17 @@ function blocks(raw: unknown, depth: number): string {
 const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
 
 /** Confluence storage format (XHTML) → Markdown-ish text. Rough by design: structure, not fidelity. */
+/** A character by its number, or undefined for one Unicode does not have (`&#99999999;` would throw). */
+function codePoint(n: number): string | undefined {
+  return Number.isInteger(n) && n >= 0 && n <= 0x10ffff ? String.fromCodePoint(n) : undefined;
+}
+
+/** An ADF date node's timestamp as YYYY-MM-DD; nothing for one that is not a time (it would throw). */
+function dateOf(timestamp: unknown): string {
+  const d = new Date(Number(timestamp));
+  return timestamp && !Number.isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : '';
+}
+
 function storageToText(html: string): string {
   return html
     .replace(/<ac:structured-macro[^>]*ac:name="code"[^>]*>[\s\S]*?<!\[CDATA\[([\s\S]*?)\]\]>[\s\S]*?<\/ac:structured-macro>/g, '\n```\n$1\n```\n')
@@ -373,9 +386,7 @@ function storageToText(html: string): string {
     .replace(/<(br|\/p|\/tr|\/ul|\/ol)[^>]*>/g, '\n')
     .replace(/<\/t[dh]>/g, ' | ')
     .replace(/<[^>]+>/g, '')
-    .replace(/&(#\d+|#x[0-9a-f]+|\w+);/gi, (m, e) =>
-      e[0] === '#' ? String.fromCodePoint(e[1]!.toLowerCase() === 'x' ? parseInt(e.slice(2), 16) : Number(e.slice(1))) : ENTITIES[e] ?? m
-    )
+    .replace(/&(#\d+|#x[0-9a-f]+|\w+);/gi, (m, e: string) => (e[0] === '#' ? codePoint(e[1]!.toLowerCase() === 'x' ? parseInt(e.slice(2), 16) : Number(e.slice(1))) ?? m : ENTITIES[e] ?? m))
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
