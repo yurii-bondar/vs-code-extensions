@@ -37,7 +37,8 @@ When the extension's engine or page changes, nothing here changes unless the wir
 ## Requirements
 
 - An IDE based on IntelliJ Platform **2026.2 or newer** (`since-build` 262) with JCEF. From 2026.2 the embedded browser is a plugin of its own (`com.intellij.modules.jcef`), bundled with every standard IDE; older IDEs keep it in the core under no plugin id, so one build cannot serve both.
-- **Node.js 20+** on the `PATH` of your login shell, or its path in the settings. It is not bundled, which keeps the plugin at ~450 KB. 20 because the engine watches its task and config folders recursively, which Node supports on Linux only from 20.
+- **Node.js 20+** on the `PATH` of your login shell, or its path in the settings. It is not bundled. 20 because the engine watches its task and config folders recursively, which Node supports on Linux only from 20.
+- **Node.js 22.12+** for the sandbox the checks and git hooks run in (`policy.sandbox`, on by default): the engine ships Anthropic's sandbox-runtime and starts it with that Node. On Linux it also needs `bubblewrap`, `socat` and `ripgrep`, as Claude Code's own sandbox does. With an older Node a task says so before any agent runs.
 - The same tools as the extension: Claude Code CLI, Git, GitHub CLI.
 
 ## Build and run
