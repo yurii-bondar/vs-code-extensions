@@ -439,7 +439,8 @@ class Engine extends EventEmitter {
     if (this.running.has(taskId)) return;
     this.errors.delete(taskId);
     this.run(taskId).catch((e) => {
-      if (e.code === 'stopped') return;
+      // Stopped mid-step: what the step did next was refused, which is the point of stopping.
+      if (e.code === 'stopped' || e.code === 'task_stopped') return;
       const err = { code: e.code || 'internal', message: e.message || String(e), ...(e.blocked && { blocked: e.blocked }), at: new Date().toISOString() };
       this.errors.set(taskId, err);
       try {
@@ -613,6 +614,10 @@ class Engine extends EventEmitter {
     this.sessions.set(s.taskId, session);
     let t: TurnResult = { ok: false, report: '' };
     try {
+      if (this.svc.state(s.taskId).status === 'stopped') {
+        await session.interrupt();
+        throw new EngineError('stopped', 'stopped');
+      }
       t = await this.turnOf(s.taskId, session);
       let parsed: RawTicket | null = null;
       for (let i = 0; ; i++) {
@@ -804,7 +809,9 @@ class Engine extends EventEmitter {
     const gated = (stage.scope === 'repo' ? [step.repo] : workRepos.map((r) => r.name)).some((n) => n && config.repos[n] && config.repos[n]!.gates.length);
     if (gated) await this.ensureSandbox(config);
     const hook = this.hooks.register((call) => this.decide({ taskId, step, writeRoots, config, call, emitItem }));
-    const session = await this.runner.start({
+    let session: ClaudeSession;
+    try {
+      session = await this.runner.start({
       agent,
       prompt,
       cwd,
@@ -821,13 +828,22 @@ class Engine extends EventEmitter {
         this.emit('limits', limits);
       },
       ...(budget !== undefined && { maxBudgetUsd: Math.max(0.01, budget - spent) }),
-    });
+      });
+    } catch (e) {
+      // It did not start (a CLI too old to be guarded, its MCP config not written): a failed step to retry, not a task
+      // left "running" with its guard token still registered.
+      this.hooks.unregister(hook.token);
+      fail(`the agent did not start: ${(e as Error).message}`);
+      return;
+    }
     this.sessions.set(taskId, session);
     this.setLive(taskId, { phase: 'agent', step, key, text: `${label} is working` });
 
     let t: TurnResult = { ok: false, report: '' };
     const stopped = (): boolean => this.svc.state(taskId).status === 'stopped';
     try {
+      // Stopped while it started: Stop found no session to interrupt then.
+      if (stopped()) return void (await session.interrupt());
       t = await this.turnOf(taskId, session);
       if (stopped()) return;
       if (!t.ok) return void fail(t.error || 'the agent failed');
@@ -975,6 +991,8 @@ class Engine extends EventEmitter {
       emitItem({ type: 'blocked', tool, reason, input: summarizeInput(tool, input) });
       return { allow: false, reason: `Claudestrator: ${reason}` };
     };
+    // A stopped task's agent is being interrupted: what it still asks for does not run.
+    if (this.svc.exists(taskId) && this.svc.state(taskId).status === 'stopped') return blocked('the task was stopped');
     // StructuredOutput is how an agent hands over its report's data (--json-schema): nothing it reaches.
     if (READ_TOOLS.has(tool) || tool === 'StructuredOutput') return { allow: true };
     const cwd = writeRoots.length === 1 ? writeRoots[0]! : this.workspace;

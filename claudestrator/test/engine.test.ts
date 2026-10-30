@@ -420,3 +420,36 @@ test('engine: a failing pre-push hook stops the push and says why', async () => 
     h.hooks.dispose();
   }
 });
+
+test('engine: an agent that cannot start is a failed step to retry, and one stopped while it starts does no work', async () => {
+  const ws = workspace(['api'], 'pipeline: [planner, developer]\nrepos:\n  api: {}\n');
+  const h = await harness(ws, { FAKE_REPOS: 'api' });
+  const real = h.engine.runner;
+  try {
+    // A CLI the guard cannot rely on: start() throws before any process runs.
+    h.engine.runner = { start: async (req) => (/developer/.test(req.name ?? '') ? Promise.reject(new Error('Claude Code 2.1.290 is older than 2.1.302')) : real.start(req)) };
+    const { taskId } = h.engine.start({ text: 'Add the feature', auto: true });
+    let s = await runTask(h.engine, taskId);
+    assert.equal(s.checkpoint && s.checkpoint.id, 'agent-failure');
+    assert.match(s.checkpoint!.reason!, /did not start: Claude Code 2\.1\.290 is older/);
+    assert.equal(h.hooks.sessions.size, 0, 'its guard token is gone');
+    assert.equal(h.engine.lastError(taskId), null, 'a step that failed, not a run');
+
+    // Stop while the session starts: Stop finds no session yet, the step sees the stop as soon as it has one.
+    let starting!: () => void;
+    const started = new Promise<void>((r) => (starting = r));
+    h.engine.runner = { start: async (req) => { starting(); await new Promise((r) => setTimeout(r, 300)); return real.start(req); } };
+    await h.engine.answer(taskId, 'agent-failure', 'retry');
+    await started;
+    await h.engine.stop(taskId);
+    await waitFor(() => !h.engine.isRunning(taskId));
+    s = h.engine.svc.state(taskId);
+    assert.equal(s.status, 'stopped');
+    assert.equal(h.engine.lastError(taskId), null, 'a stop is not reported as a failure');
+    assert.ok(!only(h.engine.svc.events(taskId), 'stage_completed').some((e) => e.agent === 'developer'), 'the agent did not get to work');
+    assert.ok(!fs.existsSync(path.join(ws, 'api', 'feature.txt')), 'and changed nothing');
+  } finally {
+    h.engine.runner = real;
+    h.hooks.dispose();
+  }
+});
