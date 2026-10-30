@@ -29,7 +29,7 @@ Everything is adapted to this repo and lives in `.claude/`:
 
 `principles.md` and `typescript.md` apply to every `.ts`. `ts-performance` is loaded only for the hot paths listed in its description, and readability wins elsewhere.
 
-The only git hook is husky's `commit-msg` (`.husky/commit-msg`), which strips AI-attribution trailers from commit messages. The root `npm install` activates it through the `prepare` script (`core.hooksPath` becomes `.husky/_`), so run it once after cloning. There is no pre-commit hook and no pre-commit version bump. CI's `pr-title` check is paused (`workflow_dispatch` only), so verify PR titles by hand.
+The only git hook is husky's `commit-msg` (`.husky/commit-msg`), which strips AI-attribution trailers from commit messages. The root `npm install` activates it through the `prepare` script (`core.hooksPath` becomes `.husky/_`), so run it once after cloning. There is no pre-commit hook and no pre-commit version bump. CI (`ci.yml`: the `pr-title` check, then typecheck, lint, test and package of every extension) and releases (`release.yml`) are paused (`workflow_dispatch` only): run those checks locally and verify PR titles by hand.
 
 ## Writing code
 
