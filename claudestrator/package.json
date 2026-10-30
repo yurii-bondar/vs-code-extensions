@@ -353,11 +353,6 @@
           "default": "",
           "markdownDescription": "Folder that holds the repos and `.claudestrator/config.yaml`. Empty: the first workspace folder."
         },
-        "claudestrator.nodePath": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Node.js used to run the guard hook. Empty: `node` from your `PATH`, else VS Code's own runtime."
-        },
         "claudestrator.atlassian.site": {
           "type": "string",
           "default": "",

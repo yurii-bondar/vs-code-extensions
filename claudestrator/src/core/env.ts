@@ -1,5 +1,5 @@
 // The machine around the orchestrator: a usable PATH (VS Code started from the Dock does not get the
-// login shell's), where claude / node / gh live, and the health checks shown on the dashboard.
+// login shell's), where claude / gh live, and the health checks shown on the dashboard.
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -112,8 +112,8 @@ function claudeAccounts(): { dir: string; label: string; email?: string }[] {
 }
 
 /**
- * Health of everything the pipeline needs. `settings`: { claudePath, nodePath }.
- * Returns { PATH, claude: { path, version, flags }, node, git, gh, checkedAt }.
+ * Health of everything the pipeline needs. `settings`: { claudePath }.
+ * Returns { PATH, claude: { path, version, flags }, git, gh, checkedAt }.
  */
 interface ClaudeProbe {
   path: string | null | undefined;
@@ -133,7 +133,6 @@ interface Probe {
   PATH: string;
   env: NodeJS.ProcessEnv;
   claude: ClaudeProbe;
-  node: { path: string | null; ok: boolean };
   git: { ok: boolean; version: string };
   gh: GhProbe;
   checkedAt: string;
@@ -168,7 +167,7 @@ async function resolveShim(command: string, PATH: string): Promise<string | null
   return null;
 }
 
-async function probe(settings: { claudePath?: string; nodePath?: string } = {}): Promise<Probe> {
+async function probe(settings: { claudePath?: string } = {}): Promise<Probe> {
   const PATH = await loginShellPath();
   const env: NodeJS.ProcessEnv = { ...process.env, PATH };
   delete env.ELECTRON_RUN_AS_NODE;
@@ -188,9 +187,6 @@ async function probe(settings: { claudePath?: string; nodePath?: string } = {}):
     else if (!claude.ok) claude.error = (v.stderr || v.stdout).trim().slice(0, 300) || `exit ${v.code}`;
   } else claude.error = claudePath ? `${claudePath} does not exist` : 'not found on PATH';
 
-  const nodePath = settings.nodePath ? expand(settings.nodePath) : which('node', PATH);
-  const node: Probe['node'] = { path: nodePath && fs.existsSync(nodePath) ? nodePath : null, ok: Boolean(nodePath && fs.existsSync(nodePath)) };
-
   const gitV = await exec('git', ['--version'], { env, timeoutMs: 8000 });
   const git = { ok: gitV.code === 0, version: gitV.stdout.trim().replace(/^git version /, '') };
 
@@ -206,7 +202,7 @@ async function probe(settings: { claudePath?: string; nodePath?: string } = {}):
     if (!gh.ok) gh.error = 'not logged in (run: gh auth login)';
   } else gh.error = 'not installed (needed only to open PRs)';
 
-  return { PATH, env, claude, node, git, gh, checkedAt: new Date().toISOString() };
+  return { PATH, env, claude, git, gh, checkedAt: new Date().toISOString() };
 }
 
 /**

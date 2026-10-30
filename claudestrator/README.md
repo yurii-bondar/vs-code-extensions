@@ -88,12 +88,12 @@ First time in a workspace, *Set up this workspace* finds the git repos and sugge
 - **Git.**
   - In *branch* mode the repos switch to `<type>/<KEY>-<slug>` and must be clean first. In *worktree* mode each task gets `.orch/worktrees/<task>/<repo>` from `origin/<base>`, and your checkouts are never touched.
   - The engine makes one commit per repo. It pushes and opens draft PRs with `gh` only after you confirm, and the PRs link to each other.
-- **Guard.** Every agent runs with a `PreToolUse` hook that asks the extension over a local socket. It always blocks:
+- **Guard.** Every tool call of an agent goes first to the extension, over a `PreToolUse` http hook on `127.0.0.1` with a token only that agent session holds; no process starts per call. It always blocks:
   - git writes by agents (commit, push, switch, stash, reset…) and non-read `gh` calls;
   - force-push, pushes to protected branches, `--no-verify`, merging PRs, non-draft PRs, AI attribution (if the policy says so) and destructive `rm -r`;
   - edits outside the repo of the current step (read-only stages edit nothing).
 
-  With *Ask me* on, you also approve every edit and command from the dashboard or a notification. The hook fails closed: if VS Code is gone, the tool call is denied.
+  With *Ask me* on, you also approve every edit and command from the dashboard or a notification; a question nobody answers in 14 minutes is denied.
 - **Jira comments** (*Approve & post to Jira*, *Push, open PRs & comment in Jira*, *Post to Jira*) go over REST with an API token, else through the account's Atlassian MCP server: a short haiku session whose guard allows only the read tools and one add-comment call. Each attempt is in the activity log and the *Jira comments* card; a failed one shows a banner with *Post again*.
 - **Jira and Confluence.** With an API token (Settings) tickets are read over REST. Without one, a short read-only agent (haiku, low effort, a few cents) reads the issue or page through the account's Atlassian MCP server, signed in with Claude Code; its tool calls are limited to get/search/fetch.
 - **Account.** Agents, MCP checks and limits use one Claude Code account (config folder), chosen in the header or followed from ctx-man. `claude auth status` shows which accounts are signed in; a signed-out one gets a banner with *Sign in* (`claude auth login` in a terminal). Agents run without the `user` setting source, so the account's own MCP servers are handed to them with `--mcp-config` (a 0600 file), without your personal plugins and hooks.
@@ -206,7 +206,6 @@ VS Code settings (`claudestrator.*`):
 
 - Claude Code CLI 2.1.302 or newer, logged in (`claude --version`; `claude update`). Older versions do not honour what guards the agents, so they do not start.
 - Git. GitHub CLI (`gh auth login`) only to open PRs.
-- Node.js on `PATH` for the guard hook (otherwise VS Code's own runtime is used).
 
 ## Develop
 

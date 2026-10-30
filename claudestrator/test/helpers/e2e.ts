@@ -8,7 +8,7 @@ import { execFileSync } from 'child_process';
 
 import { Engine } from '../../src/core/engine';
 import { ClaudeRunner } from '../../src/core/runner';
-import { HookServer, writeHookSettings } from '../../src/core/hookserver';
+import { HookServer } from '../../src/core/hookserver';
 import { setChildEnv } from '../../src/core/git';
 import type { TranscriptItem } from '../../src/core/store';
 import type { ComposerArgs } from '../../src/core/engine';
@@ -22,7 +22,6 @@ interface OutputEvent {
 }
 
 const FAKE = path.join(__dirname, '..', 'fixtures', 'fake-claude.js');
-const HOOK = path.join(__dirname, '..', '..', 'hook', 'pretooluse.js');
 fs.chmodSync(FAKE, 0o755);
 
 const git = (cwd: string, ...args: string[]): string => execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } }).trim();
@@ -47,8 +46,7 @@ async function harness(ws: string, env: Record<string, string> = {}) {
   setChildEnv({ ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t', FAKE_STATE: state, FAKE_LOG: path.join(state, 'calls.ndjson'), ...env });
   const hooks = new HookServer();
   await hooks.listen();
-  const settings = writeHookSettings(path.join(state, 'hook-settings.json'), { node: process.execPath, script: HOOK });
-  const runner = new ClaudeRunner({ command: () => FAKE, flags: () => new Set(['--include-partial-messages', '--tools', '--setting-sources', '--name', '--effort', '--strict-mcp-config']), settingSources: () => ['project'], hookSettings: () => settings, env: () => ({}) });
+  const runner = new ClaudeRunner({ command: () => FAKE, flags: () => new Set(['--include-partial-messages', '--tools', '--setting-sources', '--name', '--effort', '--strict-mcp-config']), settingSources: () => ['project'], env: () => ({}) });
   const engine = new Engine({ workspace: ws, home: state, runner, hooks });
   const outputs: OutputEvent[] = [];
   engine.on('output', (o: OutputEvent) => outputs.push(o));

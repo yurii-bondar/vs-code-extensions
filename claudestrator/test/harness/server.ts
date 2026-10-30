@@ -73,7 +73,7 @@ interface TerminalOptions {
 }
 
 let savedFile: string | undefined;
-const settingsStore: Record<string, unknown> = { claudePath: FAKE, settingSources: ['project', 'local'], askPermissions: false, notifications: 'all', claudeConfigDir: '', workspaceFolder: '', nodePath: '', 'atlassian.site': '', 'atlassian.email': '' };
+const settingsStore: Record<string, unknown> = { claudePath: FAKE, settingSources: ['project', 'local'], askPermissions: false, notifications: 'all', claudeConfigDir: '', workspaceFolder: '', 'atlassian.site': '', 'atlassian.email': '' };
 const listeners: ((e: ConfigChange) => void)[] = [];
 class EventEmitter<T = void> {
   fns: Set<(v: T) => void>;

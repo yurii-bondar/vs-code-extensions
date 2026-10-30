@@ -139,7 +139,6 @@ export interface HealthReport {
   claude: { ok: boolean; version: string | undefined; path: string | null | undefined; error: string | undefined };
   git: { ok: boolean | undefined; version: string | undefined };
   gh: { ok: boolean | undefined; version: string | undefined; account: string | undefined; error: string | undefined; installed: boolean };
-  node: { ok: boolean | undefined; path: string | null | undefined };
   account: Account;
   atlassian: boolean;
   atlassianMcp: string | null;

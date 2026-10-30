@@ -14,8 +14,8 @@ fs.chmodSync(FAKE, 0o755);
 /** A session of the fake CLI, with the modes it runs in. */
 function session(modes: string, prompt = 'implement the plan', delay = 100): { s: ClaudeSession; items: TranscriptItem[] } {
   const items: TranscriptItem[] = [];
-  const opts: RunnerOptions = { command: () => FAKE, flags: () => new Set(), settingSources: () => null, hookSettings: () => '{}', env: () => ({ FAKE_STREAM: modes, FAKE_STREAM_DELAY: String(delay) }) };
-  return { s: new ClaudeSession({ agent: { model: 'sonnet', instructions: '' }, prompt, cwd: __dirname, onOutput: (i) => void items.push(i) }, opts), items };
+  const opts: RunnerOptions = { command: () => FAKE, flags: () => new Set(), settingSources: () => null, env: () => ({ FAKE_STREAM: modes, FAKE_STREAM_DELAY: String(delay) }) };
+  return { s: new ClaudeSession({ agent: { model: 'sonnet', instructions: '' }, prompt, cwd: __dirname, settings: {}, onOutput: (i) => void items.push(i) }, opts), items };
 }
 
 for (const modes of ['uuids', '']) {
@@ -71,6 +71,6 @@ test('runner: a Claude Code older than the guard needs does not start', async ()
   assert.equal(versionProblem(undefined), null, 'unknown: the probe has not run yet');
   assert.match(versionProblem('2.1.295 (Claude Code)')!, /2\.1\.295 is older than 2\.1\.302.*claude update/);
   assert.match(versionProblem('1.9.999')!, /older/);
-  const runner = new ClaudeRunner({ command: () => FAKE, version: () => '2.0.1 (Claude Code)', flags: () => new Set(), settingSources: () => null, hookSettings: () => '{}', env: () => ({}) });
-  await assert.rejects(runner.start({ agent: { model: 'sonnet', instructions: '' }, prompt: 'hi', cwd: __dirname, onOutput: () => {} }), /older than/);
+  const runner = new ClaudeRunner({ command: () => FAKE, version: () => '2.0.1 (Claude Code)', flags: () => new Set(), settingSources: () => null, env: () => ({}) });
+  await assert.rejects(runner.start({ agent: { model: 'sonnet', instructions: '' }, prompt: 'hi', cwd: __dirname, settings: {}, onOutput: () => {} }), /older than/);
 });

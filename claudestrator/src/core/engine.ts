@@ -19,7 +19,7 @@ import { commitSubject, prTitle, prBody } from './pr';
 import { renderReport, jiraText } from './report';
 import type { Live, PermissionRequest, RepoStatus } from './wire';
 import type { ClaudeRunner, ClaudeSession, Limits, TurnResult } from './runner';
-import type { HookServer, Decision, ToolCall } from './hookserver';
+import { HOOK_TIMEOUT_S, type HookServer, type Decision, type ToolCall } from './hookserver';
 import type { AtlassianClient, Invocation } from './intake';
 import type { StageSource } from './pipeline';
 import type { RepoGates } from './gates';
@@ -39,6 +39,8 @@ const MCP_READ = /^(get|search|fetch|lookup|list|read|atlassianUserInfo)/i;
 /** The one write a Jira comment session may make (Atlassian: addCommentToJiraIssue). */
 const MCP_COMMENT = /^addComment/i;
 const COMMENT_TIMEOUT_MS = 4 * 60000;
+/** An "Ask me" question gets this long, a little less than Claude Code waits for the guard (HOOK_TIMEOUT_S). */
+const PERMISSION_TIMEOUT_MS = (HOOK_TIMEOUT_S - 30) * 1000;
 /** An agent that shows no sign of work this long is stopped. Longer than any one tool call (Bash allows 10 minutes). */
 const STALL_MS = 20 * 60000;
 
@@ -547,7 +549,7 @@ class Engine extends EventEmitter {
       return { allow: false, reason: 'Claudestrator: the intake only reads; use the get/search/fetch tools' };
     });
     this.setLive(s.taskId, { phase: 'intake', key: INTAKE_KEY, text: `Reading ${src.kind === 'jira' ? src.key : 'the page'} via ${via.server}` });
-    const session = await this.runner.start({ agent, prompt, cwd: this.workspace, additionalDirectories: [], env: hook.env, name: `claudestrator ${s.taskId} · intake`, onOutput: emitItem }).catch((e: Error) => {
+    const session = await this.runner.start({ agent, prompt, cwd: this.workspace, settings: this.agentSettings(), additionalDirectories: [], env: hook.env, name: `claudestrator ${s.taskId} · intake`, onOutput: emitItem }).catch((e: Error) => {
       this.hooks.unregister(hook.token);
       throw e;
     });
@@ -596,6 +598,11 @@ class Engine extends EventEmitter {
       this.svc.record(s.taskId, { type: 'agent_stopped', agent: 'intake', payload: { costUsd: t.costUsd || session.costUsd || 0, turns: t.turns || session.turns || 0, sessionId: t.sessionId || session.sessionId, cwd: this.workspace, transcript: INTAKE_KEY, ...(u.model && { model: u.model }), ...(u.effort && { effort: u.effort }) } });
       await this.svc.flushTranscripts();
     }
+  }
+
+  /** The settings every agent session gets (`--settings`): the guard hook in front of every tool call. */
+  agentSettings(): Record<string, unknown> {
+    return { hooks: this.hooks.settings() };
   }
 
   spentUsd(taskId: string): number {
@@ -682,6 +689,7 @@ class Engine extends EventEmitter {
       agent,
       prompt,
       cwd,
+      settings: this.agentSettings(),
       additionalDirectories: [...new Set([taskDir, this.workspace, ...workRepos.map((r) => r.dir), ...readRepos.map((r) => r.dir).filter((d) => fs.existsSync(d))])].filter((d) => !realInside(cwd, d)),
       env: hook.env,
       name: `claudestrator ${taskId} · ${label}`,
@@ -850,6 +858,8 @@ class Engine extends EventEmitter {
     const answer = await new Promise<PermissionAnswer>((resolve) => {
       this.permissions.set(requestId, { request, resolve });
       this.emit('permission', request);
+      // Unanswered, the question is denied before Claude Code gives up on the guard.
+      setTimeout(() => this.permissionReply(requestId, false, `no answer in ${Math.round(PERMISSION_TIMEOUT_MS / 60000)} minutes`), PERMISSION_TIMEOUT_MS).unref();
     });
     if (prev) this.setLive(taskId, prev);
     return answer.allow ? { allow: true } : { allow: false, reason: answer.message || 'denied by the user' };
@@ -1003,7 +1013,7 @@ class Engine extends EventEmitter {
       return { allow: false, reason: posted ? 'Claudestrator: the comment is already posted; stop and report' : 'Claudestrator: only the add-comment and read tools are allowed here' };
     });
     const agent = { name: 'jira-comment', description: 'Posts one Jira comment', model: 'haiku', effort: 'low' as const, instructions: COMMENT_INSTRUCTIONS, output: 'plan' };
-    const session = await this.runner.start({ agent, prompt, cwd: this.workspace, additionalDirectories: [], env: hook.env, name: `claudestrator ${s.taskId} · Jira comment`, onOutput: append }).catch((e: Error) => {
+    const session = await this.runner.start({ agent, prompt, cwd: this.workspace, settings: this.agentSettings(), additionalDirectories: [], env: hook.env, name: `claudestrator ${s.taskId} · Jira comment`, onOutput: append }).catch((e: Error) => {
       this.hooks.unregister(hook.token);
       throw e;
     });

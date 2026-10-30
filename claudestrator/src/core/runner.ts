@@ -86,8 +86,6 @@ interface RunnerOptions {
   /** What this CLI version supports. */
   flags(): Set<string>;
   settingSources(): string[] | null;
-  /** The `--settings` file with the PreToolUse hook. */
-  hookSettings(): string;
   env(): NodeJS.ProcessEnv;
   /** The account's MCP servers as an `--mcp-config` file, for agents run without the `user` setting source. */
   mcpConfig?(): Promise<string | null>;
@@ -100,6 +98,8 @@ interface SessionRequest {
   agent: SessionAgent;
   prompt: string;
   cwd: string;
+  /** The session's own settings (`--settings`): the guard hook and what Claude Code itself enforces. */
+  settings: Record<string, unknown>;
   additionalDirectories?: string[] | undefined;
   env?: Record<string, string> | undefined;
   name?: string | undefined;
@@ -180,7 +180,7 @@ class ClaudeRunner {
   }
 }
 
-function buildArgs(req: Pick<SessionRequest, 'agent' | 'additionalDirectories' | 'maxBudgetUsd' | 'name' | 'mcpConfig'>, opts: RunnerOptions): string[] {
+function buildArgs(req: Pick<SessionRequest, 'agent' | 'additionalDirectories' | 'maxBudgetUsd' | 'name' | 'mcpConfig' | 'settings'>, opts: RunnerOptions): string[] {
   const a = req.agent;
   const has = (f: string): boolean => opts.flags().has(f);
   const args = ['-p', '--output-format', 'stream-json', '--input-format', 'stream-json', '--verbose'];
@@ -194,7 +194,7 @@ function buildArgs(req: Pick<SessionRequest, 'agent' | 'additionalDirectories' |
   args.push('--disallowedTools', disallowed.join(','));
   const sources = opts.settingSources();
   if (sources && has('--setting-sources')) args.push('--setting-sources', sources.join(','));
-  args.push('--settings', opts.hookSettings());
+  args.push('--settings', JSON.stringify(req.settings));
   if (a.mcp === false && has('--strict-mcp-config')) {
     // Strict: only servers named in --mcp-config count, and none is given. Each server's tool list would otherwise ride along in every turn.
     args.push('--strict-mcp-config');

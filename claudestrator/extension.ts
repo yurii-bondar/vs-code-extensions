@@ -219,7 +219,7 @@ function activate(context: vscode.ExtensionContext) {
     vscode.workspace.onDidChangeWorkspaceFolders(() => orch.rebuild()),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('claudestrator.workspaceFolder')) orch.rebuild();
-      if (e.affectsConfiguration('claudestrator.claudePath') || e.affectsConfiguration('claudestrator.nodePath')) orch.refreshHealth();
+      if (e.affectsConfiguration('claudestrator.claudePath')) orch.refreshHealth();
       else if (e.affectsConfiguration('claudestrator.settingSources')) orch.refreshDefaults(true);
 
     })

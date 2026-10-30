@@ -237,15 +237,15 @@ test('engine: a signed-out Claude Code is reported as such, and agents get the a
   } finally {
     h.hooks.dispose();
   }
-  const base = { flags: () => new Set(['--mcp-config']), hookSettings: () => '/h.json' } as Partial<RunnerOptions>;
-  const withMcp = { agent: {} as Agent, mcpConfig: '/m.json' };
+  const base = { flags: () => new Set(['--mcp-config']) } as Partial<RunnerOptions>;
+  const withMcp = { agent: {} as Agent, mcpConfig: '/m.json', settings: {} };
   assert.ok(buildArgs(withMcp, { ...base, settingSources: () => ['project', 'local'] } as RunnerOptions).includes('/m.json'), 'without the user source, MCP servers come in explicitly');
   assert.ok(!buildArgs(withMcp, { ...base, settingSources: () => ['user', 'project'] } as RunnerOptions).includes('--mcp-config'), 'with it, Claude Code loads them itself');
   const strict = { ...base, flags: () => new Set(['--mcp-config', '--strict-mcp-config']), settingSources: () => ['project', 'local'] } as RunnerOptions;
   const none = buildArgs({ ...withMcp, agent: { mcp: false } as Agent }, strict);
   assert.ok(none.includes('--strict-mcp-config') && !none.includes('--mcp-config'), 'an agent with mcp: false sees no MCP servers, not even the account ones');
   assert.ok(!buildArgs(withMcp, strict).includes('--strict-mcp-config'), 'by default nothing changes');
-  assert.ok(!buildArgs({ agent: { mcp: false } as Agent }, { ...strict, flags: () => new Set(['--mcp-config']) } as RunnerOptions).includes('--strict-mcp-config'), 'an old CLI without the flag still runs');
+  assert.ok(!buildArgs({ agent: { mcp: false } as Agent, settings: {} }, { ...strict, flags: () => new Set(['--mcp-config']) } as RunnerOptions).includes('--strict-mcp-config'), 'an old CLI without the flag still runs');
   const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-acc-'));
   const account = path.join(cfg, '.claude.json');
   fs.writeFileSync(account, JSON.stringify({ mcpServers: { Grafana: { type: 'http', url: 'http://x', headers: { Authorization: 'Bearer t' } } } }));

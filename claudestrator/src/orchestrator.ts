@@ -5,7 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Engine } from './core/engine';
 import { ClaudeRunner } from './core/runner';
-import { HookServer, writeHookSettings } from './core/hookserver';
+import { HookServer } from './core/hookserver';
 import { setChildEnv, getChildEnv } from './core/git';
 import { resolveDefaults } from './core/defaults';
 import * as mcp from './core/mcp';
@@ -28,7 +28,6 @@ interface Health {
   PATH?: string;
   env?: NodeJS.ProcessEnv;
   claude: Partial<Probe['claude']> & { ok: boolean };
-  node: Partial<Probe['node']>;
   git: Partial<Probe['git']>;
   gh: Partial<Probe['gh']>;
   checkedAt?: string;
@@ -96,8 +95,6 @@ class Orchestrator {
   mcpLogins: Map<string, McpLogin>;
   auth: Map<string, AuthInfo>;
   claudeLoginTerminal: vscode.Terminal | null;
-  hookSettingsFile: string;
-  hookScript: string;
   lastAccount: string | null | undefined;
   configSub: vscode.Disposable | undefined;
   ready: Promise<Health> | undefined;
@@ -125,8 +122,6 @@ class Orchestrator {
     /** Claude Code sign-in per account folder: `{ loggedIn, email, plan }`, from `claude auth status`. */
     this.auth = new Map();
     this.claudeLoginTerminal = null;
-    this.hookSettingsFile = path.join(context.globalStorageUri.fsPath, 'hook-settings.json');
-    this.hookScript = path.join(context.extensionPath, 'dist', 'hook', 'pretooluse.js');
   }
 
   async init(): Promise<void> {
@@ -141,14 +136,9 @@ class Orchestrator {
     });
     await this.hooks.listen();
     this.token = await this.context.secrets.get(SECRET_KEY);
-    this.writeHookSettings(null);
     // No processes at activation: the health checks (and the model, sign-in and MCP checks after them) start the
     // first time something needs them, see ensureReady.
     this.rebuild();
-  }
-
-  writeHookSettings(nodePath: string | null | undefined): void {
-    writeHookSettings(this.hookSettingsFile, { node: nodePath, script: this.hookScript });
   }
 
   /** Runs the health checks again; ensureReady waits for this same run. */
@@ -161,14 +151,13 @@ class Orchestrator {
   private async checkHealth(): Promise<Health> {
     const s = settings();
     try {
-      this.health = await probe({ claudePath: s.get<string>('claudePath') as string, nodePath: s.get<string>('nodePath') as string });
+      this.health = await probe({ claudePath: s.get<string>('claudePath') as string });
       setChildEnv(this.health.env!);
-      this.writeHookSettings(this.health.node.path);
       this.refreshDefaults(true);
       this.refreshAuth();
       if (!this.mcp.checkedAt) this.refreshMcp();
     } catch (e) {
-      this.health = { error: (e as Error).message, claude: { ok: false, error: (e as Error).message }, node: {}, git: {}, gh: {} };
+      this.health = { error: (e as Error).message, claude: { ok: false, error: (e as Error).message }, git: {}, gh: {} };
     }
     this.fire();
     return this.health;
@@ -196,7 +185,6 @@ class Orchestrator {
       version: () => (this.health && this.health.claude ? this.health.claude.version : undefined),
       flags: () => new Set((this.health && this.health.claude && this.health.claude.flags) || DEFAULT_FLAGS),
       settingSources: () => settings().get<string[]>('settingSources') || null,
-      hookSettings: () => this.hookSettingsFile,
       mcpConfig: () => mcp.writeUserMcpConfig(path.join(this.context.globalStorageUri.fsPath, 'agent-mcp.json'), this.agentEnv().CLAUDE_CONFIG_DIR),
       env: (): NodeJS.ProcessEnv => {
         const dir = this.account().dir;

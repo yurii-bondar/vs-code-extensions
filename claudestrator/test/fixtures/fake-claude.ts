@@ -1,16 +1,27 @@
 #!/usr/bin/env node
 // A stand-in for the Claude Code CLI in print mode with stream-json in and out. It plays each pipeline
-// role from the prompt, and before every tool call it runs the PreToolUse hook from --settings, exactly
-// as Claude Code would, so tests cover the guard end to end.
+// role from the prompt, and before every tool call it posts the call to the PreToolUse http hook from --settings,
+// as Claude Code does, so tests cover the guard end to end.
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 
-/** The slice of `--settings` the fake reads: the PreToolUse hook command. */
-interface HookSettings {
-  hooks: { PreToolUse: { hooks: { command: string }[] }[] };
+/** The PreToolUse hook of `--settings`, as far as the fake reads it. */
+interface HttpHook {
+  type: string;
+  url: string;
+  headers?: Record<string, string>;
+  allowedEnvVars?: string[];
+  timeout?: number;
+  onFailure?: string;
 }
+interface Settings {
+  hooks?: { PreToolUse?: { matcher?: string; hooks: HttpHook[] }[] };
+}
+
+/** Posts `{ url, headers, body }` from stdin and prints the answer; exits 1 on a non-2xx status. */
+const POST = `let s = ''; process.stdin.on('data', (d) => (s += d)).on('end', async () => { const r = JSON.parse(s); const res = await fetch(r.url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...r.headers }, body: JSON.stringify(r.body) }); if (!res.ok) process.exit(1); process.stdout.write(await res.text()); });`;
 
 /** What the extension sends on stdin: a user turn, or a control request. */
 interface ClientMessage {
@@ -74,8 +85,28 @@ function main(): void {
   const log = process.env.FAKE_LOG;
   if (log) fs.appendFileSync(log, `${JSON.stringify({ args, cwd: process.cwd() })}\n`);
 
-  const settings: HookSettings | null = argOf('--settings') ? JSON.parse(fs.readFileSync(argOf('--settings')!, 'utf8')) : null;
-  const hookCmd = settings && settings.hooks.PreToolUse[0]!.hooks[0]!.command;
+  const rawSettings = argOf('--settings');
+  const settings: Settings | null = rawSettings ? JSON.parse(rawSettings.trim().startsWith('{') ? rawSettings : fs.readFileSync(rawSettings, 'utf8')) : null;
+  const hook = settings && settings.hooks && settings.hooks.PreToolUse && settings.hooks.PreToolUse[0] ? settings.hooks.PreToolUse[0].hooks[0] : undefined;
+
+  /**
+   * Asks the hook like Claude Code: the input as the POST body, `$VAR` in a header filled only from allowedEnvVars.
+   * A hook that fails (no answer, a non-2xx status, a timeout) lets the call go on unless it says `onFailure: block`;
+   * the fake then allows it, as an allow rule of the project would.
+   */
+  function askHook(input: object): { allow: boolean; reason: string } {
+    if (!hook) return { allow: true, reason: 'no hook' };
+    const env = (name: string): string => ((hook.allowedEnvVars || []).includes(name) ? process.env[name] || '' : '');
+    const headers = Object.fromEntries(Object.entries(hook.headers || {}).map(([k, v]) => [k, v.replace(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g, (_m, name: string) => env(name))]));
+    try {
+      const out = execFileSync(process.execPath, ['-e', POST], { input: JSON.stringify({ url: hook.url, headers, body: input }), timeout: (hook.timeout ?? 600) * 1000, encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] });
+      const d = JSON.parse(out).hookSpecificOutput as { permissionDecision: string; permissionDecisionReason: string };
+      return { allow: d.permissionDecision === 'allow', reason: d.permissionDecisionReason };
+    } catch (e) {
+      const failure = `PreToolUse hook failed: ${(e as Error).message.split('\n')[0]}`;
+      return hook.onFailure === 'block' ? { allow: false, reason: failure } : { allow: true, reason: failure };
+    }
+  }
   const ALIAS: Record<string, string> = { opus: 'claude-opus-5-5', sonnet: 'claude-sonnet-5-5', haiku: 'claude-haiku-5-5' };
   const resolvedModel = ALIAS[argOf('--model')!] || argOf('--model') || 'claude-opus-5-5';
   const sessionId = `fake-${process.pid}`;
@@ -92,10 +123,9 @@ function main(): void {
     sleep(DELAY);
     const id = `tu_${Math.random().toString(36).slice(2)}`;
     out({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name, input }] }, parent_tool_use_id: null });
-    const raw = execSync(hookCmd!, { input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: name, tool_input: input, cwd: process.cwd(), session_id: sessionId }), env: process.env, shell: '/bin/sh' }).toString();
-    const d = JSON.parse(raw).hookSpecificOutput;
-    const allowed = d.permissionDecision === 'allow';
-    let result = d.permissionDecisionReason;
+    const d = askHook({ hook_event_name: 'PreToolUse', tool_name: name, tool_input: input, cwd: process.cwd(), session_id: sessionId });
+    const allowed = d.allow;
+    let result = d.reason;
     if (allowed && name === 'Write') {
       fs.mkdirSync(path.dirname(input.file_path!), { recursive: true });
       fs.writeFileSync(input.file_path!, input.content!);

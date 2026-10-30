@@ -7,7 +7,6 @@
   "include": [
     "extension.ts",
     "src/**/*.ts",
-    "hook/**/*.ts",
     "test/**/*.ts"
   ],
   "exclude": [

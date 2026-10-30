@@ -172,7 +172,6 @@ function validateLibraryLayer(raw: unknown): string[] {
 const SETTINGS: Record<string, Check> = {
   claudePath: T.str(),
   claudeConfigDir: T.str(),
-  nodePath: T.str(),
   workspaceFolder: T.str(),
   settingSources: T.arr(T.oneOf(['user', 'project', 'local'])),
   askPermissions: T.bool(),

@@ -478,10 +478,9 @@ test('guard: an agent writes files only where its stage works or in a temp folde
 });
 
 test('hook: a tool call that is not in the expected shape is refused, never passed as an unknown tool', () => {
-  const ok = parseHookRequest(JSON.stringify({ token: 't', payload: { tool_name: 'Bash', tool_input: { command: 'ls' }, cwd: '/ws' } }));
-  assert.deepEqual(ok, { token: 't', call: { tool: 'Bash', input: { command: 'ls' }, cwd: '/ws' } });
-  assert.deepEqual(parseHookRequest(JSON.stringify({ token: 't', payload: { tool_name: 'Read' } }))!.call, { tool: 'Read', input: {}, cwd: '' });
-  for (const bad of ['', 'not json', '[]', '{}', '{"token":"t"}', '{"token":"t","payload":{}}', '{"token":"t","payload":{"tool_name":""}}', '{"token":"t","payload":{"tool_name":5}}', '{"token":1,"payload":{"tool_name":"Bash"}}', '{"token":"t","payload":{"tool_name":"Bash","tool_input":"rm -rf /"}}']) {
+  assert.deepEqual(parseHookRequest(JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'ls' }, cwd: '/ws' })), { tool: 'Bash', input: { command: 'ls' }, cwd: '/ws' });
+  assert.deepEqual(parseHookRequest(JSON.stringify({ tool_name: 'Read' })), { tool: 'Read', input: {}, cwd: '' });
+  for (const bad of ['', 'not json', '[]', '{}', '{"tool_name":""}', '{"tool_name":5}', '{"tool_name":"Bash","tool_input":"rm -rf /"}']) {
     assert.equal(parseHookRequest(bad), null, bad);
   }
 });
@@ -574,12 +573,12 @@ test('config: effort is validated and inherited along extends', () => {
   config.updateAgentConfig(ws, 'planner', { effort: null });
   assert.equal(passed(loadCfg({ workspace: ws })).config.agents.planner!.effort, 'high', 'clearing the setting falls back to the built-in effort');
   assert.throws(() => config.updateAgentConfig(ws, 'planner', { effort: 'huge' }), /effort: expected one of low, medium, high, xhigh, max/);
-  const args = buildArgs({ agent: { model: 'opus', effort: 'low', instructions: 'x' } as Agent }, { flags: () => new Set(['--effort']), settingSources: () => null, hookSettings: () => '/h.json' } as RunnerOptions);
+  const args = buildArgs({ agent: { model: 'opus', effort: 'low', instructions: 'x' } as Agent, settings: {} }, { flags: () => new Set(['--effort']), settingSources: () => null } as Partial<RunnerOptions> as RunnerOptions);
   assert.equal(args[args.indexOf('--effort') + 1], 'low');
-  assert.ok(!buildArgs({ agent: { effort: 'low' } as Agent }, { flags: () => new Set(), settingSources: () => null, hookSettings: () => '/h' } as RunnerOptions).includes('--effort'), 'old CLIs without --effort still run');
-  const turns = buildArgs({ agent: { maxTurns: 40 } as Agent }, { flags: () => new Set(['--max-turns']), settingSources: () => null, hookSettings: () => '/h' } as RunnerOptions);
+  assert.ok(!buildArgs({ agent: { effort: 'low' } as Agent, settings: {} }, { flags: () => new Set(), settingSources: () => null } as Partial<RunnerOptions> as RunnerOptions).includes('--effort'), 'old CLIs without --effort still run');
+  const turns = buildArgs({ agent: { maxTurns: 40 } as Agent, settings: {} }, { flags: () => new Set(['--max-turns']), settingSources: () => null } as Partial<RunnerOptions> as RunnerOptions);
   assert.equal(turns[turns.indexOf('--max-turns') + 1], '40', "an agent's maxTurns reaches Claude Code");
-  assert.ok(!buildArgs({ agent: {} as Agent }, { flags: () => new Set(['--max-turns']), settingSources: () => null, hookSettings: () => '/h' } as RunnerOptions).includes('--max-turns'), 'no cap unless the agent sets one');
+  assert.ok(!buildArgs({ agent: {} as Agent, settings: {} }, { flags: () => new Set(['--max-turns']), settingSources: () => null } as Partial<RunnerOptions> as RunnerOptions).includes('--max-turns'), 'no cap unless the agent sets one');
   assert.deepEqual(limitsOf({ rateLimitType: 'seven_day', utilization: 0.5, resetsAt: 9 }), { fiveHour: undefined, sevenDay: { pct: 50, resetsAt: 9, status: undefined } });
 });
 

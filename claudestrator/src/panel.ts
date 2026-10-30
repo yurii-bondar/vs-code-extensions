@@ -194,7 +194,6 @@ class DashboardPanel implements RpcHandlers {
       claude: { ok: h.claude.ok, version: h.claude.version, path: h.claude.path, error: h.claude.error },
       git: { ok: h.git.ok, version: h.git.version },
       gh: { ok: h.gh.ok, version: h.gh.version, account: h.gh.account, error: h.gh.error, installed: Boolean(h.gh.path) },
-      node: { ok: h.node.ok, path: h.node.path },
       account,
       atlassian: Boolean(this.orch.atlassianAuth()),
       atlassianMcp: (this.orch.mcpIntakeServer() || ({} as { server?: string })).server || null,
@@ -771,7 +770,7 @@ class DashboardPanel implements RpcHandlers {
     const issues = validateSetting(key, value);
     if (issues.length) throw new Error(`invalid setting: ${issues.join('; ')}`);
     await settings().update(key, value, vscode.ConfigurationTarget.Global);
-    if (key === 'claudePath' || key === 'nodePath') await this.orch.refreshHealth();
+    if (key === 'claudePath') await this.orch.refreshHealth();
     else if (key === 'settingSources') this.orch.refreshDefaults(true);
   }
 
