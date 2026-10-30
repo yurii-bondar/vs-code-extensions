@@ -108,6 +108,7 @@ What the built-in agents do by default, and what to change per task.
 - **Gates do the checking.** developer and tester are told not to run the full lint, typecheck or test suite; the gates run it after the stage and send back only the tail of a failing command (40 lines, without colour codes or redrawn progress lines). Make gate commands quiet so that tail holds the failure and not the progress: `--silent`, `-q`, a `dot` reporter.
 - **Run less.** For a small task, click agents off (no tester for a text fix), turn on *Skip plan approval*, or keep a scenario like the `hotfix` below (developer and a short review).
 - **Caps.** `limits.reviewRounds`, `limits.gateAttempts` and `limits.budgetUsd` stop a loop that is not converging.
+- **Usage limits.** When Claude Code reports that the account's 5-hour or weekly limit is used up, no agent starts until the window resets: the task says when, and you resume it then.
 - **See the cost.** Every step shows its tokens, context used and cost; compare two runs of a task after changing a model or an effort.
 
 ## Configuration

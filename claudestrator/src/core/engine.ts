@@ -110,6 +110,15 @@ interface SessionUsage {
 }
 
 const stepLabel = (s: { agent: string; repo?: string | undefined }): string => (s.repo ? `${s.agent} @ ${s.repo}` : s.agent);
+
+/** The account's window that Claude Code reported as used up and not yet reset: agents started now would fail at once. */
+function usedUpWindow(limits: EngineLimits | null, now: number): string | null {
+  if (!limits) return null;
+  for (const [label, w] of [['5-hour', limits.fiveHour], ['weekly', limits.sevenDay]] as const) {
+    if (w && w.status === 'rejected' && w.resetsAt && w.resetsAt * 1000 > now) return `the account's ${label} limit is used up until ${new Date(w.resetsAt * 1000).toLocaleString()}; resume the task then`;
+  }
+  return null;
+}
 const transcriptKey = (seq: number, step: { agent: string; repo?: string | undefined }): string => `${String(seq).padStart(4, '0')}-${step.agent}${step.repo ? `-${step.repo.replace(/[^A-Za-z0-9._-]/g, '_')}` : ''}`;
 
 function realInside(root: string, target: string): boolean {
@@ -471,6 +480,8 @@ class Engine extends EventEmitter {
       const project = src.key.split('-')[0]!;
       if (allowed.length && !allowed.includes(project)) throw new EngineError('project_not_allowed', `Jira project ${project} is not allowed (allowed: ${allowed.join(', ')})`);
     }
+    const usedUp = usedUpWindow(this.limits, Date.now());
+    if (usedUp) throw new EngineError('limit_reached', `reading the ticket did not start: ${usedUp}`);
     const what = src.kind === 'jira' ? `the Jira issue ${src.key}${src.site || via.site ? ` on ${src.site || via.site}` : ''}` : `the Confluence page ${(src as Extract<Source, { kind: 'confluence' }>).url}`;
     const prompt = `Read ${what} using the "${via.server}" MCP server's tools and write the ticket as your instructions say.`;
     const emitItem = this.emitter(s.taskId, INTAKE_KEY);
@@ -556,6 +567,8 @@ class Engine extends EventEmitter {
       this.dispatch(taskId, { type: 'stopped', reason: `budget of $${budget} spent` });
       return;
     }
+    const usedUp = usedUpWindow(this.limits, Date.now());
+    if (usedUp) throw new EngineError('limit_reached', `${label} did not start: ${usedUp}`);
 
     let repoDir: string | undefined;
     /** A `repos` stage (the tester) works in every repo of the pass: `[{ name, dir }]`. */
@@ -587,7 +600,10 @@ class Engine extends EventEmitter {
       seq = started.length ? started[started.length - 1]!.seq! : 0;
     }
     const key = transcriptKey(seq, step);
-    const fail = (error: string) => this.dispatch(taskId, { type: 'stage_failed', agent: step.agent, ...(step.repo && { repo: step.repo }), error });
+    const fail = (error: string) => {
+      const usedUpNow = usedUpWindow(this.limits, Date.now());
+      return this.dispatch(taskId, { type: 'stage_failed', agent: step.agent, ...(step.repo && { repo: step.repo }), error: usedUpNow ? `${error} (${usedUpNow})` : error });
+    };
 
     if (!agent || !agent.enabled) {
       fail(`agent "${step.agent}" is no longer enabled in the config`);
@@ -887,6 +903,8 @@ class Engine extends EventEmitter {
       return r;
     };
     if (!client && !via) return record({ ok: false, error: 'Jira is not connected: sign in to an Atlassian MCP server (MCP tab) or add an API token (Settings → Jira & Confluence)' });
+    const usedUp = client ? null : usedUpWindow(this.limits, Date.now());
+    if (usedUp) return record({ ok: false, error: usedUp });
     try {
       if (client) return record({ ok: true, id: await client.addComment(key, text) });
       return record(await this.commentViaMcp(s, via!, text));
