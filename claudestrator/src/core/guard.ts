@@ -164,7 +164,36 @@ function checkCommand(cmd: string, args: string[], dir: string, ctx: GuardContex
   if (cmd === 'git') return checkGit(args, dir, ctx);
   if (cmd === 'gh') return checkGh(args, dir, ctx);
   if (cmd === 'rm') return checkRm(args, dir, ctx);
+  if (ctx.agent && publishes(cmd, args)) return deny(`${cmd} ${args.filter((a) => !a.startsWith('-')).slice(0, 2).join(' ')} publishes a package; releases are for humans`);
+  if (ctx.agent && cmd === 'security' && /^(find-(generic|internet)-password|dump-keychain|export|unlock-keychain)$/.test(args[0] ?? '')) return deny('agents do not read the keychain');
   return allow;
+}
+
+/** Package managers' publish commands: a registry the sandbox lets a command reach takes uploads too. */
+function publishes(cmd: string, args: string[]): boolean {
+  const words = args.filter((a) => !a.startsWith('-'));
+  const [first, second] = words;
+  switch (cmd) {
+    case 'npm':
+    case 'pnpm':
+    case 'bun':
+    case 'poetry':
+    case 'uv':
+    case 'flit':
+    case 'hatch':
+    case 'cargo':
+      return first === 'publish';
+    case 'yarn':
+      return first === 'publish' || (first === 'npm' && second === 'publish');
+    case 'twine':
+      return first === 'upload';
+    case 'gem':
+      return first === 'push';
+    case 'dotnet':
+      return first === 'nuget' && second === 'push';
+    default:
+      return false;
+  }
 }
 
 /** Tests that narrow what `find` matches. */

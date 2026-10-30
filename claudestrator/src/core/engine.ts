@@ -11,7 +11,7 @@ import { buildPipeline, scenarioKind, taskPipeline, fitsScenario, onRepos } from
 import { nextAction, runOf, artifactPath, branchName, sameStep, editableFrom, stepRepos, TASK_FILES, type NextAction, type RunAction } from './machine';
 import { parseInvocation, classifyInput, detectScenario, runIntake, renderTicket, IntakeError, extractAcceptanceCriteria } from './intake';
 import { TaskService, type DispatchResult } from './store';
-import { exec, GitRepo, branchAt, taskRepos, prepareRepos, taskDiff, removeWorktrees } from './git';
+import { exec, getChildEnv, GitRepo, branchAt, taskRepos, prepareRepos, taskDiff, removeWorktrees } from './git';
 import { runGates } from './gates';
 import { guardBash } from './guard';
 import { buildAgentPrompt, parseStageReport, lastJsonBlock } from './prompt';
@@ -19,8 +19,8 @@ import { commitSubject, prTitle, prBody } from './pr';
 import { renderReport, jiraText } from './report';
 import type { Live, PermissionRequest, RepoStatus } from './wire';
 import type { ClaudeRunner, ClaudeSession, Limits, TurnResult } from './runner';
-import { HOOK_TIMEOUT_S, type HookServer, type Decision, type ToolCall } from './hookserver';
-import { sessionSettings } from './settings';
+import { HOOK_TIMEOUT_S, TOKEN_ENV, type HookServer, type Decision, type ToolCall } from './hookserver';
+import { sessionSettings, credentialVars } from './settings';
 import { REPORT_SCHEMAS } from './schemas';
 import type { AtlassianClient, Invocation } from './intake';
 import type { StageSource } from './pipeline';
@@ -32,6 +32,8 @@ import type { Checkpoint, Config, Effort, EventBody, EventOf, GatesStatus, Pipel
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 const REPORT_OUTPUTS = new Set(['readiness', 'audit']);
 const READ_TOOLS = new Set(['Read', 'Grep', 'Glob', 'LS', 'TodoWrite', 'Task', 'BashOutput', 'ToolSearch', 'Skill']);
+/** Tools that reach any host from Claude Code itself, outside the sandbox's network rules: only for an agent whose tools name them. */
+const WEB_TOOLS = new Set(['WebFetch', 'WebSearch']);
 const REPORT_RETRIES = 2;
 /** What Claude Code says when its own sign-in is missing or expired (not an MCP server's). */
 const CLAUDE_AUTH = /Failed to authenticate|OAuth (session|token) (has )?expired|Invalid API key|Please run \/login|not logged in|authentication_error/i;
@@ -93,6 +95,8 @@ interface EngineOptions {
   now?: (() => Date) | undefined;
   /** How long an agent may show no sign of work before it is stopped. */
   stallMs?: number | undefined;
+  /** Files of the extension's own that agents never read (the MCP config it writes for them, with the servers' tokens). */
+  secretFiles?: (() => string[]) | undefined;
 }
 
 interface PermissionAnswer {
@@ -179,6 +183,7 @@ class Engine extends EventEmitter {
   atlassian: () => AtlassianClient | null;
   mcpIntake: () => McpIntake | null;
   askPermissions: () => boolean;
+  secretFiles: () => string[];
   sessions: Map<string, ClaudeSession>;
   /** Stops the gates a task runs right now; Stop aborts it. */
   gateRuns = new Map<string, AbortController>();
@@ -207,6 +212,7 @@ class Engine extends EventEmitter {
     /** `() => ({ server, site }) | null`: an Atlassian MCP server to read tickets with when there is no API token. */
     this.mcpIntake = opts.mcpIntake || (() => null);
     this.askPermissions = opts.askPermissions || (() => false);
+    this.secretFiles = opts.secretFiles || (() => []);
     this.sessions = new Map();
     this.running = new Set();
     this.prepared = new Set();
@@ -566,7 +572,7 @@ class Engine extends EventEmitter {
       return { allow: false, reason: 'Claudestrator: the intake only reads; use the get/search/fetch tools' };
     });
     this.setLive(s.taskId, { phase: 'intake', key: INTAKE_KEY, text: `Reading ${src.kind === 'jira' ? src.key : 'the page'} via ${via.server}` });
-    const session = await this.runner.start({ agent, prompt, cwd: this.workspace, settings: this.agentSettings({ writeRoots: [], cwd: this.workspace, config: this.config() }), additionalDirectories: [], env: hook.env, name: `claudestrator ${s.taskId} · intake`, onOutput: emitItem }).catch((e: Error) => {
+    const session = await this.runner.start({ agent, prompt, cwd: this.workspace, settings: this.agentSettings({ writeRoots: [], cwd: this.workspace, config: this.config() }), additionalDirectories: [], env: this.agentEnv(hook.env, this.config()), name: `claudestrator ${s.taskId} · intake`, onOutput: emitItem }).catch((e: Error) => {
       this.hooks.unregister(hook.token);
       throw e;
     });
@@ -622,7 +628,26 @@ class Engine extends EventEmitter {
    * itself: deny rules for secrets and pushes, and the sandbox around shell commands (writes only in `writeRoots`).
    */
   agentSettings({ writeRoots, cwd, config }: { writeRoots: string[]; cwd: string; config: Config }): Record<string, unknown> {
-    return sessionSettings({ hooks: this.hooks.settings(), guard: this.hooks.host(), writeRoots, protect: configPaths(this.workspace, config), cwd, sandbox: config.policy.sandbox, network: config.policy.network });
+    return sessionSettings({
+      hooks: this.hooks.settings(),
+      guard: this.hooks.host(),
+      writeRoots,
+      protect: configPaths(this.workspace, config),
+      secrets: this.secretFiles(),
+      envVars: credentialVars({ ...getChildEnv(), [TOKEN_ENV]: '' }),
+      cwd,
+      sandbox: config.policy.sandbox,
+      network: config.policy.network,
+    });
+  }
+
+  /**
+   * The environment of a session besides the inherited one: its guard token, and with the sandbox off, Claude Code's
+   * scrub, which strips credentials from what its shell commands, hooks and MCP servers inherit (the sandbox does that
+   * for shell commands by name).
+   */
+  agentEnv(hookEnv: Record<string, string>, config: Config): Record<string, string> {
+    return { ...hookEnv, ...(!config.policy.sandbox && { CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1' }) };
   }
 
   spentUsd(taskId: string): number {
@@ -698,7 +723,12 @@ class Engine extends EventEmitter {
     const run = next.kind === 'run' ? next : runOf(state, step);
     // Readiness and audit agents read every configured repo where it is, also outside the workspace folder.
     const readRepos = REPORT_OUTPUTS.has(stage.output) ? Object.values(config.repos).map((r) => ({ name: r.name, dir: path.resolve(this.workspace, r.path), baseBranch: r.baseBranch, ...(r.role && { role: r.role }) })) : [];
-    const prompt = buildAgentPrompt({ state, next: run, taskDir, language: config.language, ...(repoDir && { repoDir }), ...(workRepos.length && { workRepos }), ...(diffPath && { diffPath }), ...(readRepos.length && { repos: readRepos }) });
+    let prsPath: string | undefined;
+    if (stage.output === 'readiness' && s.source.kind === 'jira' && readRepos.length) {
+      this.setLive(taskId, { phase: 'preparing', step, text: `Listing the PRs on GitHub for ${s.source.key}` });
+      prsPath = await this.listPrs(taskId, s.source.key, readRepos);
+    }
+    const prompt = buildAgentPrompt({ state, next: run, taskDir, language: config.language, ...(repoDir && { repoDir }), ...(workRepos.length && { workRepos }), ...(diffPath && { diffPath }), ...(prsPath && { prsPath }), ...(readRepos.length && { repos: readRepos }) });
     // A stage that writes starts in the repo it writes (the first of them for a stage across repos): Claude Code's
     // sandbox lets a session write its working directories, so the workspace around the repos is never one of them.
     const cwd = repoDir || (workRepos.length ? workRepos[0]!.dir : this.workspace);
@@ -716,7 +746,7 @@ class Engine extends EventEmitter {
       // Only the repos a stage writes are working directories; it reads the task folder, the workspace and other repos
       // through the guard, which allows reading.
       additionalDirectories: [...new Set(writeRoots)].filter((d) => !realInside(cwd, d)),
-      env: hook.env,
+      env: this.agentEnv(hook.env, config),
       name: `claudestrator ${taskId} · ${label}`,
       onOutput: emitItem,
       onLimits: (limits) => {
@@ -841,6 +871,34 @@ class Engine extends EventEmitter {
     }
   }
 
+  /**
+   * The PRs GitHub has for a readiness check's Jira issue, per repo, in a file the verifier reads. Agents reach neither
+   * GitHub's API nor a token for it, so `gh pr list --search <KEY>` runs here, under your own gh login.
+   */
+  async listPrs(taskId: string, key: string, repos: { name: string; dir: string }[]): Promise<string> {
+    const fields = 'number,title,url,state,isDraft,headRefName,baseRefName,mergedAt,updatedAt';
+    const sections = await Promise.all(
+      repos.map(async (r) => {
+        const res = await exec('gh', ['pr', 'list', '--search', key, '--state', 'all', '--limit', '50', '--json', fields], { cwd: r.dir, timeoutMs: 60000 });
+        if (res.code !== 0) return `## ${r.name}\n\nGitHub could not be asked: ${(res.stderr || res.stdout).trim().split('\n').slice(-3).join(' ') || `gh exited with ${res.code}`}. Judge the branches and commits.`;
+        let prs: unknown;
+        try {
+          prs = JSON.parse(res.stdout);
+        } catch {
+          prs = null;
+        }
+        const list = Array.isArray(prs) ? prs.filter((p): p is Record<string, unknown> => typeof p === 'object' && p !== null) : [];
+        const line = (p: Record<string, unknown>): string => {
+          const state = `${String(p.state || '').toLowerCase()}${p.isDraft === true ? ', draft' : ''}${p.mergedAt ? `, merged ${String(p.mergedAt).slice(0, 10)}` : ''}`;
+          return `- #${String(p.number)} [${state}] ${String(p.title || '')}: ${String(p.headRefName || '')} → ${String(p.baseRefName || '')}, ${String(p.url || '')}`;
+        };
+        return `## ${r.name}\n\n${list.length ? list.map(line).join('\n') : 'No pull request mentions it.'}`;
+      })
+    );
+    const text = `# Pull requests on GitHub that mention ${key}\n\nListed by Claudestrator with \`gh pr list --search ${key} --state all\` in each repository.\n\n${sections.join('\n\n')}\n`;
+    return this.svc.writeArtifact(taskId, 'github/prs.md', text);
+  }
+
   /** The permission policy of an agent session: the Bash guard, writes only inside the stage's repo, then (optionally) you. */
   async decide({ taskId, step, writeRoots = [], config, call, emitItem }: { taskId: string; step: Step; writeRoots?: string[]; config: Config; call: ToolCall; emitItem: (item: TranscriptItem) => void }): Promise<Decision> {
     const { tool, input } = call;
@@ -878,12 +936,14 @@ class Engine extends EventEmitter {
     }
     // Claude Code is started with the agent's tools; anything else reaching the hook is refused.
     const agent = config.agents[step.agent];
+    const named = (name: string): boolean => Boolean(agent && agent.tools && agent.tools.some((t) => t === name || t.startsWith(`${name}(`)));
+    if (WEB_TOOLS.has(tool) && !named(tool)) return blocked(`${tool} reaches any host, outside the sandbox; the ${step.agent} agent uses it only when its tools name it (tools: [${tool}])`);
     if (tool.startsWith('mcp__')) {
       if (agent && agent.mcp === false) return blocked(`${tool}: the ${step.agent} agent runs without MCP servers`);
       if (!MCP_READ.test(mcpAction(tool)) && !(agent && agent.tools && agent.tools.some((rule) => mcpRuleCovers(rule, tool)))) {
         return blocked(`${tool} may change something outside the repos; the ${step.agent} agent calls it only when its tools name it (tools: [${tool}])`);
       }
-    } else if (agent && agent.tools && !agent.tools.some((t) => t === tool || t.startsWith(`${tool}(`))) return blocked(`${tool} is not one of the ${step.agent} agent's tools`);
+    } else if (agent && agent.tools && !named(tool)) return blocked(`${tool} is not one of the ${step.agent} agent's tools`);
     if (!this.askPermissions()) return { allow: true };
     const requestId = crypto.randomUUID();
     const request: PermissionRequest = { requestId, taskId, agent: step.agent, ...(step.repo && { repo: step.repo }), tool, input: summarizeInput(tool, input), at: Date.now() };
@@ -1048,7 +1108,7 @@ class Engine extends EventEmitter {
       return { allow: false, reason: posted ? 'Claudestrator: the comment is already posted; stop and report' : 'Claudestrator: only the add-comment and read tools are allowed here' };
     });
     const agent = { name: 'jira-comment', description: 'Posts one Jira comment', model: 'haiku', effort: 'low' as const, instructions: COMMENT_INSTRUCTIONS, output: 'plan' };
-    const session = await this.runner.start({ agent, prompt, cwd: this.workspace, settings: this.agentSettings({ writeRoots: [], cwd: this.workspace, config: this.config() }), additionalDirectories: [], env: hook.env, name: `claudestrator ${s.taskId} · Jira comment`, onOutput: append }).catch((e: Error) => {
+    const session = await this.runner.start({ agent, prompt, cwd: this.workspace, settings: this.agentSettings({ writeRoots: [], cwd: this.workspace, config: this.config() }), additionalDirectories: [], env: this.agentEnv(hook.env, this.config()), name: `claudestrator ${s.taskId} · Jira comment`, onOutput: append }).catch((e: Error) => {
       this.hooks.unregister(hook.token);
       throw e;
     });

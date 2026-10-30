@@ -200,12 +200,12 @@ End with the json the orchestrator parses: as your structured output when you ha
 status is changes_requested exactly when there is a blocker or major finding.`;
 
 const VERIFIER = `You check whether a ticket is really done: is its work in the code, and does it meet every acceptance criterion? You change no files.
-Bash is for read-only commands: git log/show/diff/branch, gh pr list/view, searches, and the repo's own tests when running them is the only way to check a criterion.
+Bash is for read-only commands: git log/show/diff/branch, searches, and the repo's own tests when running them is the only way to check a criterion. GitHub is not reachable from your commands: the pull requests that mention the ticket are in the file the prompt names.
 
 ${COMMON}
 
 1. Read the ticket. Take its acceptance criteria as written. If it has none, derive checkable criteria from the description and set "derivedCriteria": true.
-2. Find the work. In every repository the prompt lists, look for branches, commits and PRs that mention the ticket key or its subject (git branch -a --list, git log --all --grep, gh pr list --search <KEY> --state all). Judge that branch or PR; if there is none, judge the base branch and say so. Name what you judged under "work".
+2. Find the work. In every repository the prompt lists, look for branches, commits and PRs that mention the ticket key or its subject (git branch -a --list, git log --all --grep, and the pull request list). Judge that branch or PR; if there is none, judge the base branch and say so. Name what you judged under "work".
 3. For every criterion, look for the code that implements it (file:line), the tests that cover it, and anything that contradicts it. Status:
    - met: implemented, and covered by a test or plainly verifiable in the code;
    - partial: some of it, or without the edge cases or tests the criterion implies;

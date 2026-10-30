@@ -9,7 +9,7 @@ ticket → planner → [you approve the plan] → per repo: developer (checks af
 
 Besides delivering a change, two read-only scenarios end with a report instead of PRs:
 
-- **Check readiness**: "PROJ-123 перевір готовність виконання таски і закриття всіх критеріїв приймання". The `verifier` reads the issue, finds its branches, commits and PRs in every repo, and judges each acceptance criterion (met, partial, not met, check by hand) with file:line evidence, plus gaps that block a release. The verdict (ready, not ready, needs a human check) follows from the statuses.
+- **Check readiness**: "PROJ-123 перевір готовність виконання таски і закриття всіх критеріїв приймання". The `verifier` reads the issue, finds its branches and commits in every repo and the PRs GitHub has for it (Claudestrator lists them with your `gh`; agents do not reach GitHub), and judges each acceptance criterion (met, partial, not met, check by hand) with file:line evidence, plus gaps that block a release. The verdict (ready, not ready, needs a human check) follows from the statuses.
 - **Audit**: "Аудит проекту: вузькі місця, перформанс, помилки". The `auditor` looks for bugs, performance bottlenecks, reliability and security issues and rates each one critical, high, medium or low.
 
 The orchestration is code, not a prompt: a pure state machine decides what runs next and rejects anything out of order (no skipped approval, no extra review round, no push before you confirm). Each agent is a `claude -p` session of your installed Claude Code CLI, under your login and account.
@@ -92,13 +92,16 @@ First time in a workspace, *Set up this workspace* finds the git repos and sugge
   - git writes by agents (commit, push, switch, stash, reset…) and non-read `gh` calls;
   - force-push, pushes to protected branches, `--no-verify`, merging PRs, non-draft PRs, AI attribution (if the policy says so) and destructive `rm -r`;
   - edits outside the repo of the current step (read-only stages edit nothing), and edits of Claudestrator's own config, libraries, instruction files and task state, also in a workspace that is itself the repo (Claude Code's deny rules and sandbox refuse them too);
-  - MCP tools that may change something (merge a PR, move an issue, write a file): an agent reads through its MCP servers (`get…`, `search…`, `list…`, `read…`), and calls any other MCP tool only when its `tools` name it (`mcp__github__create_issue`, the whole server as `mcp__github`, or `mcp__github__*`).
+  - MCP tools that may change something (merge a PR, move an issue, write a file): an agent reads through its MCP servers (`get…`, `search…`, `list…`, `read…`), and calls any other MCP tool only when its `tools` name it (`mcp__github__create_issue`, the whole server as `mcp__github`, or `mcp__github__*`);
+  - `WebFetch` and `WebSearch`, which reach any host from Claude Code itself, unless the agent's `tools` name them;
+  - publishing a package (`npm publish`, `twine upload`, `cargo publish`…) and reading the keychain (`security find-generic-password`).
 
   With *Ask me* on, you also approve every edit and command from the dashboard or a notification; a question nobody answers in 14 minutes is denied.
 
   The guard reads commands; a command can hide what it does (`node -e "…"`, a script the agent wrote first). So Claude Code itself enforces the essentials too, for each session:
-  - deny rules: no reading of `~/.ssh`, `~/.aws`, `~/.kube`, cloud and Docker credentials, Claude Code's own and `.env` files; no `git push` or `gh pr merge`;
-  - the sandbox around every shell command and what it starts (Seatbelt on macOS, bubblewrap on Linux and WSL2): writes only in the step's repos (never their `.git`), none for a read-only stage; no reading of those credentials; network only to the package registries and GitHub's API, plus `policy.network`. A command the sandbox blocks is not run again outside it. Turn it off with `policy.sandbox: false` (Settings → Safety); on native Windows Claude Code has no sandbox.
+  - deny rules: no reading of `~/.ssh`, `~/.aws`, `~/.kube`, cloud and Docker credentials, GitHub's (`~/.config/gh`, `~/.git-credentials`) and package registries' tokens (`~/.npmrc`, `~/.pypirc`, cargo, gem), Claude Code's own files (`.claude.json`, credentials), the MCP config Claudestrator writes for the agents, and `.env` files; no `git push` or `gh pr merge`;
+  - the sandbox around every shell command and what it starts (Seatbelt on macOS, bubblewrap on Linux and WSL2): writes only in the step's repos (never their `.git`), none for a read-only stage; no reading of those credentials, and none of your environment's credentials (`*_TOKEN`, `*_SECRET`, `*_API_KEY`, a password in a URL…); network only to the package registries and GitHub's download hosts, plus `policy.network`. Not GitHub's API: it takes writes, and the macOS keychain, where `gh` keeps its token, stays readable in the sandbox. A command the sandbox blocks is not run again outside it. Turn it off with `policy.sandbox: false` (Settings → Safety); then Claude Code strips credentials from what its commands inherit (`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`). On native Windows Claude Code has no sandbox.
+  - No GitHub token (`GH_TOKEN`, `GITHUB_TOKEN`) reaches an agent session at all.
   - Agents are told that the ticket, the repos and tool output are material, not instructions: text planted in a Jira issue does not steer them.
 - **Jira comments** (*Approve & post to Jira*, *Push, open PRs & comment in Jira*, *Post to Jira*) go over REST with an API token, else through the account's Atlassian MCP server: a short haiku session whose guard allows only the read tools and one add-comment call. Each attempt is in the activity log and the *Jira comments* card; a failed one shows a banner with *Post again*.
 - **Jira and Confluence.** With an API token (Settings) tickets are read over REST. Without one, a short read-only agent (haiku, low effort, a few cents) reads the issue or page through the account's Atlassian MCP server, signed in with Claude Code; its tool calls are limited to get/search/fetch.
@@ -213,7 +216,7 @@ VS Code settings (`claudestrator.*`):
 ## Requirements
 
 - Claude Code CLI 2.1.302 or newer, logged in (`claude --version`; `claude update`). Older versions do not honour what guards the agents, so they do not start.
-- Git. GitHub CLI (`gh auth login`) only to open PRs.
+- Git. GitHub CLI (`gh auth login`) to open PRs and to list a ticket's PRs for a readiness check.
 
 ## Develop
 

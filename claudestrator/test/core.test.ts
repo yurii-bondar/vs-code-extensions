@@ -509,6 +509,12 @@ test('guard: agents never touch git history, destructive commands are refused', 
   assert.match(refusal('git branch feature-x 2>/dev/null', ctx()), /do not create, rename or delete branches/);
   assert.match(refusal('git push origin main 2>&1', ctx()), /git push/);
   assert.match(refusal('git branch --list > ../other/branches.txt', ctx({ writeRoots: ['/ws/api'] })), /outside \/ws\/api/, 'the file it writes is still checked');
+  for (const publish of ['npm publish', 'npm publish --access public', 'cd pkg && pnpm publish', 'yarn npm publish', 'npx twine upload dist/*', 'cargo publish', 'gem push x.gem', 'poetry publish --build']) {
+    assert.match(refusal(publish.replace('npx ', ''), ctx()), /publishes a package/, publish);
+  }
+  assert.equal(guard('npm run publish-docs && npm pack', ctx()).allow, true, 'a script named after publishing is not npm publish');
+  assert.match(refusal('security find-generic-password -s gh:github.com -w', ctx()), /keychain/);
+  assert.equal(guard('npm publish', orchestrator).allow, true, 'only agents are held to it');
 });
 
 test('intake: invocations, sources and acceptance criteria', () => {

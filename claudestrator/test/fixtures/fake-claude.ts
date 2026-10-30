@@ -84,7 +84,7 @@ function main(): void {
     }
   }
   const log = process.env.FAKE_LOG;
-  if (log) fs.appendFileSync(log, `${JSON.stringify({ args, cwd: process.cwd() })}\n`);
+  if (log) fs.appendFileSync(log, `${JSON.stringify({ args, cwd: process.cwd(), ghToken: Boolean(process.env.GH_TOKEN || process.env.GITHUB_TOKEN), scrub: process.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB })}\n`);
 
   const rawSettings = argOf('--settings');
   const settings: Settings | null = rawSettings ? JSON.parse(rawSettings.trim().startsWith('{') ? rawSettings : fs.readFileSync(rawSettings, 'utf8')) : null;

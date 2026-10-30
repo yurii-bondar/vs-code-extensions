@@ -185,7 +185,7 @@ class Orchestrator {
       version: () => (this.health && this.health.claude ? this.health.claude.version : undefined),
       flags: () => new Set((this.health && this.health.claude && this.health.claude.flags) || DEFAULT_FLAGS),
       settingSources: () => settings().get<string[]>('settingSources') || null,
-      mcpConfig: () => mcp.writeUserMcpConfig(path.join(this.context.globalStorageUri.fsPath, 'agent-mcp.json'), this.agentEnv().CLAUDE_CONFIG_DIR),
+      mcpConfig: () => mcp.writeUserMcpConfig(this.agentMcpFile(), this.agentEnv().CLAUDE_CONFIG_DIR),
       env: (): NodeJS.ProcessEnv => {
         const dir = this.account().dir;
         return dir ? { CLAUDE_CONFIG_DIR: dir } : {};
@@ -198,6 +198,7 @@ class Orchestrator {
       atlassian: () => this.atlassian(),
       mcpIntake: () => this.mcpIntakeServer(),
       askPermissions: () => settings().get('askPermissions') === true,
+      secretFiles: () => [this.agentMcpFile()],
     });
     const engine = this.engine;
     for (const name of ['changed', 'output', 'live', 'log', 'checkpoint', 'finished', 'permission', 'permissionDone', 'limits']) {
@@ -409,6 +410,11 @@ class Orchestrator {
   }
 
   /** The environment Claude Code runs in for the agents: login-shell PATH and their account. */
+  /** The account's MCP servers for the agents (`--mcp-config`), with their tokens: the agents themselves never read it. */
+  agentMcpFile(): string {
+    return path.join(this.context.globalStorageUri.fsPath, 'agent-mcp.json');
+  }
+
   agentEnv(): NodeJS.ProcessEnv {
     const dir = this.account().dir;
     const env = { ...getChildEnv() };

@@ -6,6 +6,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import * as crypto from 'crypto';
 import { getChildEnv, launch } from './git';
+import { GITHUB_TOKENS } from './settings';
 import type { TranscriptItem } from './store';
 import type { Agent } from './types';
 
@@ -271,6 +272,7 @@ class ClaudeSession {
     const env = { ...getChildEnv(), ...opts.env(), ...req.env };
     delete env.ELECTRON_RUN_AS_NODE;
     delete env.CLAUDECODE;
+    for (const name of GITHUB_TOKENS) delete env[name];
     const [file, argv] = launch(opts.command(), this.args);
     this.proc = spawn(file, argv, { cwd: req.cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
     this.proc.on('error', (e: NodeJS.ErrnoException) => this.end(e.code === 'ENOENT' ? `Claude Code CLI not found (${opts.command()}). Set "claudestrator.claudePath" or install Claude Code.` : e.message));

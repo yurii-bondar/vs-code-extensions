@@ -264,7 +264,10 @@ test('engine: a signed-out Claude Code is reported as such, and agents get the a
 
 test('engine: "PROJ-805 перевір готовність…" runs a read-only readiness check, writes the report and posts it to Jira via MCP', async () => {
   const ws = workspace(['api'], 'repos:\n  api: { role: Betting API }\n');
-  const h = await harness(ws, { FAKE_REPOS: 'api' });
+  // GitHub, as `gh pr list --search PROJ-805` sees it: agents never reach it, Claudestrator asks for them.
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-gh-'));
+  fs.writeFileSync(path.join(bin, 'gh'), `#!/bin/sh\ncase "$*" in *"pr list --search PROJ-805"*) echo '[{"number":42,"title":"PROJ-805 cap bets","url":"https://github.com/acme/api/pull/42","state":"MERGED","isDraft":false,"headRefName":"feat/PROJ-805-cap","baseRefName":"main","mergedAt":"2026-10-01T10:00:00Z"}]';; *) exit 1;; esac\n`, { mode: 0o755 });
+  const h = await harness(ws, { FAKE_REPOS: 'api', PATH: `${bin}${path.delimiter}${process.env.PATH}` });
   h.engine.mcpIntake = () => ({ server: 'Atlassian', site: 'acme.atlassian.net' });
   try {
     const request = 'PROJ-805 перевір готовність виконання таски і закриття всіх критеріїв приймання';
@@ -284,7 +287,8 @@ test('engine: "PROJ-805 перевір готовність…" runs a read-only
 
     const prompt = fs.readFileSync(path.join(h.state, 'prompt-verifier.txt'), 'utf8');
     assert.match(prompt, new RegExp(`- api at ${path.join(ws, 'api').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\(base branch main\\): Betting API`));
-    assert.match(prompt, /Jira issue: PROJ-805/);
+    assert.match(prompt, /Jira issue: PROJ-805\. Search branches and commits for this key; the pull requests GitHub has for it are listed in .*github\/prs\.md/);
+    assert.match(h.engine.svc.readArtifact(taskId, 'github/prs.md'), /## api\n\n- #42 \[merged, merged 2026-10-01\] PROJ-805 cap bets: feat\/PROJ-805-cap → main, https:\/\/github\.com\/acme\/api\/pull\/42/);
     assert.ok(!fs.existsSync(path.join(ws, 'api', 'audit-notes.txt')), 'the verifier cannot write');
     assert.ok(h.outputs.some((o) => o.item.type === 'blocked' && /does not change files/.test(text(o.item.reason))));
     assert.equal(git(path.join(ws, 'api'), 'rev-parse', '--abbrev-ref', 'HEAD'), 'main', 'no branch was made');
