@@ -707,8 +707,16 @@ interface Views {
     if (name === 'MultiEdit') return list(field(input, 'edits')).map((e) => diffHtml(field(e, 'old_string'), field(e, 'new_string'))).join('');
     if (name === 'Write') return `<pre class="code-pre">${esc(String(field(input, 'content') || '').split('\n').slice(0, 60).join('\n'))}${String(field(input, 'content') || '').split('\n').length > 60 ? '\n…' : ''}</pre>`;
     if (name === 'Bash') return `<pre class="code-pre">$ ${esc(field(input, 'command') || '')}</pre>`;
-    if (name === 'TodoWrite') return `<ul class="todos">${list(field(input, 'todos')).map((t) => `<li class="todo ${field(t, 'status')}">${field(t, 'status') === 'completed' ? icon('check') : field(t, 'status') === 'in_progress' ? '<span class="spinner xs"></span>' : '<span class="st-dot"></span>'}${esc(field(t, 'content') || field(t, 'activeForm') || '')}</li>`).join('')}</ul>`;
+    if (name === 'TodoWrite') return `<ul class="todos">${list(field(input, 'todos')).map(todoHtml).join('')}</ul>`;
     return `<pre class="code-pre">${esc(JSON.stringify(input, null, 2).slice(0, 3000))}</pre>`;
+  }
+
+  /** One to-do of the agent's list. Its status is the agent's text: only a known one becomes a class, so it cannot add attributes. */
+  function todoHtml(t: unknown) {
+    const raw = field(t, 'status');
+    const status = raw === 'completed' || raw === 'in_progress' ? raw : 'pending';
+    const mark = status === 'completed' ? icon('check') : status === 'in_progress' ? '<span class="spinner xs"></span>' : '<span class="st-dot"></span>';
+    return `<li class="todo ${status}">${mark}${esc(field(t, 'content') || field(t, 'activeForm') || '')}</li>`;
   }
 
   function diffHtml(a: unknown, b: unknown) {
