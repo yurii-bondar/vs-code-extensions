@@ -26,7 +26,7 @@ import { resolveDefaults, effectiveFor, modelName } from '../src/core/defaults';
 import * as mcp from '../src/core/mcp';
 import { reposFromFolders, repoLayerOf } from '../src/core/setup';
 import { execFileSync } from 'child_process';
-import { parseReadiness, parseAudit, validateSetting } from '../src/core/protocol';
+import { parseReadiness, parseAudit, validateSetting, validateConfigLayer } from '../src/core/protocol';
 import { renderReport, jiraText } from '../src/core/report';
 import type { Agent, Config, EventBody, EventOf, OrchEvent, Output, PlanMeta, PlanRepo, Source, Spec, StoredPipeline, TaskState } from '../src/core/types';
 import type { GuardContext, GuardVerdict } from '../src/core/guard';
@@ -1548,4 +1548,12 @@ test('git: output too large to read whole says it was cut, so a diff is never ta
   assert.equal(r.code, 125);
   assert.match(r.stderr, /passed 1000 bytes and was cut there/);
   assert.ok(r.stdout.length <= 1000);
+});
+
+test('config: a base branch is a branch name, never something git would read as an option', () => {
+  for (const base of ['main', 'release/2.x', 'develop_v2']) assert.deepEqual(validateConfigLayer({ baseBranch: base, repos: { api: { baseBranch: base } } }), [], base);
+  for (const base of ['--upload-pack=touch /tmp/x', '-main', 'a..b', 'feat//x', '']) {
+    assert.ok(validateConfigLayer({ baseBranch: base }).length > 0, `baseBranch ${base}`);
+    assert.ok(validateConfigLayer({ repos: { api: { baseBranch: base } } }).length > 0, `repos.api.baseBranch ${base}`);
+  }
 });

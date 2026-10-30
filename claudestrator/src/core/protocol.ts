@@ -192,6 +192,8 @@ const GROUP = T.obj({ type: T.oneOf(GROUP_TYPES), label: T.str(1, 80), 'jira?': 
 const INSTRUCTION = T.obj({ label: T.str(1, 80), text: T.str(1) });
 
 const GATE = T.obj({ name: T.str(1), cmd: T.str(1), 'dir?': T.str(1), 'when?': T.str(1) });
+/** A branch name git takes as one (`main`, `release/2.x`): no leading `-`, which git would read as an option, and no `..`. */
+const BRANCH = T.re(/^(?!-)(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9][A-Za-z0-9._/-]*$/, 'a branch name, e.g. main or release/2.x');
 
 const CONFIG_LAYER = T.obj({
   'agents?': T.rec(agentName, T.obj(AGENT_LAYER)),
@@ -200,8 +202,8 @@ const CONFIG_LAYER = T.obj({
   'libraries?': T.arr(T.str(1)),
   'limits?': T.obj({ 'reviewRounds?': T.int(0, 20), 'gateAttempts?': T.int(1, 20), 'budgetUsd?': T.pos(), 'parallelTasks?': T.int(1, 20) }),
   'language?': T.str(1),
-  'baseBranch?': T.str(1),
-  'repos?': T.rec(T.str(1), T.obj({ 'role?': T.str(1), 'path?': T.str(1), 'baseBranch?': T.str(1), 'gates?': T.arr(GATE) })),
+  'baseBranch?': BRANCH,
+  'repos?': T.rec(T.str(1), T.obj({ 'role?': T.str(1), 'path?': T.str(1), 'baseBranch?': BRANCH, 'gates?': T.arr(GATE) })),
   'jira?': T.obj({ 'allowedProjects?': T.arr(T.str(1)) }),
   'policy?': T.obj({ 'protectedBranches?': T.arr(T.str(1)), 'draftPrsOnly?': T.bool(), 'forbidAiAttribution?': T.bool(), 'allowNoVerify?': T.bool(), 'sandbox?': T.bool(), 'network?': T.arr(T.re(/^[A-Za-z0-9*.:[\]-]+$/, 'a host name, e.g. npm.acme.corp or *.acme.corp')), 'writable?': T.arr(T.re(/^(~|\/|[A-Za-z]:[\\/])/, 'a folder from ~ or the filesystem root, e.g. ~/.cache/go-build')), 'checkEnv?': T.arr(T.re(/^[A-Za-z_][A-Za-z0-9_]*$/, 'a variable name, e.g. DATABASE_URL')) }),
   'git?': T.obj({ 'mode?': T.oneOf(['branch', 'worktree']) }),
