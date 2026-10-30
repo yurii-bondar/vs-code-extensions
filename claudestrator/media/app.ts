@@ -305,6 +305,8 @@ interface Views {
     try {
       await v.enter(route);
     } catch (e) {
+      // A screen left before it finished loading is not this one's to replace.
+      if (current !== v) return;
       $('#view')!.innerHTML = `<div class="empty-state">${icon('alert', 'big')}<h2>Something went wrong</h2><p>${esc(e instanceof Error ? e.message : String(e))}</p><button class="btn" data-action="go-home">Back to tasks</button></div>`;
     }
   }
@@ -719,14 +721,12 @@ interface Views {
   views.home = {
     detected: null,
     async enter(route) {
-      if (route.compose !== undefined && route.compose !== '') {
-        S.draft.text = route.compose;
-        persist();
-      }
-      if (route.scenario) {
-        // Once: a reload must not pick it again over what you chose since.
-        S.draft.scenario = route.scenario;
-        S.route = { ...route, scenario: undefined };
+      if (route.compose !== undefined && route.compose !== '') S.draft.text = route.compose;
+      if (route.scenario) S.draft.scenario = route.scenario;
+      // Once: a reload must not put them back over what you typed or chose since.
+      if (route.compose !== undefined || route.scenario) {
+        const { compose: _compose, scenario: _scenario, ...rest } = route;
+        S.route = rest;
         persist();
       }
       $('#view')!.innerHTML = `
@@ -737,6 +737,7 @@ interface Views {
           <div data-region="tasks"></div>
         </div>`;
       await loadOverview();
+      if (current !== views.home) return; // you went on to another screen meanwhile
       this.renderComposer();
       this.render();
       const ta = $<HTMLTextAreaElement>('#composer-text');
@@ -1231,6 +1232,7 @@ interface Views {
     prefs: { language: 'English', gitMode: 'branch', map: false },
     async enter() {
       await loadOverview();
+      if (current !== views.setup) return;
       const o = S.overview;
       if (!o!.root) return go({ name: 'home' });
       if (o!.hasConfig) {
@@ -1239,6 +1241,7 @@ interface Views {
         return;
       }
       const detected = await call('detect');
+      if (current !== views.setup) return;
       this.repos = detected.repos.map((r) => ({ ...r, on: true, gates: r.gates.map((g) => ({ ...g, on: true })) }));
       this.prefs = { language: 'English', gitMode: 'branch', map: this.repos.length > 1 };
       this.render();

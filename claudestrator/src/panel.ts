@@ -193,8 +193,11 @@ class DashboardPanel implements RpcHandlers {
 
   // ---------- overview ----------
 
+  /** The route the panel was opened with, once: a reload of the page goes back to where you were, not to it. */
   async $boot() {
-    return { route: this.initialRoute || null, platform: process.platform, version: this.context.extension.packageJSON.version };
+    const route = this.initialRoute || null;
+    this.initialRoute = undefined;
+    return { route, platform: process.platform, version: this.context.extension.packageJSON.version };
   }
 
   configSummary(): ConfigSummary {

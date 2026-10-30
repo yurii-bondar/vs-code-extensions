@@ -96,6 +96,9 @@ class Orchestrator {
   ready: Promise<Health> | undefined;
   defaults: Defaults | null | undefined;
   defaultsKey: string | undefined;
+  /** The health probe running now, and the defaults asked of the CLI now (by their key): one of each at a time. */
+  checking: Promise<Health> | null = null;
+  resolving: { key: string; run: Promise<Defaults | null | undefined> } | null = null;
   fireTimer: NodeJS.Timeout | null | undefined;
 
   constructor(context: vscode.ExtensionContext) {
@@ -138,8 +141,16 @@ class Orchestrator {
   }
 
   /** Runs the health checks again; ensureReady waits for this same run. */
+  /**
+   * Probes the CLI, git and gh again. A call while a probe runs gets that probe: a setting changed from the dashboard
+   * asks once from the panel and once from the settings listener.
+   */
   refreshHealth(): Promise<Health> {
-    const run = this.checkHealth();
+    if (this.checking) return this.checking;
+    const run = this.checkHealth().finally(() => {
+      if (this.checking === run) this.checking = null;
+    });
+    this.checking = run;
     this.ready = run;
     return run;
   }
@@ -289,15 +300,24 @@ class Orchestrator {
     const dir = this.account().dir;
     const key = JSON.stringify([this.root, dir, sources, [...new Set(aliases)].sort()]);
     if (!force && key === this.defaultsKey) return this.defaults;
+    if (this.resolving && this.resolving.key === key) return this.resolving.run;
     this.defaultsKey = key;
     const env = this.agentEnv();
-    const d = await resolveDefaults({ command: this.health.claude.path as string, cwd: this.root, env, settingSources: sources, aliases });
-    if (d && key === this.defaultsKey) {
-      this.defaults = d;
-      this._onDidChangeConfig.fire();
-      this.fire();
-    }
-    return this.defaults;
+    const command = this.health.claude.path as string;
+    const root = this.root;
+    const run = (async () => {
+      const d = await resolveDefaults({ command, cwd: root, env, settingSources: sources, aliases });
+      if (d && key === this.defaultsKey) {
+        this.defaults = d;
+        this._onDidChangeConfig.fire();
+        this.fire();
+      }
+      return this.defaults;
+    })().finally(() => {
+      if (this.resolving && this.resolving.run === run) this.resolving = null;
+    });
+    this.resolving = { key, run };
+    return run;
   }
 
   /**

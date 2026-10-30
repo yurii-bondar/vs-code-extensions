@@ -557,11 +557,15 @@ interface Views {
         views.repos.load();
       },
       'repo-run': async (el) => {
+        const label = el.innerHTML;
         el.disabled = true;
         el.innerHTML = '<span class="spinner xs"></span>Running…';
         const name = el.dataset.repo;
         let r = await attempt('runGates', { name });
         if (r && r.status === 'skipped' && /no changes/.test(r.summary)) r = await attempt('runGates', { name, force: true });
+        // On a failure the page renders as before, which a patch skips: the button is put back here.
+        el.disabled = false;
+        el.innerHTML = label;
         if (r) views.repos.results[name] = r;
         views.repos.render();
       },
