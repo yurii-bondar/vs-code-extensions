@@ -15,6 +15,22 @@ function setChildEnv(env: NodeJS.ProcessEnv): void {
 }
 const getChildEnv = (): NodeJS.ProcessEnv => childEnv;
 
+/**
+ * What an npm shim on Windows (`claude.cmd`) really runs. Node refuses to spawn a `.cmd` without a shell, and a shell
+ * would mangle arguments such as a multi-line system prompt, so the probe reads the shim and child processes start
+ * its target directly.
+ */
+const shims = new Map<string, { file: string; args: string[] }>();
+function setShim(command: string, target: { file: string; args: string[] }): void {
+  shims.set(command, target);
+}
+
+/** The file to spawn and its arguments: a shim's target, else the command as it is. */
+function launch(command: string, args: readonly string[]): [string, string[]] {
+  const shim = shims.get(command);
+  return shim ? [shim.file, [...shim.args, ...args]] : [command, [...args]];
+}
+
 interface ExecResult {
   code: number;
   stdout: string;
@@ -31,7 +47,8 @@ interface ExecOptions {
 /** Never rejects: `{ code, stdout, stderr }`, code 127 when the binary is missing, 124 on timeout. */
 function exec(cmd: string, args: readonly string[], { cwd, timeoutMs = 60000, env, input }: ExecOptions = {}): Promise<ExecResult> {
   return new Promise((resolve) => {
-    const child = execFile(cmd, args, { cwd, timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, env: env || childEnv }, (err, stdout, stderr) => {
+    const [file, argv] = launch(cmd, args);
+    const child = execFile(file, argv, { cwd, timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, env: env || childEnv }, (err, stdout, stderr) => {
       let code = 0;
       if (err) code = err.code === 'ENOENT' ? 127 : err.killed ? 124 : typeof err.code === 'number' ? err.code : 1;
       resolve({ code, stdout: String(stdout ?? ''), stderr: `${stderr ?? ''}${err && err.code === 'ENOENT' ? `${cmd}: not found` : ''}${err && err.killed ? `\nkilled after ${Math.round(timeoutMs / 1000)}s` : ''}` });
@@ -268,4 +285,4 @@ async function removeWorktrees(workspace: string, state: TaskState, config: Repo
 }
 
 export type { ExecResult, ExecOptions, TaskRepo, Prepared, PrepareResult };
-export { exec, setChildEnv, getChildEnv, GitRepo, branchSync, worktreeDir, taskRepos, prepareRepos, taskDiff, removeWorktrees, isOwn };
+export { exec, launch, setShim, setChildEnv, getChildEnv, GitRepo, branchSync, worktreeDir, taskRepos, prepareRepos, taskDiff, removeWorktrees, isOwn };

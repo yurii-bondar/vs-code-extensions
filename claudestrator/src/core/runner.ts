@@ -2,7 +2,7 @@
 // The session stays open, so gate output or a report correction goes back into the same conversation.
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import * as crypto from 'crypto';
-import { getChildEnv } from './git';
+import { getChildEnv, launch } from './git';
 import type { TranscriptItem } from './store';
 import type { Agent } from './types';
 
@@ -208,7 +208,8 @@ class ClaudeSession {
     const env = { ...getChildEnv(), ...opts.env(), ...req.env };
     delete env.ELECTRON_RUN_AS_NODE;
     delete env.CLAUDECODE;
-    this.proc = spawn(opts.command(), this.args, { cwd: req.cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const [file, argv] = launch(opts.command(), this.args);
+    this.proc = spawn(file, argv, { cwd: req.cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
     this.proc.on('error', (e: NodeJS.ErrnoException) => this.end(e.code === 'ENOENT' ? `Claude Code CLI not found (${opts.command()}). Set "claudestrator.claudePath" or install Claude Code.` : e.message));
     this.proc.on('exit', (code, signal) => this.end(this.exitMessage(code, signal)));
     this.proc.stdin.on('error', () => {}); // EPIPE after the process died; reported through 'exit'

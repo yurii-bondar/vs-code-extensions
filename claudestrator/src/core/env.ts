@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { execFile } from 'child_process';
-import { exec, type ExecResult } from './git';
+import { exec, launch, setShim, type ExecResult } from './git';
 import { parseFlags } from './runner';
 
 const HOME = os.homedir();
@@ -12,7 +12,8 @@ const isWin = process.platform === 'win32';
 
 function run(cmd: string, args: string[], timeout = 8000, env?: NodeJS.ProcessEnv): Promise<ExecResult> {
   return new Promise((resolve) => {
-    execFile(cmd, args, { timeout, env: env || process.env, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => resolve({ code: err ? (typeof err.code === 'number' ? err.code : 1) : 0, stdout: String(stdout || ''), stderr: String(stderr || '') }));
+    const [file, argv] = launch(cmd, args);
+    execFile(file, argv, { timeout, env: env || process.env, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => resolve({ code: err ? (typeof err.code === 'number' ? err.code : 1) : 0, stdout: String(stdout || ''), stderr: String(stderr || '') }));
   });
 }
 
@@ -138,6 +139,35 @@ interface Probe {
   checkedAt: string;
 }
 
+/**
+ * The file an npm Windows shim (`claude.cmd`) runs, absolute: `"%dp0%\\node_modules\\…\\cli.js" %*` in the shim's
+ * text, or the older `"%~dp0\\…"` form. Null when the text is not such a shim.
+ */
+function npmShimTarget(text: string, shimDir: string): string | null {
+  const m = text.match(/"%~?dp0%?\\([^"]+)"\s+%\*/i);
+  return m ? path.join(shimDir, ...m[1]!.split('\\')) : null;
+}
+
+/** Registers what a `.cmd`/`.bat` shim runs, so it can be spawned; an error message when it cannot be. */
+async function resolveShim(command: string, PATH: string): Promise<string | null> {
+  let text: string;
+  try {
+    text = await fs.promises.readFile(command, 'utf8');
+  } catch (e) {
+    return `cannot read ${command}: ${(e as Error).message}`;
+  }
+  const target = npmShimTarget(text, path.dirname(command));
+  if (!target) return `${command} is a script Claudestrator cannot start; set claudestrator.claudePath to claude.exe (the native build)`;
+  if (/\.exe$/i.test(target)) {
+    setShim(command, { file: target, args: [] });
+    return null;
+  }
+  const node = which('node', PATH);
+  if (!node) return `${command} runs ${target} with Node.js, which is not on PATH`;
+  setShim(command, { file: node, args: [target] });
+  return null;
+}
+
 async function probe(settings: { claudePath?: string; nodePath?: string } = {}): Promise<Probe> {
   const PATH = await loginShellPath();
   const env: NodeJS.ProcessEnv = { ...process.env, PATH };
@@ -145,7 +175,9 @@ async function probe(settings: { claudePath?: string; nodePath?: string } = {}):
 
   const claudePath = settings.claudePath && settings.claudePath !== 'claude' ? expand(settings.claudePath) : which('claude', PATH);
   const claude: ClaudeProbe = { path: claudePath, ok: false };
-  if (claudePath && fs.existsSync(claudePath)) {
+  const shimError = claudePath && isWin && /\.(cmd|bat)$/i.test(claudePath) && fs.existsSync(claudePath) ? await resolveShim(claudePath, PATH) : null;
+  if (shimError) claude.error = shimError;
+  else if (claudePath && fs.existsSync(claudePath)) {
     const v = await run(claudePath, ['--version'], 15000, env);
     claude.version = v.stdout.trim().split('\n')[0] || undefined;
     const h = await run(claudePath, ['--help'], 15000, env);
@@ -226,4 +258,4 @@ function statuslineSnapshot(configDir: string): StatuslineSnapshot | null {
 }
 
 export type { Probe, StatuslineSnapshot };
-export { loginShellPath, which, expand, claudeAccounts, probe, statuslineSnapshot };
+export { loginShellPath, which, expand, claudeAccounts, probe, statuslineSnapshot, npmShimTarget };
