@@ -53,7 +53,8 @@ function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, 
   if (diffPath) inputs.push(diffPath);
   if (prsPath) inputs.push(prsPath);
   const lines = [
-    `You are the \`${next.step.agent}\` stage of Claudestrator task ${state.taskId}${state.spec ? ` (${state.spec.title})` : ''}.`,
+    // Not the ticket's title: it is written in Jira by anyone, and this message is the one the agent is told to follow.
+    `You are the \`${next.step.agent}\` stage of Claudestrator task ${state.taskId}.`,
     '',
     `Mode: ${MODE[next.mode]}`,
     `Review round: ${next.round}.`,
