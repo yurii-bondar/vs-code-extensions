@@ -48,10 +48,12 @@ function guardBash(command: string, ctx: GuardContext): Verdict {
     } catch {
       argv = segment.trim().split(/\s+/);
     }
-    argv = stripPrefixes(withoutRedirects(argv));
-    const [first, ...args] = argv;
+    const split = splitPrefixes(withoutRedirects(argv));
+    const [first, ...args] = split.argv;
     if (!first) continue;
     const cmd = path.basename(first);
+    const env = ctx.agent ? gitEnvRefusal(cmd, split.env, args) : null;
+    if (env) return env;
     if (cmd === 'cd') {
       dir = resolveIn(dir, args[0] ?? '~', ctx);
       continue;
@@ -354,10 +356,21 @@ const WRAPPERS: Record<string, { valued: string[]; positional?: number }> = {
 
 /** Drops what runs before the command: `VAR=value`, shell keywords, and wrappers with their options. */
 function stripPrefixes(argv: string[]): string[] {
+  return splitPrefixes(argv).argv;
+}
+
+/** The command and the variables set for it (`GIT_DIR=x git …`, `env VAR=y …`), past keywords and wrappers. */
+function splitPrefixes(argv: string[]): { env: string[]; argv: string[] } {
+  const env: string[] = [];
   let i = 0;
   while (i < argv.length) {
     const a = argv[i]!;
-    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(a) || KEYWORDS.has(a)) {
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(a)) {
+      env.push(a);
+      i++;
+      continue;
+    }
+    if (KEYWORDS.has(a)) {
       i++;
       continue;
     }
@@ -371,15 +384,32 @@ function stripPrefixes(argv: string[]): string[] {
         i++;
         break;
       }
-      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(opt)) i++; // env VAR=value cmd
-      else if (opt.startsWith('-')) i += wrapper.valued.includes(opt) ? 2 : 1;
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(opt)) {
+        env.push(opt); // env VAR=value cmd
+        i++;
+      } else if (opt.startsWith('-')) i += wrapper.valued.includes(opt) ? 2 : 1;
       else if (positional > 0) {
         positional--;
         i++;
       } else break;
     }
   }
-  return argv.slice(i);
+  return { env, argv: argv.slice(i) };
+}
+
+/**
+ * Git's environment changes what a command does: GIT_EXTERNAL_DIFF or GIT_PAGER run a program, GIT_CONFIG_* is `-c`,
+ * GIT_DIR points it at other metadata. An agent sets none of it, for a git command or for the shell's later ones
+ * (`export GIT_…`), except harmless ones: no prompts, no locks, a pager that only prints.
+ */
+const GIT_ENV_OK = /^(GIT_TERMINAL_PROMPT|GIT_OPTIONAL_LOCKS|GIT_PAGER=(cat|less)?$|PAGER=(cat|less)?$)/;
+const GIT_ENV = /^(GIT_[A-Z0-9_]*|PAGER)=/;
+const DECLARES = new Set(['export', 'declare', 'typeset', 'readonly', 'local']);
+
+function gitEnvRefusal(cmd: string, env: string[], args: string[]): Verdict | null {
+  const set = cmd === 'git' ? env : DECLARES.has(cmd) ? args.filter((a) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(a)) : [];
+  const bad = set.find((v) => GIT_ENV.test(v) && !GIT_ENV_OK.test(v));
+  return bad ? deny(`agents do not set git's environment (${bad.split('=')[0]}); Claudestrator owns git`) : null;
 }
 
 function resolveIn(dir: string, p: string, ctx: GuardContext): string {
@@ -443,6 +473,22 @@ const AGENT_GIT_WRITES = new Set<string>([
   'revert', 'am', 'tag', 'worktree', 'clean', 'rm', 'mv', 'update-ref', 'filter-branch', 'filter-repo', 'notes', 'gc', 'prune',
 ]);
 
+/**
+ * What an agent may run of git: reading it, staging and applying a patch in its repo, fetching. Anything else
+ * (symbolic-ref, bisect, update-index, submodule, clone, archive…) moves HEAD, hides changes from the commit or writes
+ * outside the repo; with the sandbox off nothing else would stop it. `stash`, `worktree`, `reflog` and `lfs` only read.
+ */
+const AGENT_GIT = new Set<string>([
+  'status', 'diff', 'log', 'show', 'blame', 'annotate', 'grep', 'ls-files', 'ls-tree', 'ls-remote', 'cat-file', 'rev-parse',
+  'rev-list', 'describe', 'shortlog', 'show-ref', 'for-each-ref', 'name-rev', 'merge-base', 'diff-tree', 'diff-files',
+  'diff-index', 'check-ignore', 'check-attr', 'check-mailmap', 'check-ref-format', 'count-objects', 'version', 'help', 'var',
+  'whatchanged', 'range-diff', 'cherry', 'show-branch', 'branch', 'remote', 'config', 'add', 'apply', 'fetch', 'fsck',
+  'stash', 'worktree', 'reflog', 'lfs',
+]);
+const AGENT_GIT_READ_ONLY: Record<string, string[]> = { stash: ['list', 'show'], worktree: ['list'], reflog: ['show'], lfs: ['ls-files', 'status', 'env', 'version'] };
+/** Options that run a program or write a file: `--upload-pack=cmd`, `grep -O<cmd>`, `--output=<file>`. */
+const AGENT_GIT_OPTIONS = /^(--upload-pack|--receive-pack|--exec|--output|--open-files-in-pager|-O)(=|$)|^-O./;
+
 function checkGit(all: string[], cwd: string, ctx: GuardContext): Verdict {
   let dir = cwd;
   let i = 0;
@@ -464,10 +510,15 @@ function checkGit(all: string[], cwd: string, ctx: GuardContext): Verdict {
       return deny('agents do not override git config (-c); Claudestrator owns git');
     }
     if (sub && !GIT_COMMANDS.has(sub)) return deny(`git ${sub} is not a git command an agent may run (aliases are not allowed)`);
+    if (sub && !AGENT_GIT.has(sub) && !AGENT_GIT_WRITES.has(sub)) return deny(`agents do not run git ${sub}; they read git, stage and apply patches, and Claudestrator owns the rest`);
+    const readOnly = sub ? AGENT_GIT_READ_ONLY[sub] : undefined;
+    if (readOnly && sub !== 'stash' && sub !== 'worktree' && args[0] !== undefined && !args[0].startsWith('-') && !readOnly.includes(args[0])) return deny(`agents only read with git ${sub} (${readOnly.join(', ')})`);
+    const option = args.find((a) => AGENT_GIT_OPTIONS.test(a));
+    if (option) return deny(`git ${sub} ${option.split('=')[0]} runs a program or writes a file; redirect the output instead`);
     if (sub === 'config' && !args.some((a) => GIT_CONFIG_READS.has(a.split('=')[0]!))) return deny('agents only read git config (--get, --list); Claudestrator owns git');
     if (sub === 'remote' && args[0] !== undefined && !['-v', '--verbose', 'show', 'get-url'].includes(args[0])) return deny('agents do not change git remotes');
   }
-  if (ctx.agent && sub && AGENT_GIT_WRITES.has(sub)) return deny(`agents do not run git ${sub}; Claudestrator owns git (commits, branches, pushes)`);
+  if (ctx.agent && sub && AGENT_GIT_WRITES.has(sub) && !(AGENT_GIT_READ_ONLY[sub] || []).includes(args[0] ?? '')) return deny(`agents do not run git ${sub}; Claudestrator owns git (commits, branches, pushes)`);
   if (ctx.agent && sub === 'branch' && args.some((a) => !a.startsWith('-') || ['-d', '-D', '-m', '-M', '-c', '-C', '--delete', '--move', '--copy'].includes(a))) {
     return deny('agents do not create, rename or delete branches; Claudestrator owns git');
   }

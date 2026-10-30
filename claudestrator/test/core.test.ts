@@ -512,6 +512,31 @@ test('guard: agents never touch git history, destructive commands are refused', 
   assert.match(refusal('git branch feature-x 2>/dev/null', ctx()), /do not create, rename or delete branches/);
   assert.match(refusal('git push origin main 2>&1', ctx()), /git push/);
   assert.match(refusal('git branch --list > ../other/branches.txt', ctx({ writeRoots: ['/ws/api'] })), /outside \/ws\/api/, 'the file it writes is still checked');
+  // Git that reads, stages or applies a patch is the agents'; what moves HEAD, hides changes or runs a program is not.
+  for (const read of ['git log --oneline', 'git stash list', 'git stash show -p stash@{0}', 'git worktree list', 'git reflog', 'git reflog show HEAD', 'git lfs ls-files', 'git add -N new.ts', 'git apply fix.patch', 'git fetch origin main', 'GIT_PAGER=cat git log', 'GIT_TERMINAL_PROMPT=0 git ls-remote origin', 'git grep -n foo']) {
+    assert.equal(guard(read, ctx()).allow, true, read);
+  }
+  for (const [command, reason] of [
+    ['git symbolic-ref HEAD refs/heads/main', /do not run git symbolic-ref/],
+    ['git bisect start', /do not run git bisect/],
+    ['git update-index --assume-unchanged src/a.ts', /do not run git update-index/],
+    ['git submodule update --init', /do not run git submodule/],
+    ['git clone https://github.com/x/y /tmp/y', /do not run git clone/],
+    ['git stash', /do not run git stash/],
+    ['git worktree add ../wt', /do not run git worktree/],
+    ['git reflog expire --all', /only read with git reflog/],
+    ['git lfs pull', /only read with git lfs/],
+    ['git fetch --upload-pack="touch /tmp/pwned" origin', /--upload-pack runs a program/],
+    ['git grep -Ovim foo', /-Ovim runs a program/],
+    ['git diff --output=/etc/x', /--output runs a program or writes a file/],
+    ['GIT_EXTERNAL_DIFF=/tmp/evil git diff', /git's environment \(GIT_EXTERNAL_DIFF\)/],
+    ['env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.pager GIT_CONFIG_VALUE_0=sh git log', /git's environment \(GIT_CONFIG_COUNT\)/],
+    ['export GIT_DIR=/tmp/other.git && git status', /git's environment \(GIT_DIR\)/],
+    ['PAGER="sh -c evil" git log', /git's environment \(PAGER\)/],
+  ] as [string, RegExp][]) {
+    assert.match(refusal(command, ctx()), reason, command);
+  }
+  assert.equal(guard('export NODE_ENV=test && npm test', ctx()).allow, true, 'other variables are the agent\'s to set');
   for (const publish of ['npm publish', 'npm publish --access public', 'cd pkg && pnpm publish', 'yarn npm publish', 'npx twine upload dist/*', 'cargo publish', 'gem push x.gem', 'poetry publish --build']) {
     assert.match(refusal(publish.replace('npx ', ''), ctx()), /publishes a package/, publish);
   }
