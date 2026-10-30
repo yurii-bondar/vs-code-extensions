@@ -113,4 +113,4 @@ class TaskTree implements vscode.TreeDataProvider<TreeNode> {
 const escapeMd = (s: unknown): string => String(s || '').replace(/[\\`*_{}[\]()#+\-.!|<>]/g, '\\$&');
 
 export type { TreeNode };
-export { TaskTree, ago };
+export { TaskTree, ago, escapeMd };

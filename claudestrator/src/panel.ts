@@ -17,7 +17,7 @@ import { findRepos, describeRepo, reposFromFolders, repoLayerOf, WORKSPACE_MAP, 
 import { expand } from './core/env';
 import { effectiveFor } from './core/defaults';
 import { AGENT_COLORS, OUTPUTS, EFFORTS, validateSetting } from './core/protocol';
-import { parsePageRequest } from './core/requests';
+import { parsePageRequest, openable, SESSION_ID } from './core/requests';
 import { settings, type Orchestrator } from './orchestrator';
 import type { Engine } from './core/engine';
 import type { ComposerArgs, ConfigData, ConfigSummary, HealthSummary, NewAgentParams, PipelineEdit, Preview, ReposData, Route, Rpc, RpcHandlers, SaveGroupParams, SaveInstructionParams, SaveScenarioParams, SettingsData, SetupParams, TaskScreen } from './core/wire';
@@ -345,6 +345,7 @@ class DashboardPanel implements RpcHandlers {
 
   async $openFile({ taskId, file, preview }: { taskId?: string; file: string; preview?: boolean }): Promise<unknown> {
     const abs = taskId ? this.engine.svc.artifactFile(taskId, file) : file;
+    if (!taskId && !openable(abs, this.openableRoots())) throw new Error(`${file} is outside the workspace and its repos; open it yourself if you need it`);
     if (!fs.existsSync(abs)) throw new Error(`${path.basename(abs)} does not exist (yet)`);
     const uri = vscode.Uri.file(abs);
     if (preview && abs.endsWith('.md')) return vscode.commands.executeCommand('markdown.showPreviewToSide', uri);
@@ -354,6 +355,13 @@ class DashboardPanel implements RpcHandlers {
     return undefined;
   }
 
+  /** Where a path the page sends may lead: the workspace, the configured repos, and the files the config comes from. */
+  openableRoots(): string[] {
+    const r = this.orch.config();
+    if (!r.ok) return [this.root];
+    return [this.root, ...Object.values(r.config.repos).map((repo) => path.resolve(this.root, repo.path)), ...r.config.sources];
+  }
+
   /** The task's current combined diff, freshly computed, in a diff-highlighted editor. */
   async $openDiff({ taskId }: { taskId: string }) {
     const engine = this.engine;
@@ -361,8 +369,8 @@ class DashboardPanel implements RpcHandlers {
     if (!state.repos.length) throw new Error('No repos have changes yet');
     const r = this.orch.config();
     const diff = await taskDiff(taskRepos(this.root, state, r.ok ? r.config : null, state.repos.map((x) => x.name)));
-    const file = engine.svc.writeArtifact(taskId, 'diff.patch', diff.text);
-    await this.$openFile({ file });
+    engine.svc.writeArtifact(taskId, 'diff.patch', diff.text);
+    await this.$openFile({ taskId, file: 'diff.patch' });
   }
 
   async $openRepo({ taskId, repo }: { taskId: string; repo: string }) {
@@ -404,6 +412,8 @@ class DashboardPanel implements RpcHandlers {
     const d = view.detail(this.engine, taskId);
     const step = d.steps.find((s) => s.key === key);
     if (!step || !step.sessionId) throw new Error('This step has no Claude session to continue');
+    // It comes from the task log, and goes on a shell's command line.
+    if (!SESSION_ID.test(step.sessionId)) throw new Error('This step\'s session id is not one Claude Code makes');
     const dir = this.orch.account().dir;
     const terminal = vscode.window.createTerminal({
       name: `Claude · ${step.agent}${step.repo ? `@${step.repo}` : ''}`,

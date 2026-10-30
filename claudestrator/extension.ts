@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { Orchestrator, settings } from './src/orchestrator';
-import { TaskTree } from './src/tree';
+import { TaskTree, escapeMd } from './src/tree';
 import { DashboardPanel } from './src/panel';
 import * as view from './src/core/view';
 import { CHECKPOINT_TITLE } from './src/core/describe';
@@ -64,10 +64,11 @@ function updateStatus(item: vscode.StatusBarItem, tree: TaskTree): void {
   const running = tree.cards.filter((x) => x.status.group === 'running');
   const waiting = tree.cards.filter((x) => x.status.group === 'attention');
   const md = new vscode.MarkdownString(undefined, true);
-  md.isTrusted = true;
+  // Trusted for its own two links only; the live text holds repo and gate names from the config.
+  md.isTrusted = { enabledCommands: ['claudestrator.newTask', 'claudestrator.open'] };
   md.appendMarkdown('**Claudestrator**\n\n');
-  for (const x of running) md.appendMarkdown(`$(sync~spin) \`${x.taskId}\` ${(x.live && x.live.text) || 'running'}\n\n`);
-  for (const x of waiting) md.appendMarkdown(`$(bell-dot) \`${x.taskId}\` ${x.status.label}\n\n`);
+  for (const x of running) md.appendMarkdown(`$(sync~spin) \`${x.taskId}\` ${escapeMd((x.live && x.live.text) || 'running')}\n\n`);
+  for (const x of waiting) md.appendMarkdown(`$(bell-dot) \`${x.taskId}\` ${escapeMd(x.status.label)}\n\n`);
   if (!running.length && !waiting.length) md.appendMarkdown('Nothing needs you right now.\n\n');
   md.appendMarkdown('[New task](command:claudestrator.newTask) · [Dashboard](command:claudestrator.open)');
   item.tooltip = md;

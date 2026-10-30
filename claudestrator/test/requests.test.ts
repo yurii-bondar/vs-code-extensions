@@ -2,7 +2,7 @@
 import test from 'node:test';
 import * as assert from 'node:assert/strict';
 
-import { parsePageRequest } from '../src/core/requests';
+import { parsePageRequest, openable, SESSION_ID } from '../src/core/requests';
 
 test('requests: only a known request with parameters of its shape reaches a handler', () => {
   const ok = parsePageRequest({ type: 'req', id: 1, method: 'answer', params: { taskId: 'PROJ-1', checkpointId: 'approve-plan', option: 'approve' } });
@@ -31,4 +31,12 @@ test('requests: the page opens only web links outside the editor', () => {
     const r = parsePageRequest({ type: 'req', id: 2, method: 'openExternal', params: { url } });
     assert.ok(r && !r.ok, url);
   }
+});
+
+test('requests: a path from the page opens only inside the workspace, its repos or the config, and a session id is only one', () => {
+  const roots = ['/ws', '/elsewhere/billing', '/home/u/libs/agents/library.yaml'];
+  for (const file of ['/ws/api/src/a.ts', '/elsewhere/billing/go.mod', '/home/u/libs/agents/library.yaml', '/ws/./api/../web/x']) assert.equal(openable(file, roots), true, file);
+  for (const file of ['/etc/passwd', '/home/u/.ssh/id_rsa', '/ws/../etc/hosts', '/wsx/a', '/home/u/libs/agents/other.yaml']) assert.equal(openable(file, roots), false, file);
+  assert.ok(SESSION_ID.test('3f1c2a4e-9b7d-4c1e-8f2a-1234567890ab'));
+  for (const id of ['x; rm -rf ~', '$(curl evil)', '', 'a b']) assert.equal(SESSION_ID.test(id), false, id);
 });

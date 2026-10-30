@@ -1,5 +1,6 @@
 // What the dashboard page may ask the host: every request's parameters are checked here, at the boundary, so a
 // handler only ever sees the shape `Rpc` promises it.
+import * as path from 'path';
 import { T, EFFORTS, GROUP_TYPES, OUTPUTS, type Check } from './protocol';
 import type { Rpc } from './wire';
 
@@ -119,5 +120,20 @@ function parsePageRequest(msg: unknown): Parsed | null {
   return { ok: true, request: { id: m.id, method: m.method, params: m.params } as PageRequest };
 }
 
+/** A Claude Code session id as the CLI makes them; anything else never reaches a terminal's command line. */
+const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9-]{7,63}$/;
+
+/**
+ * Whether the page may open a file the host did not name itself: one inside the workspace, a configured repo or the
+ * config's own files. The page shows paths agents wrote (their tool calls), so a click must not open just anything.
+ */
+function openable(file: string, roots: string[]): boolean {
+  const abs = path.resolve(file);
+  return roots.some((root) => {
+    const r = path.resolve(root);
+    return abs === r || abs.startsWith(r + path.sep);
+  });
+}
+
 export type { PageRequest };
-export { parsePageRequest };
+export { parsePageRequest, openable, SESSION_ID };
