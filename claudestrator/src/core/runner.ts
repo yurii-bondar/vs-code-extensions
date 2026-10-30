@@ -47,6 +47,8 @@ function limitsOf(info: RateLimitInfo | null | undefined): Limits | null {
   return out.fiveHour || out.sevenDay ? out : null;
 }
 const STDERR_KEEP = 8000;
+/** After an interrupt, how long the CLI gets to end the turn before SIGTERM, and SIGTERM before SIGKILL. */
+const STOP_GRACE_MS = 5000;
 
 /** What a result's error subtype means, for the step's failure message. */
 const RESULT_ERRORS: Record<string, string> = {
@@ -282,10 +284,23 @@ class ClaudeSession {
     return new Promise((resolve) => (this.waiter = resolve));
   }
 
+  /**
+   * Stops the agent: an `interrupt` control request ends the turn cleanly (it comes back as a failed result and the
+   * session is saved for a resume); SIGTERM if the CLI does not, and SIGKILL as the last resort.
+   */
   async interrupt(): Promise<void> {
     this.closing = true;
-    if (!this.ended) this.proc.kill('SIGTERM');
-    setTimeout(() => !this.ended && this.proc.kill('SIGKILL'), 3000).unref();
+    if (this.ended) return;
+    try {
+      this.proc.stdin.write(`${JSON.stringify({ type: 'control_request', request_id: `cs-interrupt-${crypto.randomBytes(4).toString('hex')}`, request: { subtype: 'interrupt' } })}\n`);
+    } catch {
+      // stdin is gone; the signals below still stop it
+    }
+    setTimeout(() => {
+      if (this.ended) return;
+      this.proc.kill('SIGTERM');
+      setTimeout(() => !this.ended && this.proc.kill('SIGKILL'), STOP_GRACE_MS).unref();
+    }, STOP_GRACE_MS).unref();
   }
 
   close(): void {

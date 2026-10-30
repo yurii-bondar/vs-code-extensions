@@ -199,6 +199,8 @@ function main(): void {
 
   let buf = '';
   let turn = 0;
+  /** The message a hanging agent never answers. */
+  let hanging: string | null = null;
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (d) => {
     buf += d;
@@ -208,6 +210,13 @@ function main(): void {
       buf = buf.slice(i + 1);
       if (!line.trim()) continue;
       const m: ClientMessage = JSON.parse(line);
+      if (m.type === 'control_request' && m.request.subtype === 'interrupt') {
+        out({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: {} } });
+        // Claude Code ends the turn it is in with an error result.
+        if (hanging) out({ type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['interrupted'], total_cost_usd: cost, num_turns: 0, user_message_uuids: [hanging] });
+        hanging = null;
+        continue;
+      }
       if (m.type === 'control_request') {
         const model = resolvedModel;
         const response = m.request.subtype === 'get_settings'
@@ -219,7 +228,10 @@ function main(): void {
       const text = m.message.content;
       out({ type: 'system', subtype: 'init', session_id: sessionId, model: resolvedModel });
       if (turn++ === 0) {
-        if (process.env.FAKE_HANG && process.env.FAKE_HANG === (text.match(/You are the `([^`]+)`/) || [])[1]) return; // never answers
+        if (process.env.FAKE_HANG && process.env.FAKE_HANG === (text.match(/You are the `([^`]+)`/) || [])[1]) {
+          hanging = m.uuid; // never answers, until interrupted
+          continue;
+        }
         first(text, m.uuid);
       } else reply(`Follow-up handled: ${text.split('\n')[0]!.slice(0, 60)}`, m.uuid);
     }

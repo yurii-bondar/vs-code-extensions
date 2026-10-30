@@ -46,3 +46,20 @@ test('runner: an answer to a message sent between turns never stands in for the 
     s.close();
   }
 });
+
+test('runner: stopping an agent ends its turn cleanly, and a CLI that ignores that is terminated', async () => {
+  const clean = session('interrupt', 'implement the plan', 10000);
+  const started = Date.now();
+  setTimeout(() => void clean.s.interrupt(), 50);
+  const t = await clean.s.turn();
+  assert.equal(t.ok, false);
+  assert.match(t.error!, /error_during_execution: interrupted/);
+  assert.ok(Date.now() - started < 2000, 'the interrupt ended the turn without a signal');
+  clean.s.close();
+
+  const deaf = session('', 'implement the plan', 30000);
+  setTimeout(() => void deaf.s.interrupt(), 50);
+  const killed = await deaf.s.turn();
+  assert.equal(killed.ok, false);
+  assert.match(killed.error!, /session ended|stopped/);
+});
