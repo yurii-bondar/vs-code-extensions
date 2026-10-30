@@ -237,19 +237,29 @@ test('engine: a signed-out Claude Code is reported as such, and agents get the a
   } finally {
     h.hooks.dispose();
   }
-  const base = { flags: () => new Set(['--mcp-config']), hookSettings: () => '/h.json', mcpConfig: () => '/m.json' };
-  assert.ok(buildArgs({ agent: {} as Agent }, { ...base, settingSources: () => ['project', 'local'] } as RunnerOptions).includes('/m.json'), 'without the user source, MCP servers come in explicitly');
-  assert.ok(!buildArgs({ agent: {} as Agent }, { ...base, settingSources: () => ['user', 'project'] } as RunnerOptions).includes('--mcp-config'), 'with it, Claude Code loads them itself');
+  const base = { flags: () => new Set(['--mcp-config']), hookSettings: () => '/h.json' } as Partial<RunnerOptions>;
+  const withMcp = { agent: {} as Agent, mcpConfig: '/m.json' };
+  assert.ok(buildArgs(withMcp, { ...base, settingSources: () => ['project', 'local'] } as RunnerOptions).includes('/m.json'), 'without the user source, MCP servers come in explicitly');
+  assert.ok(!buildArgs(withMcp, { ...base, settingSources: () => ['user', 'project'] } as RunnerOptions).includes('--mcp-config'), 'with it, Claude Code loads them itself');
   const strict = { ...base, flags: () => new Set(['--mcp-config', '--strict-mcp-config']), settingSources: () => ['project', 'local'] } as RunnerOptions;
-  const none = buildArgs({ agent: { mcp: false } as Agent }, strict);
+  const none = buildArgs({ ...withMcp, agent: { mcp: false } as Agent }, strict);
   assert.ok(none.includes('--strict-mcp-config') && !none.includes('--mcp-config'), 'an agent with mcp: false sees no MCP servers, not even the account ones');
-  assert.ok(!buildArgs({ agent: {} as Agent }, strict).includes('--strict-mcp-config'), 'by default nothing changes');
+  assert.ok(!buildArgs(withMcp, strict).includes('--strict-mcp-config'), 'by default nothing changes');
   assert.ok(!buildArgs({ agent: { mcp: false } as Agent }, { ...strict, flags: () => new Set(['--mcp-config']) } as RunnerOptions).includes('--strict-mcp-config'), 'an old CLI without the flag still runs');
   const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-acc-'));
-  fs.writeFileSync(path.join(cfg, '.claude.json'), JSON.stringify({ mcpServers: { Grafana: { type: 'http', url: 'http://x', headers: { Authorization: 'Bearer t' } } } }));
-  const file = writeUserMcpConfig(path.join(cfg, 'out', 'mcp.json'), cfg)!;
+  const account = path.join(cfg, '.claude.json');
+  fs.writeFileSync(account, JSON.stringify({ mcpServers: { Grafana: { type: 'http', url: 'http://x', headers: { Authorization: 'Bearer t' } } } }));
+  const out = path.join(cfg, 'out', 'mcp.json');
+  const file = (await writeUserMcpConfig(out, cfg))!;
   assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(file, 'utf8')).mcpServers), ['Grafana']);
   assert.equal(fs.statSync(file).mode & 0o777, 0o600, 'it carries tokens, so only you can read it');
+  const before = fs.statSync(file).mtimeMs;
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(await writeUserMcpConfig(out, cfg), file);
+  assert.equal(fs.statSync(file).mtimeMs, before, 'an unchanged account file is not read and written again');
+  fs.writeFileSync(account, JSON.stringify({ mcpServers: { Grafana: {}, Sentry: { type: 'http', url: 'http://s' } } }));
+  await writeUserMcpConfig(out, cfg);
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(file, 'utf8')).mcpServers), ['Grafana', 'Sentry'], 'a changed one is');
 });
 
 test('engine: "PROJ-805 перевір готовність…" runs a read-only readiness check, writes the report and posts it to Jira via MCP', async () => {

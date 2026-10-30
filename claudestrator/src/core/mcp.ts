@@ -165,15 +165,32 @@ function mcpLogin({ command, workspace, env, name, onLine, timeoutMs = 10 * 6000
  * source (which would also bring personal plugins and hooks). Written 0600: server configs can carry tokens.
  * Returns the file, or null when the account has none.
  */
-function writeUserMcpConfig(file: string, configDir?: string | null): string | null {
-  const global = readJson(configDir ? path.join(configDir, '.claude.json') : path.join(os.homedir(), '.claude.json')) || {};
-  const servers = global.mcpServers && typeof global.mcpServers === 'object' ? global.mcpServers : {};
-  if (!Object.keys(servers).length) return null;
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify({ mcpServers: servers }), { mode: 0o600 });
-  fs.chmodSync(file, 0o600);
-  return file;
+async function writeUserMcpConfig(file: string, configDir?: string | null): Promise<string | null> {
+  // `.claude.json` holds the account's history too and grows to megabytes: read it again only when it changed.
+  const source = configDir ? path.join(configDir, '.claude.json') : path.join(os.homedir(), '.claude.json');
+  const sig = await fs.promises.stat(source).then((st) => `${source}:${st.size}:${st.mtimeMs}`, () => `${source}:none`);
+  const hit = mcpConfigs.get(file);
+  if (hit && hit.sig === sig && (hit.result === null || (await fs.promises.access(file).then(() => true, () => false)))) return hit.result;
+  let servers: Record<string, unknown> = {};
+  try {
+    const global = JSON.parse(await fs.promises.readFile(source, 'utf8')) as ClaudeJson;
+    if (global.mcpServers && typeof global.mcpServers === 'object') servers = global.mcpServers;
+  } catch {
+    // no account file, or one being rewritten: no servers this time
+  }
+  let result: string | null = null;
+  if (Object.keys(servers).length) {
+    await fs.promises.mkdir(path.dirname(file), { recursive: true });
+    await fs.promises.writeFile(file, JSON.stringify({ mcpServers: servers }), { mode: 0o600 });
+    await fs.promises.chmod(file, 0o600);
+    result = file;
+  }
+  mcpConfigs.set(file, { sig, result });
+  return result;
 }
+
+/** The last `--mcp-config` written per file: what its account file looked like then, and the result. */
+const mcpConfigs = new Map<string, { sig: string; result: string | null }>();
 
 export type { McpServer };
 export { writeUserMcpConfig, configuredMcpServers, parseMcpList, mergeMcp, checkMcpServers, redactMcpDetails, isMcpName, canLogin, mcpLogin };

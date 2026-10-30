@@ -89,7 +89,8 @@ interface RunnerOptions {
   /** The `--settings` file with the PreToolUse hook. */
   hookSettings(): string;
   env(): NodeJS.ProcessEnv;
-  mcpConfig?(): string | null;
+  /** The account's MCP servers as an `--mcp-config` file, for agents run without the `user` setting source. */
+  mcpConfig?(): Promise<string | null>;
 }
 
 /** The part of an agent definition a session needs. */
@@ -103,6 +104,8 @@ interface SessionRequest {
   env?: Record<string, string> | undefined;
   name?: string | undefined;
   maxBudgetUsd?: number | undefined;
+  /** Filled in by the runner: the `--mcp-config` file, if the session gets one. */
+  mcpConfig?: string | null | undefined;
   onOutput(item: TranscriptItem): void;
   onSession?: ((sessionId: string, model: string | undefined) => void) | undefined;
   onLimits?: ((limits: Limits & { at: number }) => void) | undefined;
@@ -167,14 +170,17 @@ class ClaudeRunner {
     this.opts = opts;
   }
 
-  start(req: SessionRequest): ClaudeSession {
+  async start(req: SessionRequest): Promise<ClaudeSession> {
     const problem = versionProblem(this.opts.version && this.opts.version());
     if (problem) throw new Error(problem);
-    return new ClaudeSession(req, this.opts);
+    const sources = this.opts.settingSources();
+    // Without the user source, the account's own MCP servers come in explicitly.
+    const wantsMcp = req.agent.mcp !== false && this.opts.mcpConfig && (!sources || !sources.includes('user'));
+    return new ClaudeSession({ ...req, mcpConfig: wantsMcp ? await this.opts.mcpConfig!() : null }, this.opts);
   }
 }
 
-function buildArgs(req: Pick<SessionRequest, 'agent' | 'additionalDirectories' | 'maxBudgetUsd' | 'name'>, opts: RunnerOptions): string[] {
+function buildArgs(req: Pick<SessionRequest, 'agent' | 'additionalDirectories' | 'maxBudgetUsd' | 'name' | 'mcpConfig'>, opts: RunnerOptions): string[] {
   const a = req.agent;
   const has = (f: string): boolean => opts.flags().has(f);
   const args = ['-p', '--output-format', 'stream-json', '--input-format', 'stream-json', '--verbose'];
@@ -194,7 +200,7 @@ function buildArgs(req: Pick<SessionRequest, 'agent' | 'additionalDirectories' |
     args.push('--strict-mcp-config');
   } else {
     // Without the user source, the account's own MCP servers come in explicitly.
-    const mcpConfig = opts.mcpConfig && (!sources || !sources.includes('user')) ? opts.mcpConfig() : null;
+    const mcpConfig = req.mcpConfig && (!sources || !sources.includes('user')) ? req.mcpConfig : null;
     if (mcpConfig && has('--mcp-config')) args.push('--mcp-config', mcpConfig);
   }
   for (const d of req.additionalDirectories || []) args.push('--add-dir', d);

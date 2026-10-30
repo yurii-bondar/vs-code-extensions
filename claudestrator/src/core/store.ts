@@ -130,6 +130,9 @@ class TaskService {
   cache: Map<string, { size: number; mtimeMs: number; state: TaskState }>;
   /** The events file's signature right after this process's last append to it, per task. */
   written = new Map<string, string>();
+  /** Transcript lines not written yet, per file, and the write in flight per file: one file's lines stay in order. */
+  queued = new Map<string, string[]>();
+  writes = new Map<string, Promise<void>>();
 
   constructor({ workspace, now, onAppend }: { workspace: string; now?: (() => Date) | undefined; onAppend?: ((taskId: string, event: OrchEvent) => void) | undefined }) {
     this.workspace = workspace;
@@ -391,19 +394,53 @@ class TaskService {
     return this.artifactFile(taskId, `transcripts/${key}.ndjson`);
   }
 
+  /**
+   * Queues a transcript line. Lines of one tick go out in one asynchronous append, so a streaming agent never blocks
+   * the extension host with a write per message. `flushTranscripts` waits for them.
+   */
   appendTranscript(taskId: string, key: string, item: unknown): void {
     const file = this.transcriptFile(taskId, key);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.appendFileSync(file, `${JSON.stringify(item)}\n`);
+    const lines = this.queued.get(file);
+    if (lines) {
+      lines.push(`${JSON.stringify(item)}\n`);
+      return;
+    }
+    this.queued.set(file, [`${JSON.stringify(item)}\n`]);
+    const write = (this.writes.get(file) ?? Promise.resolve()).then(() => this.writeQueued(file));
+    this.writes.set(file, write);
+    void write.then(() => {
+      if (this.writes.get(file) === write) this.writes.delete(file);
+    });
+  }
+
+  private async writeQueued(file: string): Promise<void> {
+    const lines = this.queued.get(file) || [];
+    this.queued.delete(file);
+    try {
+      // Only inside a task folder that still exists: a deleted task does not come back as a folder of transcripts.
+      await fs.promises.mkdir(path.dirname(file)).catch((e: NodeJS.ErrnoException) => {
+        if (e.code !== 'EEXIST') throw e;
+      });
+      await fs.promises.appendFile(file, lines.join(''));
+    } catch {
+      // the task was deleted meanwhile
+    }
+  }
+
+  /** Resolves when every queued transcript line is on disk. */
+  async flushTranscripts(): Promise<void> {
+    while (this.writes.size) await Promise.all([...this.writes.values()]);
   }
 
   readTranscript(taskId: string, key: string, limit = 1500): TranscriptItem[] {
+    const file = this.transcriptFile(taskId, key);
     let text = '';
     try {
-      text = fs.readFileSync(this.transcriptFile(taskId, key), 'utf8');
+      text = fs.readFileSync(file, 'utf8');
     } catch {
-      return [];
+      // nothing written yet
     }
+    text += (this.queued.get(file) || []).join('');
     const items: TranscriptItem[] = [];
     for (const line of text.split('\n')) {
       if (!line) continue;

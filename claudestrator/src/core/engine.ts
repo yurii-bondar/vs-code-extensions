@@ -547,7 +547,10 @@ class Engine extends EventEmitter {
       return { allow: false, reason: 'Claudestrator: the intake only reads; use the get/search/fetch tools' };
     });
     this.setLive(s.taskId, { phase: 'intake', key: INTAKE_KEY, text: `Reading ${src.kind === 'jira' ? src.key : 'the page'} via ${via.server}` });
-    const session = this.runner.start({ agent, prompt, cwd: this.workspace, additionalDirectories: [], env: hook.env, name: `claudestrator ${s.taskId} · intake`, onOutput: emitItem });
+    const session = await this.runner.start({ agent, prompt, cwd: this.workspace, additionalDirectories: [], env: hook.env, name: `claudestrator ${s.taskId} · intake`, onOutput: emitItem }).catch((e: Error) => {
+      this.hooks.unregister(hook.token);
+      throw e;
+    });
     this.sessions.set(s.taskId, session);
     let t: TurnResult = { ok: false, report: '' };
     try {
@@ -591,6 +594,7 @@ class Engine extends EventEmitter {
       this.activity.delete(s.taskId);
       const u: SessionUsage = session.usage ? session.usage() : {};
       this.svc.record(s.taskId, { type: 'agent_stopped', agent: 'intake', payload: { costUsd: t.costUsd || session.costUsd || 0, turns: t.turns || session.turns || 0, sessionId: t.sessionId || session.sessionId, cwd: this.workspace, transcript: INTAKE_KEY, ...(u.model && { model: u.model }), ...(u.effort && { effort: u.effort }) } });
+      await this.svc.flushTranscripts();
     }
   }
 
@@ -674,7 +678,7 @@ class Engine extends EventEmitter {
 
     const writeRoots = stage.scope === 'repo' ? [repoDir as string] : workRepos.map((r) => r.dir);
     const hook = this.hooks.register((call) => this.decide({ taskId, step, writeRoots, config, call, emitItem }));
-    const session = this.runner.start({
+    const session = await this.runner.start({
       agent,
       prompt,
       cwd,
@@ -798,6 +802,7 @@ class Engine extends EventEmitter {
           ...(u.tokens && { tokens: u.tokens }),
         },
       });
+      await this.svc.flushTranscripts();
     }
   }
 
@@ -998,7 +1003,10 @@ class Engine extends EventEmitter {
       return { allow: false, reason: posted ? 'Claudestrator: the comment is already posted; stop and report' : 'Claudestrator: only the add-comment and read tools are allowed here' };
     });
     const agent = { name: 'jira-comment', description: 'Posts one Jira comment', model: 'haiku', effort: 'low' as const, instructions: COMMENT_INSTRUCTIONS, output: 'plan' };
-    const session = this.runner.start({ agent, prompt, cwd: this.workspace, additionalDirectories: [], env: hook.env, name: `claudestrator ${s.taskId} · Jira comment`, onOutput: append });
+    const session = await this.runner.start({ agent, prompt, cwd: this.workspace, additionalDirectories: [], env: hook.env, name: `claudestrator ${s.taskId} · Jira comment`, onOutput: append }).catch((e: Error) => {
+      this.hooks.unregister(hook.token);
+      throw e;
+    });
     let t: TurnResult = { ok: false, report: '' };
     let timer: NodeJS.Timeout | undefined;
     try {
@@ -1016,6 +1024,7 @@ class Engine extends EventEmitter {
       this.hooks.unregister(hook.token);
       const u: SessionUsage = session.usage ? session.usage() : {};
       this.svc.record(s.taskId, { type: 'agent_stopped', agent: 'jira-comment', payload: { costUsd: t.costUsd || session.costUsd || 0, turns: t.turns || session.turns || 0, sessionId: t.sessionId || session.sessionId, cwd: this.workspace, transcript, ...(u.model && { model: u.model }) } });
+      await this.svc.flushTranscripts();
     }
   }
 
