@@ -20,7 +20,7 @@ const sandboxOf = (s: Record<string, unknown>): Sandbox => s.sandbox as Sandbox;
 const denyOf = (s: Record<string, unknown>): string[] => (s.permissions as { deny: string[] }).deny;
 
 test('settings: secrets are never read and pushes never run, also when the guard is bypassed', () => {
-  const s = sessionSettings({ hooks: { PreToolUse: [] }, writeRoots: ['/ws/api'], cwd: '/ws/api', sandbox: true, network: [] });
+  const s = sessionSettings({ hooks: { PreToolUse: [] }, guard: '127.0.0.1:4100', writeRoots: ['/ws/api'], cwd: '/ws/api', sandbox: true, network: [] });
   assert.deepEqual(s.hooks, { PreToolUse: [] });
   const deny = denyOf(s);
   for (const rule of ['Read(~/.ssh/**)', 'Read(~/.aws/**)', 'Read(//**/.env)', 'Read(~/.claude*/.credentials.json)', 'Bash(git push *)', 'Bash(gh pr merge *)']) assert.ok(deny.includes(rule), rule);
@@ -28,18 +28,18 @@ test('settings: secrets are never read and pushes never run, also when the guard
 });
 
 test('settings: the sandbox lets a stage write only its repos, never their git metadata, and reach only the registries', () => {
-  const code = sandboxOf(sessionSettings({ hooks: {}, writeRoots: ['/ws/api', '/elsewhere/web'], cwd: '/ws/api', sandbox: true, network: ['npm.acme.corp'] }));
+  const code = sandboxOf(sessionSettings({ hooks: {}, guard: '127.0.0.1:4100', writeRoots: ['/ws/api', '/elsewhere/web'], cwd: '/ws/api', sandbox: true, network: ['npm.acme.corp'] }));
   assert.equal(code.enabled, true);
   assert.equal(code.allowUnsandboxedCommands, false, 'a command blocked by the sandbox is not run again outside it');
   assert.deepEqual(code.filesystem.denyWrite, [path.join('/ws/api', '.git'), path.join('/elsewhere/web', '.git')]);
   assert.ok(code.filesystem.denyRead.includes('~/.ssh'));
-  assert.deepEqual(code.network.allowedDomains, [...REGISTRIES, 'npm.acme.corp']);
+  assert.deepEqual(code.network.allowedDomains, ['127.0.0.1:4100', ...REGISTRIES, 'npm.acme.corp'], "the guard's own port first: Claude Code sends the hook through the sandbox's proxy");
   assert.ok(!code.network.allowedDomains.includes('github.com'), 'git over github.com is how a push would leave');
 
-  const readOnly = sandboxOf(sessionSettings({ hooks: {}, writeRoots: [], cwd: '/ws', sandbox: true, network: [] }));
+  const readOnly = sandboxOf(sessionSettings({ hooks: {}, guard: '127.0.0.1:4100', writeRoots: [], cwd: '/ws', sandbox: true, network: [] }));
   assert.deepEqual(readOnly.filesystem.denyWrite, ['/ws'], 'a stage that changes nothing does not write its working directory');
 
-  assert.equal(sessionSettings({ hooks: {}, writeRoots: [], cwd: '/ws', sandbox: false, network: [] }).sandbox, undefined, 'policy.sandbox: false');
+  assert.equal(sessionSettings({ hooks: {}, guard: '127.0.0.1:4100', writeRoots: [], cwd: '/ws', sandbox: false, network: [] }).sandbox, undefined, 'policy.sandbox: false');
 });
 
 test('settings: each session gets its own, and a stage writes only in the repos it works in', async () => {

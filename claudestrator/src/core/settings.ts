@@ -45,6 +45,11 @@ const REGISTRIES = [
 interface SessionSettingsArgs {
   /** The guard: `HookServer.settings()`. */
   hooks: Record<string, unknown>;
+  /**
+   * The guard's `host:port`. With the sandbox on, Claude Code sends an http hook through the sandbox's network proxy
+   * too: a host missing from the allowed ones waits for an approval nobody gives in -p, and then fails (403).
+   */
+  guard: string;
   /** Where the session may write; empty for a stage that changes nothing. */
   writeRoots: string[];
   /** The session's working directory: the sandbox lets a session write there unless told not to. */
@@ -56,7 +61,7 @@ interface SessionSettingsArgs {
 }
 
 /** One session's settings. */
-function sessionSettings({ hooks, writeRoots, cwd, sandbox, network }: SessionSettingsArgs): Record<string, unknown> {
+function sessionSettings({ hooks, guard, writeRoots, cwd, sandbox, network }: SessionSettingsArgs): Record<string, unknown> {
   return {
     hooks,
     permissions: { deny: [...SECRET_FILES.map((f) => `Read(${f})`), ...DENIED_COMMANDS] },
@@ -71,7 +76,7 @@ function sessionSettings({ hooks, writeRoots, cwd, sandbox, network }: SessionSe
           // and a stage that changes nothing writes nowhere but a temp folder.
           denyWrite: [...writeRoots.map((r) => path.join(r, '.git')), ...(writeRoots.length ? [] : [cwd])],
         },
-        network: { allowedDomains: [...new Set([...REGISTRIES, ...network])] },
+        network: { allowedDomains: [...new Set([guard, ...REGISTRIES, ...network])] },
       },
     }),
   };

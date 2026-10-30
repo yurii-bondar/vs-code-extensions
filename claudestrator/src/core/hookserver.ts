@@ -66,6 +66,12 @@ class HookServer {
     });
   }
 
+  /** `127.0.0.1:<port>`: what the sandbox's network proxy must let through for the hook to arrive. */
+  host(): string {
+    if (!this.url) throw new Error('the guard server is not listening');
+    return new URL(this.url).host;
+  }
+
   /** Registers a session's policy. Returns the env for the agent: its token, which only that session holds. */
   register(decide: Decide): { token: string; env: Record<string, string> } {
     const token = crypto.randomBytes(24).toString('hex');

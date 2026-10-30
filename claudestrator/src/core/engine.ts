@@ -621,7 +621,7 @@ class Engine extends EventEmitter {
    * itself: deny rules for secrets and pushes, and the sandbox around shell commands (writes only in `writeRoots`).
    */
   agentSettings({ writeRoots, cwd, config }: { writeRoots: string[]; cwd: string; config: Config }): Record<string, unknown> {
-    return sessionSettings({ hooks: this.hooks.settings(), writeRoots, cwd, sandbox: config.policy.sandbox, network: config.policy.network });
+    return sessionSettings({ hooks: this.hooks.settings(), guard: this.hooks.host(), writeRoots, cwd, sandbox: config.policy.sandbox, network: config.policy.network });
   }
 
   spentUsd(taskId: string): number {

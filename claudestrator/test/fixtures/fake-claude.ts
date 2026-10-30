@@ -18,6 +18,7 @@ interface HttpHook {
 }
 interface Settings {
   hooks?: { PreToolUse?: { matcher?: string; hooks: HttpHook[] }[] };
+  sandbox?: { enabled?: boolean; network?: { allowedDomains?: string[] } };
 }
 
 /** Posts `{ url, headers, body }` from stdin and prints the answer; exits 1 on a non-2xx status. */
@@ -96,6 +97,14 @@ function main(): void {
    */
   function askHook(input: object): { allow: boolean; reason: string } {
     if (!hook) return { allow: true, reason: 'no hook' };
+    // With the sandbox on, Claude Code sends the hook through the sandbox's network proxy: a host it does not allow
+    // never gets the request (the real CLI waits minutes for an approval, then gets a 403).
+    const sandboxed = settings && settings.sandbox && settings.sandbox.enabled;
+    const allowed = (settings && settings.sandbox && settings.sandbox.network && settings.sandbox.network.allowedDomains) || [];
+    if (sandboxed && !allowed.includes(new URL(hook.url).host)) {
+      const failure = `PreToolUse hook failed: HTTP 403 from ${hook.url} (the sandbox's proxy)`;
+      return hook.onFailure === 'block' ? { allow: false, reason: failure } : { allow: true, reason: failure };
+    }
     const env = (name: string): string => ((hook.allowedEnvVars || []).includes(name) ? process.env[name] || '' : '');
     const headers = Object.fromEntries(Object.entries(hook.headers || {}).map(([k, v]) => [k, v.replace(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g, (_m, name: string) => env(name))]));
     try {
