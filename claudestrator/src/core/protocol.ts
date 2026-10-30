@@ -201,7 +201,7 @@ const CONFIG_LAYER = T.obj({
   'baseBranch?': T.str(1),
   'repos?': T.rec(T.str(1), T.obj({ 'role?': T.str(1), 'path?': T.str(1), 'baseBranch?': T.str(1), 'gates?': T.arr(GATE) })),
   'jira?': T.obj({ 'allowedProjects?': T.arr(T.str(1)) }),
-  'policy?': T.obj({ 'protectedBranches?': T.arr(T.str(1)), 'draftPrsOnly?': T.bool(), 'forbidAiAttribution?': T.bool(), 'allowNoVerify?': T.bool() }),
+  'policy?': T.obj({ 'protectedBranches?': T.arr(T.str(1)), 'draftPrsOnly?': T.bool(), 'forbidAiAttribution?': T.bool(), 'allowNoVerify?': T.bool(), 'sandbox?': T.bool(), 'network?': T.arr(T.re(/^[A-Za-z0-9*.:[\]-]+$/, 'a host name, e.g. npm.acme.corp or *.acme.corp')) }),
   'git?': T.obj({ 'mode?': T.oneOf(['branch', 'worktree']) }),
   'editor?': T.str(1),
   'context?': T.arr(T.str(1)),

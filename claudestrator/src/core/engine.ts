@@ -20,6 +20,7 @@ import { renderReport, jiraText } from './report';
 import type { Live, PermissionRequest, RepoStatus } from './wire';
 import type { ClaudeRunner, ClaudeSession, Limits, TurnResult } from './runner';
 import { HOOK_TIMEOUT_S, type HookServer, type Decision, type ToolCall } from './hookserver';
+import { sessionSettings } from './settings';
 import type { AtlassianClient, Invocation } from './intake';
 import type { StageSource } from './pipeline';
 import type { RepoGates } from './gates';
@@ -562,7 +563,7 @@ class Engine extends EventEmitter {
       return { allow: false, reason: 'Claudestrator: the intake only reads; use the get/search/fetch tools' };
     });
     this.setLive(s.taskId, { phase: 'intake', key: INTAKE_KEY, text: `Reading ${src.kind === 'jira' ? src.key : 'the page'} via ${via.server}` });
-    const session = await this.runner.start({ agent, prompt, cwd: this.workspace, settings: this.agentSettings(), additionalDirectories: [], env: hook.env, name: `claudestrator ${s.taskId} · intake`, onOutput: emitItem }).catch((e: Error) => {
+    const session = await this.runner.start({ agent, prompt, cwd: this.workspace, settings: this.agentSettings({ writeRoots: [], cwd: this.workspace, config: this.config() }), additionalDirectories: [], env: hook.env, name: `claudestrator ${s.taskId} · intake`, onOutput: emitItem }).catch((e: Error) => {
       this.hooks.unregister(hook.token);
       throw e;
     });
@@ -613,9 +614,12 @@ class Engine extends EventEmitter {
     }
   }
 
-  /** The settings every agent session gets (`--settings`): the guard hook in front of every tool call. */
-  agentSettings(): Record<string, unknown> {
-    return { hooks: this.hooks.settings() };
+  /**
+   * A session's settings (`--settings`): the guard hook in front of every tool call, and what Claude Code enforces
+   * itself: deny rules for secrets and pushes, and the sandbox around shell commands (writes only in `writeRoots`).
+   */
+  agentSettings({ writeRoots, cwd, config }: { writeRoots: string[]; cwd: string; config: Config }): Record<string, unknown> {
+    return sessionSettings({ hooks: this.hooks.settings(), writeRoots, cwd, sandbox: config.policy.sandbox, network: config.policy.network });
   }
 
   spentUsd(taskId: string): number {
@@ -692,7 +696,9 @@ class Engine extends EventEmitter {
     // Readiness and audit agents read every configured repo where it is, also outside the workspace folder.
     const readRepos = REPORT_OUTPUTS.has(stage.output) ? Object.values(config.repos).map((r) => ({ name: r.name, dir: path.resolve(this.workspace, r.path), baseBranch: r.baseBranch, ...(r.role && { role: r.role }) })) : [];
     const prompt = buildAgentPrompt({ state, next: run, taskDir, language: config.language, ...(repoDir && { repoDir }), ...(workRepos.length && { workRepos }), ...(diffPath && { diffPath }), ...(readRepos.length && { repos: readRepos }) });
-    const cwd = repoDir || (workRepos.length === 1 ? workRepos[0]!.dir : this.workspace);
+    // A stage that writes starts in the repo it writes (the first of them for a stage across repos): Claude Code's
+    // sandbox lets a session write its working directories, so the workspace around the repos is never one of them.
+    const cwd = repoDir || (workRepos.length ? workRepos[0]!.dir : this.workspace);
     const emitItem = this.emitter(taskId, key);
     if (next.kind === 'run') emitItem({ type: 'prompt', text: prompt });
 
@@ -702,8 +708,10 @@ class Engine extends EventEmitter {
       agent,
       prompt,
       cwd,
-      settings: this.agentSettings(),
-      additionalDirectories: [...new Set([taskDir, this.workspace, ...workRepos.map((r) => r.dir), ...readRepos.map((r) => r.dir).filter((d) => fs.existsSync(d))])].filter((d) => !realInside(cwd, d)),
+      settings: this.agentSettings({ writeRoots, cwd, config }),
+      // Only the repos a stage writes are working directories; it reads the task folder, the workspace and other repos
+      // through the guard, which allows reading.
+      additionalDirectories: [...new Set(writeRoots)].filter((d) => !realInside(cwd, d)),
       env: hook.env,
       name: `claudestrator ${taskId} · ${label}`,
       onOutput: emitItem,
@@ -1030,7 +1038,7 @@ class Engine extends EventEmitter {
       return { allow: false, reason: posted ? 'Claudestrator: the comment is already posted; stop and report' : 'Claudestrator: only the add-comment and read tools are allowed here' };
     });
     const agent = { name: 'jira-comment', description: 'Posts one Jira comment', model: 'haiku', effort: 'low' as const, instructions: COMMENT_INSTRUCTIONS, output: 'plan' };
-    const session = await this.runner.start({ agent, prompt, cwd: this.workspace, settings: this.agentSettings(), additionalDirectories: [], env: hook.env, name: `claudestrator ${s.taskId} · Jira comment`, onOutput: append }).catch((e: Error) => {
+    const session = await this.runner.start({ agent, prompt, cwd: this.workspace, settings: this.agentSettings({ writeRoots: [], cwd: this.workspace, config: this.config() }), additionalDirectories: [], env: hook.env, name: `claudestrator ${s.taskId} · Jira comment`, onOutput: append }).catch((e: Error) => {
       this.hooks.unregister(hook.token);
       throw e;
     });

@@ -573,6 +573,8 @@ function resolveConfig(layers: Layer[], opts: { flags?: Flags | undefined; readF
         draftPrsOnly: merged.policy.draftPrsOnly ?? true,
         forbidAiAttribution: merged.policy.forbidAiAttribution ?? false,
         allowNoVerify: merged.policy.allowNoVerify ?? false,
+        sandbox: merged.policy.sandbox ?? true,
+        network: merged.policy.network ?? [],
       },
       context,
       git: { mode: merged.gitMode ?? 'branch' },

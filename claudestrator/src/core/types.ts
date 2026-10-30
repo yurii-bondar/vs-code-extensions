@@ -233,6 +233,10 @@ export interface Policy {
   draftPrsOnly: boolean;
   forbidAiAttribution: boolean;
   allowNoVerify: boolean;
+  /** Run the agents' shell commands in Claude Code's sandbox (macOS, Linux, WSL2). */
+  sandbox: boolean;
+  /** Hosts sandboxed commands may reach besides the package registries. */
+  network: string[];
 }
 
 export interface Config {
