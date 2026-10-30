@@ -12,7 +12,7 @@ import * as libraries from '../src/core/library';
 import { buildAgentPrompt, parseStageReport, reportLanguage } from '../src/core/prompt';
 import { guardBash } from '../src/core/guard';
 import { readJsonFresh } from '../src/core/env';
-import { GitRepo } from '../src/core/git';
+import { GitRepo, exec } from '../src/core/git';
 import { parseHookRequest } from '../src/core/hookserver';
 import { plain } from '../src/core/gates';
 import { parseInvocation, storageToText, classifyInput, extractAcceptanceCriteria, adfToText, detectScenario } from '../src/core/intake';
@@ -1541,4 +1541,11 @@ test("config: a library agent nothing runs does not break the config with a miss
   fs.writeFileSync(path.join(ws, '.claudestrator', 'config.yaml'), 'agents:\n  developer: { instructions: { file: ../../outside-prompt.md } }\n');
   assert.throws(() => config.ensureInstructionsFile(ws, 'developer', { instructions: 'x' }), /outside \.claudestrator\/; create it yourself/);
   assert.ok(!fs.existsSync(path.resolve(ws, '.claudestrator', '../../outside-prompt.md')), 'nothing was created out there');
+});
+
+test('git: output too large to read whole says it was cut, so a diff is never taken for whole', async () => {
+  const r = await exec(process.execPath, ['-e', "process.stdout.write('x'.repeat(5000))"], { maxBytes: 1000 });
+  assert.equal(r.code, 125);
+  assert.match(r.stderr, /passed 1000 bytes and was cut there/);
+  assert.ok(r.stdout.length <= 1000);
 });

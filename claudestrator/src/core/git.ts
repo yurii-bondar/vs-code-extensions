@@ -42,16 +42,22 @@ interface ExecOptions {
   timeoutMs?: number;
   env?: NodeJS.ProcessEnv | undefined;
   input?: string | undefined;
+  /** The most of its output read; MAX_OUTPUT unless a caller needs less. */
+  maxBytes?: number | undefined;
 }
 
-/** Never rejects: `{ code, stdout, stderr }`, code 127 when the binary is missing, 124 on timeout. */
-function exec(cmd: string, args: readonly string[], { cwd, timeoutMs = 60000, env, input }: ExecOptions = {}): Promise<ExecResult> {
+/** The most a command's output is read into memory; more is cut, and the result says so (code 125). */
+const MAX_OUTPUT = 64 * 1024 * 1024;
+
+/** Never rejects: `{ code, stdout, stderr }`, code 127 when the binary is missing, 124 on timeout, 125 when cut. */
+function exec(cmd: string, args: readonly string[], { cwd, timeoutMs = 60000, env, input, maxBytes = MAX_OUTPUT }: ExecOptions = {}): Promise<ExecResult> {
   return new Promise((resolve) => {
     const [file, argv] = launch(cmd, args);
-    const child = execFile(file, argv, { cwd, timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, env: env || childEnv }, (err, stdout, stderr) => {
+    const child = execFile(file, argv, { cwd, timeout: timeoutMs, maxBuffer: maxBytes, env: env || childEnv }, (err, stdout, stderr) => {
       let code = 0;
-      if (err) code = err.code === 'ENOENT' ? 127 : err.killed ? 124 : typeof err.code === 'number' ? err.code : 1;
-      resolve({ code, stdout: String(stdout ?? ''), stderr: `${stderr ?? ''}${err && err.code === 'ENOENT' ? `${cmd}: not found` : ''}${err && err.killed ? `\nkilled after ${Math.round(timeoutMs / 1000)}s` : ''}` });
+      const overflow = Boolean(err && (err.code as unknown) === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER');
+      if (err) code = err.code === 'ENOENT' ? 127 : overflow ? 125 : err.killed ? 124 : typeof err.code === 'number' ? err.code : 1;
+      resolve({ code, stdout: String(stdout ?? ''), stderr: `${stderr ?? ''}${err && err.code === 'ENOENT' ? `${cmd}: not found` : ''}${overflow ? `\n${cmd}: its output passed ${maxBytes} bytes and was cut there` : err && err.killed ? `\nkilled after ${Math.round(timeoutMs / 1000)}s` : ''}` });
     });
     if (input !== undefined) child.stdin!.end(input);
   });
@@ -125,20 +131,22 @@ class GitRepo {
   }
 
   /** Stat and full diff against the base, untracked files included as additions. */
+  /** The checkout's changes against the base, as a patch. One cut for size says so, so a reviewer never takes it for whole. */
   async diff(base: string): Promise<string> {
     const ref = await this.baseRef(base);
-    const parts = [(await this.git('--no-pager', 'diff', '--stat', ref, '--', '.', ...EXCLUDE)).stdout, (await this.git('--no-pager', 'diff', ref, '--', '.', ...EXCLUDE)).stdout];
-    for (const f of await this.untracked()) parts.push((await this.git('--no-pager', 'diff', '--no-index', '--', '/dev/null', f)).stdout);
-    return parts.filter((p) => p.trim()).join('\n');
+    const runs = [await this.git('--no-pager', 'diff', '--stat', ref, '--', '.', ...EXCLUDE), await this.git('--no-pager', 'diff', ref, '--', '.', ...EXCLUDE)];
+    for (const f of await this.untracked()) runs.push(await this.git('--no-pager', 'diff', '--no-index', '--', '/dev/null', f));
+    const cut = runs.some((r) => r.code === 125);
+    return [...runs.map((r) => r.stdout), cut ? `[this diff is larger than ${MAX_OUTPUT / 1024 / 1024} MB and was cut: review the rest with git diff in the repo, file by file]` : ''].filter((p) => p.trim()).join('\n');
   }
 
-  /** Stages everything except the orchestrator's own folders. */
   /** Where git keeps this checkout's metadata: its own folder and, for a worktree, the repository's shared one. */
   async gitDirs(): Promise<string[]> {
     const r = await this.git('rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir');
     return r.code === 0 ? [...new Set(r.stdout.split('\n').map((l) => l.trim()).filter(Boolean))] : [path.join(this.dir, '.git')];
   }
 
+  /** Stages everything except the orchestrator's own folders. */
   addAll(): Promise<ExecResult> {
     return this.git('add', '-A', '--', '.', ...EXCLUDE);
   }
