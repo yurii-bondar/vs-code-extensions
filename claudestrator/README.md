@@ -19,6 +19,7 @@ The orchestration is code, not a prompt: a pure state machine decides what runs 
 - **New task**: the activity-bar icon, `⌘⌥N`, or *Start a Task from Selection* in an editor. Type what you want in plain words. Below the box you see what it was recognised as (free text, Jira issue, Confluence page), the task id, and the exact pipeline it will run. Click an agent chip to skip it for this task, or turn on *Skip plan approval*. The effort part of a chip (`medium ▾`) changes that agent's effort for this task only; *Effort: … ▾* sets it for every agent. In the text, `--effort high` or `--effort developer=max,tester=low` does the same. The choice is saved with the task and wins over the agents' settings.
 - **Scenario**: *Deliver*, *Check readiness* or *Audit* at the top of the composer. Your words pick it (`готовність`, `acceptance criteria`, `критерії приймання` → readiness; `аудит`, `audit`, `вузькі місця` → audit) unless you click one; `--scenario readiness|audit` in the text does the same. A readiness check takes the one Jira issue a sentence names as its source and keeps the rest of the sentence in the ticket as what you asked. Report tasks get their own ids (`PROJ-123-check`, `AUDIT-<time>`), so they never continue the delivery task; checking again after a finished check is a new run (`PROJ-123-check-2`). Commands: *Check a Task's Readiness…*, *Audit the Project…*.
 - **Scenarios page**: every scenario as a card, built-in, your own or from a library, with its agents. *Use* starts a task with it; *Edit* opens its agents in the card: drag them into order, add and remove them, and for your own scenarios set a name, a description and a model and effort per agent for this scenario only (empty means the agent's own setting; the composer can still change effort per task). *New scenario* opens a draft that is saved to `config.yaml` only with its first agent, so a stray click leaves nothing behind. Agents that change code make it end with draft PRs like Deliver; readiness or audit agents make it a read-only report. One scenario cannot mix the two. 🗑 deletes a scenario; Check readiness and Audit can be deleted too and brought back on the same page; Deliver always stays. The backup of agents, pipeline and scenarios is saved and restored there as well, and the page lists your libraries with *Add library…*. In the composer the scenario menu only picks one (*Manage scenarios…* leads to the page); `--scenario <name>` in the text picks one too. A task started from your scenario shows its name and the models it runs with.
+- **Group and instructions**: under the text box. *No group ▾* puts the task into an epic, a story or a plain group, with its Jira key (`CP-123`) if it has one, or leaves it on its own. A group can tick instructions you already have: picking it ticks them in the composer (untick any for one task; switching to another group unticks the old group's and ticks the new one's, ones you ticked by hand stay). It can also carry instructions of its own words for every task in it (the epic's conventions, what must not change). *No instructions ▾* ticks any number of your own instructions (*No new dependencies*: "use what the repo already has"), or none. Every agent of the task gets the group, its instructions and the ticked ones word for word in its prompt, the group's first. *New group…* / *New instruction…* at the bottom of each menu and ✎ / 🗑 on each item add, change and delete them in place; they are saved to `config.yaml` (`groups:`, `instructions:`). A task keeps them as they were when it started: changing or deleting one later does not change a running task. The task card and screen show the group; the task's *Details* list its instructions.
 - **Tasks view** (sidebar) groups tasks into *Needs you*, *Running*, *Paused* and *Finished*. The badge and the status bar count what needs you. Notifications tell you when a task needs a decision, finishes or fails.
 - **Task screen**:
   - **Decisions** appear at the top, with everything needed to decide: the rendered plan with its open questions and branch, the red check output, the reviewer's findings, or per-repo commits with the combined diff before a push. Options that take feedback (request changes, retry with a hint) have a text box. `⌘↵` picks the primary option.
@@ -122,6 +123,17 @@ language: Ukrainian
 baseBranch: main
 context: [./workspace.md]
 git: { mode: worktree }
+groups:                          # what a task can belong to: epic, story or group, with an optional Jira key
+  checkout-revamp:
+    type: epic
+    label: Checkout revamp
+    jira: CP-123
+    defaultInstructions: [no-new-deps]   # optional: ticked in the composer when the group is picked
+    instructions: Refund endpoints live under /v2/refunds; keep /orders responses unchanged.   # optional, for every task in it
+instructions:                    # picked per task in the composer; every agent of the task follows them
+  no-new-deps:
+    label: No new dependencies
+    text: Do not add npm packages; use what the repo already has.
 repos:
   api:
     role: Public REST API (NestJS)

@@ -15,7 +15,7 @@ interface Views {
 }
 
 (function () {
-  const { call, attempt, toast, icon, esc, md, $, $$, ago, clock, dur, money, size, plural, stepName, agentColor, S, views, go, patch, persist, statusBadge, sourceChip, permissionCard, autosize, shake, fmtTokens, meter, level, effortTag, scenarioChip, sevCounts, SCENARIO_INFO, pipeRowHtml, pipeEditors, pipeDragging } = window.CS;
+  const { call, attempt, toast, icon, esc, md, $, $$, ago, clock, dur, money, size, plural, stepName, agentColor, S, views, go, patch, persist, statusBadge, sourceChip, permissionCard, autosize, shake, fmtTokens, meter, level, effortTag, scenarioChip, groupChip, sevCounts, SCENARIO_INFO, pipeRowHtml, pipeEditors, pipeDragging } = window.CS;
 
   type ReadinessResult = Extract<TaskResult, { kind: 'readiness' }>;
   type AuditResult = Extract<TaskResult, { kind: 'audit' }>;
@@ -410,6 +410,7 @@ interface Views {
           <button class="chip mono" data-action="copy-id" title="Copy task id">${esc(d.taskId)}</button>
           ${sourceChip(d.source)}
           ${scenarioChip(d.scenario, d.scenarioLabel)}
+          ${groupChip(d.group)}
           ${statusBadge(d.status, d.live)}
           ${live ? `<span class="muted small">${icon('clock')}<span data-since="${since}">${dur(Date.now() - since)}</span></span>` : ''}
           ${d.round > 1 ? `<span class="chip">${icon('refresh')}round ${d.round}/${d.maxRounds}</span>` : ''}
@@ -481,6 +482,8 @@ interface Views {
       ${d.scenarioLabel ? row('Scenario', esc(d.scenarioLabel)) : ''}` : `${row('Scenario', `${esc(d.scenarioLabel || SCENARIO_INFO[d.scenario]!.label)}<div class="muted small">read-only: nothing in your repos changes</div>`)}`}
       ${Object.keys(d.model || {}).length ? row('Model', `${Object.entries(d.model).map(([a, m]) => `<span class="eff-pair">${esc(a)} <code>${esc(m)}</code></span>`).join(' ')}<div class="muted small">from the scenario, over the agents' settings</div>`) : ''}
       ${Object.keys(d.effort || {}).length ? row('Effort', `${Object.entries(d.effort).map(([a, l]) => `<span class="eff-pair">${esc(a)} ${effortTag(l)}</span>`).join(' ')}<div class="muted small">for this task, over the agents' settings</div>`) : ''}
+      ${d.group ? row('Group', `${esc(d.group.label)}<div class="muted small">${esc(d.group.type)}${d.group.jira ? ` · Jira ${esc(d.group.jira)}` : ''}</div>${d.group.instructions ? `<div class="muted small pre-wrap">${esc(d.group.instructions)}</div>` : ''}`) : ''}
+      ${d.instructions.length ? row('Instructions', `${d.instructions.map((x) => `<div class="extra-pick"><b>${esc(x.label)}</b><div class="muted small pre-wrap">${esc(x.text)}</div></div>`).join('')}`) : ''}
       ${deliver ? row('Review', `round ${d.round} of ${d.maxRounds}`) : ''}
       ${row('Cost', money(d.cost))}
       ${row('Started', `<span title="${esc(d.createdAt)}">${ago(d.createdAt)}</span>`)}

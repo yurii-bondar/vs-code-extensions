@@ -18,7 +18,7 @@ import { effectiveFor } from './core/defaults';
 import { AGENT_COLORS, OUTPUTS, EFFORTS, validateSetting } from './core/protocol';
 import { settings, type Orchestrator } from './orchestrator';
 import type { Engine } from './core/engine';
-import type { ComposerArgs, ConfigData, ConfigSummary, HealthSummary, NewAgentParams, PipelineEdit, Preview, ReposData, Route, Rpc, RpcHandlers, SaveScenarioParams, SettingsData, SetupParams, TaskScreen } from './core/wire';
+import type { ComposerArgs, ConfigData, ConfigSummary, HealthSummary, NewAgentParams, PipelineEdit, Preview, ReposData, Route, Rpc, RpcHandlers, SaveGroupParams, SaveInstructionParams, SaveScenarioParams, SettingsData, SetupParams, TaskScreen } from './core/wire';
 import type { Agent, ScenarioStep, Gate, TaskState } from './core/types';
 import type { ConfigLayer, RepoLayer } from './core/config';
 
@@ -185,6 +185,8 @@ class DashboardPanel implements RpcHandlers {
       language: c.language,
       gitMode: c.git.mode,
       jiraProjects: c.jira.allowedProjects,
+      groups: Object.values(c.groups),
+      instructions: Object.values(c.instructions),
     };
   }
 
@@ -497,6 +499,33 @@ class DashboardPanel implements RpcHandlers {
 
   async $restoreScenario({ id }: { id: string }) {
     cfg.restoreScenario(this.root, id);
+  }
+
+  // ---------- task groups and instructions ----------
+
+  async $saveGroup({ id, type, label, jira, instructions, defaultInstructions }: SaveGroupParams) {
+    return { id: cfg.saveGroup({ workspace: this.root, id, type, label, jira, instructions, defaultInstructions }) };
+  }
+
+  async $deleteGroup({ id }: { id: string }) {
+    return { deleted: await this.deleteEntry('groups', id, 'Tasks already in it keep showing it.') };
+  }
+
+  async $saveInstruction({ id, label, text }: SaveInstructionParams) {
+    return { id: cfg.saveInstruction({ workspace: this.root, id, label, text }) };
+  }
+
+  async $deleteInstruction({ id }: { id: string }) {
+    return { deleted: await this.deleteEntry('instructions', id, 'Tasks that picked it keep following it.') };
+  }
+
+  private async deleteEntry(section: cfg.EntrySection, id: string, detail: string): Promise<boolean> {
+    const r = this.orch.config();
+    const label = (r.ok && r.config[section][id] && r.config[section][id]!.label) || id;
+    const ok = await vscode.window.showWarningMessage(`Delete the ${section === 'groups' ? 'group' : 'instruction'} "${label}"?`, { modal: true, detail: `It is removed from config.yaml. ${detail}` }, 'Delete');
+    if (!ok) return false;
+    cfg.removeEntry(this.root, section, id);
+    return true;
   }
 
   /** Saves the project's agents, pipeline and scenarios (with the agents' instruction files) to a file you pick. */

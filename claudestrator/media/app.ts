@@ -20,6 +20,11 @@ interface HomeView extends View {
   scenarioAgents(sc: string): AgentSummary[];
   renderScenario(): void;
   renderAgentsChips(): void;
+  /** The group and instructions menus, and the editor of the one being written. */
+  renderExtras(): void;
+  extraEditorHtml(): string;
+  /** The instructions a group can tick, as toggles; `ticked` are on. */
+  defaultsHtml(ticked: string[]): string;
   preview(): void;
   start(): Promise<void>;
 }
@@ -227,6 +232,10 @@ interface Views {
     if (label) return `<span class="chip sc-chip sc-custom" title="Your scenario">${icon('wand')}${esc(label)}</span>`;
     return sc && sc !== 'deliver' ? `<span class="chip sc-chip sc-${sc}" title="${esc(SCENARIO_INFO[sc]!.hint)}">${icon(SCENARIO_INFO[sc]!.icon)}${esc(SCENARIO_INFO[sc]!.label)}</span>` : '';
   };
+  const GROUP_TYPES: Record<GroupType, string> = { epic: 'Epic', story: 'Story', group: 'Group' };
+  const asGroupType = (v: string): GroupType => (v === 'epic' || v === 'story' ? v : 'group');
+  const groupChip = (g: TaskGroup | undefined) =>
+    g ? `<span class="chip group-chip" title="${esc(`${GROUP_TYPES[g.type]} ${g.label}${g.jira ? ` · Jira ${g.jira}` : ''}`)}">${icon('folder')}${esc(g.label)}${g.jira ? `<span class="muted">${esc(g.jira)}</span>` : ''}</span>` : '';
   const FALLBACK_MODELS: [string, string][] = [
     ['opus', 'Opus'],
     ['sonnet', 'Sonnet'],
@@ -270,7 +279,7 @@ interface Views {
   const S: AppState = {
     route: saved.route || { name: 'home' },
     overview: null,
-    draft: { text: '', no: [], auto: false, key: '', effort: {}, scenario: 'auto', ...(saved.draft || {}) },
+    draft: { text: '', no: [], auto: false, key: '', effort: {}, scenario: 'auto', group: '', instructions: [], ...(saved.draft || {}) },
     ui: saved.ui || {},
   };
   /** The config when it is valid; the dashboard offers nothing to change in a broken one. */
@@ -695,6 +704,18 @@ interface Views {
     'PROJ-123',
   ];
 
+  const groupTicks = (id: string) => okConfig()?.groups.find((g) => g.id === id)?.defaultInstructions ?? [];
+  /**
+   * Puts the task being written into a group (or none): what the group it was in ticked (`before`) is unticked, what the
+   * new one ticks is ticked; instructions ticked by hand stay.
+   */
+  function pickGroup(id: string, before: string[]) {
+    const kept = S.draft.instructions.filter((x) => !before.includes(x));
+    S.draft.group = id;
+    S.draft.instructions = [...new Set([...kept, ...groupTicks(id)])];
+    persist();
+  }
+
   views.home = {
     detected: null,
     async enter(route) {
@@ -729,6 +750,7 @@ interface Views {
       await loadOverview();
       this.render();
       this.renderAgentsChips();
+      this.renderExtras();
     },
     render() {
       const o = S.overview;
@@ -787,6 +809,8 @@ interface Views {
           <div class="scenarios" data-region="scenarios"></div>
         </div>
         <textarea id="composer-text" class="composer-text" rows="3" placeholder="${esc(scInfo(this.scenario()).placeholder)}" ${disabled ? 'disabled' : ''}>${esc(S.draft.text)}</textarea>
+        <div class="composer-extras" data-region="extras"></div>
+        <div data-region="extra-editor"></div>
         <div class="composer-detect" data-region="detect"></div>
         <div class="composer-row">
           <div class="agents-chips" data-region="agent-chips"></div>
@@ -803,6 +827,7 @@ interface Views {
           </div>
         </details>`;
       this.renderAgentsChips();
+      this.renderExtras();
       autosize($('#composer-text'));
     },
     /** The scenario the task will run: your pick (while it exists), else what the words suggest (from the last preview). */
@@ -884,6 +909,76 @@ interface Views {
           .join('')}`
       );
     },
+    renderExtras() {
+      const c = okConfig();
+      if (!c) {
+        patch('extras', '');
+        patch('extra-editor', '');
+        return;
+      }
+      const group = c.groups.find((g) => g.id === S.draft.group);
+      const picked = c.instructions.filter((x) => S.draft.instructions.includes(x.id));
+      const tools = (kind: string, id: string, label: string) =>
+        `<button class="icon-btn" data-action="extra-edit" data-kind="${kind}" data-id="${esc(id)}" title="Edit ${esc(label)}">${icon('edit')}</button><button class="icon-btn extra-del" data-action="extra-delete" data-kind="${kind}" data-id="${esc(id)}" title="Delete ${esc(label)}">${icon('trash')}</button>`;
+      const groupItem = (g: TaskGroup) => `<div class="sc-item ${group === g ? 'current' : ''}">
+          <button class="sc-pick" role="menuitemradio" aria-checked="${group === g}" data-action="set-group" data-id="${esc(g.id)}">${icon(group === g ? 'check' : 'folder')}<span class="sc-text"><b>${esc(g.label)}</b><span class="muted small">${GROUP_TYPES[g.type]}${g.jira ? ` · ${esc(g.jira)}` : ''}${g.instructions ? ' · with instructions' : ''}${g.defaultInstructions ? ` · ticks ${plural(g.defaultInstructions.length, 'instruction')}` : ''}</span></span></button>${tools('group', g.id, g.label)}
+        </div>`;
+      const instructionItem = (x: TaskInstruction) => {
+        const on = picked.includes(x);
+        return `<div class="sc-item ${on ? 'current' : ''}">
+          <button class="sc-pick" role="menuitemcheckbox" aria-checked="${on}" data-action="toggle-instruction" data-id="${esc(x.id)}">${on ? icon('check') : '<span class="ic"></span>'}<span class="sc-text"><b>${esc(x.label)}</b><span class="muted small extra-text">${esc(x.text)}</span></span></button>${tools('instruction', x.id, x.label)}
+        </div>`;
+      };
+      const instructionsLabel = !picked.length ? 'No instructions' : picked.length === 1 ? esc(picked[0]!.label) : `${picked.length} instructions`;
+      // Picking happens in the menus; a new or changed one is written in the editor under them.
+      patch(
+        'extras',
+        `<span class="menu-wrap extra-select group-select">
+          <button class="sc-current ${group ? 'picked' : ''}" data-action="eff-menu" aria-haspopup="menu" title="${esc(group ? `${GROUP_TYPES[group.type]} ${group.label}${group.jira ? ` · Jira ${group.jira}` : ''}` : 'The epic, story or group this task belongs to')}">${icon('folder')}${group ? esc(group.label) : 'No group'}${group && group.jira ? `<span class="sc-auto">${esc(group.jira)}</span>` : ''}<span class="sc-caret">▾</span></button>
+          <div class="menu sc-menu" role="menu">
+            <div class="sc-item ${group ? '' : 'current'}"><button class="sc-pick" role="menuitemradio" aria-checked="${!group}" data-action="set-group" data-id="">${icon(group ? 'x' : 'check')}<span class="sc-text"><b>No group</b><span class="muted small">The task stands on its own</span></span></button></div>
+            ${c.groups.map(groupItem).join('')}
+            <div class="sc-foot"><button class="sc-manage" data-action="extra-new" data-kind="group">${icon('plus')}New group…<span class="muted small">an epic, a story or a group, with its Jira key if it has one</span></button></div>
+          </div>
+        </span>
+        <span class="menu-wrap extra-select instructions-select">
+          <button class="sc-current ${picked.length ? 'picked' : ''}" data-action="eff-menu" aria-haspopup="menu" title="${esc(picked.length ? `Every agent of the task follows: ${picked.map((x) => x.label).join(', ')}` : 'Instructions of your own every agent of the task follows')}">${icon('list')}${instructionsLabel}<span class="sc-caret">▾</span></button>
+          <div class="menu sc-menu" role="menu">
+            ${c.instructions.length ? c.instructions.map(instructionItem).join('') : '<div class="muted small extra-empty">None yet: write down what you keep telling the agents, then tick it for the tasks that need it.</div>'}
+            <div class="sc-foot"><button class="sc-manage" data-action="extra-new" data-kind="instruction">${icon('plus')}New instruction…<span class="muted small">your own words, read by every agent of the task</span></button></div>
+          </div>
+        </span>`
+      );
+      patch('extra-editor', this.extraEditorHtml());
+      autosize($('[data-key="extra-text"]'));
+    },
+    extraEditorHtml() {
+      const e = S.ui.extraEdit;
+      if (!e) return '';
+      const group = e.kind === 'group';
+      return `<div class="sc-editor extra-editor">
+        <div class="sc-fields">
+          ${group ? `<label class="field"><span>Type</span><select class="input" data-change="extra-type">${Object.entries(GROUP_TYPES).map(([v, l]) => `<option value="${v}" ${e.type === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>` : ''}
+          <label class="field"><span>Name</span><input class="input" data-input="extra-field" data-field="label" data-key="extra-label" value="${esc(e.label)}" maxlength="80" placeholder="${group ? 'e.g. Checkout revamp' : 'e.g. No new dependencies'}"></label>
+          ${group ? `<label class="field"><span>Jira key <span class="muted">(optional)</span></span><input class="input" data-input="extra-field" data-field="jira" data-key="extra-jira" value="${esc(e.jira)}" placeholder="e.g. CP-123" spellcheck="false"></label>` : ''}
+        </div>
+        ${group
+          ? `<div class="field"><span>Instructions it ticks <span class="muted">(when you pick the group; a task can still untick them)</span></span><div class="extra-defaults">${this.defaultsHtml(e.defaults)}</div></div>
+            <label class="field"><span>Instructions for every task in it <span class="muted">(optional, your own words; every agent reads them as written, before the task's own)</span></span><textarea class="input autosize" rows="3" data-input="extra-field" data-field="text" data-key="extra-text" placeholder="e.g. All refund endpoints live under /v2/refunds; keep the old /orders responses unchanged.">${esc(e.text)}</textarea></label>`
+          : `<label class="field"><span>Instruction <span class="muted">(every agent of the task reads it as written)</span></span><textarea class="input autosize" rows="3" data-input="extra-field" data-field="text" data-key="extra-text" placeholder="e.g. Do not add npm dependencies; use what the repo already has.">${esc(e.text)}</textarea></label>`}
+        <div class="row"><button class="btn primary sm" data-action="extra-save">${icon('check')}${e.id ? 'Save' : group ? 'Add group' : 'Add instruction'}</button><button class="btn ghost sm" data-action="extra-cancel">${icon('x')}Cancel</button><span class="muted small">Saved to <code>.claudestrator/config.yaml</code>${e.id ? '; tasks already started keep what they had' : ''}.</span></div>
+      </div>`;
+    },
+    defaultsHtml(ticked) {
+      const all = okConfig()?.instructions ?? [];
+      if (!all.length) return '<span class="muted small">No instructions yet: add them with <b>New instruction…</b> in the instructions menu.</span>';
+      return all
+        .map((x) => {
+          const on = ticked.includes(x.id);
+          return `<button class="chip ${on ? 'on' : ''}" data-action="extra-default" data-id="${esc(x.id)}" aria-pressed="${on}" title="${esc(x.text)}">${icon(on ? 'check' : 'plus')}${esc(x.label)}</button>`;
+        })
+        .join('');
+    },
     preview() {
       debounce('preview', async () => {
         if (S.route.name !== 'home') return;
@@ -938,11 +1033,15 @@ interface Views {
       const btn = $<HTMLButtonElement>('#start-btn')!;
       btn.disabled = true;
       btn.classList.add('busy');
-      const r = await attempt('start', { text: S.draft.text, auto: S.draft.auto, no: S.draft.no, key: S.draft.key || undefined, effort: S.draft.effort, scenario: this.scenario() });
+      // Only what the config still has: a group or instruction deleted elsewhere is dropped, not an error.
+      const c = okConfig();
+      const group = c && c.groups.some((g) => g.id === S.draft.group) ? S.draft.group : undefined;
+      const instructions = S.draft.instructions.filter((id) => c && c.instructions.some((x) => x.id === id));
+      const r = await attempt('start', { text: S.draft.text, auto: S.draft.auto, no: S.draft.no, key: S.draft.key || undefined, effort: S.draft.effort, scenario: this.scenario(), group, instructions });
       btn.disabled = false;
       btn.classList.remove('busy');
       if (!r) return;
-      S.draft = { text: '', no: [], auto: false, key: '', effort: {}, scenario: 'auto' };
+      S.draft = { text: '', no: [], auto: false, key: '', effort: {}, scenario: 'auto', group: '', instructions: [] };
       this.detected = null;
       persist();
       toast(r.created ? `Started ${r.taskId}` : `Continuing ${r.taskId}`, 'ok');
@@ -968,6 +1067,7 @@ interface Views {
         <div class="tc-meta">
           <span class="chip mono">${esc(t.taskId)}</span>
           ${scenarioChip(t.scenario, t.scenarioLabel)}
+          ${groupChip(t.group)}
           ${statusBadge(t.status, t.live)}
           ${t.result && t.result.kind === 'audit' ? sevCounts(t.result.counts ?? {}) : ''}
           ${live ? `<span class="muted small" data-since="${live.since ?? Date.now()}">${dur(Date.now() - (live.since ?? Date.now()))}</span>` : ''}
@@ -1338,6 +1438,83 @@ interface Views {
       views.home.renderAgentsChips();
       views.home.preview();
     },
+    // Groups and instructions, picked and written in the composer.
+    'set-group': (el) => {
+      closeMenus();
+      pickGroup(el.dataset.id, groupTicks(S.draft.group));
+      views.home.renderExtras();
+    },
+    // Ticking an instruction keeps its menu open, to tick more.
+    'toggle-instruction': (el) => {
+      const id = el.dataset.id;
+      S.draft.instructions = S.draft.instructions.includes(id) ? S.draft.instructions.filter((x) => x !== id) : [...S.draft.instructions, id];
+      persist();
+      views.home.renderExtras();
+      $('.instructions-select')?.classList.add('open');
+    },
+    'extra-new': (el) => {
+      closeMenus();
+      S.ui.extraEdit = { kind: el.dataset.kind === 'group' ? 'group' : 'instruction', type: 'epic', label: '', jira: '', text: '', defaults: [] };
+      persist();
+      views.home.renderExtras();
+      $('[data-key="extra-label"]')?.focus();
+    },
+    'extra-edit': (el) => {
+      closeMenus();
+      const c = okConfig();
+      const id = el.dataset.id;
+      const g = el.dataset.kind === 'group' && c ? c.groups.find((x) => x.id === id) : undefined;
+      const x = el.dataset.kind === 'instruction' && c ? c.instructions.find((y) => y.id === id) : undefined;
+      if (g) S.ui.extraEdit = { kind: 'group', id, type: g.type, label: g.label, jira: g.jira ?? '', text: g.instructions ?? '', defaults: g.defaultInstructions ?? [] };
+      else if (x) S.ui.extraEdit = { kind: 'instruction', id, type: 'epic', label: x.label, jira: '', text: x.text, defaults: [] };
+      else return;
+      persist();
+      views.home.renderExtras();
+      $('[data-key="extra-label"]')?.focus();
+    },
+    'extra-default': (el) => {
+      const e = S.ui.extraEdit;
+      if (!e) return;
+      const id = el.dataset.id;
+      S.ui.extraEdit = { ...e, defaults: e.defaults.includes(id) ? e.defaults.filter((x) => x !== id) : [...e.defaults, id] };
+      persist();
+      patch('extra-editor', views.home.extraEditorHtml());
+    },
+    'extra-cancel': () => {
+      S.ui.extraEdit = null;
+      persist();
+      views.home.renderExtras();
+    },
+    // A saved one is picked for the task being written.
+    'extra-save': async () => {
+      const e = S.ui.extraEdit;
+      if (!e) return;
+      const r = e.kind === 'group' ? await attempt('saveGroup', { id: e.id, type: e.type, label: e.label, jira: e.jira || undefined, instructions: e.text, defaultInstructions: e.defaults }) : await attempt('saveInstruction', { id: e.id, label: e.label, text: e.text });
+      if (!r) return;
+      // What the draft's group ticked before the save: a saved group is picked with what it ticks now.
+      const before = groupTicks(S.draft.group);
+      S.ui.extraEdit = null;
+      await loadOverview();
+      if (e.kind === 'group') pickGroup(r.id, before);
+      else if (!S.draft.instructions.includes(r.id)) S.draft.instructions = [...S.draft.instructions, r.id];
+      persist();
+      views.home.renderExtras();
+      toast(`${e.label.trim()} ${e.id ? 'saved' : 'added'}`, 'ok');
+    },
+    'extra-delete': async (el) => {
+      closeMenus();
+      const id = el.dataset.id;
+      const group = el.dataset.kind === 'group';
+      const r = group ? await attempt('deleteGroup', { id }) : await attempt('deleteInstruction', { id });
+      if (!r || !r.deleted) return;
+      if (group && S.draft.group === id) S.draft.group = '';
+      if (!group) S.draft.instructions = S.draft.instructions.filter((x) => x !== id);
+      if (S.ui.extraEdit && S.ui.extraEdit.kind === (group ? 'group' : 'instruction') && S.ui.extraEdit.id === id) S.ui.extraEdit = null;
+      persist();
+      await loadOverview();
+      views.home.renderExtras();
+      toast('Deleted', 'ok');
+    },
     // A new scenario starts as a draft on the Scenarios page, its name ready to type over; its first agent saves it.
     'sc-new': async () => {
       const labels = new Set(((okConfig()?.custom) || []).map((x) => x.label.toLowerCase()));
@@ -1501,6 +1678,10 @@ interface Views {
   };
 
   const changes: Record<string, FieldFn> = {
+    'extra-type': (el) => {
+      if (S.ui.extraEdit) S.ui.extraEdit = { ...S.ui.extraEdit, type: asGroupType(el.value) };
+      persist();
+    },
     'scd-label': (el) => {
       const d = S.ui.scDraft;
       if (!d) return;
@@ -1541,6 +1722,12 @@ interface Views {
     'setup-map': (el) => (views.setup.prefs.map = el.checked),
   };
   const inputs: Record<string, FieldFn> = {
+    'extra-field': (el) => {
+      const e = S.ui.extraEdit;
+      const f = el.dataset.field;
+      if (e && (f === 'label' || f === 'jira' || f === 'text')) S.ui.extraEdit = { ...e, [f]: el.value };
+      persist();
+    },
     'setup-name': (el) => (views.setup.repos[+el.dataset.i]!.name = el.value.trim()),
   };
 
@@ -1666,7 +1853,7 @@ interface Views {
     for (const el of $$('[data-since]')) el.textContent = dur(Date.now() - Number(el.dataset.since));
   }, 1000);
 
-  window.CS = { vscode, call, attempt, toast, icon, esc, md, $, $$, ago, clock, dur, money, fmtTokens, resetIn, meter, level, EFFORT_LABEL, effortTag, size, plural, stepName, OUTPUT_INFO, SCENARIO_INFO, scInfo, modelChoices, scenarioChip, sevCounts, agentColor, S, views, pipeRowHtml, libraryBlock, libraryMove, pipeEditors, pipeDragging: () => Boolean(pipeDrag), go, patch, debounce, persist, statusBadge, miniSteps, sourceChip, outlineHtml, permissionCard, loadOverview, autosize, shake, refreshSoon, actions, changes, inputs,
+  window.CS = { vscode, call, attempt, toast, icon, esc, md, $, $$, ago, clock, dur, money, fmtTokens, resetIn, meter, level, EFFORT_LABEL, effortTag, size, plural, stepName, OUTPUT_INFO, SCENARIO_INFO, scInfo, modelChoices, scenarioChip, groupChip, sevCounts, agentColor, S, views, pipeRowHtml, libraryBlock, libraryMove, pipeEditors, pipeDragging: () => Boolean(pipeDrag), go, patch, debounce, persist, statusBadge, miniSteps, sourceChip, outlineHtml, permissionCard, loadOverview, autosize, shake, refreshSoon, actions, changes, inputs,
     // Called by the last script to load (config.js) once every view is registered.
     boot: async () => {
       renderShell();

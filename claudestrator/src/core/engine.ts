@@ -25,7 +25,7 @@ import type { StageSource } from './pipeline';
 import type { RepoGates } from './gates';
 import type { TaskRepo } from './git';
 import type { BlockedRepo, CheckpointContext, CommentResult, ComposerArgs, Preview, TranscriptItem, UsageItem } from './wire';
-import type { Checkpoint, Config, Effort, EventBody, EventOf, GatesStatus, Pipeline, Source, Spec, Step, TaskState } from './types';
+import type { Checkpoint, Config, Effort, EventBody, EventOf, GatesStatus, Pipeline, Source, Spec, Step, TaskGroup, TaskInstruction, TaskState } from './types';
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 const REPORT_OUTPUTS = new Set(['readiness', 'audit']);
@@ -300,7 +300,16 @@ class Engine extends EventEmitter {
     return out;
   }
 
-  start({ text = '', auto = false, no = [], key, effort = {}, scenario }: ComposerArgs = {}): { taskId: string; created: boolean } {
+  /** The group and instructions a task picked, as the config has them now; an id that is gone is an error. */
+  extras(config: Config, group: string | undefined, instructions: string[]): { group?: TaskGroup; instructions: TaskInstruction[] } {
+    const g = group ? config.groups[group] : undefined;
+    if (group && !g) throw new EngineError('bad_group', `there is no group "${group}" here any more; pick another`);
+    const missing = instructions.filter((id) => !config.instructions[id]);
+    if (missing.length) throw new EngineError('bad_instruction', `there is no instruction ${missing.map((id) => `"${id}"`).join(', ')} here any more; pick again`);
+    return { ...(g && { group: g }), instructions: instructions.map((id) => config.instructions[id]!) };
+  }
+
+  start({ text = '', auto = false, no = [], key, effort = {}, scenario, group, instructions = [] }: ComposerArgs = {}): { taskId: string; created: boolean } {
     const inv = parseInvocation(text);
     if (!inv.input && !(key || inv.key)) throw new EngineError('no_input', 'Describe the task, or paste a Jira key or a Confluence link');
     const flags = { no: [...new Set([...(inv.flags.no || []), ...no])], ...(inv.flags.only && { only: inv.flags.only }) };
@@ -318,12 +327,14 @@ class Engine extends EventEmitter {
     const defaults = this.scenarioDefaults(config, sc.name);
     const taskEffort = this.effortFor(config, pipeline, inv.effort, effort, defaults.effort);
     const taskModel: Record<string, string> = Object.fromEntries(Object.entries(defaults.model).filter(([name]) => pipeline.stages.some((st) => st.agent === name)));
+    const extras = this.extras(config, group, instructions);
     const extra = [...(no.length ? [`--no ${no.join(',')}`] : []), ...(auto && !inv.auto ? ['--auto'] : []), ...(scenario && scenario !== 'auto' && !inv.scenario ? [`--scenario ${scenario}`] : [])].join(' ');
     const started = this.svc.start({
       input: extra ? `${text.trim()} ${extra}` : text.trim(),
       source,
       scenario: sc.scenario,
       ...(sc.label && { scenarioName: sc.name, scenarioLabel: sc.label }),
+      ...extras,
       auto: isAuto,
       pipeline,
       config,

@@ -9,7 +9,7 @@ import { buildPipeline, outline, taskPipeline } from '../src/core/pipeline';
 import * as config from '../src/core/config';
 import * as backups from '../src/core/backup';
 import * as libraries from '../src/core/library';
-import { parseStageReport, reportLanguage } from '../src/core/prompt';
+import { buildAgentPrompt, parseStageReport, reportLanguage } from '../src/core/prompt';
 import { guardBash } from '../src/core/guard';
 import { GitRepo } from '../src/core/git';
 import { parseHookRequest } from '../src/core/hookserver';
@@ -952,6 +952,74 @@ test('config edits from the dashboard: new scenarios and agents, kept only when 
   assert.throws(() => config.addAgent({ workspace: ws, home, name: 'ghost', base: 'not-here' }));
   assert.equal(fs.existsSync(path.join(ws, config.CONFIG_DIR, config.PROMPTS_DIR, 'ghost.md')), false);
   assert.ok(!resolved().agents.ghost);
+});
+
+test('groups and instructions: written in the composer, frozen into a task, and given to every agent', () => {
+  const ws = tmp('cs-extra-');
+  const home = tmp('cs-extra-h-');
+  const resolved = () => passed(loadCfg({ workspace: ws, home })).config;
+
+  // Named after their label like scenarios; the Jira key is written in capitals and must look like one.
+  assert.equal(config.saveGroup({ workspace: ws, home, type: 'epic', label: 'Checkout revamp', jira: ' cp-123 ' }), 'checkout-revamp');
+  assert.equal(config.saveGroup({ workspace: ws, home, type: 'story', label: 'Checkout-revamp!' }), 'checkout-revamp-2');
+  assert.deepEqual(resolved().groups['checkout-revamp'], { id: 'checkout-revamp', type: 'epic', label: 'Checkout revamp', jira: 'CP-123' });
+  assert.throws(() => config.saveGroup({ workspace: ws, home, type: 'epic', label: 'X', jira: 'CP 1' }), /not a Jira key/);
+  assert.throws(() => config.saveGroup({ workspace: ws, home, type: 'epic', label: 'checkout REVAMP' }), /group called .* already exists/);
+  assert.throws(() => config.saveGroup({ workspace: ws, home, type: 'group', label: ' ' }), /Give the group a name/);
+  assert.throws(() => config.saveGroup({ workspace: ws, home, id: 'nope', type: 'group', label: 'X' }), /no group "nope"/);
+  // Editing keeps the id; dropping the Jira key removes it.
+  assert.equal(config.saveGroup({ workspace: ws, home, id: 'checkout-revamp', type: 'story', label: 'Checkout v2' }), 'checkout-revamp');
+  assert.deepEqual(resolved().groups['checkout-revamp'], { id: 'checkout-revamp', type: 'story', label: 'Checkout v2' });
+
+  assert.equal(config.saveInstruction({ workspace: ws, home, label: 'No new deps', text: ' Use what the repo has. ' }), 'no-new-deps');
+  assert.equal(config.saveInstruction({ workspace: ws, home, label: 'Тести', text: 'Cover edge cases' }), 'instruction', 'no Latin letters: a plain id');
+  assert.equal(resolved().instructions['no-new-deps']!.text, 'Use what the repo has.');
+  assert.throws(() => config.saveInstruction({ workspace: ws, home, label: 'Empty', text: '  ' }), /Write the instruction/);
+
+  // Your user config can hold them too; only the project's own can be deleted from the project.
+  fs.mkdirSync(path.join(home, config.CONFIG_DIR), { recursive: true });
+  fs.writeFileSync(config.userConfigFile(home), 'instructions:\n  mine: { label: Mine, text: Keep it short }\n');
+  assert.equal(resolved().instructions.mine!.label, 'Mine');
+  assert.throws(() => config.removeEntry(ws, 'instructions', 'mine'), /not in this project's config\.yaml/);
+  config.removeEntry(ws, 'groups', 'checkout-revamp-2');
+  assert.deepEqual(Object.keys(resolved().groups), ['checkout-revamp']);
+  assert.match(fs.readFileSync(config.projectConfigFile(ws), 'utf8'), /^groups:/m);
+  config.removeEntry(ws, 'groups', 'checkout-revamp');
+  assert.doesNotMatch(fs.readFileSync(config.projectConfigFile(ws), 'utf8'), /^groups:/m, 'no empty section is left');
+
+  // A task keeps them as they were when it started.
+  config.saveGroup({ workspace: ws, home, type: 'epic', label: 'Payments', jira: 'CP-7', instructions: ' Refunds live under /v2/refunds. ' });
+  const engine = new Engine({ workspace: ws, home, runner: {} as EngineOptions['runner'], hooks: {} as EngineOptions['hooks'] });
+  assert.throws(() => engine.start({ text: 'x', group: 'gone' }), /no group "gone"/);
+  assert.throws(() => engine.start({ text: 'x', instructions: ['no-new-deps', 'gone'] }), /no instruction "gone"/);
+  const r = engine.start({ text: 'Add refunds', group: 'payments', instructions: ['no-new-deps', 'mine'] });
+  config.saveInstruction({ workspace: ws, home, id: 'no-new-deps', label: 'No new deps', text: 'Changed later' });
+  let s = engine.svc.state(r.taskId);
+  assert.deepEqual(s.group, { id: 'payments', type: 'epic', label: 'Payments', jira: 'CP-7', instructions: 'Refunds live under /v2/refunds.' });
+  assert.deepEqual(s.instructions.map((x) => x.text), ['Use what the repo has.', 'Keep it short']);
+  assert.deepEqual(engine.svc.state(engine.start({ text: 'Plain' }).taskId).instructions, [], 'none picked: none given');
+
+  // Every agent's prompt names the group and carries the instructions verbatim.
+  engine.dispatch(r.taskId, { type: 'intake_completed', spec: { ...spec, id: r.taskId } });
+  s = engine.svc.state(r.taskId);
+  const prompt = buildAgentPrompt({ state: s, next: runOf(nx(s)), taskDir: ws, language: 'English' });
+  assert.match(prompt, /Part of the epic "Payments" \(Jira CP-7\)\./);
+  assert.match(prompt, /instructions for this task, verbatim[^\n]*\n\n### For every task in "Payments"\nRefunds live under \/v2\/refunds\.\n\n### No new deps\nUse what the repo has\.\n\n### Mine\nKeep it short/, "the group's first, then the task's own");
+  // A group ticks instructions that exist; deleting one unticks it everywhere in the project.
+  assert.throws(() => config.saveGroup({ workspace: ws, home, id: 'payments', type: 'epic', label: 'Payments', defaultInstructions: ['nope'] }), /no instruction "nope"/);
+  config.saveGroup({ workspace: ws, home, id: 'payments', type: 'epic', label: 'Payments', instructions: 'x', defaultInstructions: ['no-new-deps', 'mine', 'no-new-deps'] });
+  assert.deepEqual(resolved().groups.payments!.defaultInstructions, ['no-new-deps', 'mine']);
+  config.removeEntry(ws, 'instructions', 'no-new-deps');
+  assert.deepEqual(resolved().groups.payments!.defaultInstructions, ['mine']);
+  // One named in a hand-written config that does not exist is left out with a warning, not an error.
+  config.setProjectValue(ws, ['groups', 'payments', 'defaultInstructions'], ['mine', 'ghost']);
+  const loaded = passed(loadCfg({ workspace: ws, home }));
+  assert.deepEqual(loaded.config.groups.payments!.defaultInstructions, ['mine']);
+  assert.ok(loaded.warnings.some((w) => w.code === 'unknown_instruction' && w.message.includes('"ghost"')));
+
+  // A group without instructions adds none; a blank text is not written.
+  assert.equal(config.saveGroup({ workspace: ws, home, id: 'payments', type: 'epic', label: 'Payments', instructions: '  ' }), 'payments');
+  assert.equal(resolved().groups.payments!.instructions, undefined);
 });
 
 test('setup: a picked repo is written with only what differs from the defaults; settings are checked by shape', () => {

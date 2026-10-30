@@ -23,6 +23,9 @@ type Preview = import('../src/core/wire').Preview;
 type HostMessage = import('../src/core/wire').HostMessage;
 type ScenarioStep = import('../src/core/types').ScenarioStep;
 type GitMode = import('../src/core/types').GitMode;
+type GroupType = import('../src/core/types').GroupType;
+type TaskGroup = import('../src/core/types').TaskGroup;
+type TaskInstruction = import('../src/core/types').TaskInstruction;
 type FoundRepo = import('../src/core/wire').FoundRepo;
 type SuggestedGate = import('../src/core/wire').SuggestedGate;
 type AddedRepo = import('../src/core/wire').AddedRepo;
@@ -86,6 +89,23 @@ interface Draft {
   key: string;
   effort: Record<string, string>;
   scenario: string;
+  /** The id of the group the task goes into; empty for none. */
+  group: string;
+  /** The ids of the instructions the task's agents follow. */
+  instructions: string[];
+}
+
+/** The group or instruction being written in the composer; without `id` it is a new one. */
+interface ExtraEdit {
+  kind: 'group' | 'instruction';
+  id?: string;
+  type: GroupType;
+  label: string;
+  jira: string;
+  /** An instruction's text, or a group's instructions for every task in it. */
+  text: string;
+  /** A group's: the instructions it ticks when picked. */
+  defaults: string[];
 }
 
 /** Small interface state that survives a reload: which groups are folded, which scenario is being edited. */
@@ -93,6 +113,7 @@ interface UiState {
   scEdit?: string | null;
   /** A new scenario not saved yet: it reaches config.yaml with its first agent. */
   scDraft?: { label: string; description: string } | null;
+  extraEdit?: ExtraEdit | null;
   showAllDone?: boolean;
   taskTab?: string;
   pipeEdit?: boolean;
@@ -217,6 +238,7 @@ interface CSApi {
   scInfo(id: string): ScenarioInfo & { kind: string; custom?: true };
   modelChoices(defaults: DefaultsView | null | undefined): [string, string][];
   scenarioChip(sc: string | undefined, label: string | undefined): string;
+  groupChip(g: TaskGroup | undefined): string;
   sevCounts(counts: Record<string, number>): string;
   agentColor(c: string | undefined | null): string;
   S: AppState;
