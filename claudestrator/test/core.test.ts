@@ -502,6 +502,13 @@ test('guard: agents never touch git history, destructive commands are refused', 
   assert.match(refusal('gh pr create --title x --body y', orchestrator), /drafts only/);
   assert.match(refusal('git commit -m "x" -m "Co-Authored-By: Claude <noreply@anthropic.com>"', ctx({ agent: false, branchOf: () => 'feat/x' })), /AI attribution/);
   assert.match(refusal('git commit --no-verify -m x', ctx({ agent: false })), /hooks/);
+  // Redirections are not arguments: what an agent appends to a read-only command does not turn it into a write.
+  for (const read of ['git branch -a 2>/dev/null', 'git branch 2>&1 | head', 'git branch --list > /tmp/branches.txt', 'git log --oneline 2> /dev/null']) {
+    assert.equal(guard(read, ctx()).allow, true, read);
+  }
+  assert.match(refusal('git branch feature-x 2>/dev/null', ctx()), /do not create, rename or delete branches/);
+  assert.match(refusal('git push origin main 2>&1', ctx()), /git push/);
+  assert.match(refusal('git branch --list > ../other/branches.txt', ctx({ writeRoots: ['/ws/api'] })), /outside \/ws\/api/, 'the file it writes is still checked');
 });
 
 test('intake: invocations, sources and acceptance criteria', () => {

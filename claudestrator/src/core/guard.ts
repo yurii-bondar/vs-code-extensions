@@ -46,7 +46,7 @@ function guardBash(command: string, ctx: GuardContext): Verdict {
     } catch {
       argv = segment.trim().split(/\s+/);
     }
-    argv = stripPrefixes(argv);
+    argv = stripPrefixes(withoutRedirects(argv));
     const [first, ...args] = argv;
     if (!first) continue;
     const cmd = path.basename(first);
@@ -278,6 +278,21 @@ function simpleCommands(command: string): string[] {
 /** The line with quoted text blanked out, so `echo "<<EOF"` is not taken for a heredoc. */
 function unquoted(line: string): string {
   return line.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, (m) => ' '.repeat(m.length));
+}
+
+/**
+ * The words of a command without its redirections (`2>/dev/null`, `> out.txt`, `2>&1`, `< in`): they are not
+ * arguments, so `git branch -a 2>/dev/null` lists branches rather than creating one. The files written are checked
+ * apart, from the segment's text.
+ */
+function withoutRedirects(argv: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!;
+    if (/^(?:\d*|&)(?:>>?|<)[|&]?$/.test(a)) i++; // the operator alone: its target is the next word
+    else if (!/^(?:\d*|&)(?:>>?|<)[|&]?\S+$/.test(a)) out.push(a);
+  }
+  return out;
 }
 
 /** Words that come before the command itself: shell keywords. */
