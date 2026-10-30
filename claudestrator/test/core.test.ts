@@ -1468,3 +1468,15 @@ test('store: an append keeps the cached state and events current, and a write by
   assert.equal(svc.record(taskId, { type: 'note', message: 'three' }).seq, 6);
   assert.deepEqual(fs.readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l).seq), [1, 2, 3, 4, 5, 6]);
 });
+
+test('config: a repo with nothing but its name stays configured when the config is edited', () => {
+  const ws = tmp('cs-repo-');
+  config.createProjectConfig(ws, { repos: { api: {}, web: { gates: [{ name: 'lint', cmd: 'npm run lint' }] } } });
+  config.setProjectValue(ws, ['language'], 'German');
+  config.setRepo(ws, 'web', {});
+  config.updateAgentConfig(ws, 'planner', { effort: 'max' });
+  const r = passed(config.loadConfig({ workspace: ws, home: tmp('cs-home-') }));
+  assert.deepEqual(Object.keys(r.config.repos).sort(), ['api', 'web']);
+  assert.deepEqual(r.config.repos.web!.gates, [], 'its gates removed, the repo kept');
+  assert.equal(r.config.language, 'German');
+});

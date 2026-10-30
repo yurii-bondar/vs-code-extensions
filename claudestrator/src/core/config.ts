@@ -862,8 +862,8 @@ function editYamlFile(file: string, mutate: (doc: YAML.Document) => unknown, { v
   if (doc.errors.length) throw new Error(`${file}: ${doc.errors[0]!.message}`);
   if (doc.contents === null) doc.contents = doc.createNode({}) as unknown as typeof doc.contents;
   mutate(doc);
+  // An agent left with no fields changes nothing; a repo with none is still a repo (`api: {}`: at ./api, base main).
   pruneEmpty(doc, ['agents']);
-  pruneEmpty(doc, ['repos']);
   const issues = validate(doc.toJS() ?? {});
   if (issues.length) throw new Error(`the change would make ${what} invalid: ${issues.join('; ')}`);
   fs.mkdirSync(path.dirname(file), { recursive: true });
