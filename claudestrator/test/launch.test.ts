@@ -1,10 +1,14 @@
-// Starting the Claude Code CLI: an npm shim on Windows (`claude.cmd`) is read and its target spawned directly.
+// Child processes and git: an npm shim on Windows (`claude.cmd`) is read and its target spawned directly, and the
+// guard reads a checkout's branch without spawning git.
 import test from 'node:test';
 import * as assert from 'node:assert/strict';
+import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
+import { execFileSync } from 'child_process';
 
 import { npmShimTarget } from '../src/core/env';
-import { launch, setShim } from '../src/core/git';
+import { branchAt, launch, setShim } from '../src/core/git';
 
 // What `npm install -g @anthropic-ai/claude-code` writes, in the cmd-shim format of npm 7+ and in the older one.
 const SHIM = `@ECHO off
@@ -46,4 +50,24 @@ test('launch: a registered shim runs its target with the arguments, anything els
   setShim('C:\\npm\\claude.cmd', { file: 'C:\\node\\node.exe', args: ['C:\\npm\\cli.js'] });
   assert.deepEqual(launch('C:\\npm\\claude.cmd', ['-p', '--verbose']), ['C:\\node\\node.exe', ['C:\\npm\\cli.js', '-p', '--verbose']]);
   assert.deepEqual(launch('/usr/local/bin/claude', ['--version']), ['/usr/local/bin/claude', ['--version']]);
+});
+
+test('git: the branch of a checkout is read from HEAD, in a worktree and a subfolder too', () => {
+  const run = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
+  const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cs-head-')));
+  run(repo, 'init', '-q', '-b', 'main');
+  fs.mkdirSync(path.join(repo, 'src', 'deep'), { recursive: true });
+  fs.writeFileSync(path.join(repo, 'a.txt'), 'a');
+  run(repo, 'add', '.');
+  run(repo, 'commit', '-q', '-m', 'init');
+  assert.equal(branchAt(repo), 'main');
+  assert.equal(branchAt(path.join(repo, 'src', 'deep')), 'main');
+  run(repo, 'switch', '-q', '-c', 'feat/PROJ-1-cap');
+  assert.equal(branchAt(repo), 'feat/PROJ-1-cap', 'a branch name with slashes');
+  const wt = path.join(repo, '..', `${path.basename(repo)}-wt`);
+  run(repo, 'worktree', 'add', '-q', '-b', 'fix/other', wt);
+  assert.equal(branchAt(wt), 'fix/other', "a worktree's own HEAD");
+  run(repo, 'switch', '-q', '--detach');
+  assert.equal(branchAt(repo), 'HEAD', 'detached, as git rev-parse --abbrev-ref says');
+  assert.equal(branchAt(fs.mkdtempSync(path.join(os.tmpdir(), 'cs-norepo-'))), null);
 });

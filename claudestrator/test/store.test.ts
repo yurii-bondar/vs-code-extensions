@@ -4,8 +4,9 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { spawnSync } from 'child_process';
 
-import { TaskService } from '../src/core/store';
+import { TaskService, withLock } from '../src/core/store';
 
 test('store: transcript lines are written asynchronously, in order, and readable before they land', async () => {
   const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-tr-'));
@@ -21,4 +22,18 @@ test('store: transcript lines are written asynchronously, in order, and readable
   svc.appendTranscript('T-1', '0001-dev', { type: 'text', text: 'late' });
   await svc.flushTranscripts();
   assert.ok(!fs.existsSync(svc.dir('T-1')), 'a deleted task does not come back as a folder of transcripts');
+});
+
+test('store: a lock left by a crashed process is taken over at once', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-lock-'));
+  const lock = path.join(dir, '.lock');
+  const dead = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' });
+  fs.writeFileSync(lock, `${dead.stdout}\n`);
+  const started = Date.now();
+  assert.equal(withLock(lock, () => 'ran', { timeoutMs: 2000, staleMs: 60000 }), 'ran');
+  assert.ok(Date.now() - started < 500, 'no wait for a holder that is gone');
+  assert.ok(!fs.existsSync(lock), 'released');
+
+  fs.writeFileSync(lock, `${process.ppid}\n`); // alive, and not this process: a real holder
+  assert.throws(() => withLock(lock, () => 'ran', { timeoutMs: 200, staleMs: 60000 }), /timed out/);
 });

@@ -2,7 +2,7 @@
 // responsive), with every read degrading to a safe answer when git fails.
 import * as fs from 'fs';
 import * as path from 'path';
-import { execFile, spawnSync } from 'child_process';
+import { execFile } from 'child_process';
 import { ORCH_DIR } from './store';
 import { branchName } from './machine';
 import type { Config, TaskState } from './types';
@@ -152,13 +152,29 @@ class GitRepo {
   }
 }
 
-/** Synchronous branch lookup for the Bash guard, which decides inside a hook round-trip. */
-function branchSync(dir: string): string | null {
-  try {
-    const r = spawnSync('git', ['-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8', timeout: 5000, env: childEnv });
-    return r.status === 0 ? r.stdout.trim() : null;
-  } catch {
-    return null;
+/**
+ * The branch checked out where `dir` is, for the Bash guard, which decides synchronously inside a tool call: read from
+ * git's HEAD file (a worktree's `.git` file points to its own), so no git process blocks the extension host.
+ * `HEAD` when detached, as `git rev-parse --abbrev-ref HEAD` says; null outside a repository.
+ */
+function branchAt(dir: string): string | null {
+  for (let cur = path.resolve(dir); ; cur = path.dirname(cur)) {
+    const dotGit = path.join(cur, '.git');
+    let gitDir: string | null = null;
+    try {
+      gitDir = fs.statSync(dotGit).isFile() ? path.resolve(cur, (fs.readFileSync(dotGit, 'utf8').match(/^gitdir:\s*(.+)$/m) || [])[1]?.trim() ?? '') : dotGit;
+    } catch {
+      // not here
+    }
+    if (gitDir) {
+      try {
+        const head = fs.readFileSync(path.join(gitDir, 'HEAD'), 'utf8').trim();
+        return (head.match(/^ref:\s*refs\/heads\/(.+)$/) || [])[1] ?? 'HEAD';
+      } catch {
+        return null;
+      }
+    }
+    if (path.dirname(cur) === cur) return null;
   }
 }
 
@@ -285,4 +301,4 @@ async function removeWorktrees(workspace: string, state: TaskState, config: Repo
 }
 
 export type { ExecResult, ExecOptions, TaskRepo, Prepared, PrepareResult };
-export { exec, launch, setShim, setChildEnv, getChildEnv, GitRepo, branchSync, worktreeDir, taskRepos, prepareRepos, taskDiff, removeWorktrees, isOwn };
+export { exec, launch, setShim, setChildEnv, getChildEnv, GitRepo, branchAt, worktreeDir, taskRepos, prepareRepos, taskDiff, removeWorktrees, isOwn };

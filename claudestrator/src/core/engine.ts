@@ -11,7 +11,7 @@ import { buildPipeline, scenarioKind, taskPipeline, fitsScenario, onRepos } from
 import { nextAction, runOf, artifactPath, branchName, sameStep, editableFrom, stepRepos, TASK_FILES, type NextAction, type RunAction } from './machine';
 import { parseInvocation, classifyInput, detectScenario, runIntake, renderTicket, IntakeError, extractAcceptanceCriteria } from './intake';
 import { TaskService, type DispatchResult } from './store';
-import { exec, GitRepo, branchSync, taskRepos, prepareRepos, taskDiff, removeWorktrees } from './git';
+import { exec, GitRepo, branchAt, taskRepos, prepareRepos, taskDiff, removeWorktrees } from './git';
 import { runGates } from './gates';
 import { guardBash } from './guard';
 import { buildAgentPrompt, parseStageReport, lastJsonBlock } from './prompt';
@@ -825,7 +825,7 @@ class Engine extends EventEmitter {
         task: { taskId, canPush: false },
         agent: true,
         writeRoots,
-        branchOf: branchSync,
+        branchOf: branchAt,
         isRepoRoot: (dir) => fs.existsSync(path.join(dir, '.git')),
         readFile: (f) => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null),
       });

@@ -16,11 +16,29 @@ const TASK_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 const pause = (ms: number): 'ok' | 'not-equal' | 'timed-out' => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
+/** Whether the process that wrote a lock file is gone (it crashed holding the lock). */
+function holderGone(file: string): boolean {
+  let pid: number;
+  try {
+    pid = Number(fs.readFileSync(file, 'utf8').trim());
+  } catch {
+    return false;
+  }
+  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false;
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'ESRCH';
+  }
+}
+
 /**
- * Cross-process mutex on a lock file (O_EXCL create). Synchronous on purpose: it is held only
- * for a read-transition-append, which takes milliseconds.
+ * Cross-process mutex on a lock file (O_EXCL create). Synchronous on purpose: it is held only for a
+ * read-transition-append, which takes milliseconds, so the wait is short; a lock left by a crashed process is taken
+ * over at once instead of after `staleMs`.
  */
-function withLock<T>(file: string, fn: () => T, { timeoutMs = 10000, staleMs = 30000 }: { timeoutMs?: number; staleMs?: number } = {}): T {
+function withLock<T>(file: string, fn: () => T, { timeoutMs = 10000, staleMs = 10000 }: { timeoutMs?: number; staleMs?: number } = {}): T {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const started = Date.now();
   for (;;) {
@@ -37,7 +55,7 @@ function withLock<T>(file: string, fn: () => T, { timeoutMs = 10000, staleMs = 3
       } catch {
         continue; // released between our open and stat
       }
-      if (age > staleMs) {
+      if (age > staleMs || holderGone(file)) {
         fs.rmSync(file, { force: true });
         continue;
       }
