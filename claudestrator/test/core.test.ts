@@ -523,6 +523,12 @@ test('guard: agents never touch git history, destructive commands are refused', 
 test('intake: invocations, sources and acceptance criteria', () => {
   assert.deepEqual(parseInvocation('PROJ-123 --no tester --auto'), { input: 'PROJ-123', flags: { no: ['tester'] }, auto: true });
   assert.deepEqual(parseInvocation("Don't break the dice game"), { input: "Don't break the dice game", flags: {}, auto: false });
+  // A flag's name inside the description is a word of it; flags count at the start or the end.
+  assert.deepEqual(parseInvocation('Add a --key option to the CLI'), { input: 'Add a --key option to the CLI', flags: {}, auto: false });
+  assert.deepEqual(parseInvocation("Support --auto mode in the user's dashboard"), { input: "Support --auto mode in the user's dashboard", flags: {}, auto: false });
+  assert.deepEqual(parseInvocation('Cap bets\n\n## Acceptance criteria\n- the --no flag skips tester\n--auto --no tester'), { input: 'Cap bets\n\n## Acceptance criteria\n- the --no flag skips tester', flags: { no: ['tester'] }, auto: true });
+  assert.deepEqual(parseInvocation('--effort high --scenario audit Find slow queries'), { input: 'Find slow queries', flags: {}, auto: false, scenario: 'audit', effort: { '*': 'high' } });
+  assert.deepEqual(parseInvocation('--key=PROJ-9'), { input: '', flags: {}, auto: false, key: 'PROJ-9' });
   assert.deepEqual(classify('PROJ-12'), { kind: 'jira', key: 'PROJ-12' });
   assert.deepEqual(classify('https://acme.atlassian.net/browse/PROJ-7'), { kind: 'jira', key: 'PROJ-7', site: 'acme.atlassian.net' });
   assert.equal((classify('https://acme.atlassian.net/wiki/spaces/X/pages/12345/Title') as Extract<Source, { kind: 'confluence' }>).pageId, '12345');

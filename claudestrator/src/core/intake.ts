@@ -29,11 +29,6 @@ function tokenize(line: string): string[] {
 const FLAG_RE = /(^|\s)--(auto|no|only|key|effort|scenario)(?=[\s=]|$)/;
 import { SCENARIOS as SCENARIO_NAMES, SCENARIO_ID } from './protocol';
 
-/**
- * Parses `<input> [--auto] [--no X] [--only X,Y] [--key=K] [--effort high | --effort developer=high,tester=low] [--scenario readiness]`.
- * `effort` comes back as `{ '*': level, <agent>: level }`; `*` means every agent of the task. Free text without any flag is taken
- * verbatim, so apostrophes and line breaks in a description never trip the tokenizer.
- */
 /** What the user typed, split into the description and the flags. */
 interface Invocation {
   input: string;
@@ -44,10 +39,40 @@ interface Invocation {
   effort?: Record<string, string>;
 }
 
+const FLAG = /^--(auto|no|only|key|effort|scenario)(=|$)/;
+
+/** How many words from `i` a flag takes: itself, and its value unless it is --auto or written `--flag=value`. 0: no flag. */
+function flagSpan(words: string[], i: number): number {
+  const m = (words[i] ?? '').match(FLAG);
+  if (!m) return 0;
+  return m[1] === 'auto' || m[2] === '=' ? 1 : 2;
+}
+
+/**
+ * Parses `[flags] <input> [flags]`: `--auto`, `--no X`, `--only X,Y`, `--key=K`, `--effort high` or
+ * `--effort developer=high,tester=low`, `--scenario readiness`. Flags count only in a block at the start or the end
+ * of the text; in between they are words of the description ("Add a --key option to the CLI"), which is kept verbatim,
+ * line breaks and apostrophes included. `effort` comes back as `{ '*': level, <agent>: level }`; `*` means every agent.
+ */
 function parseInvocation(line: string): Invocation {
   if (!FLAG_RE.test(line)) return { input: line.trim(), flags: {}, auto: false };
-  const tokens = tokenize(line);
-  const words: string[] = [];
+  const found = [...line.matchAll(/\S+/g)];
+  const words = found.map((m) => m[0]);
+  let lead = 0;
+  for (let n = flagSpan(words, 0); n && lead < words.length; n = flagSpan(words, lead)) lead += n;
+  let tail = words.length;
+  for (let j = Math.min(lead, words.length); j < words.length; j++) {
+    if (!flagSpan(words, j)) continue;
+    let k = j;
+    for (let n = flagSpan(words, k); n && k < words.length; n = flagSpan(words, k)) k += n;
+    if (k >= words.length) {
+      tail = j;
+      break;
+    }
+  }
+  const at = (i: number): number => (i < found.length ? found[i]!.index! : line.length);
+  const input = line.slice(at(Math.min(lead, words.length)), at(tail)).trim();
+  const tokens = [...words.slice(0, lead), ...words.slice(tail)].map((w) => w.replace(/^(['"])(.*)\1$/, '$2'));
   const no: string[] = [];
   const only: string[] = [];
   let auto = false;
@@ -61,11 +86,8 @@ function parseInvocation(line: string): Invocation {
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i]!;
     const eq = t.indexOf('=');
-    const [flag, inline]: [string | null, string | undefined] = t.startsWith('--') ? (eq > 0 ? [t.slice(0, eq), t.slice(eq + 1)] : [t, undefined]) : [null, undefined];
+    const [flag, inline] = eq > 0 ? [t.slice(0, eq), t.slice(eq + 1)] : [t, undefined];
     switch (flag) {
-      case null:
-        words.push(t);
-        break;
       case '--auto':
         auto = true;
         break;
@@ -92,11 +114,9 @@ function parseInvocation(line: string): Invocation {
         scenario = inline ?? tokens[++i];
         if (!SCENARIO_ID.test(scenario || '')) throw new Error(`--scenario names a scenario, e.g. ${SCENARIO_NAMES.join(', ')} or one of your own`);
         break;
-      default:
-        words.push(t);
     }
   }
-  return { input: words.join(' '), flags: { ...(no.length && { no }), ...(only.length && { only }) }, auto, ...(key && { key }), ...(scenario && { scenario }), ...(Object.keys(effort).length && { effort }) };
+  return { input, flags: { ...(no.length && { no }), ...(only.length && { only }) }, auto, ...(key && { key }), ...(scenario && { scenario }), ...(Object.keys(effort).length && { effort }) };
 }
 
 const AUDIT_WORDS = /аудит|\baudit|\bвузьк\w* місц|bottleneck/i;
