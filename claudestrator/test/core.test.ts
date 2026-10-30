@@ -1523,3 +1523,22 @@ test('config: a repo with nothing but its name stays configured when the config 
   assert.deepEqual(r.config.repos.web!.gates, [], 'its gates removed, the repo kept');
   assert.equal(r.config.language, 'German');
 });
+
+test("config: a library agent nothing runs does not break the config with a missing file; an instructions file is made only in .claudestrator", () => {
+  const home = tmp('cs-home-');
+  const ws = tmp('cs-ws-');
+  const lib = tmp('cs-lib-');
+  fs.writeFileSync(path.join(lib, 'library.yaml'), 'agents:\n  perf: { extends: reviewer, instructions: { mode: append, file: ./prompts/perf.md } }\n');
+  fs.mkdirSync(path.join(ws, '.claudestrator'));
+  fs.writeFileSync(path.join(ws, '.claudestrator', 'config.yaml'), `libraries: [${lib}]\n`);
+  const r = config.loadConfig({ workspace: ws, home });
+  assert.ok(r.ok, 'the rest of the config works');
+  assert.ok(r.warnings.some((w) => w.code === 'instructions_unreadable' && w.agent === 'perf'), 'and the missing file is said');
+  fs.writeFileSync(path.join(ws, '.claudestrator', 'config.yaml'), `libraries: [${lib}]\npipeline: [planner, developer, perf]\n`);
+  const used = config.loadConfig({ workspace: ws, home });
+  assert.ok(!used.ok && used.errors.some((e) => e.agent === 'perf'), 'an agent the pipeline runs needs its instructions');
+
+  fs.writeFileSync(path.join(ws, '.claudestrator', 'config.yaml'), 'agents:\n  developer: { instructions: { file: ../../outside-prompt.md } }\n');
+  assert.throws(() => config.ensureInstructionsFile(ws, 'developer', { instructions: 'x' }), /outside \.claudestrator\/; create it yourself/);
+  assert.ok(!fs.existsSync(path.resolve(ws, '.claudestrator', '../../outside-prompt.md')), 'nothing was created out there');
+});

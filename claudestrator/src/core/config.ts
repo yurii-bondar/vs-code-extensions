@@ -542,6 +542,11 @@ function resolveConfig(layers: Layer[], opts: { flags?: Flags | undefined; readF
     }
   }
 
+  // An agent nothing runs (a library's, not in the pipeline or a scenario) with unreadable instructions is a warning:
+  // the rest of the config works, and the agent says so when something starts to use it.
+  const used = new Set([...pipeline, ...Object.values(scenarios).flat(), ...inCustom]);
+  for (const d of diags) if (d.code === 'instructions_unreadable' && d.agent && !used.has(d.agent)) d.level = 'warning';
+
   const context = merged.context ?? [];
   for (const file of context) {
     try {
@@ -994,6 +999,9 @@ function ensureInstructionsFile(workspace: string, agentName: string, resolved?:
   if (own && typeof own === 'object' && own.file) {
     const existing = path.resolve(path.join(workspace, CONFIG_DIR), own.file);
     if (!fs.existsSync(existing)) {
+      // A missing file is created only in the config folder: a path in a config someone else wrote may lead anywhere.
+      const dir = path.join(workspace, CONFIG_DIR);
+      if (!existing.startsWith(dir + path.sep)) throw new Error(`${own.file} does not exist, and it is outside ${CONFIG_DIR}/; create it yourself, or point "${agentName}" at a file in ${CONFIG_DIR}/`);
       fs.mkdirSync(path.dirname(existing), { recursive: true });
       fs.writeFileSync(existing, `${(resolved && resolved.instructions) || ''}\n`);
     }
