@@ -39,6 +39,9 @@ kotlin {
 }
 
 intellijPlatform {
+    // Off together with prepareJarSearchableOptions, which otherwise expects their output after a clean.
+    buildSearchableOptions = false
+
     pluginConfiguration {
         version = providers.gradleProperty("pluginVersion")
         ideaVersion {
@@ -109,7 +112,5 @@ val generateVersionFile by tasks.registering(WriteProperties::class) {
 }
 
 tasks.processResources { from(generateVersionFile) }
-
-tasks.buildSearchableOptions { enabled = false }
 
 tasks.wrapper { gradleVersion = "9.8.2" }
