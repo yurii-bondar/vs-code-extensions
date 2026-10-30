@@ -483,3 +483,20 @@ test('engine: when a PR description cannot list the other PRs, the PRs stay open
     h.hooks.dispose();
   }
 });
+
+test('engine: a plan for a repo the workspace does not have goes back to the planner, who sees the repos by name', async () => {
+  const ws = workspace(['api'], 'pipeline: [planner, developer]\nrepos:\n  api: { role: Betting API }\n');
+  const h = await harness(ws, { FAKE_REPOS: 'api', FAKE_PLAN_REPOS_FIRST: 'betting-service' });
+  try {
+    const { taskId } = h.engine.start({ text: 'Add the feature', auto: true });
+    const s = await runTask(h.engine, taskId);
+    assert.equal(s.checkpoint && s.checkpoint.id, 'confirm-push', JSON.stringify(h.engine.lastError(taskId)));
+    assert.deepEqual(s.repos.map((r) => r.name), ['api']);
+    const planner = h.engine.svc.readTranscript(taskId, view.detail(h.engine, taskId).steps.find((st) => st.agent === 'planner')!.key!);
+    const prompt = text(planner.find((i) => i.type === 'prompt')!.text);
+    assert.match(prompt, /- api at .+ \(base branch main\): Betting API\nName the repos of your plan exactly as listed here\./);
+    assert.ok(planner.some((i) => i.type === 'user' && i.from === 'orchestrator' && /repos this workspace does not have \(betting-service\); name them as configured: api/.test(text(i.text))));
+  } finally {
+    h.hooks.dispose();
+  }
+});

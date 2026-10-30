@@ -526,4 +526,4 @@ function branchName(s: TaskState): string | null {
 }
 
 export type { NextAction, RunAction };
-export { MAX_EMPTY_ROUNDS, transition, replay, canPush, passSteps, editableFrom, stepRepos, nextAction, runOf, artifactPath, branchName, sameStep, TASK_FILES };
+export { MAX_EMPTY_ROUNDS, transition, replay, canPush, passSteps, editableFrom, stepRepos, nextAction, runOf, artifactPath, branchName, sameStep, unknownRepos, TASK_FILES };

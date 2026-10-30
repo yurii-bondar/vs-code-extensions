@@ -189,6 +189,11 @@ function main(): void {
 
   const state = process.env.FAKE_STATE;
 
+  function plan(names: string, uuid: string) {
+    const repos = names.split(',').map((name) => ({ name, mode: 'full' }));
+    return reply(`## Summary\n\nAdd the feature to every repo.\n\n## Steps\n- do it\n\n\`\`\`json\n${JSON.stringify({ type: 'feat', slug: 'add-feature', title: 'add the feature', repos, openQuestions: [] })}\n\`\`\``, uuid);
+  }
+
   function first(prompt: string, uuid: string) {
     role = (prompt.match(/You are the `([^`]+)` stage/) || [])[1];
     const issue = prompt.match(/^Read the Jira issue (\S+)/);
@@ -209,10 +214,9 @@ function main(): void {
     }
     repoDir = (prompt.match(/Repository: \S+ at (.+)\. Work only there\./) || [])[1];
     switch (role) {
-      case 'planner': {
-        const repos = (process.env.FAKE_REPOS || 'api').split(',').map((name) => ({ name, mode: 'full' }));
-        return reply(`## Summary\n\nAdd the feature to every repo.\n\n## Steps\n- do it\n\n\`\`\`json\n${JSON.stringify({ type: 'feat', slug: 'add-feature', title: 'add the feature', repos, openQuestions: [] })}\n\`\`\``, uuid);
-      }
+      case 'planner':
+        // FAKE_PLAN_REPOS_FIRST: the first plan names repos by another name (the package's), as a small model may.
+        return plan(process.env.FAKE_PLAN_REPOS_FIRST || process.env.FAKE_REPOS || 'api', uuid);
       case 'developer': {
         // FAKE_TODO_STATUS: a to-do status an agent steered by a ticket might write (the dashboard must not run it as markup).
         if (process.env.FAKE_TODO_STATUS) tool('TodoWrite', { todos: [{ content: 'Add the feature', status: process.env.FAKE_TODO_STATUS, activeForm: 'Adding it' }, { content: 'Write the test', status: 'pending', activeForm: 'Writing it' }] });
@@ -290,7 +294,8 @@ function main(): void {
           continue;
         }
         first(text, m.uuid);
-      } else reply(`Follow-up handled: ${text.split('\n')[0]!.slice(0, 60)}`, m.uuid);
+      } else if (role === 'planner' && /repos this workspace does not have/.test(text)) plan(process.env.FAKE_REPOS || 'api', m.uuid);
+      else reply(`Follow-up handled: ${text.split('\n')[0]!.slice(0, 60)}`, m.uuid);
     }
   });
   process.stdin.on('end', () => process.exit(0));

@@ -67,6 +67,7 @@ function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, 
   }
   if (repos && repos.length) {
     lines.push('', 'Repositories (read them where they are; change nothing):', ...repos.map((r) => `- ${r.name} at ${r.dir} (base branch ${r.baseBranch})${r.role ? `: ${r.role}` : ''}`));
+    if (next.output === 'plan') lines.push('Name the repos of your plan exactly as listed here.');
   }
   if (state.source && state.source.kind === 'jira' && next.output === 'readiness') {
     lines.push('', `Jira issue: ${state.source.key}. Search branches and commits for this key${prsPath ? `; the pull requests GitHub has for it are listed in ${prsPath}` : ''}.`);

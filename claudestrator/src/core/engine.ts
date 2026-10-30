@@ -8,13 +8,13 @@ import { EventEmitter } from 'events';
 import { loadConfig, configPaths } from './config';
 import { EFFORTS, SCENARIOS } from './protocol';
 import { buildPipeline, scenarioKind, taskPipeline, fitsScenario, onRepos } from './pipeline';
-import { nextAction, runOf, artifactPath, branchName, sameStep, editableFrom, stepRepos, TASK_FILES, type NextAction, type RunAction } from './machine';
+import { nextAction, runOf, artifactPath, branchName, sameStep, editableFrom, stepRepos, unknownRepos, TASK_FILES, type NextAction, type RunAction } from './machine';
 import { parseInvocation, classifyInput, detectScenario, runIntake, renderTicket, IntakeError, extractAcceptanceCriteria } from './intake';
 import { TaskService, type DispatchResult } from './store';
 import { exec, getChildEnv, GitRepo, branchAt, taskRepos, prepareRepos, taskDiff, removeWorktrees } from './git';
 import { runGates, runShell, withoutCredentials } from './gates';
 import { guardBash } from './guard';
-import { buildAgentPrompt, parseStageReport, lastJsonBlock } from './prompt';
+import { buildAgentPrompt, parseStageReport, lastJsonBlock, type StageReport } from './prompt';
 import { commitSubject, prTitle, prBody } from './pr';
 import { renderReport, jiraText } from './report';
 import type { Live, PermissionRequest, RepoStatus } from './wire';
@@ -791,8 +791,9 @@ class Engine extends EventEmitter {
 
     const state = this.svc.state(taskId);
     const run = next.kind === 'run' ? next : runOf(state, step);
-    // Readiness and audit agents read every configured repo where it is, also outside the workspace folder.
-    const readRepos = REPORT_OUTPUTS.has(stage.output) ? Object.values(config.repos).map((r) => ({ name: r.name, dir: path.resolve(this.workspace, r.path), baseBranch: r.baseBranch, ...(r.role && { role: r.role }) })) : [];
+    // A planner names the repos its plan works in, and readiness and audit agents read them: each gets every configured
+    // repo, where it is (also outside the workspace folder), by the name the plan must use.
+    const readRepos = REPORT_OUTPUTS.has(stage.output) || stage.output === 'plan' ? Object.values(config.repos).map((r) => ({ name: r.name, dir: path.resolve(this.workspace, r.path), baseBranch: r.baseBranch, ...(r.role && { role: r.role }) })) : [];
     let prsPath: string | undefined;
     if (stage.output === 'readiness' && s.source.kind === 'jira' && readRepos.length) {
       this.setLive(taskId, { phase: 'preparing', step, text: `Listing the PRs on GitHub for ${s.source.key}` });
@@ -901,14 +902,23 @@ class Engine extends EventEmitter {
         }
       }
 
-      let parsed = parseStageReport(stage.output, t.report, t.structured);
+      // A plan for repos this workspace does not have is a report to correct, like one that does not parse: the state
+      // machine would refuse it, and the task would stop with nothing the agent could fix.
+      const check = (): StageReport => {
+        const r = parseStageReport(stage.output, t.report, t.structured);
+        const unknown = r.ok && r.plan ? unknownRepos(state, r.plan.repos) : [];
+        if (!unknown.length) return r;
+        const known = state.knownRepos.length ? `name them as configured: ${state.knownRepos.join(', ')}` : 'name them by their folders in the workspace';
+        return { ok: false, error: `the plan names repos this workspace does not have (${unknown.join(', ')}); ${known}` };
+      };
+      let parsed = check();
       for (let i = 0; !parsed.ok && i < REPORT_RETRIES; i++) {
         this.setLive(taskId, { phase: 'agent', step, key, text: `${label} is correcting its report` });
         session.send(`Your report could not be read: ${parsed.error}. Reply again with the complete, corrected report.`, { from: 'orchestrator' });
         t = await this.turnOf(taskId, session);
         if (stopped()) return;
         if (!t.ok) return void fail(t.error || 'the agent failed while correcting its report');
-        parsed = parseStageReport(stage.output, t.report, t.structured);
+        parsed = check();
       }
       if (!parsed.ok) return void fail(`report still invalid after ${REPORT_RETRIES} corrections: ${parsed.error}`);
 
