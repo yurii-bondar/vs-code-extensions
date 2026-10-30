@@ -27,3 +27,5 @@ node_modules/zod/**/*.d.ts
 node_modules/zod/**/*.d.cts
 node_modules/zod/**/*.map
 node_modules/node-forge/dist/**
+node_modules/node-forge/flash/**
+node_modules/zod/src/**

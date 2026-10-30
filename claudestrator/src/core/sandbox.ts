@@ -41,14 +41,14 @@ const plainLauncher: Launcher = async (cmd, env) => {
   return { file, args, env, cleanup: async () => {} };
 };
 
-/** The oldest Node srt runs on (VS Code 1.101 and later ships one). */
+/** The oldest Node srt runs on (VS Code 1.101 and later ships one; the JetBrains plugin runs the user's). */
 const SRT_NODE = [22, 12];
 
 /** Why srt cannot run here, or null. */
 function sandboxProblem(platform: string = process.platform, nodeVersion: string = process.versions.node): string | null {
   if (platform !== 'darwin' && platform !== 'linux') return `there is no sandbox on ${platform}`;
   const [major = 0, minor = 0] = nodeVersion.split('.').map(Number);
-  if (major < SRT_NODE[0]! || (major === SRT_NODE[0] && minor < SRT_NODE[1]!)) return `the sandbox needs Node ${SRT_NODE.join('.')} or newer, and this VS Code runs ${nodeVersion}; update VS Code`;
+  if (major < SRT_NODE[0]! || (major === SRT_NODE[0] && minor < SRT_NODE[1]!)) return `the sandbox needs Node ${SRT_NODE.join('.')} or newer, and Claudestrator runs on ${nodeVersion} here: update VS Code (1.101 or newer ships one), or the Node.js the JetBrains plugin uses`;
   return null;
 }
 

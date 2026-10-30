@@ -16,7 +16,7 @@ import type { SandboxPolicy } from '../src/core/sandbox';
 
 test('sandbox: there is none on native Windows, and it needs a Node of VS Code 1.101 or newer', () => {
   assert.match(sandboxProblem('win32', '22.15.0')!, /no sandbox on win32/);
-  assert.match(sandboxProblem('darwin', '20.18.0')!, /needs Node 22\.12/);
+  assert.match(sandboxProblem('darwin', '20.18.0')!, /needs Node 22\.12 or newer, and Claudestrator runs on 20\.18\.0/);
   assert.equal(sandboxProblem('linux', '22.12.0'), null);
   assert.equal(sandboxProblem('darwin', '24.1.0'), null);
 });
