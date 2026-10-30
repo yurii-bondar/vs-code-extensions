@@ -76,8 +76,7 @@ class GitRepo {
     return (await this.git('rev-parse', '--verify', '--quiet', `refs/heads/${name}`)).code === 0;
   }
 
-  /** Where the task's changes start: merge-base with origin/<base>, else with <base>, else HEAD. */
-  /** Where `of` (HEAD, or a branch) left the base. */
+  /** Where `of` (HEAD, or a branch) left the base: merge-base with origin/<base>, else with <base>, else HEAD. */
   async baseRef(base: string, of = 'HEAD'): Promise<string> {
     for (const ref of [`origin/${base}`, base]) {
       const r = await this.git('merge-base', of, ref);
@@ -148,7 +147,6 @@ function branchSync(dir: string): string | null {
 
 const worktreeDir = (workspace: string, taskId: string, repo: string): string => path.join(workspace, ORCH_DIR, 'worktrees', taskId, repo);
 
-/** Where each repo of a task lives. Repos missing from the config sit at `<workspace>/<name>` on the default base. */
 /** A repo of a task: where its checkout is, where the task works, and the base branch. */
 interface TaskRepo {
   name: string;
@@ -160,6 +158,7 @@ interface TaskRepo {
 
 type RepoLookup = Pick<Config, 'repos' | 'baseBranch'>;
 
+/** Where each repo of a task lives. Repos missing from the config sit at `<workspace>/<name>` on the default base. */
 function taskRepos(workspace: string, state: TaskState, config: RepoLookup | null | undefined, names: string[]): TaskRepo[] {
   return names.map((name) => {
     const r = config && config.repos[name];
@@ -169,11 +168,6 @@ function taskRepos(workspace: string, state: TaskState, config: RepoLookup | nul
   });
 }
 
-/**
- * Puts every plan repo on the task branch. All-or-nothing: if any repo is not ready, nothing changes.
- * Branch mode switches the user's checkout (which must be clean); worktree mode adds a worktree per repo
- * and never touches the checkout. Idempotent.
- */
 interface PrepareResult {
   repo: string;
   dir: string;
@@ -186,6 +180,11 @@ type Prepared =
   | { ok: true; branch: string; repos: PrepareResult[] }
   | { ok: false; code: string; error: string; branch?: string; blocked?: Blocked[] };
 
+/**
+ * Puts every plan repo on the task branch. All-or-nothing: if any repo is not ready, nothing changes.
+ * Branch mode switches the user's checkout (which must be clean); worktree mode adds a worktree per repo
+ * and never touches the checkout. Idempotent.
+ */
 async function prepareRepos(workspace: string, state: TaskState, config: RepoLookup | null | undefined): Promise<Prepared> {
   const branch = branchName(state);
   if (!branch) return { ok: false, code: 'no_plan', error: 'no plan yet, so no branch name; prepare repos after the plan is approved' };

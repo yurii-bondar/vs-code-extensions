@@ -957,7 +957,6 @@ class Engine extends EventEmitter {
 
   // ---------- commands from the UI ----------
 
-  /** Starts or resumes a task. */
   /**
    * Reshapes what is still to come in a task: `names` is the whole new order. Stages that ran keep their place;
    * an agent the task already has keeps its role, a new one comes from the config. A running task carries on with it.
@@ -1111,7 +1110,5 @@ function summarizeInput(tool: string, input: Record<string, unknown>): unknown {
   return json.length > 2000 ? { preview: `${json.slice(0, 2000)}…` } : input;
 }
 
-/** What the composer sends: the text, the options beside it, and the scenario picked. */
-/** What a human needs to decide a checkpoint. */
 export type { CheckpointContext, ComposerArgs, EngineOptions, Live, McpIntake, PermissionRequest };
 export { Engine, EngineError, stepLabel, transcriptKey, realInside, CLAUDE_AUTH };

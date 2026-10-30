@@ -100,7 +100,6 @@ class EventStore {
   }
 }
 
-/** The single entry point for changing a task: validate, transition, then persist, or log the rejection. */
 /** What `start` needs to create a task. */
 interface StartRequest {
   taskId?: string | undefined;
@@ -286,6 +285,7 @@ class TaskService {
     return nextAction(this.state(taskId));
   }
 
+  /** The single entry point for changing a task: validate, transition, then persist, or log the rejection. */
   dispatch(taskId: string, body: EventBody): DispatchResult {
     return this.locked(taskId, () => this.dispatchUnlocked(taskId, body));
   }
