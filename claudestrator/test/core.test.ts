@@ -11,6 +11,7 @@ import * as backups from '../src/core/backup';
 import * as libraries from '../src/core/library';
 import { buildAgentPrompt, parseStageReport, reportLanguage } from '../src/core/prompt';
 import { guardBash } from '../src/core/guard';
+import { readJsonFresh } from '../src/core/env';
 import { GitRepo } from '../src/core/git';
 import { parseHookRequest } from '../src/core/hookserver';
 import { plain } from '../src/core/gates';
@@ -1428,4 +1429,17 @@ test('config: read again only when a file it comes from changes, and a path to a
     const bad = config.loadConfig({ workspace: ws, home });
     assert.ok(!bad.ok && bad.errors.some((e) => /not a regular file/.test(e.message)), 'instructions from a device are an error, not a hang');
   }
+});
+
+test("env: Claude Code's big JSON files are parsed once per change, and looked at no more than every few seconds", () => {
+  const file = path.join(tmp('cs-json-'), '.claude.json');
+  fs.writeFileSync(file, JSON.stringify({ oauthAccount: { emailAddress: 'a@x' } }));
+  const t = 1_000_000;
+  assert.deepEqual(readJsonFresh(file, t), { oauthAccount: { emailAddress: 'a@x' } });
+  fs.writeFileSync(file, JSON.stringify({ oauthAccount: { emailAddress: 'b@x' }, pad: 'x'.repeat(10) }));
+  assert.deepEqual(readJsonFresh(file, t + 1000), { oauthAccount: { emailAddress: 'a@x' } }, 'within the window the file is not even looked at');
+  assert.deepEqual(readJsonFresh(file, t + 6000), { oauthAccount: { emailAddress: 'b@x' }, pad: 'x'.repeat(10) }, 'after it, a change is read');
+  fs.writeFileSync(file, '{"half');
+  assert.equal(readJsonFresh(file, t + 12000), undefined, 'a file caught mid-write is no value, not an error');
+  assert.equal(readJsonFresh(path.join(path.dirname(file), 'none.json'), t), undefined);
 });

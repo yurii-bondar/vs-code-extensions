@@ -5,6 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { spawn, type ChildProcess } from 'child_process';
 import { exec } from './git';
+import { readJsonFresh } from './env';
 import type { McpServer } from './wire';
 
 /** `~/.claude.json` as far as this module reads it. */
@@ -14,12 +15,10 @@ interface ClaudeJson {
   disabledMcpjsonServers?: string[];
 }
 
+/** One of Claude Code's config files, parsed once per change (`readJsonFresh`). */
 const readJson = (file: string): ClaudeJson | null => {
-  try {
-    return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null;
-  } catch {
-    return null;
-  }
+  const value = readJsonFresh(file);
+  return typeof value === 'object' && value !== null ? (value as ClaudeJson) : null;
 };
 
 /**

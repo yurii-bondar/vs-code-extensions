@@ -54,37 +54,59 @@ function expand(p: string | null | undefined): string | null | undefined {
   return p ? path.resolve(String(p).replace(/^~(?=$|[\\/])/, HOME)) : p;
 }
 
-/**
- * The signed-in email a `.claude.json` names, cached by the file's size and mtime: the file keeps per-project history and
- * can be megabytes, and the account is asked for several times per refresh.
- */
-const emails = new Map<string, { sig: string; email: string | undefined }>();
+/** How long what was read of a Claude Code file holds before the file is looked at again. */
+const FRESH_MS = 5000;
+const jsonFiles = new Map<string, { at: number; sig: string; value: unknown }>();
 
-function accountEmail(file: string): string | undefined {
+/**
+ * A JSON file of Claude Code's, parsed once per change and looked at no more than every FRESH_MS: `.claude.json` keeps
+ * per-project history and can be megabytes, Claude Code rewrites it all the time an agent runs, and the dashboard asks
+ * for the account and the MCP servers on every refresh. Undefined when it is not there or not JSON (being written).
+ */
+function readJsonFresh(file: string, now: number = Date.now()): unknown {
+  const hit = jsonFiles.get(file);
+  if (hit && now - hit.at < FRESH_MS) return hit.value;
   let sig: string;
   try {
     const st = fs.statSync(file);
     sig = `${st.size}:${st.mtimeMs}`;
   } catch {
-    return undefined; // no such file
+    jsonFiles.set(file, { at: now, sig: '', value: undefined });
+    return undefined;
   }
-  const hit = emails.get(file);
-  if (hit && hit.sig === sig) return hit.email;
-  let email: string | undefined;
+  if (hit && hit.sig === sig) {
+    hit.at = now;
+    return hit.value;
+  }
+  let value: unknown;
   try {
-    const data: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
-    const acc = typeof data === 'object' && data !== null ? (data as { oauthAccount?: unknown }).oauthAccount : undefined;
-    const value = typeof acc === 'object' && acc !== null ? (acc as { emailAddress?: unknown }).emailAddress : undefined;
-    email = typeof value === 'string' ? value : undefined;
+    value = JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch {
-    email = undefined; // being written, or not JSON
+    value = undefined;
   }
-  emails.set(file, { sig, email });
-  return email;
+  jsonFiles.set(file, { at: now, sig, value });
+  return value;
 }
 
-/** Claude Code config folders (accounts): ~/.claude and ~/.claude-*. */
-function claudeAccounts(): { dir: string; label: string; email?: string }[] {
+/** The signed-in email a `.claude.json` names. */
+function accountEmail(file: string): string | undefined {
+  const data = readJsonFresh(file);
+  const acc = typeof data === 'object' && data !== null ? (data as { oauthAccount?: unknown }).oauthAccount : undefined;
+  const value = typeof acc === 'object' && acc !== null ? (acc as { emailAddress?: unknown }).emailAddress : undefined;
+  return typeof value === 'string' ? value : undefined;
+}
+
+let accounts: { at: number; list: { dir: string; label: string; email?: string }[] } | null = null;
+
+/** Claude Code config folders (accounts): ~/.claude and ~/.claude-*. Looked for again after FRESH_MS. */
+function claudeAccounts(now: number = Date.now()): { dir: string; label: string; email?: string }[] {
+  if (accounts && now - accounts.at < FRESH_MS) return accounts.list;
+  const list = findAccounts();
+  accounts = { at: now, list };
+  return list;
+}
+
+function findAccounts(): { dir: string; label: string; email?: string }[] {
   const out: { dir: string; label: string; email?: string }[] = [];
   let names: string[] = [];
   try {
@@ -256,4 +278,4 @@ function statuslineSnapshot(configDir: string): StatuslineSnapshot | null {
 }
 
 export type { Probe, StatuslineSnapshot };
-export { loginShellPath, which, expand, claudeAccounts, probe, statuslineSnapshot, npmShimTarget };
+export { loginShellPath, which, expand, claudeAccounts, probe, statuslineSnapshot, npmShimTarget, readJsonFresh };
