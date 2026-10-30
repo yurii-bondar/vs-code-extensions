@@ -11,6 +11,7 @@ eslint.config.mjs
 release.config.cjs
 .gitignore
 media/icon.svg
+media/screenshots/**
 # yaml: only the Node build is loaded (dist/index.js); browser build, types, CLI and docs are not
 node_modules/yaml/browser/**
 node_modules/yaml/**/*.d.ts
