@@ -3,6 +3,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { spawn } from 'child_process';
 import { getChildEnv, GitRepo } from './git';
+import { plainLauncher, type Launcher } from './sandbox';
+import { credentialVars, GITHUB_TOKENS } from './settings';
 import type { RepoConfig } from './types';
 import type { GateResult, RepoGates } from './wire';
 
@@ -25,10 +27,19 @@ function plain(output: string): string {
     .join('\n');
 }
 
-function shellCommand(cmd: string): [string, string[]] {
-  if (process.platform === 'win32') return ['cmd.exe', ['/d', '/s', '/c', cmd]];
-  return [fs.existsSync('/bin/bash') ? '/bin/bash' : '/bin/sh', ['-c', cmd]];
+/**
+ * The environment a gate or a git hook runs in: yours without its credentials. What runs there is code the agents
+ * wrote or changed (a test, a package.json script), which must not find a token to send somewhere.
+ */
+function withoutCredentials(env: NodeJS.ProcessEnv, keep: string[] = []): NodeJS.ProcessEnv {
+  const out = { ...env };
+  for (const name of [...credentialVars(env), ...GITHUB_TOKENS]) if (!keep.includes(name)) delete out[name];
+  return out;
 }
+
+/** What a sandboxed command that failed on a write or a read it may not do says. */
+const SANDBOX_REFUSAL = /Operation not permitted|EPERM|Read-only file system|EROFS|CONNECT tunnel failed, response 403/;
+const SANDBOX_HINT = 'note: checks run in the sandbox (policy.sandbox): they write only in the repo and reach only the package registries. A tool that writes elsewhere (a build cache) needs that folder in policy.writable, a host it needs goes in policy.network.';
 
 interface ShellRun {
   code: number;
@@ -41,17 +52,45 @@ interface ShellRun {
  * Runs a gate command in a process group of its own, so a timeout or a stopped task ends everything it started
  * (test workers, a dev server), not only the shell. stdout and stderr are kept in one text, in the order they arrive.
  */
-function runShell(cmd: string, { cwd, env, timeoutMs, signal }: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; signal?: AbortSignal | undefined }): Promise<ShellRun> {
+interface ShellOptions {
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  timeoutMs: number;
+  signal?: AbortSignal | undefined;
+  /** How the command starts: in the sandbox, or plainly (the default). */
+  launch?: Launcher | undefined;
+  /** What it reads on stdin (a pre-push hook reads the refs it pushes). */
+  input?: string | undefined;
+}
+
+async function runShell(cmd: string, { cwd, env, timeoutMs, signal, launch = plainLauncher, input }: ShellOptions): Promise<ShellRun> {
+  let l: Awaited<ReturnType<Launcher>>;
+  try {
+    l = await launch(cmd, env);
+  } catch (e) {
+    return { code: 127, output: (e as Error).message };
+  }
+  try {
+    return await spawnShell(l, { cwd, timeoutMs, signal, input });
+  } finally {
+    await l.cleanup();
+  }
+}
+
+function spawnShell({ file: bin, args, env }: Awaited<ReturnType<Launcher>>, { cwd, timeoutMs, signal, input }: Omit<ShellOptions, 'env' | 'launch'>): Promise<ShellRun> {
   return new Promise((resolve) => {
-    const [bin, args] = shellCommand(cmd);
     const win = process.platform === 'win32';
     let output = '';
     let killed: ShellRun['killed'];
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(bin, args, { cwd, env, detached: !win, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+      child = spawn(bin, args, { cwd, env, detached: !win, stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], windowsHide: true });
     } catch (e) {
       return resolve({ code: 127, output: (e as Error).message });
+    }
+    if (input !== undefined && child.stdin) {
+      child.stdin.on('error', () => {}); // a hook that does not read its input
+      child.stdin.end(input);
     }
     const keep = (d: string): void => {
       output += d;
@@ -99,7 +138,21 @@ function runShell(cmd: string, { cwd, env, timeoutMs, signal }: { cwd: string; e
  * no changed file (unless `force`). Logs go to `logDir`. `onGate(name)` reports progress. `signal` stops the gate
  * that runs and skips the rest.
  */
-async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = false, onGate, signal }: { repo: RepoConfig; dir: string; logDir: string; timeoutMs?: number; force?: boolean | undefined; onGate?: ((name: string) => void) | undefined; signal?: AbortSignal | undefined }): Promise<RepoGates> {
+interface GatesArgs {
+  repo: RepoConfig;
+  dir: string;
+  logDir: string;
+  timeoutMs?: number;
+  force?: boolean | undefined;
+  onGate?: ((name: string) => void) | undefined;
+  signal?: AbortSignal | undefined;
+  /** The sandbox the gates run in (`Engine.sandboxFor`); none: they run plainly. */
+  launch?: Launcher | undefined;
+  /** `policy.checkEnv`: credential-like variables the gates keep. */
+  keepEnv?: string[] | undefined;
+}
+
+async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = false, onGate, signal, launch, keepEnv }: GatesArgs): Promise<RepoGates> {
   const git = new GitRepo(dir);
   if (!(await git.isRepo())) {
     return { repo: repo.name, status: 'fail', results: [{ repo: repo.name, gate: '(repo)', status: 'fail' }], summary: `FAIL ${repo.name}: not a git repo at ${dir}` };
@@ -126,10 +179,11 @@ async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = fal
     if (onGate) onGate(gate.name);
     const cwd = path.join(dir, gate.dir ?? '.');
     const started = Date.now();
-    const r = await runShell(gate.cmd, { cwd, timeoutMs, env: { ...getChildEnv(), ...PLAIN_ENV }, signal });
+    const r = await runShell(gate.cmd, { cwd, timeoutMs, env: { ...withoutCredentials(getChildEnv(), keepEnv), ...PLAIN_ENV }, signal, launch });
     const ms = Date.now() - started;
     const log = path.join(logDir, `${slug(repo.name)}.${slug(gate.name)}.log`);
-    const output = plain(r.output);
+    const hint = launch && r.code !== 0 && SANDBOX_REFUSAL.test(r.output) ? `\n${SANDBOX_HINT}` : '';
+    const output = plain(r.output) + hint;
     fs.writeFileSync(log, `$ (cd ${path.relative(dir, cwd) || '.'} && ${gate.cmd})\n${output}\nexit ${r.code}\n`);
     if (r.code === 0) {
       results.push({ repo: repo.name, gate: gate.name, status: 'pass', log, ms });
@@ -145,4 +199,4 @@ async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = fal
 }
 
 export type { GateResult, RepoGates };
-export { plain, runGates, runShell, shellCommand };
+export { plain, runGates, runShell, withoutCredentials };

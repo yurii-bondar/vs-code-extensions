@@ -123,6 +123,8 @@ interface SessionSettingsArgs {
   cwd: string;
   /** `policy.sandbox`: run the agents' shell commands in Claude Code's sandbox. */
   sandbox: boolean;
+  /** `policy.writable`: folders commands may write besides the write roots (build caches). */
+  writable: string[];
   /** `policy.network`: hosts commands may reach besides the registries. */
   network: string[];
 }
@@ -131,7 +133,7 @@ interface SessionSettingsArgs {
 const ruleRoot = (abs: string): string => `/${abs.split(path.sep).join('/').replace(/^\/*/, '/')}`;
 
 /** One session's settings. */
-function sessionSettings({ hooks, guard, writeRoots, protect, secrets, envVars, cwd, sandbox, network }: SessionSettingsArgs): Record<string, unknown> {
+function sessionSettings({ hooks, guard, writeRoots, protect, secrets, envVars, cwd, sandbox, network, writable }: SessionSettingsArgs): Record<string, unknown> {
   return {
     hooks,
     permissions: { deny: [...[...SECRET_FILES, ...secrets.map(ruleRoot)].map((f) => `Read(${f})`), ...protect.flatMap((p) => [`Edit(${ruleRoot(p)})`, `Edit(${ruleRoot(p)}/**)`]), ...DENIED_COMMANDS] },
@@ -142,6 +144,7 @@ function sessionSettings({ hooks, guard, writeRoots, protect, secrets, envVars, 
         allowUnsandboxedCommands: false,
         filesystem: {
           denyRead: [...SECRET_PATHS, ...secrets],
+          ...(writable.length && { allowWrite: writable }),
           // Git metadata is Claudestrator's (a hook or core.fsmonitor written there would run on its next git call),
           // and a stage that changes nothing writes nowhere but a temp folder.
           denyWrite: [...writeRoots.map((r) => path.join(r, '.git')), ...protect, ...(writeRoots.length ? [] : [cwd])],

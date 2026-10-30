@@ -12,7 +12,7 @@ import { nextAction, runOf, artifactPath, branchName, sameStep, editableFrom, st
 import { parseInvocation, classifyInput, detectScenario, runIntake, renderTicket, IntakeError, extractAcceptanceCriteria } from './intake';
 import { TaskService, type DispatchResult } from './store';
 import { exec, getChildEnv, GitRepo, branchAt, taskRepos, prepareRepos, taskDiff, removeWorktrees } from './git';
-import { runGates } from './gates';
+import { runGates, runShell, withoutCredentials } from './gates';
 import { guardBash } from './guard';
 import { buildAgentPrompt, parseStageReport, lastJsonBlock } from './prompt';
 import { commitSubject, prTitle, prBody } from './pr';
@@ -20,7 +20,8 @@ import { renderReport, jiraText } from './report';
 import type { Live, PermissionRequest, RepoStatus } from './wire';
 import type { ClaudeRunner, ClaudeSession, Limits, TurnResult } from './runner';
 import { HOOK_TIMEOUT_S, TOKEN_ENV, type HookServer, type Decision, type ToolCall } from './hookserver';
-import { sessionSettings, credentialVars } from './settings';
+import { sessionSettings, credentialVars, REGISTRIES, SECRET_PATHS } from './settings';
+import { probeSandbox, sandboxLauncher, sandboxProblem, shq, type Launcher, type SandboxPolicy } from './sandbox';
 import { REPORT_SCHEMAS } from './schemas';
 import type { AtlassianClient, Invocation } from './intake';
 import type { StageSource } from './pipeline';
@@ -97,6 +98,8 @@ interface EngineOptions {
   stallMs?: number | undefined;
   /** Files of the extension's own that agents never read (the MCP config it writes for them, with the servers' tokens). */
   secretFiles?: (() => string[]) | undefined;
+  /** How a command starts in the sandbox (srt); tests pass one that records the policy. */
+  sandbox?: ((policy: SandboxPolicy) => Launcher) | undefined;
 }
 
 interface PermissionAnswer {
@@ -184,6 +187,9 @@ class Engine extends EventEmitter {
   mcpIntake: () => McpIntake | null;
   askPermissions: () => boolean;
   secretFiles: () => string[];
+  sandbox: (policy: SandboxPolicy) => Launcher;
+  /** Whether the sandbox started here once: it is not probed again. */
+  sandboxReady = false;
   sessions: Map<string, ClaudeSession>;
   /** Stops the gates a task runs right now; Stop aborts it. */
   gateRuns = new Map<string, AbortController>();
@@ -213,6 +219,7 @@ class Engine extends EventEmitter {
     this.mcpIntake = opts.mcpIntake || (() => null);
     this.askPermissions = opts.askPermissions || (() => false);
     this.secretFiles = opts.secretFiles || (() => []);
+    this.sandbox = opts.sandbox || sandboxLauncher;
     this.sessions = new Map();
     this.running = new Set();
     this.prepared = new Set();
@@ -638,7 +645,38 @@ class Engine extends EventEmitter {
       cwd,
       sandbox: config.policy.sandbox,
       network: config.policy.network,
+      writable: config.policy.writable,
     });
+  }
+
+  /**
+   * How checks and git hooks start, writing only in `allowWrite` (never its `.git` unless `git`), reading no
+   * credential, reaching only the registries: the agents' own sandbox, since they run code the agents changed. None
+   * with `policy.sandbox: false` or on native Windows, where the agents have none either.
+   */
+  sandboxFor(config: Config, allowWrite: string[], { git = false }: { git?: boolean } = {}): Launcher | undefined {
+    if (!config.policy.sandbox || process.platform === 'win32') return undefined;
+    return this.sandbox({
+      allowWrite: [...allowWrite, ...config.policy.writable],
+      denyWrite: [...(git ? [] : allowWrite.map((d) => path.join(d, '.git'))), ...configPaths(this.workspace, config)],
+      denyRead: [...SECRET_PATHS, ...this.secretFiles()],
+      network: [...REGISTRIES, ...config.policy.network],
+    });
+  }
+
+  /**
+   * Fails at once, before an agent runs, when checks and hooks are to run in a sandbox this machine cannot start
+   * (Linux without bubblewrap, socat or ripgrep; a VS Code with too old a Node), rather than after the agent's work.
+   */
+  async ensureSandbox(config: Config): Promise<void> {
+    const launch = this.sandboxFor(config, [this.workspace]);
+    if (!launch || this.sandboxReady) return;
+    const problem = (this.sandbox === sandboxLauncher && sandboxProblem()) || (await probeSandbox(launch, withoutCredentials(getChildEnv())));
+    if (problem) {
+      const fix = process.platform === 'linux' ? 'install bubblewrap, socat and ripgrep, or ' : '';
+      throw new EngineError('sandbox_unavailable', `checks and git hooks run in the sandbox (policy.sandbox), and it does not start here: ${problem}. To go on, ${fix}turn the sandbox off in Settings → Safety.`);
+    }
+    this.sandboxReady = true;
   }
 
   /**
@@ -736,6 +774,8 @@ class Engine extends EventEmitter {
     if (next.kind === 'run') emitItem({ type: 'prompt', text: prompt });
 
     const writeRoots = stage.scope === 'repo' ? [repoDir as string] : workRepos.map((r) => r.dir);
+    const gated = (stage.scope === 'repo' ? [step.repo] : workRepos.map((r) => r.name)).some((n) => n && config.repos[n] && config.repos[n]!.gates.length);
+    if (gated) await this.ensureSandbox(config);
     const hook = this.hooks.register((call) => this.decide({ taskId, step, writeRoots, config, call, emitItem }));
     const session = await this.runner.start({
       agent,
@@ -784,6 +824,8 @@ class Engine extends EventEmitter {
                   logDir: path.join(taskDir, 'gates', `r${state.review.round}`),
                   onGate: (name) => this.setLive(taskId, { phase: 'gates', step, key, text: `Gate "${name}" in ${r.name} (attempt ${attempt})` }),
                   signal: abort.signal,
+                  launch: this.sandboxFor(config, [r.dir]),
+                  keepEnv: config.policy.checkEnv,
                 })
               );
               if (stopped()) return;
@@ -982,27 +1024,63 @@ class Engine extends EventEmitter {
   async commit(s: TaskState): Promise<void> {
     this.setLive(s.taskId, { phase: 'committing', text: 'Committing' });
     const config = this.config();
+    await this.ensureSandbox(config);
     const subject = commitSubject(s);
     const body = s.source.kind === 'jira' ? `Refs: ${s.taskId}` : '';
     const branch = branchName(s) as string;
     const committed: string[] = [];
-    for (const r of taskRepos(this.workspace, s, config, s.repos.map((x) => x.name))) {
-      if (!(await r.git.isRepo())) continue;
-      if ((await r.git.dirty()).length) {
-        // The work is committed on the task branch only: another branch checked out meanwhile (main, another task's)
-        // would get it instead.
-        const current = await r.git.branch();
-        if (current !== branch) throw new EngineError('wrong_branch', `${r.name} is on ${current || 'a detached HEAD'}, not the task branch ${branch}; switch back (git switch ${branch}) and try again`);
-        await r.git.addAll();
-        const c = await r.git.git('commit', '-m', subject, ...(body ? ['-m', body] : []));
-        if (c.code !== 0) {
-          this.dispatch(s.taskId, { type: 'commit_failed', repo: r.name, output: `${c.stdout}${c.stderr}`.trim().slice(-8000) });
-          return;
+    const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cs-commit-'));
+    try {
+      const message = path.join(tmp, 'message.txt');
+      await fs.promises.writeFile(message, body ? `${subject}\n\n${body}\n` : `${subject}\n`);
+      for (const r of taskRepos(this.workspace, s, config, s.repos.map((x) => x.name))) {
+        if (!(await r.git.isRepo())) continue;
+        if ((await r.git.dirty()).length) {
+          // The work is committed on the task branch only: another branch checked out meanwhile (main, another task's)
+          // would get it instead.
+          const current = await r.git.branch();
+          if (current !== branch) throw new EngineError('wrong_branch', `${r.name} is on ${current || 'a detached HEAD'}, not the task branch ${branch}; switch back (git switch ${branch}) and try again`);
+          await r.git.addAll();
+          // The repo's commit hooks run here, and they are code the agents could change (`.husky/pre-commit`, a
+          // package.json script): in the sandbox, which lets git write its objects and refs, not its config or hooks.
+          const c = await runShell(`git commit -F ${shq(message)}`, { cwd: r.dir, env: withoutCredentials(getChildEnv(), config.policy.checkEnv), timeoutMs: 15 * 60000, launch: this.sandboxFor(config, [r.dir, ...(await r.git.gitDirs())], { git: true }) });
+          if (c.code !== 0) {
+            this.dispatch(s.taskId, { type: 'commit_failed', repo: r.name, output: c.output.trim().slice(-8000) });
+            return;
+          }
         }
+        if ((await r.git.branchChanges(r.base, branch)).length) committed.push(r.name);
       }
-      if ((await r.git.branchChanges(r.base, branch)).length) committed.push(r.name);
+    } finally {
+      await fs.promises.rm(tmp, { recursive: true, force: true });
     }
     this.dispatch(s.taskId, { type: 'committed', repos: committed });
+  }
+
+  /**
+   * Runs the repo's pre-push hook the way git would, in the sandbox: git itself pushes with your credentials and
+   * network, which the hook (code the agents could change) must not get. Null when it passes or there is none.
+   */
+  async prePush(r: TaskRepo, branch: string, config: Config): Promise<string | null> {
+    const found = await r.git.git('rev-parse', '--git-path', 'hooks/pre-push');
+    const hook = path.resolve(r.dir, found.stdout.trim());
+    if (found.code !== 0 || !found.stdout.trim()) return null;
+    try {
+      await fs.promises.access(hook, fs.constants.X_OK);
+    } catch {
+      return null;
+    }
+    const url = (await r.git.git('remote', 'get-url', 'origin')).stdout.trim();
+    const local = (await r.git.git('rev-parse', `refs/heads/${branch}`)).stdout.trim();
+    const remote = (await r.git.git('rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`)).stdout.trim() || '0'.repeat(local.length || 40);
+    const run = await runShell(`${shq(hook)} origin ${shq(url)}`, {
+      cwd: r.dir,
+      env: withoutCredentials(getChildEnv(), config.policy.checkEnv),
+      timeoutMs: 15 * 60000,
+      input: `refs/heads/${branch} ${local} refs/heads/${branch} ${remote}\n`,
+      launch: this.sandboxFor(config, [r.dir, ...(await r.git.gitDirs())], { git: true }),
+    });
+    return run.code === 0 ? null : run.output.trim().slice(-8000) || `the pre-push hook exited with ${run.code}`;
   }
 
   async publish(s: TaskState): Promise<void> {
@@ -1013,6 +1091,7 @@ class Engine extends EventEmitter {
     const repos: TaskRepo[] = [];
     for (const r of all) if ((await r.git.branchChanges(r.base, branch)).length) repos.push(r);
     const prs = { ...s.prs };
+    await this.ensureSandbox(config);
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-pr-'));
     const bodyFile = (repo: string): string => {
       const f = path.join(tmp, `${repo}.md`);
@@ -1022,8 +1101,12 @@ class Engine extends EventEmitter {
     try {
       for (const r of repos) {
         if (prs[r.name]) continue;
+        this.setLive(s.taskId, { phase: 'publishing', text: `Checking ${r.name} before the push` });
+        const refused = await this.prePush(r, branch, config);
+        if (refused) throw new EngineError('push_failed', `${r.name}: the pre-push hook failed:\n${refused}`);
         this.setLive(s.taskId, { phase: 'publishing', text: `Pushing ${r.name}` });
-        const push = await r.git.git('push', '-u', 'origin', branch);
+        // The hook has run, in the sandbox; git would run it again outside.
+        const push = await r.git.git('push', '--no-verify', '-u', 'origin', branch);
         if (push.code !== 0) throw new EngineError('push_failed', `${r.name}: ${push.stderr.trim()}`);
         // A retry after a partial failure (or a Stop mid-publish) finds the PR it already opened.
         const open = await exec('gh', ['pr', 'view', branch, '--json', 'url,state', '--jq', 'select(.state == "OPEN") | .url'], { cwd: r.dir, timeoutMs: 60000 });
@@ -1275,7 +1358,8 @@ class Engine extends EventEmitter {
     const repo = config.repos[repoName];
     if (!repo) throw new EngineError('unknown_repo', `no repo "${repoName}" in the config`);
     const dir = path.resolve(this.workspace, repo.path);
-    return runGates({ repo, dir, logDir: path.join(this.workspace, '.orch', 'gates'), force });
+    await this.ensureSandbox(config);
+    return runGates({ repo, dir, logDir: path.join(this.workspace, '.orch', 'gates'), force, launch: this.sandboxFor(config, [dir]), keepEnv: config.policy.checkEnv });
   }
 
   async repoStatus() {

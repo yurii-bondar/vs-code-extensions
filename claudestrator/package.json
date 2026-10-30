@@ -371,6 +371,7 @@
     }
   },
   "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "^0.0.81",
     "yaml": "^2.5.0"
   },
   "devDependencies": {

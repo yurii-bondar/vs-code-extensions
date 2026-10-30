@@ -237,6 +237,10 @@ export interface Policy {
   sandbox: boolean;
   /** Hosts sandboxed commands may reach besides the package registries. */
   network: string[];
+  /** Folders sandboxed commands (agents' and checks') may write besides the repo: build caches such as `~/.cache/go-build`. */
+  writable: string[];
+  /** Variables of your environment that checks and git hooks keep although they look like credentials (a test database's URL). */
+  checkEnv: string[];
 }
 
 export interface Config {

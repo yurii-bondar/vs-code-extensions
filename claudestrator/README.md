@@ -83,7 +83,7 @@ First time in a workspace, *Set up this workspace* finds the git repos and sugge
 ## How it works
 
 - **Routing by output, never by name.** An agent's `output` decides its role. `plan` waits for your approval. `code` runs once per repo of the plan, in plan order, with the repo's checks after it. `tests` runs once after that, across every repo the plan names (one tester sees all the changes and the contracts between them), then the checks of each of those repos. An agent's `runs: per-repo | all-repos` switches this for a code or tests agent (Agents screen, or *per repo ⇄ all repos* on its chip in a scenario's editor on the Scenarios page). Tasks started before keep the tester per repo. `verdict` sends blocking findings (blocker, major) back to the code/tests stages of only the affected repos, up to `limits.reviewRounds`. Minor findings go into the PR description.
-- **Checks.** After a code or tests step the repo's checks run on its changes. Red output goes back into the same agent session, up to `limits.gateAttempts` times; then you decide.
+- **Checks.** After a code or tests step the repo's checks run on its changes. Red output goes back into the same agent session, up to `limits.gateAttempts` times; then you decide. Checks run code the agents wrote or changed (tests, package.json scripts), so they run in the agents' sandbox (Anthropic's sandbox-runtime, which Claude Code's sandbox is built on): writes only in the repo (not its `.git`), none of your credentials, files or variables, network only as for the agents. So do the repo's git hooks: the commit's hooks may write git's objects and refs but not its config or hooks, and the pre-push hook runs in the sandbox before git pushes (with `--no-verify`, so it does not run twice). A tool that writes elsewhere (a build cache) needs that folder in `policy.writable`; a variable that looks like a credential but a check needs (a test database's URL) goes in `policy.checkEnv`. Where the sandbox cannot start (Linux without bubblewrap, socat and ripgrep, a VS Code older than 1.101), a task says so before any agent runs.
 - **Reports.** Plan, verdict, readiness and audit stages write their report for a human and hand its data over as structured output: Claude Code checks it against the stage's JSON Schema (`--json-schema`) and asks the agent again on a mismatch. The engine checks it once more, also what a schema cannot say (a verdict with a blocker or major finding is `changes_requested`), and sends a report it cannot use back for correction twice before the step fails. The artifact keeps the report with its data as a JSON block at the end.
 - **Git.**
   - In *branch* mode the repos switch to `<type>/<KEY>-<slug>` and must be clean first. In *worktree* mode each task gets `.orch/worktrees/<task>/<repo>` from `origin/<base>`, and your checkouts are never touched.
@@ -197,8 +197,10 @@ policy:
   protectedBranches: [main, master]
   draftPrsOnly: true
   forbidAiAttribution: true
-  sandbox: true                  # agents' commands in Claude Code's sandbox
+  sandbox: true                  # agents' commands, checks and git hooks in the sandbox
   network: [npm.acme.corp]       # hosts they may reach besides the package registries
+  writable: [~/.cache/go-build]  # folders they may write besides the repo (build caches)
+  checkEnv: [DATABASE_URL]       # credential-like variables checks and hooks still get
 ```
 
 VS Code settings (`claudestrator.*`):
@@ -218,6 +220,7 @@ VS Code settings (`claudestrator.*`):
 ## Requirements
 
 - Claude Code CLI 2.1.302 or newer, logged in (`claude --version`; `claude update`). Older versions do not honour what guards the agents, so they do not start.
+- For the sandbox of checks and git hooks: VS Code 1.101 or newer (its Node runs sandbox-runtime); on Linux and WSL2 also `bubblewrap`, `socat` and `ripgrep`, as Claude Code's own sandbox needs.
 - Git. GitHub CLI (`gh auth login`) to open PRs and to list a ticket's PRs for a readiness check.
 
 ## Develop

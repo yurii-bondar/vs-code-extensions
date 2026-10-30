@@ -10,6 +10,7 @@ import { Engine } from '../../src/core/engine';
 import { ClaudeRunner } from '../../src/core/runner';
 import { HookServer } from '../../src/core/hookserver';
 import { setChildEnv } from '../../src/core/git';
+import { plainLauncher, type SandboxPolicy } from '../../src/core/sandbox';
 import type { TranscriptItem } from '../../src/core/store';
 import type { ComposerArgs } from '../../src/core/engine';
 import type { EventOf, EventType, OrchEvent, TaskState } from '../../src/core/types';
@@ -50,11 +51,13 @@ async function harness(ws: string, env: Record<string, string> = {}, { flags = C
   const hooks = new HookServer();
   await hooks.listen();
   const runner = new ClaudeRunner({ command: () => FAKE, flags: () => new Set(flags), settingSources: () => ['project'], env: () => ({}) });
-  const engine = new Engine({ workspace: ws, home: state, runner, hooks });
+  // Checks and hooks run plainly here, with the policy they would get recorded; test/sandbox.test.ts runs the real one.
+  const sandboxed: SandboxPolicy[] = [];
+  const engine = new Engine({ workspace: ws, home: state, runner, hooks, sandbox: (policy) => (sandboxed.push(policy), plainLauncher) });
   const outputs: OutputEvent[] = [];
   engine.on('output', (o: OutputEvent) => outputs.push(o));
   const calls = () => fs.readFileSync(path.join(state, 'calls.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-  return { engine, hooks, outputs, state, calls };
+  return { engine, hooks, outputs, state, calls, sandboxed };
 }
 
 /** The events of one type, narrowed to it. */

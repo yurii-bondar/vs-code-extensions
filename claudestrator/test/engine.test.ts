@@ -110,6 +110,17 @@ repos:
     assert.ok(web.some((i) => i.type === 'gates' && i.status === 'fail'));
     assert.ok(web.some((i) => i.type === 'user' && i.from === 'orchestrator' && /Gates failed/.test(text(i.text))));
 
+    // Checks and the commit hooks ran in the sandbox: the repo writable, its git metadata only for the commit.
+    const api = path.join(ws, 'api');
+    const gate = h.sandboxed.find((p) => p.allowWrite[0] === api && p.denyWrite.includes(path.join(api, '.git')))!;
+    assert.ok(gate, 'a gate of api ran sandboxed');
+    assert.ok(gate.denyWrite.includes(path.join(ws, '.claudestrator')), "and cannot change Claudestrator's config");
+    assert.ok(gate.denyRead.includes('~/.ssh') && gate.denyRead.includes('~/.config/gh'));
+    assert.ok(gate.network.includes('registry.npmjs.org') && !gate.network.includes('api.github.com'));
+    const commit = h.sandboxed.find((p) => p.allowWrite.includes(path.join(api, '.git')))!;
+    assert.ok(commit, 'the commit ran sandboxed');
+    assert.ok(!commit.denyWrite.includes(path.join(api, '.git')), 'git writes its objects and refs');
+
     await h.engine.answer(taskId, 'confirm-push', 'local');
     s = await waitFor(() => (h.engine.isRunning(taskId) ? null : h.engine.svc.state(taskId)));
     assert.equal(s.status, 'done');
@@ -349,6 +360,62 @@ test('engine: an audit finds bugs and bottlenecks, rates them and reports; a Jir
     assert.equal(r.ok, false);
     assert.match(r.error!, /Jira is not connected/);
     assert.equal(view.detail(h.engine, taskId).comments[0]!.ok, false, 'a failure is visible on the task, not only in a log');
+  } finally {
+    h.hooks.dispose();
+  }
+});
+
+/** A repo of `ws` with a bare origin it is pushed to, a pre-push hook, and a gh that opens PRs: what publishing needs. */
+function remoteSetup(ws: string, hook: string) {
+  const remote = path.join(ws, 'remote.git');
+  git(ws, 'init', '-q', '--bare', remote);
+  const api = path.join(ws, 'api');
+  git(api, 'remote', 'add', 'origin', remote);
+  git(api, 'push', '-q', 'origin', 'main');
+  fs.writeFileSync(path.join(api, '.git', 'hooks', 'pre-push'), hook, { mode: 0o755 });
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-gh-'));
+  fs.writeFileSync(path.join(bin, 'gh'), '#!/bin/sh\ncase "$1 $2" in "pr view") exit 1;; "pr create") echo https://github.com/acme/api/pull/7;; *) exit 0;; esac\n', { mode: 0o755 });
+  return { remote, api, path: `${bin}${path.delimiter}${process.env.PATH}` };
+}
+
+test('engine: checks and git hooks get no credential of yours, and the pre-push hook runs once, before git pushes', async () => {
+  const ws = workspace(['api'], `pipeline: [planner, developer]\nrepos:\n  api:\n    gates:\n      - { name: env, cmd: 'test -z "$ACME_DEPLOY_TOKEN" && test "$DATABASE_URL" = postgres://u:p@db/x' }\npolicy: { checkEnv: [DATABASE_URL] }\n`);
+  const { remote, path: PATH } = remoteSetup(ws, '#!/bin/sh\necho "$1 $2 $(cat) token=${ACME_DEPLOY_TOKEN:-none}" >> "$FAKE_STATE/pre-push.log"\n');
+  const h = await harness(ws, { FAKE_REPOS: 'api', ACME_DEPLOY_TOKEN: 's3cret', DATABASE_URL: 'postgres://u:p@db/x', PATH });
+  try {
+    const { taskId } = h.engine.start({ text: 'Add the feature', auto: true });
+    let s = await runTask(h.engine, taskId);
+    assert.equal(s.checkpoint && s.checkpoint.id, 'confirm-push', JSON.stringify(h.engine.lastError(taskId)));
+    const gates = only(h.engine.svc.events(taskId), 'gates_ran');
+    assert.ok(gates.length > 0 && gates.every((e) => e.status === 'pass'), `the gate saw no token, and the variable policy.checkEnv keeps: ${JSON.stringify(gates)}`);
+
+    await h.engine.answer(taskId, 'confirm-push', 'push');
+    s = await waitFor(() => (h.engine.isRunning(taskId) ? null : h.engine.svc.state(taskId)));
+    assert.equal(s.outcome, 'published', JSON.stringify(h.engine.lastError(taskId)));
+    assert.deepEqual(s.prs, { api: 'https://github.com/acme/api/pull/7' });
+    const branch = 'feat/add-feature';
+    const sha = git(path.join(ws, 'api'), 'rev-parse', branch);
+    const runs = fs.readFileSync(path.join(h.state, 'pre-push.log'), 'utf8').trim().split('\n');
+    assert.deepEqual(runs, [`origin ${remote} refs/heads/${branch} ${sha} refs/heads/${branch} ${'0'.repeat(40)} token=none`], 'once, as git would run it, without your credentials');
+    assert.equal(git(remote, 'rev-parse', branch), sha, 'then git pushed');
+  } finally {
+    h.hooks.dispose();
+  }
+});
+
+test('engine: a failing pre-push hook stops the push and says why', async () => {
+  const ws = workspace(['api'], 'pipeline: [planner, developer]\nrepos:\n  api: {}\n');
+  const { remote, path: PATH } = remoteSetup(ws, '#!/bin/sh\necho "lint: 3 problems"\nexit 1\n');
+  const h = await harness(ws, { FAKE_REPOS: 'api', PATH });
+  try {
+    const { taskId } = h.engine.start({ text: 'Add the feature', auto: true });
+    await runTask(h.engine, taskId);
+    await h.engine.answer(taskId, 'confirm-push', 'push');
+    await waitFor(() => !h.engine.isRunning(taskId));
+    const err = h.engine.lastError(taskId);
+    assert.equal(err && err.code, 'push_failed');
+    assert.match(err!.message, /pre-push hook failed:\nlint: 3 problems/);
+    assert.throws(() => git(remote, 'rev-parse', '--verify', 'feat/add-feature'), 'nothing was pushed');
   } finally {
     h.hooks.dispose();
   }

@@ -585,6 +585,8 @@ function resolveConfig(layers: Layer[], opts: { flags?: Flags | undefined; readF
         allowNoVerify: merged.policy.allowNoVerify ?? false,
         sandbox: merged.policy.sandbox ?? true,
         network: merged.policy.network ?? [],
+        writable: merged.policy.writable ?? [],
+        checkEnv: merged.policy.checkEnv ?? [],
       },
       context,
       git: { mode: merged.gitMode ?? 'branch' },

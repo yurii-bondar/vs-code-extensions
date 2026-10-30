@@ -21,7 +21,7 @@ const sandboxOf = (s: Record<string, unknown>): Sandbox => s.sandbox as Sandbox;
 const denyOf = (s: Record<string, unknown>): string[] => (s.permissions as { deny: string[] }).deny;
 
 test('settings: secrets are never read and pushes never run, also when the guard is bypassed', () => {
-  const s = sessionSettings({ hooks: { PreToolUse: [] }, guard: '127.0.0.1:4100', writeRoots: ['/ws/api'], protect: [], secrets: [], envVars: [], cwd: '/ws/api', sandbox: true, network: [] });
+  const s = sessionSettings({ hooks: { PreToolUse: [] }, guard: '127.0.0.1:4100', writeRoots: ['/ws/api'], protect: [], secrets: [], envVars: [], cwd: '/ws/api', sandbox: true, network: [], writable: [] });
   assert.deepEqual(s.hooks, { PreToolUse: [] });
   const deny = denyOf(s);
   for (const rule of ['Read(~/.ssh/**)', 'Read(~/.aws/**)', 'Read(//**/.env)', 'Read(~/.claude*/.credentials.json)', 'Bash(git push *)', 'Bash(gh pr merge *)']) assert.ok(deny.includes(rule), rule);
@@ -29,7 +29,7 @@ test('settings: secrets are never read and pushes never run, also when the guard
 });
 
 test('settings: the sandbox lets a stage write only its repos, never their git metadata, and reach only the registries', () => {
-  const code = sandboxOf(sessionSettings({ hooks: {}, guard: '127.0.0.1:4100', writeRoots: ['/ws/api', '/elsewhere/web'], protect: [], secrets: [], envVars: [], cwd: '/ws/api', sandbox: true, network: ['npm.acme.corp'] }));
+  const code = sandboxOf(sessionSettings({ hooks: {}, guard: '127.0.0.1:4100', writeRoots: ['/ws/api', '/elsewhere/web'], protect: [], secrets: [], envVars: [], cwd: '/ws/api', sandbox: true, network: ['npm.acme.corp'], writable: [] }));
   assert.equal(code.enabled, true);
   assert.equal(code.allowUnsandboxedCommands, false, 'a command blocked by the sandbox is not run again outside it');
   assert.deepEqual(code.filesystem.denyWrite, [path.join('/ws/api', '.git'), path.join('/elsewhere/web', '.git')]);
@@ -37,14 +37,14 @@ test('settings: the sandbox lets a stage write only its repos, never their git m
   assert.deepEqual(code.network.allowedDomains, ['127.0.0.1:4100', ...REGISTRIES, 'npm.acme.corp'], "the guard's own port first: Claude Code sends the hook through the sandbox's proxy");
   assert.ok(!code.network.allowedDomains.includes('github.com'), 'git over github.com is how a push would leave');
 
-  const readOnly = sandboxOf(sessionSettings({ hooks: {}, guard: '127.0.0.1:4100', writeRoots: [], protect: [], secrets: [], envVars: [], cwd: '/ws', sandbox: true, network: [] }));
+  const readOnly = sandboxOf(sessionSettings({ hooks: {}, guard: '127.0.0.1:4100', writeRoots: [], protect: [], secrets: [], envVars: [], cwd: '/ws', sandbox: true, network: [], writable: [] }));
   assert.deepEqual(readOnly.filesystem.denyWrite, ['/ws'], 'a stage that changes nothing does not write its working directory');
 
-  assert.equal(sessionSettings({ hooks: {}, guard: '127.0.0.1:4100', writeRoots: [], protect: [], secrets: [], envVars: [], cwd: '/ws', sandbox: false, network: [] }).sandbox, undefined, 'policy.sandbox: false');
+  assert.equal(sessionSettings({ hooks: {}, guard: '127.0.0.1:4100', writeRoots: [], protect: [], secrets: [], envVars: [], cwd: '/ws', sandbox: false, network: [], writable: [] }).sandbox, undefined, 'policy.sandbox: false');
 });
 
 test('settings: tokens for GitHub and package registries are secrets too, and api.github.com is not reachable', () => {
-  const s = sessionSettings({ hooks: {}, guard: '127.0.0.1:4100', writeRoots: ['/ws/api'], protect: [], secrets: ['/gs/agent-mcp.json'], envVars: ['NPM_TOKEN'], cwd: '/ws/api', sandbox: true, network: [] });
+  const s = sessionSettings({ hooks: {}, guard: '127.0.0.1:4100', writeRoots: ['/ws/api'], protect: [], secrets: ['/gs/agent-mcp.json'], envVars: ['NPM_TOKEN'], cwd: '/ws/api', sandbox: true, network: [], writable: [] });
   const deny = denyOf(s);
   for (const f of ['~/.config/gh/**', '~/.git-credentials', '~/.npmrc', '~/.pypirc', '~/.claude.json', '//gs/agent-mcp.json']) assert.ok(deny.includes(`Read(${f})`), f);
   const box = sandboxOf(s);
@@ -60,7 +60,7 @@ test('settings: credentials in the environment are found by name or by a passwor
 });
 
 test("settings: an agent never writes Claudestrator's config or task state, also inside its own repo", () => {
-  const s = sessionSettings({ hooks: {}, guard: '127.0.0.1:4100', writeRoots: ['/ws'], protect: ['/ws/.claudestrator', '/ws/.orch/tasks', '/lib/library.yaml'], secrets: [], envVars: [], cwd: '/ws', sandbox: true, network: [] });
+  const s = sessionSettings({ hooks: {}, guard: '127.0.0.1:4100', writeRoots: ['/ws'], protect: ['/ws/.claudestrator', '/ws/.orch/tasks', '/lib/library.yaml'], secrets: [], envVars: [], cwd: '/ws', sandbox: true, network: [], writable: [] });
   const deny = denyOf(s);
   for (const rule of ['Edit(//ws/.claudestrator)', 'Edit(//ws/.claudestrator/**)', 'Edit(//ws/.orch/tasks/**)', 'Edit(//lib/library.yaml)']) assert.ok(deny.includes(rule), rule);
   assert.deepEqual(sandboxOf(s).filesystem.denyWrite, [path.join('/ws', '.git'), '/ws/.claudestrator', '/ws/.orch/tasks', '/lib/library.yaml']);

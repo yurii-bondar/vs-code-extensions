@@ -133,6 +133,12 @@ class GitRepo {
   }
 
   /** Stages everything except the orchestrator's own folders. */
+  /** Where git keeps this checkout's metadata: its own folder and, for a worktree, the repository's shared one. */
+  async gitDirs(): Promise<string[]> {
+    const r = await this.git('rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir');
+    return r.code === 0 ? [...new Set(r.stdout.split('\n').map((l) => l.trim()).filter(Boolean))] : [path.join(this.dir, '.git')];
+  }
+
   addAll(): Promise<ExecResult> {
     return this.git('add', '-A', '--', '.', ...EXCLUDE);
   }
