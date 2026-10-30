@@ -362,7 +362,9 @@ function parseAudit(raw: unknown): ParseResult<Audit> {
   return { ok: true, value: { summary: v.summary, scope: (v.scope || []).map(String), findings } };
 }
 
+export type { Check };
 export {
+  T,
   OUTPUTS,
   SCENARIOS,
   SCENARIO_OUTPUT,

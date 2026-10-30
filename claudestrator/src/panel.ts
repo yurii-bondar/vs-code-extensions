@@ -16,26 +16,12 @@ import { findRepos, describeRepo, reposFromFolders, repoLayerOf, WORKSPACE_MAP, 
 import { expand } from './core/env';
 import { effectiveFor } from './core/defaults';
 import { AGENT_COLORS, OUTPUTS, EFFORTS, validateSetting } from './core/protocol';
+import { parsePageRequest } from './core/requests';
 import { settings, type Orchestrator } from './orchestrator';
 import type { Engine } from './core/engine';
 import type { ComposerArgs, ConfigData, ConfigSummary, HealthSummary, NewAgentParams, PipelineEdit, Preview, ReposData, Route, Rpc, RpcHandlers, SaveGroupParams, SaveInstructionParams, SaveScenarioParams, SettingsData, SetupParams, TaskScreen } from './core/wire';
 import type { Agent, ScenarioStep, Gate, TaskState } from './core/types';
 import type { ConfigLayer, RepoLayer } from './core/config';
-
-/** A request from the page: `{ type: 'req', id, method, params }`. */
-interface PageRequest {
-  type: 'req';
-  id: number;
-  method: string;
-  params?: unknown;
-}
-
-/** What arrives from the page is untyped: only a well-formed request is answered. */
-function isPageRequest(msg: unknown): msg is PageRequest {
-  if (typeof msg !== 'object' || msg === null) return false;
-  const m = msg as Record<string, unknown>;
-  return m.type === 'req' && typeof m.id === 'number' && typeof m.method === 'string' && /^[a-zA-Z]+$/.test(m.method);
-}
 
 /** A repo as the page sends it back from the setup wizard or the detected list. */
 interface PickedRepo {
@@ -125,17 +111,22 @@ class DashboardPanel implements RpcHandlers {
   }
 
   async onMessage(msg: unknown): Promise<void> {
-    if (!isPageRequest(msg)) return;
-    // Only the panel's own `$` handlers, never something reached through Object's prototype.
-    const name = `$${msg.method}`;
-    const fn = Object.prototype.hasOwnProperty.call(DashboardPanel.prototype, name) ? (this as unknown as Record<string, Handler | undefined>)[name] : undefined;
+    // What arrives from the page is untyped: only a known request with parameters of its shape reaches a handler.
+    const parsed = parsePageRequest(msg);
+    if (!parsed) return;
+    if (!parsed.ok) {
+      if (parsed.id !== null) this.post({ type: 'res', id: parsed.id, ok: false, error: parsed.error });
+      return;
+    }
+    const { id, method, params } = parsed.request;
+    // `implements RpcHandlers` makes sure every request has its `$` handler.
+    const handler = (this as RpcHandlers)[`$${method}`] as Handler;
     try {
-      if (!fn) throw new Error(`unknown request ${msg.method}`);
-      const data = await fn.call(this, msg.params || {});
-      this.post({ type: 'res', id: msg.id, ok: true, data });
+      const data = await handler.call(this, params ?? {});
+      this.post({ type: 'res', id, ok: true, data });
     } catch (err) {
       const e = err as Error & { code?: string; blocked?: object };
-      this.post({ type: 'res', id: msg.id, ok: false, error: e.message || String(e), code: e.code, ...(e.blocked && { blocked: e.blocked }) });
+      this.post({ type: 'res', id, ok: false, error: e.message || String(e), code: e.code, ...(e.blocked && { blocked: e.blocked }) });
     }
   }
 
