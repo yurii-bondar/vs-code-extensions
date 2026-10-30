@@ -41,12 +41,15 @@ function workspace(repos: string[], configYaml: string): string {
   return ws;
 }
 
-async function harness(ws: string, env: Record<string, string> = {}) {
+/** What a current Claude Code accepts; a test leaves one out to see the engine get by without it. */
+const CLI_FLAGS = ['--include-partial-messages', '--tools', '--setting-sources', '--name', '--effort', '--strict-mcp-config', '--json-schema'];
+
+async function harness(ws: string, env: Record<string, string> = {}, { flags = CLI_FLAGS }: { flags?: string[] } = {}) {
   const state = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-fake-state-'));
   setChildEnv({ ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t', FAKE_STATE: state, FAKE_LOG: path.join(state, 'calls.ndjson'), ...env });
   const hooks = new HookServer();
   await hooks.listen();
-  const runner = new ClaudeRunner({ command: () => FAKE, flags: () => new Set(['--include-partial-messages', '--tools', '--setting-sources', '--name', '--effort', '--strict-mcp-config']), settingSources: () => ['project'], env: () => ({}) });
+  const runner = new ClaudeRunner({ command: () => FAKE, flags: () => new Set(flags), settingSources: () => ['project'], env: () => ({}) });
   const engine = new Engine({ workspace: ws, home: state, runner, hooks });
   const outputs: OutputEvent[] = [];
   engine.on('output', (o: OutputEvent) => outputs.push(o));
@@ -85,4 +88,4 @@ const waitFor = async <T>(fn: () => T | null | undefined | false, ms = 20000): P
 };
 
 export type { OutputEvent };
-export { FAKE, git, workspace, harness, only, runTask, previewOf, text, waitFor };
+export { CLI_FLAGS, FAKE, git, workspace, harness, only, runTask, previewOf, text, waitFor };

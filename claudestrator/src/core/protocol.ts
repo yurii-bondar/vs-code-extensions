@@ -28,6 +28,8 @@ const RUNS: Runs[] = ['per-repo', 'all-repos'];
 const AGENT_COLORS = ['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'pink', 'cyan'];
 const AGENT_NAME = /^[a-z][a-z0-9-]*$/;
 const PLAN_TYPES = ['feat', 'fix', 'chore', 'refactor'];
+/** A plan's slug: the end of the branch name. */
+const SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 /** What a task group is. */
 const GROUP_TYPES: GroupType[] = ['epic', 'story', 'group'];
 /** A Jira issue key, as a group names it: `CP-123`. */
@@ -222,7 +224,7 @@ function dropNulls(v: unknown): unknown {
 const PLAN = T.obj(
   {
     type: T.oneOf(PLAN_TYPES),
-    slug: T.re(/^[a-z0-9]+(-[a-z0-9]+)*$/, 'slug must be kebab-case latin'),
+    slug: T.re(SLUG_PATTERN, 'slug must be kebab-case latin'),
     'title?': T.str(1, 100),
     repos: T.arr(T.obj({ name: T.str(1), 'mode?': T.oneOf(['full', 'tests_only']) }), 1),
     'openQuestions?': T.arr(T.obj({ question: T.str(), default: T.str() }, { strict: false })),
@@ -370,6 +372,8 @@ export {
   SCENARIO_ID,
   REPORT_SEVERITIES,
   CRITERION_STATUSES,
+  SEVERITIES,
+  SLUG_PATTERN,
   INSTRUCTION_MODES,
   AGENT_COLORS,
   RUNS,

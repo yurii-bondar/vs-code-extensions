@@ -74,6 +74,7 @@ const STOP_GRACE_MS = 5000;
 
 /** What a result's error subtype means, for the step's failure message. */
 const RESULT_ERRORS: Record<string, string> = {
+  error_max_structured_output_retries: 'the agent could not hand over a report that matches its schema',
   error_max_turns: 'the agent used up its turns (maxTurns)',
   error_max_budget_usd: "the task's budget ran out (limits.budgetUsd)",
 };
@@ -106,6 +107,8 @@ interface SessionRequest {
   maxBudgetUsd?: number | undefined;
   /** Filled in by the runner: the `--mcp-config` file, if the session gets one. */
   mcpConfig?: string | null | undefined;
+  /** The JSON Schema of the data a turn hands over (`--json-schema`); it comes back as `TurnResult.structured`. */
+  jsonSchema?: Record<string, unknown> | undefined;
   onOutput(item: TranscriptItem): void;
   onSession?: ((sessionId: string, model: string | undefined) => void) | undefined;
   onLimits?: ((limits: Limits & { at: number }) => void) | undefined;
@@ -114,7 +117,10 @@ interface SessionRequest {
 /** What one turn of the agent came to. */
 interface TurnResult {
   ok: boolean;
+  /** What the agent wrote for a human in its last turn. */
   report: string;
+  /** With a JSON Schema: the data of the turn, as Claude Code checked it against the schema. */
+  structured?: unknown;
   error?: string;
   sessionId?: string;
   costUsd?: number;
@@ -160,8 +166,15 @@ interface CliMessage {
   modelUsage?: Record<string, ModelUsage>;
   is_error?: boolean;
   result?: string;
+  structured_output?: unknown;
   errors?: unknown[];
 }
+
+/** The tool Claude Code adds for --json-schema: the way an agent hands its data over, not a step it chose. */
+const STRUCTURED_OUTPUT = 'StructuredOutput';
+
+/** A report without a json block at its end: with structured output the data is apart, and appended once. */
+const withoutTrailingJson = (text: string): string => text.replace(/\n*```json[^\n]*\n(?:(?!```)[\s\S])*```\s*$/, '').trim();
 
 class ClaudeRunner {
   opts: RunnerOptions;
@@ -180,7 +193,7 @@ class ClaudeRunner {
   }
 }
 
-function buildArgs(req: Pick<SessionRequest, 'agent' | 'additionalDirectories' | 'maxBudgetUsd' | 'name' | 'mcpConfig' | 'settings'>, opts: RunnerOptions): string[] {
+function buildArgs(req: Pick<SessionRequest, 'agent' | 'additionalDirectories' | 'maxBudgetUsd' | 'name' | 'mcpConfig' | 'settings' | 'jsonSchema'>, opts: RunnerOptions): string[] {
   const a = req.agent;
   const has = (f: string): boolean => opts.flags().has(f);
   const args = ['-p', '--output-format', 'stream-json', '--input-format', 'stream-json', '--verbose'];
@@ -207,6 +220,7 @@ function buildArgs(req: Pick<SessionRequest, 'agent' | 'additionalDirectories' |
   for (const d of req.additionalDirectories || []) args.push('--add-dir', d);
   if (req.maxBudgetUsd !== undefined && has('--max-budget-usd')) args.push('--max-budget-usd', req.maxBudgetUsd.toFixed(2));
   if (req.name && has('--name')) args.push('--name', req.name);
+  if (req.jsonSchema && has('--json-schema')) args.push('--json-schema', JSON.stringify(req.jsonSchema));
   return args;
 }
 
@@ -229,6 +243,13 @@ class ClaudeSession {
   settingsRequest: string;
   /** Whether a message this session could not handle was already logged (once is enough to find the bug). */
   reportedBadMessage = false;
+  /**
+   * What the agent has written since its last tool call: its final words, the report, when the data comes structured.
+   * Text before a tool call is it thinking aloud ("I'll read that file"), as Claude Code's own `result` leaves it out.
+   */
+  turnText: string[] = [];
+  /** StructuredOutput calls, whose results are not shown either. */
+  hiddenTools = new Set<string>();
   closing?: boolean;
   endReason?: string;
 
@@ -427,8 +448,15 @@ class ClaudeSession {
         }
         const content = ((m.message && m.message.content) || []) as ContentBlock[];
         for (const block of content) {
-          if (block.type === 'text' && block.text) out({ type: 'text', text: block.text });
-          if (block.type === 'tool_use') out({ type: 'tool_use', id: block.id || '', name: block.name || '', input: block.input });
+          if (block.type === 'text' && block.text) {
+            this.turnText.push(block.text);
+            out({ type: 'text', text: block.text });
+          }
+          if (block.type === 'tool_use' && block.name === STRUCTURED_OUTPUT) this.hiddenTools.add(block.id || '');
+          else if (block.type === 'tool_use') {
+            this.turnText = [];
+            out({ type: 'tool_use', id: block.id || '', name: block.name || '', input: block.input });
+          }
         }
         return;
       }
@@ -436,7 +464,7 @@ class ClaudeSession {
         const content = m.message && m.message.content;
         if (m.parent_tool_use_id || typeof content === 'string' || !Array.isArray(content)) return;
         for (const block of content) {
-          if (block.type !== 'tool_result') continue;
+          if (block.type !== 'tool_result' || this.hiddenTools.has(block.tool_use_id || '')) continue;
           const text = typeof block.content === 'string' ? block.content : Array.isArray(block.content) ? (block.content as { text?: string }[]).map((c) => c.text || '').join('\n') : JSON.stringify(block.content ?? '');
           out({ type: 'tool_result', id: block.tool_use_id || '', isError: block.is_error === true, text: text.slice(0, 4000) });
         }
@@ -466,9 +494,14 @@ class ClaudeSession {
         this.emitUsage();
         const ok = m.subtype === 'success' && !m.is_error;
         const errors = Array.isArray(m.errors) ? m.errors.join('; ') : '';
+        // With structured output, `result` is the data as JSON text; the report is what the agent wrote this turn.
+        const structured = m.structured_output !== undefined && m.structured_output !== null;
+        const written = withoutTrailingJson(this.turnText.join('\n\n'));
+        this.turnText = [];
         const r: TurnResult = {
           ok,
-          report: m.subtype === 'success' ? m.result || '' : '',
+          report: m.subtype !== 'success' ? '' : structured ? written : m.result || '',
+          ...(structured && { structured: m.structured_output }),
           ...(!ok && { error: m.subtype === 'success' ? `the agent reported an error${m.result ? `: ${String(m.result).slice(0, 500)}` : ''}` : `${RESULT_ERRORS[m.subtype ?? ''] ?? m.subtype}${errors ? `: ${errors}` : ''}` }),
           ...this.totals(),
         };
@@ -487,4 +520,4 @@ function parseFlags(helpText: string): Set<string> {
 }
 
 export type { CliMessage, Limit, Limits, RunnerOptions, SessionRequest, TurnResult };
-export { ClaudeRunner, ClaudeSession, buildArgs, parseFlags, limitsOf, versionProblem, MIN_CLAUDE_VERSION };
+export { ClaudeRunner, ClaudeSession, buildArgs, parseFlags, limitsOf, versionProblem, withoutTrailingJson, MIN_CLAUDE_VERSION };

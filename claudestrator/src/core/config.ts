@@ -157,7 +157,7 @@ ${COMMON}
 
 Start the plan with a "## Summary" section of two or three sentences: it becomes the PR description.
 
-End with a fenced json block the orchestrator parses:
+End with the json the orchestrator parses: as your structured output when you have the StructuredOutput tool, else as a fenced json block:
 {"type": "feat|fix|chore|refactor", "slug": "<kebab-case>", "title": "<short imperative English description, lowercase: the commit subject>", "repos": [{"name": "<repo>", "mode": "full|tests_only"}], "openQuestions": [{"question": "...", "default": "..."}]}`;
 
 const DEVELOPER = `You implement one repository's part of an approved plan, or fix review findings there.
@@ -192,7 +192,7 @@ Check, in order: correctness against the ticket and plan, cross-repo contract co
 Skip linter-level style and code the diff did not touch.
 
 Severities: blocker (wrong behaviour, broken contract, security hole, data at risk), major (missing test for new behaviour, rule violation, scope creep), minor (everything else).
-End with a fenced json block the orchestrator parses:
+End with the json the orchestrator parses: as your structured output when you have the StructuredOutput tool, else as a fenced json block:
 {"status": "approved|changes_requested", "summary": "...", "findings": [{"severity": "blocker|major|minor", "repo": "...", "file": "...", "line": 1, "problem": "...", "fix": "..."}]}
 status is changes_requested exactly when there is a blocker or major finding.`;
 
@@ -213,7 +213,7 @@ ${COMMON}
 
 Write the report for a human: a one-paragraph verdict, a table criterion | status | evidence, then gaps and what to do next.
 
-End with a fenced json block the orchestrator parses:
+End with the json the orchestrator parses: as your structured output when you have the StructuredOutput tool, else as a fenced json block:
 {"summary": "...", "work": [{"repo": "...", "ref": "<branch, commit or PR url>"}], "criteria": [{"criterion": "...", "status": "met|partial|not_met|unverifiable", "evidence": "...", "files": ["<repo>/<path>:<line>"]}], "gaps": [{"severity": "critical|high|medium|low", "problem": "...", "fix": "..."}], "derivedCriteria": false}
 The orchestrator derives the verdict from the statuses: ready only when every criterion is met and no gap is critical or high.`;
 
@@ -238,7 +238,7 @@ Scope: the repositories the prompt lists, narrowed to the repos, areas or concer
 
 Write the report for a human: a summary, then the findings by severity, each with problem, impact, evidence and fix.
 
-End with a fenced json block the orchestrator parses:
+End with the json the orchestrator parses: as your structured output when you have the StructuredOutput tool, else as a fenced json block:
 {"summary": "...", "scope": ["<repo>"], "findings": [{"severity": "critical|high|medium|low", "category": "bug|performance|reliability|security|maintainability", "repo": "...", "file": "...", "line": 1, "title": "<one line>", "problem": "...", "impact": "...", "fix": "...", "effort": "S|M|L"}]}`;
 
 interface BuiltinConfig extends ConfigLayer {

@@ -21,6 +21,7 @@ import type { Live, PermissionRequest, RepoStatus } from './wire';
 import type { ClaudeRunner, ClaudeSession, Limits, TurnResult } from './runner';
 import { HOOK_TIMEOUT_S, type HookServer, type Decision, type ToolCall } from './hookserver';
 import { sessionSettings } from './settings';
+import { REPORT_SCHEMAS } from './schemas';
 import type { AtlassianClient, Invocation } from './intake';
 import type { StageSource } from './pipeline';
 import type { RepoGates } from './gates';
@@ -711,6 +712,7 @@ class Engine extends EventEmitter {
       prompt,
       cwd,
       settings: this.agentSettings({ writeRoots, cwd, config }),
+      ...(REPORT_SCHEMAS[stage.output] && { jsonSchema: REPORT_SCHEMAS[stage.output] }),
       // Only the repos a stage writes are working directories; it reads the task folder, the workspace and other repos
       // through the guard, which allows reading.
       additionalDirectories: [...new Set(writeRoots)].filter((d) => !realInside(cwd, d)),
@@ -783,19 +785,21 @@ class Engine extends EventEmitter {
         }
       }
 
-      let parsed = parseStageReport(stage.output, t.report);
+      let parsed = parseStageReport(stage.output, t.report, t.structured);
       for (let i = 0; !parsed.ok && i < REPORT_RETRIES; i++) {
         this.setLive(taskId, { phase: 'agent', step, key, text: `${label} is correcting its report` });
         session.send(`Your report could not be read: ${parsed.error}. Reply again with the complete, corrected report.`, { from: 'orchestrator' });
         t = await this.turnOf(taskId, session);
         if (stopped()) return;
         if (!t.ok) return void fail(t.error || 'the agent failed while correcting its report');
-        parsed = parseStageReport(stage.output, t.report);
+        parsed = parseStageReport(stage.output, t.report, t.structured);
       }
       if (!parsed.ok) return void fail(`report still invalid after ${REPORT_RETRIES} corrections: ${parsed.error}`);
 
       const artifact = artifactPath(stage.output, step.agent, state.review.round, step.repo);
-      this.svc.writeArtifact(taskId, artifact, t.report.endsWith('\n') ? t.report : `${t.report}\n`);
+      // The artifact reads as before: the report, then its data as a json block (structured output comes apart).
+      const text = t.structured !== undefined ? `${t.report}\n\n\`\`\`json\n${JSON.stringify(t.structured, null, 2)}\n\`\`\`` : t.report;
+      this.svc.writeArtifact(taskId, artifact, text.endsWith('\n') ? text : `${text}\n`);
       this.dispatch(taskId, {
         type: 'stage_completed',
         agent: step.agent,
@@ -844,7 +848,8 @@ class Engine extends EventEmitter {
       emitItem({ type: 'blocked', tool, reason, input: summarizeInput(tool, input) });
       return { allow: false, reason: `Claudestrator: ${reason}` };
     };
-    if (READ_TOOLS.has(tool)) return { allow: true };
+    // StructuredOutput is how an agent hands over its report's data (--json-schema): nothing it reaches.
+    if (READ_TOOLS.has(tool) || tool === 'StructuredOutput') return { allow: true };
     const cwd = writeRoots.length === 1 ? writeRoots[0]! : this.workspace;
     if (tool === 'Bash') {
       const d = guardBash(String(input.command || ''), {

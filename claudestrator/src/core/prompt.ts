@@ -76,7 +76,7 @@ function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, 
   }
   if (next.feedback) lines.push('', 'Feedback from the user, verbatim:', next.feedback);
   lines.push('', `Write your report in ${reportLanguage(next.output, language)}. Code, identifiers and anything a program reads stay in English.`);
-  if (JSON_OUTPUTS.has(next.output)) lines.push('End your reply with the fenced ```json block your instructions describe; a program validates it.');
+  if (JSON_OUTPUTS.has(next.output)) lines.push('Write your report for a human, then hand over the json your instructions describe: as your structured output when you have the StructuredOutput tool, else as a fenced ```json block at the end. A program validates it.');
   lines.push('Do not commit, push, stash or switch branches: Claudestrator owns git.', 'Your final message is your report; nothing may follow it.');
   return lines.join('\n');
 }
@@ -99,12 +99,13 @@ const PARSERS: Partial<Record<Output, (raw: unknown) => ParseResult<PlanMeta | V
 type StageReport = { ok: true; plan?: PlanMeta; verdict?: Verdict; readiness?: Readiness; audit?: Audit } | { ok: false; error: string };
 
 /**
- * Plan, verdict, readiness and audit stages must end with a JSON block matching their schema; code and tests stages need none.
+ * Plan, verdict, readiness and audit stages hand over data matching their schema: as structured output, or (a CLI
+ * without --json-schema) as the report's last JSON block. Code and tests stages hand over none.
  * Returns `{ ok, [output]: value }`, e.g. `{ ok: true, plan }`.
  */
-function parseStageReport(output: Output, text: string): StageReport {
+function parseStageReport(output: Output, text: string, structured?: unknown): StageReport {
   if (!JSON_OUTPUTS.has(output)) return { ok: true };
-  const block = lastJsonBlock(text);
+  const block = structured !== undefined ? { ok: true as const, value: structured } : lastJsonBlock(text);
   if (!block.ok) return block;
   const parsed = PARSERS[output]!(block.value);
   if (!parsed.ok) return { ok: false, error: `the ${output} json block does not match the schema: ${parsed.issues.join('; ')}` };

@@ -86,3 +86,19 @@ test('runner: text cut inside a multi-byte character by the pipe arrives intact'
     s.close();
   }
 });
+
+test('runner: with structured output the report is what the agent wrote after its last tool call', () => {
+  const { s } = session('hang');
+  try {
+    const assistant = (content: unknown[]) => s.handle({ type: 'assistant', parent_tool_use_id: null, message: { content: content as never } });
+    assistant([{ type: 'text', text: "I'll read calc.js first." }, { type: 'tool_use', id: 't1', name: 'Read', input: { file_path: 'calc.js' } }]);
+    assistant([{ type: 'text', text: '## Audit\n\n- div has no zero check.' }, { type: 'tool_use', id: 't2', name: 'StructuredOutput', input: { summary: 's', findings: [] } }]);
+    let got: { report: string; structured?: unknown } | undefined;
+    s.deliver = (r) => void (got = r);
+    s.handle({ type: 'result', subtype: 'success', result: '{"summary":"s","findings":[]}', structured_output: { summary: 's', findings: [] }, num_turns: 2 });
+    assert.equal(got!.report, '## Audit\n\n- div has no zero check.', 'no thinking aloud before a tool call');
+    assert.deepEqual(got!.structured, { summary: 's', findings: [] });
+  } finally {
+    s.close();
+  }
+});

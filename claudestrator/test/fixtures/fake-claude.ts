@@ -50,7 +50,7 @@ function main(): void {
     process.exit(0);
   }
   if (args.includes('--help')) {
-    console.log('--print --output-format --input-format --verbose --include-partial-messages --append-system-prompt --model --effort --tools --mcp-config --strict-mcp-config --disallowedTools --setting-sources --settings --add-dir --name');
+    console.log('--print --output-format --input-format --verbose --include-partial-messages --append-system-prompt --model --effort --tools --mcp-config --strict-mcp-config --disallowedTools --setting-sources --settings --add-dir --name --json-schema');
     process.exit(0);
   }
   if (args[0] === 'auth' && args[1] === 'status') {
@@ -149,10 +149,22 @@ function main(): void {
     if (ms) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
   };
 
+  /**
+   * With --json-schema, like Claude Code: the report's data goes over the StructuredOutput tool (through the hook) and
+   * comes back as `structured_output`, with `result` holding it as JSON text; the report itself is the turn's text.
+   */
+  const jsonSchema = argOf('--json-schema');
+
   function reply(text: string, uuid: string) {
     if (process.env.FAKE_AUTH_FAIL) {
       out({ type: 'result', subtype: 'success', is_error: true, result: 'Failed to authenticate: OAuth session expired and could not be refreshed', total_cost_usd: 0, num_turns: 0, user_message_uuids: [uuid] });
       return;
+    }
+    let structured: unknown;
+    const block = jsonSchema ? text.match(/\n*```json\n([\s\S]*?)\n```\s*$/) : null;
+    if (block) {
+      structured = JSON.parse(block[1]!);
+      text = text.slice(0, block.index).trim();
     }
     for (const chunk of text.match(/.{1,40}/gs) || []) {
       out({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: chunk } }, parent_tool_use_id: null });
@@ -167,8 +179,12 @@ function main(): void {
     }
     cost += 0.01;
     tokensTotal += ctx + 1300;
+    if (structured !== undefined && !tool('StructuredOutput', structured as ToolInput)) {
+      out({ type: 'result', subtype: 'error_max_structured_output_retries', is_error: true, errors: ['StructuredOutput was not allowed'], total_cost_usd: cost, num_turns: 1, user_message_uuids: [uuid] });
+      return;
+    }
     const model = resolvedModel;
-    out({ type: 'result', subtype: 'success', is_error: false, result: text, total_cost_usd: cost, num_turns: 1, user_message_uuids: [uuid], modelUsage: { [model]: { inputTokens: 4, outputTokens: 300, cacheReadInputTokens: tokensTotal, cacheCreationInputTokens: 1000, contextWindow: 200000, costUSD: cost } } });
+    out({ type: 'result', subtype: 'success', is_error: false, result: structured !== undefined ? JSON.stringify(structured) : text, ...(structured !== undefined && { structured_output: structured }), total_cost_usd: cost, num_turns: 1, user_message_uuids: [uuid], modelUsage: { [model]: { inputTokens: 4, outputTokens: 300, cacheReadInputTokens: tokensTotal, cacheCreationInputTokens: 1000, contextWindow: 200000, costUSD: cost } } });
   }
 
   const state = process.env.FAKE_STATE;
