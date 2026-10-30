@@ -83,7 +83,7 @@ val buildExtension by tasks.registering(Exec::class) {
     description = "Builds claudestrator/ (the webview scripts and the engine's types)."
     workingDir = extensionDir.asFile
     commandLine(npm, "run", "build")
-    inputs.files(extensionDir.asFileTree.matching { include("package-lock.json", "extension.ts", "src/**", "media/**", "hook/**", "tsconfig*.json") })
+    inputs.files(extensionDir.asFileTree.matching { include("package-lock.json", "extension.ts", "src/**", "media/**", "tsconfig*.json") })
     outputs.dir(extensionDir.dir("dist/media"))
 }
 
@@ -95,7 +95,7 @@ val buildSidecar by tasks.registering(Exec::class) {
     commandLine(npm, "run", "build")
     inputs.files(sidecarDir.asFileTree.matching { include("package-lock.json", "build.mjs", "src/**") })
     inputs.dir(extensionDir.dir("dist/media"))
-    inputs.files(extensionDir.asFileTree.matching { include("src/**", "media/**", "hook/**") })
+    inputs.files(extensionDir.asFileTree.matching { include("src/**", "media/**") })
     outputs.dir(sidecarDir.dir("dist/engine"))
 }
 
