@@ -144,7 +144,7 @@ function activate(context: vscode.ExtensionContext) {
       const what = data.tool === 'Bash' ? `run \`${String((data.input && data.input.command) || '').slice(0, 120)}\`` : data.input && data.input.file_path ? `${data.tool.toLowerCase()} ${path.basename(data.input.file_path)}` : `use ${data.tool}`;
       const choice = await vscode.window.showWarningMessage(`${data.agent}${data.repo ? ` @ ${data.repo}` : ''} wants to ${what}`, { detail: `Task ${data.taskId}` }, 'Allow', 'Deny', 'Open');
       if (choice === 'Allow' || choice === 'Deny') {
-        if (orch.engine) orch.engine.permissionReply(data.requestId, choice === 'Allow');
+        orch.permissionReply(data.requestId, choice === 'Allow');
       }
       else if (choice === 'Open') open(context, { name: 'task', taskId: data.taskId });
     }
@@ -187,7 +187,8 @@ function activate(context: vscode.ExtensionContext) {
     }),
     reg('claudestrator.stopTask', async (arg) => {
       const taskId = idOf(arg) || (await pickTask('Stop which task?', (c) => c.status.key === 'running'));
-      if (taskId) await orch.engine!.stop(taskId);
+      const engine = taskId && orch.engineOf(taskId);
+      if (engine) await engine.stop(taskId);
     }),
     reg('claudestrator.revealTaskFolder', (arg) => {
       const taskId = idOf(arg);

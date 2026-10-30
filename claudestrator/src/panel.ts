@@ -248,7 +248,7 @@ class DashboardPanel implements RpcHandlers {
         return { total: list.length, connected: n('connected'), problems: n('needs_auth') + n('failed'), installed: n('installed'), checking: this.orch.mcp.checking };
       })(),
       defaults: this.orch.defaults ? { models: this.orch.defaults.models, byModel: this.orch.defaults.byModel } : null,
-      permissions: engine ? engine.pendingPermissions() : [],
+      permissions: this.orch.pendingPermissions(),
     };
   }
 
@@ -316,7 +316,8 @@ class DashboardPanel implements RpcHandlers {
   }
 
   async $stop({ taskId }: { taskId: string }) {
-    await this.engine.stop(taskId);
+    // A task of a replaced engine (the workspace folder changed) still runs there.
+    await (this.orch.engineOf(taskId) ?? this.engine).stop(taskId);
   }
 
   async $answer({ taskId, checkpointId, option, feedback }: Rpc['answer']['params']) {
@@ -335,11 +336,11 @@ class DashboardPanel implements RpcHandlers {
   }
 
   async $message({ taskId, text }: { taskId: string; text: string }) {
-    this.engine.sendMessage(taskId, text);
+    (this.orch.engineOf(taskId) ?? this.engine).sendMessage(taskId, text);
   }
 
   async $permission({ requestId, allow, message }: Rpc['permission']['params']) {
-    if (!this.engine.permissionReply(requestId, allow, message)) throw new Error('That request is no longer waiting');
+    if (!this.orch.permissionReply(requestId, allow, message)) throw new Error('That request is no longer waiting');
   }
 
   async $openFile({ taskId, file, preview }: { taskId?: string; file: string; preview?: boolean }): Promise<unknown> {

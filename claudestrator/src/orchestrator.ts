@@ -18,7 +18,7 @@ import type { Defaults } from './core/defaults';
 import type { Probe, StatuslineSnapshot } from './core/env';
 import type { TaskEntry } from './core/view';
 import type { Diagnostic } from './core/types';
-import type { Account, AccountEntry, LimitWindow, StoredLimits } from './core/wire';
+import type { Account, AccountEntry, LimitWindow, StoredLimits, PermissionRequest } from './core/wire';
 
 const SECRET_KEY = 'claudestrator.atlassianToken';
 
@@ -552,6 +552,25 @@ class Orchestrator {
   }
 
   /** Every task as a list entry, guarded against a task folder vanishing mid-read. */
+  /** The current engine and those replaced while their tasks ran: an agent of any of them may ask you something. */
+  engines(): Engine[] {
+    return [...(this.engine ? [this.engine] : []), ...this.retired];
+  }
+
+  /** The engine a task runs in: a replaced one while its agent still works, else the current one. */
+  engineOf(taskId: string): Engine | null {
+    return this.retired.find((e) => e.running.has(taskId)) ?? this.engine;
+  }
+
+  /** Answers a permission question of any engine's agent; false when none is waiting for it. */
+  permissionReply(requestId: string, allow: boolean, message?: string): boolean {
+    return this.engines().some((e) => e.permissionReply(requestId, allow, message));
+  }
+
+  pendingPermissions(): PermissionRequest[] {
+    return this.engines().flatMap((e) => e.pendingPermissions());
+  }
+
   /** Stops every running agent, also those of an engine that was replaced; their tasks resume from the same step. */
   async stopAll(): Promise<void> {
     await Promise.all([...(this.engine ? [this.engine] : []), ...this.retired].map((e) => e.stopAll()));
