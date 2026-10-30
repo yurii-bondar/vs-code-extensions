@@ -188,7 +188,9 @@ const broadcast = (msg: unknown) => {
   await orch.ensureReady();
   if (process.env.PREVIEW_SETUP) {
     const { createProjectConfig } = require(path.join(DIST, 'src', 'core', 'config.js')) as typeof import('../../src/core/config');
-    createProjectConfig(ws, { repos: { api: { gates: [{ name: 'lint', cmd: 'true' }] }, web: { gates: [{ name: 'flaky', cmd: 'test -f "$FAKE_STATE/ok" || { touch "$FAKE_STATE/ok"; echo "lint: 1 error in pages/index.vue"; exit 1; }' }] } } });
+    // Checks run in the sandbox, which writes only in the repo and its own temp folder: the flaky gate's mark goes there.
+    const flaky = `cs-flaky-${path.basename(ws)}`;
+    createProjectConfig(ws, { repos: { api: { gates: [{ name: 'lint', cmd: 'true' }] }, web: { gates: [{ name: 'flaky', cmd: `test -f "\${TMPDIR:-/tmp}/${flaky}" || { touch "\${TMPDIR:-/tmp}/${flaky}"; echo "lint: 1 error in pages/index.vue"; exit 1; }` }] } } });
   }
   // A panel without a webview: same handlers, messages go to the browser over SSE.
   const panel: InstanceType<typeof DashboardPanel> = Object.create(DashboardPanel.prototype);

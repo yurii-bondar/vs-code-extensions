@@ -214,6 +214,8 @@ function main(): void {
         return reply(`## Summary\n\nAdd the feature to every repo.\n\n## Steps\n- do it\n\n\`\`\`json\n${JSON.stringify({ type: 'feat', slug: 'add-feature', title: 'add the feature', repos, openQuestions: [] })}\n\`\`\``, uuid);
       }
       case 'developer': {
+        // FAKE_TODO_STATUS: a to-do status an agent steered by a ticket might write (the dashboard must not run it as markup).
+        if (process.env.FAKE_TODO_STATUS) tool('TodoWrite', { todos: [{ content: 'Add the feature', status: process.env.FAKE_TODO_STATUS, activeForm: 'Adding it' }, { content: 'Write the test', status: 'pending', activeForm: 'Writing it' }] });
         tool('Bash', { command: 'git commit -am "sneaky"' });
         tool('Write', { file_path: path.join(repoDir!, '..', 'outside.txt'), content: 'nope' });
         tool('Write', { file_path: path.join(repoDir!, 'feature.txt'), content: 'feature\n' });
