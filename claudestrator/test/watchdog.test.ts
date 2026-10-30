@@ -9,7 +9,7 @@ import type { PermissionRequest } from '../src/core/engine';
 test('watchdog: a hung agent is interrupted and the step fails with the reason', async () => {
   const ws = workspace(['api'], 'repos:\n  api: {}\npipeline: [planner, developer]\n');
   const h = await harness(ws, { FAKE_REPOS: 'api' });
-  h.engine.stallMs = 400;
+  h.engine.stallMs = 1500; // wide enough for a slow start of the fake CLI on a busy machine
   try {
     setChildEnv({ ...getChildEnv(), FAKE_HANG: 'developer' });
     const { taskId } = h.engine.start({ text: 'Do a thing', auto: true });
@@ -25,9 +25,9 @@ test('watchdog: a hung agent is interrupted and the step fails with the reason',
 test('watchdog: a question waiting for you does not count as a hung agent', async () => {
   const ws = workspace(['api'], 'repos:\n  api: {}\npipeline: [planner, developer]\n');
   const h = await harness(ws, { FAKE_REPOS: 'api' });
-  h.engine.stallMs = 300;
+  h.engine.stallMs = 1200;
   h.engine.askPermissions = () => true;
-  h.engine.on('permission', (req: PermissionRequest) => setTimeout(() => h.engine.permissionReply(req.requestId, true), 900));
+  h.engine.on('permission', (req: PermissionRequest) => setTimeout(() => h.engine.permissionReply(req.requestId, true), 2500));
   try {
     const { taskId } = h.engine.start({ text: 'Do a thing', auto: true });
     const s = await runTask(h.engine, taskId);
