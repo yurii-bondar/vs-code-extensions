@@ -1,7 +1,7 @@
 // Intake: what the user typed → a task source → a ticket every agent reads first.
 
 /** Splits like a shell: whitespace separates, single and double quotes group. */
-import type { Source, Spec } from './types';
+import type { PlanMeta, Source, Spec } from './types';
 
 function tokenize(line: string): string[] {
   const tokens: string[] = [];
@@ -26,7 +26,7 @@ function tokenize(line: string): string[] {
   return tokens;
 }
 
-const FLAG_RE = /(^|\s)--(auto|no|only|key|effort|scenario)(?=[\s=]|$)/;
+const FLAG_RE = /(^|\s)--(auto|no|only|key|effort|scenario|repos)(?=[\s=]|$)/;
 import { SCENARIOS as SCENARIO_NAMES, SCENARIO_ID } from './protocol';
 
 /** What the user typed, split into the description and the flags. */
@@ -37,9 +37,11 @@ interface Invocation {
   key?: string;
   scenario?: string;
   effort?: Record<string, string>;
+  /** `--repos api,web`: the repos of a pipeline without a plan stage, which has no planner to name them. */
+  repos?: string[];
 }
 
-const FLAG = /^--(auto|no|only|key|effort|scenario)(=|$)/;
+const FLAG = /^--(auto|no|only|key|effort|scenario|repos)(=|$)/;
 
 /** How many words from `i` a flag takes: itself, and its value unless it is --auto or written `--flag=value`. 0: no flag. */
 function flagSpan(words: string[], i: number): number {
@@ -50,7 +52,7 @@ function flagSpan(words: string[], i: number): number {
 
 /**
  * Parses `[flags] <input> [flags]`: `--auto`, `--no X`, `--only X,Y`, `--key=K`, `--effort high` or
- * `--effort developer=high,tester=low`, `--scenario readiness`. Flags count only in a block at the start or the end
+ * `--effort developer=high,tester=low`, `--scenario readiness`, `--repos api,web`. Flags count only in a block at the start or the end
  * of the text; in between they are words of the description ("Add a --key option to the CLI"), which is kept verbatim,
  * line breaks and apostrophes included. `effort` comes back as `{ '*': level, <agent>: level }`; `*` means every agent.
  */
@@ -79,8 +81,9 @@ function parseInvocation(line: string): Invocation {
   let key: string | undefined;
   let scenario: string | undefined;
   const effort: Record<string, string> = {};
+  const repos: string[] = [];
   const list = (v: string | undefined, flag: string): string[] => {
-    if (!v) throw new Error(`${flag} needs an agent name`);
+    if (!v) throw new Error(`${flag} needs ${flag === '--repos' ? 'a repo name' : 'an agent name'}`);
     return v.split(',').map((x) => x.trim()).filter(Boolean);
   };
   for (let i = 0; i < tokens.length; i++) {
@@ -96,6 +99,9 @@ function parseInvocation(line: string): Invocation {
         break;
       case '--only':
         only.push(...list(inline ?? tokens[++i], '--only'));
+        break;
+      case '--repos':
+        repos.push(...list(inline ?? tokens[++i], '--repos'));
         break;
       case '--effort': {
         const v = inline ?? tokens[++i];
@@ -116,7 +122,7 @@ function parseInvocation(line: string): Invocation {
         break;
     }
   }
-  return { input, flags: { ...(no.length && { no }), ...(only.length && { only }) }, auto, ...(key && { key }), ...(scenario && { scenario }), ...(Object.keys(effort).length && { effort }) };
+  return { input, flags: { ...(no.length && { no }), ...(only.length && { only }) }, auto, ...(key && { key }), ...(scenario && { scenario }), ...(Object.keys(effort).length && { effort }), ...(repos.length && { repos: [...new Set(repos)] }) };
 }
 
 const AUDIT_WORDS = /аудит|\baudit|\bвузьк\w* місц|bottleneck/i;
@@ -582,8 +588,27 @@ class AtlassianClient {
   }
 }
 
+/**
+ * The plan of a pipeline without a planner, from the ticket: its repos, a type and a branch slug from the title (latin
+ * letters and digits; `change` when the title has none), and the title as the commit subject.
+ */
+function planFromTicket(spec: Pick<Spec, 'title'>, input: string, repos: string[]): PlanMeta {
+  const title = spec.title.replace(/\s+/g, ' ').trim().slice(0, 100);
+  const slug =
+    title
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .slice(0, 40)
+      .replace(/^-+|-+$/g, '') || 'change';
+  const type = /\b(fix(es|ed)?|bugs?|bugfix|hotfix|regression)\b/i.test(`${title} ${input}`) || /виправ|помилк|баг/i.test(`${title} ${input}`) ? 'fix' : 'feat';
+  return { type, slug, ...(title && { title }), repos: repos.map((name) => ({ name, mode: 'full' as const })), openQuestions: [] };
+}
+
 export type { Classified, Invocation };
 export {
+  planFromTicket,
   tokenize,
   parseInvocation,
   detectScenario,

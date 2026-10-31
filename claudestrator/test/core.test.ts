@@ -597,6 +597,8 @@ test('guard: agents never touch git history, destructive commands are refused', 
 test('intake: invocations, sources and acceptance criteria', async () => {
   assert.deepEqual(parseInvocation('PROJ-123 --no tester --auto'), { input: 'PROJ-123', flags: { no: ['tester'] }, auto: true });
   assert.deepEqual(parseInvocation("Don't break the dice game"), { input: "Don't break the dice game", flags: {}, auto: false });
+  assert.deepEqual(parseInvocation('Fix the typo --repos api,web --repos api'), { input: 'Fix the typo', flags: {}, auto: false, repos: ['api', 'web'] });
+  assert.throws(() => parseInvocation('Fix it --repos'), /--repos needs a repo name/);
   // A flag's name inside the description is a word of it; flags count at the start or the end.
   assert.deepEqual(parseInvocation('Add a --key option to the CLI'), { input: 'Add a --key option to the CLI', flags: {}, auto: false });
   assert.deepEqual(parseInvocation("Support --auto mode in the user's dashboard"), { input: "Support --auto mode in the user's dashboard", flags: {}, auto: false });
@@ -1035,7 +1037,8 @@ test('scenarios: custom scenarios with their own agents, models and effort; buil
   assert.deepEqual(prev.effort, { reviewer: 'low' });
   assert.equal((await previewOf(engine, { text: 'Зроби аудит проекту' })).scenarioName, 'deliver', 'words cannot pick a removed scenario');
   await assert.rejects(() => engine.start({ text: 'x', scenario: 'audit' }), /no scenario "audit"/);
-  const { taskId } = await engine.start({ text: 'Fix the login', scenario: 'hotfix', effort: { developer: 'high' } });
+  assert.match(prev.problem!, /name them with --repos/, 'no planner names its repos, and the workspace has none');
+  const { taskId } = await engine.start({ text: 'Fix the login --repos api', scenario: 'hotfix', effort: { developer: 'high' } });
   const s = await engine.svc.state(taskId);
   assert.equal(s.scenario, 'deliver');
   assert.equal(s.scenarioLabel, 'Hotfix');

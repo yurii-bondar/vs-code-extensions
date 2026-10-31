@@ -7,10 +7,10 @@ import * as crypto from 'crypto';
 import { EventEmitter } from 'events';
 import { loadConfig, configPaths } from './config';
 import { exists } from './files';
-import { EFFORTS, SCENARIOS } from './protocol';
-import { buildPipeline, scenarioKind, taskPipeline, fitsScenario, onRepos } from './pipeline';
+import { EFFORTS, REPO_NAME, SCENARIOS } from './protocol';
+import { buildPipeline, scenarioKind, taskPipeline, fitsScenario, onRepos, reposBeforePlan } from './pipeline';
 import { nextAction, runOf, artifactPath, branchName, sameStep, editableFrom, stepRepos, unknownRepos, TASK_FILES, type NextAction, type RunAction } from './machine';
-import { parseInvocation, classifyInput, detectScenario, runIntake, renderTicket, IntakeError, extractAcceptanceCriteria, otherSite } from './intake';
+import { parseInvocation, classifyInput, detectScenario, runIntake, renderTicket, IntakeError, extractAcceptanceCriteria, otherSite, planFromTicket } from './intake';
 import { TaskService, type DispatchResult } from './store';
 import { exec, getChildEnv, GitRepo, branchAt, taskRepos, prepareRepos, taskDiff, removeWorktrees } from './git';
 import { runGates, runShell, withoutCredentials } from './gates';
@@ -30,7 +30,7 @@ import type { StageSource } from './pipeline';
 import type { RepoGates } from './gates';
 import type { TaskRepo } from './git';
 import type { BlockedRepo, CheckpointContext, CommentResult, ComposerArgs, Preview, TranscriptItem, UsageItem } from './wire';
-import type { Checkpoint, Config, Effort, EventBody, EventOf, GatesStatus, Pipeline, Source, Spec, Step, TaskGroup, TaskInstruction, TaskState } from './types';
+import type { Checkpoint, Config, Effort, EventBody, EventOf, GatesStatus, Pipeline, PlanMeta, Source, Spec, Step, TaskGroup, TaskInstruction, TaskState } from './types';
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 const REPORT_OUTPUTS = new Set(['readiness', 'audit']);
@@ -365,6 +365,40 @@ class Engine extends EventEmitter {
     };
   }
 
+  /**
+   * The repos of a pipeline whose agents change code before any plan stage names repos: those `--repos` names, else
+   * every configured one. A pipeline with a planner takes no `--repos`: the planner names them.
+   */
+  reposWithoutPlan(named: string[] | undefined, config: Config, pipeline: Pick<Pipeline, 'stages'>): { ok: true; repos: string[] } | { ok: false; error: string } {
+    const configured = Object.keys(config.repos);
+    if (!reposBeforePlan(pipeline.stages)) return named ? { ok: false, error: '--repos is for a pipeline without a plan stage; here the planner names the repos' } : { ok: true, repos: [] };
+    const repos = named ?? configured;
+    if (!repos.length) return { ok: false, error: 'no plan stage names the repos this pipeline changes: name them with --repos api,web, or add repos in Repos & checks' };
+    const unknown = configured.length ? repos.filter((r) => !configured.includes(r)) : repos.filter((r) => !REPO_NAME.test(r));
+    if (unknown.length) return { ok: false, error: `--repos names repos this workspace does not have: ${unknown.join(', ')}${configured.length ? ` (configured: ${configured.join(', ')})` : ''}` };
+    return { ok: true, repos };
+  }
+
+  /** Whether `branch` is there already, here or on origin, in any of these repos of a task: the repos it is in. */
+  async branchTaken(state: TaskState, config: Config, branch: string, names: string[]): Promise<string[]> {
+    const repos = await filterAsync(taskRepos(this.workspace, state, config, names), async (x) => {
+      const git = new GitRepo(x.checkout);
+      return (await git.hasBranch(branch)) || (await git.git('rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`)).code === 0;
+    });
+    return repos.map((x) => x.name);
+  }
+
+  /** The plan of a pipeline without a planner: the task's repos and a branch for its ticket no other work is on. */
+  async planWithoutPlanner(s: TaskState, spec: Spec): Promise<PlanMeta | undefined> {
+    if (!reposBeforePlan(s.pipeline.stages)) return undefined;
+    const config = await this.config();
+    const r = this.reposWithoutPlan(parseInvocation(s.input).repos, config, s.pipeline);
+    if (!r.ok) throw new EngineError('repos_required', r.error);
+    const plan = planFromTicket(spec, s.source.kind === 'text' ? s.source.text : s.input, r.repos);
+    for (let n = 2; (await this.branchTaken(s, config, branchName({ ...s, plan })!, r.repos)).length; n++) plan.slug = `${planFromTicket(spec, '', []).slug}-${n}`;
+    return plan;
+  }
+
   /** What a composer input would do, without creating anything. */
   async preview({ text = '', auto = false, no = [], key, effort = {}, scenario }: ComposerArgs = {}): Promise<Preview> {
     let inv: Invocation;
@@ -394,6 +428,8 @@ class Engine extends EventEmitter {
       if (allowed.length && !allowed.includes(project)) problem = `Jira project ${project} is not allowed here (allowed: ${allowed.join(', ')})`;
     }
     if (pipeline.stages.length === 0) problem = problem || (sc.name === 'deliver' ? 'every agent is switched off' : `no agent is on for the ${sc.label || sc.name} scenario`);
+    const repos = this.reposWithoutPlan(inv.repos, r.config, pipeline);
+    if (!repos.ok) problem = problem || repos.error;
     let taskEffort: Record<string, string> = {};
     try {
       taskEffort = this.effortFor(r.config, pipeline, inv.effort, effort, this.scenarioDefaults(r.config, sc.name).effort);
@@ -446,6 +482,8 @@ class Engine extends EventEmitter {
     const isAuto = auto || inv.auto;
     const pipeline = buildPipeline(config, { auto: isAuto, scenario: sc.name });
     if (pipeline.stages.length === 0) throw new EngineError('empty_pipeline', sc.name === 'deliver' ? 'Every agent is switched off; turn at least one on' : `No agent is on for the ${sc.label || sc.name} scenario; add one or turn one on in Agents`);
+    const repos = this.reposWithoutPlan(inv.repos, config, pipeline);
+    if (!repos.ok) throw new EngineError('repos_required', repos.error);
     const defaults = this.scenarioDefaults(config, sc.name);
     const taskEffort = this.effortFor(config, pipeline, inv.effort, effort, defaults.effort);
     const taskModel: Record<string, string> = Object.fromEntries(Object.entries(defaults.model).filter(([name]) => pipeline.stages.some((st) => st.agent === name)));
@@ -587,7 +625,8 @@ class Engine extends EventEmitter {
     if (s.source.note && !spec.request) spec = { ...spec, request: s.source.note };
     await this.svc.writeArtifact(s.taskId, TASK_FILES.ticketJson, `${JSON.stringify(spec, null, 2)}\n`);
     await this.svc.writeArtifact(s.taskId, TASK_FILES.ticket, renderTicket(spec));
-    await this.dispatch(s.taskId, { type: 'intake_completed', spec });
+    const plan = await this.planWithoutPlanner(s, spec);
+    await this.dispatch(s.taskId, { type: 'intake_completed', spec, ...(plan && { plan }) });
   }
 
   /** Streams an agent session's output to the UI and its transcript. */
@@ -998,12 +1037,8 @@ class Engine extends EventEmitter {
           return { ok: false, error: `the plan names repos this workspace does not have (${unknown.join(', ')}); ${known}` };
         }
         const branch = branchName({ ...state, plan: r.plan })!;
-        const repos = taskRepos(this.workspace, state, config, r.plan.repos.map((x) => x.name));
-        const taken = await filterAsync(repos, async (x) => {
-          const git = new GitRepo(x.checkout);
-          return (await git.hasBranch(branch)) || (await git.git('rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`)).code === 0;
-        });
-        if (taken.length) return { ok: false, error: `the branch ${branch} is there already in ${taken.map((x) => x.name).join(', ')}, with other work on it; choose another slug` };
+        const taken = await this.branchTaken(state, config, branch, r.plan.repos.map((x) => x.name));
+        if (taken.length) return { ok: false, error: `the branch ${branch} is there already in ${taken.join(', ')}, with other work on it; choose another slug` };
         return r;
       };
       let parsed = await check();

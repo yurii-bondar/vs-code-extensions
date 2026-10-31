@@ -577,3 +577,30 @@ test('engine: a plan that names a repo twice goes back to the planner, and its r
     h.hooks.dispose();
   }
 });
+
+test('engine: a scenario without a planner works in the repos the task names, on a branch named after the ticket', async () => {
+  const ws = workspace(['api', 'web'], 'repos:\n  api: {}\n  web: {}\nscenarios:\n  hotfix:\n    label: Hotfix\n    agents: [developer, reviewer]\n');
+  const h = await harness(ws, { FAKE_REPOS: 'api' });
+  try {
+    assert.match((await previewOf(h.engine, { text: 'Fix the typo --repos billing', scenario: 'hotfix' })).problem!, /--repos names repos this workspace does not have: billing \(configured: api, web\)/);
+    assert.match((await previewOf(h.engine, { text: 'Add a thing --repos api' })).problem!, /the planner names the repos/, 'deliver has a planner');
+    assert.equal((await previewOf(h.engine, { text: 'Fix the typo --repos api', scenario: 'hotfix' })).problem, undefined);
+
+    const { taskId } = await h.engine.start({ text: 'Fix the typo in the README --repos api --auto', scenario: 'hotfix' });
+    const s = await runTask(h.engine, taskId);
+    assert.equal(s.checkpoint && s.checkpoint.id, 'confirm-push', JSON.stringify(h.engine.lastError(taskId)));
+    assert.deepEqual(s.repos.map((r) => r.name), ['api'], 'only the repo it names');
+    assert.equal(git(path.join(ws, 'api'), 'rev-parse', '--abbrev-ref', 'HEAD'), 'fix/fix-the-typo-in-the-readme');
+    assert.equal(git(path.join(ws, 'api'), 'log', '-1', '--format=%s'), 'fix: Fix the typo in the README');
+    assert.equal(git(path.join(ws, 'web'), 'rev-parse', '--abbrev-ref', 'HEAD'), 'main', 'web was not touched');
+
+    // The same words again: that branch has the first task's commit, so the second gets its own.
+    git(path.join(ws, 'api'), 'switch', '-q', 'main');
+    const again = await h.engine.start({ text: 'Fix the typo in the README --repos api --auto', scenario: 'hotfix', key: 'T-AGAIN' });
+    const s2 = await runTask(h.engine, again.taskId);
+    assert.equal(s2.checkpoint && s2.checkpoint.id, 'confirm-push', JSON.stringify(h.engine.lastError(again.taskId)));
+    assert.equal(git(path.join(ws, 'api'), 'rev-parse', '--abbrev-ref', 'HEAD'), 'fix/fix-the-typo-in-the-readme-2');
+  } finally {
+    h.hooks.dispose();
+  }
+});

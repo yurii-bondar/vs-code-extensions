@@ -1,7 +1,7 @@
 // The task state machine. Pure: the same events always give the same state, and an illegal
 // event (a skipped approval, an extra review round, a push before it was confirmed) is rejected.
 import { CHECKPOINT_OPTIONS, JIRA_ONLY_OPTIONS, REPO_NAME, isBlocking, isInfoEvent } from './protocol';
-import { onRepos } from './pipeline';
+import { onRepos, reposBeforePlan } from './pipeline';
 import type { Checkpoint, CheckpointId, Finding, NextMode, Output, OrchEvent, PlanRepo, Stage, Step, StepRef, TaskState, Transition } from './types';
 
 /** The event of one type: `Ev<'stopped'>`. */
@@ -149,16 +149,21 @@ function unknownRepos(s: TaskState, repos: PlanRepo[]): string[] {
 
 function intakeCompleted(s: TaskState, e: Ev<'intake_completed'>): Transition {
   if (s.phase !== 'intake') return fail('intake_done', 'intake already completed');
+  // A pipeline without a planner gets its plan from the engine: the repos the task names and a branch for the ticket.
+  if (e.plan) {
+    const unknown = unknownRepos(s, e.plan.repos);
+    if (unknown.length) return fail('unknown_repo', `unknown repos: ${unknown.join(', ')}`);
+    s.plan = e.plan;
+    s.repos = e.plan.repos.filter((r, i, all) => all.findIndex((x) => x.name === r.name) === i);
+  }
   if (e.repos) {
     const unknown = unknownRepos(s, e.repos);
     if (unknown.length) return fail('unknown_repo', `unknown repos: ${unknown.join(', ')}`);
     s.repos = e.repos;
   }
   const stages = s.pipeline.stages;
-  const firstPlan = stages.findIndex((st) => st.output === 'plan');
-  const firstRepo = stages.findIndex(onRepos);
-  if (firstRepo !== -1 && (firstPlan === -1 || firstRepo < firstPlan) && s.repos.length === 0) {
-    return fail('repos_required', `"${stages[firstRepo]!.agent}" runs per repo before any plan names repos; pass repos with intake_completed`);
+  if (reposBeforePlan(stages) && s.repos.length === 0) {
+    return fail('repos_required', `"${stages.find(onRepos)!.agent}" runs per repo before any plan names repos; pass repos with intake_completed`);
   }
   s.spec = e.spec;
   s.phase = 'stages';

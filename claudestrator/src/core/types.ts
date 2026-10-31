@@ -442,7 +442,7 @@ export type OrchEvent = EventBase &
         model?: Record<string, string> | undefined;
         limits: Pick<Limits, 'reviewRounds' | 'gateAttempts'>;
       }
-    | { type: 'intake_completed'; spec: Spec; repos?: PlanRepo[] }
+    | { type: 'intake_completed'; spec: Spec; repos?: PlanRepo[]; plan?: PlanMeta }
     | { type: 'stage_started'; agent: string; repo?: string }
     | {
         type: 'stage_completed';
