@@ -75,6 +75,8 @@ interface Layer {
   config: ConfigLayer;
   /** The file it was read from; the built-in layer has none. */
   file?: string | undefined;
+  /** A library's: the config that lists it (yours first, when both do). */
+  listedBy?: 'user' | 'project' | undefined;
 }
 
 /** One piece of an agent's instructions: inline text or a file, and how it combines with what came before. */
@@ -385,7 +387,7 @@ async function loadLayers({ workspace, home = os.homedir() }: { workspace: strin
       for (let n = 2; libraries.some((l) => l.name === `${LIBRARY_PREFIX}${label}`); n++) label = `${libraryLabel(file)}-${n}`;
       const r = await loadLibraryFile(file, label);
       diagnostics.push(...r.diagnostics);
-      if (r.layer) libraries.push(r.layer);
+      if (r.layer) libraries.push({ ...r.layer, listedBy: layer.name === 'project' ? 'project' : 'user' });
     }
   }
   // Every file a layer comes from or would come from: one created later is a new config too.
@@ -891,14 +893,15 @@ async function readConfig({ workspace, home, flags }: { workspace: string; home?
 }
 
 /**
- * What the project config relaxes of the safety the layers under it (yours, its libraries, the defaults) set. A repo
- * someone else wrote can carry that file, and the dashboard's Safety switches write it too: either way it is said
- * wherever the config's warnings show, not applied silently.
+ * What the project config, and the libraries it lists, relax of the safety the layers under them (yours, your
+ * libraries, the defaults) set. A repo someone else wrote can carry that file and those libraries, and the dashboard's
+ * Safety switches write it too: either way it is said wherever the config's warnings show, not applied silently.
  */
 function loosened(layers: Layer[]): Diagnostic[] {
   const project = layers.find((l) => l.name === 'project');
   if (!project) return [];
-  const under = mergeLayers(layers.filter((l) => l !== project));
+  const brought = layers.filter((l) => l.listedBy === 'project');
+  const under = mergeLayers(layers.filter((l) => l !== project && !brought.includes(l)));
   const was = { sandbox: true, allowNoVerify: false, draftPrsOnly: true, forbidAiAttribution: false, protectedBranches: ['main', 'master'], ...under.policy };
   const p = project.config.policy ?? {};
   const out: string[] = [];
@@ -917,15 +920,22 @@ function loosened(layers: Layer[]): Diagnostic[] {
   const checkEnv = added(p.checkEnv, under.policy.checkEnv);
   const github = checkEnv.filter((v) => GITHUB_TOKENS.includes(v));
   if (checkEnv.length) out.push(`hands ${checkEnv.join(', ')} to checks and git hooks${github.length ? ` (${github.join(', ')}: a GitHub token, which can push and merge)` : ''}`);
-  for (const [name, agent] of Object.entries(project.config.agents ?? {})) {
-    const before = (under.agents.get(name) ?? { tools: undefined }).tools ?? [];
-    const reach = (agent.tools ?? []).filter((t) => (t === 'WebFetch' || t === 'WebSearch' || t.startsWith('WebFetch(') || t.startsWith('mcp__')) && !before.includes(t));
-    if (reach.length) out.push(`gives the ${name} agent ${reach.join(', ')}, which reach${reach.length === 1 ? 'es' : ''} outside the sandbox`);
-  }
   const projects = project.config.jira && project.config.jira.allowedProjects;
   const allowed = under.jira.allowedProjects ?? [];
   if (projects && allowed.length && (!projects.length || projects.some((k) => !allowed.includes(k)))) out.push(projects.length ? `allows Jira projects you did not (${projects.filter((k) => !allowed.includes(k)).join(', ')})` : 'allows every Jira project, where your config allows some');
-  return out.map((m) => ({ level: 'warning', code: 'policy_loosened', source: project.file, message: `the project's config (${CONFIG_DIR}/${CONFIG_FILE}) ${m}` }));
+  const diag = (layer: Layer, m: string): Diagnostic => ({ level: 'warning', code: 'policy_loosened', source: layer.file, message: `${layer === project ? `the project's config (${CONFIG_DIR}/${CONFIG_FILE})` : `the library "${layer.name.slice(LIBRARY_PREFIX.length)}" the project's config lists`} ${m}` });
+  // Agents, from the project's config and from the libraries it lists, which can only bring agents and scenarios.
+  const agents: Diagnostic[] = [];
+  for (const layer of [...brought, project]) {
+    for (const [name, agent] of Object.entries(layer.config.agents ?? {})) {
+      const was = under.agents.get(name);
+      const before = (was && was.tools) ?? [];
+      const reach = (agent.tools ?? []).filter((t) => (t === 'WebFetch' || t === 'WebSearch' || t.startsWith('WebFetch(') || t.startsWith('mcp__')) && !before.includes(t));
+      if (reach.length) agents.push(diag(layer, `gives the ${name} agent ${reach.join(', ')}, which reach${reach.length === 1 ? 'es' : ''} outside the sandbox`));
+      if (agent.mcp === true && was && was.mcp === false) agents.push(diag(layer, `turns MCP servers on for the ${name} agent, which reads through them outside the sandbox`));
+    }
+  }
+  return [...out.map((m) => diag(project, m)), ...agents];
 }
 
 /**

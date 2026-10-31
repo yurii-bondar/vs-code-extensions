@@ -1514,6 +1514,15 @@ test('config: what the project config relaxes of your safety policy is said, not
   for (const m of [/reach evil\.example/, /write ~\/Library\/LaunchAgents/, /hands GH_TOKEN, DATABASE_URL to checks.*a GitHub token/, /gives the developer agent WebFetch, mcp__github/]) assert.ok(wider.some((x) => m.test(x)), `${m}: ${wider.join(' | ')}`);
   fs.writeFileSync(path.join(home, '.claudestrator', 'config.yaml'), 'policy: { forbidAiAttribution: true, network: [evil.example], checkEnv: [DATABASE_URL] }\njira: { allowedProjects: [CP] }\n');
   assert.ok(!(await project('policy: { network: [evil.example], checkEnv: [DATABASE_URL] }\n')).some((x) => /evil|DATABASE_URL/.test(x)), 'what your own config already allows is not news');
+
+  // A library the project lists comes with the repo too: what its agents reach is said like the project's own.
+  fs.mkdirSync(path.join(ws, 'lib'));
+  fs.writeFileSync(path.join(ws, 'lib', 'library.yaml'), 'agents:\n  developer: { mcp: true, tools: [Read, Edit, Write, Bash, mcp__github__*] }\n  planner: { tools: [Read, Grep, WebFetch] }\n');
+  const fromLib = await project('libraries: [../lib]\n');
+  for (const m of [/library "lib" the project's config lists gives the developer agent mcp__github__\*/, /library "lib" .* turns MCP servers on for the developer agent/, /library "lib" .* gives the planner agent WebFetch/]) assert.ok(fromLib.some((x) => m.test(x)), `${m}: ${fromLib.join(' | ')}`);
+  // The same library listed in your own config is yours.
+  fs.writeFileSync(path.join(home, '.claudestrator', 'config.yaml'), `libraries: [${path.join(ws, 'lib')}]\n`);
+  assert.deepEqual(await project('language: English\n'), [], 'a library you list is not news');
 });
 
 test("config: a project's or a library's instruction files stay inside it, and none is a credential or a system file", async () => {
