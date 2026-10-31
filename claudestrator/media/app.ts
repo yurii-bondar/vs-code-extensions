@@ -12,6 +12,8 @@ interface CustomDef {
 interface HomeView extends View {
   /** The scenario the last preview detected in the words, or null. */
   detected: string | null;
+  /** Whether a start is on its way to the extension. */
+  starting: boolean;
   render(): void;
   tasksHtml(tasks: Card[]): string;
   renderComposer(): void;
@@ -720,6 +722,7 @@ interface Views {
 
   views.home = {
     detected: null,
+    starting: false,
     async enter(route) {
       if (route.compose !== undefined && route.compose !== '') S.draft.text = route.compose;
       if (route.scenario) S.draft.scenario = route.scenario;
@@ -1025,6 +1028,9 @@ interface Views {
       }, 250);
     },
     async start() {
+      // One start at a time: a second ⌘↵ while the first is on its way (the CLI is checked first, a dialog asks)
+      // would start a description twice, as two tasks.
+      if (this.starting) return;
       const text = S.draft.text.trim();
       if (!text && !S.draft.key) {
         $('#composer-text')?.focus();
@@ -1034,13 +1040,19 @@ interface Views {
       const btn = $<HTMLButtonElement>('#start-btn')!;
       btn.disabled = true;
       btn.classList.add('busy');
+      this.starting = true;
       // Only what the config still has: a group or instruction deleted elsewhere is dropped, not an error.
       const c = okConfig();
       const group = c && c.groups.some((g) => g.id === S.draft.group) ? S.draft.group : undefined;
       const instructions = S.draft.instructions.filter((id) => c && c.instructions.some((x) => x.id === id));
-      const r = await attempt('start', { text: S.draft.text, auto: S.draft.auto, no: S.draft.no, key: S.draft.key || undefined, effort: S.draft.effort, scenario: this.scenario(), group, instructions });
-      btn.disabled = false;
-      btn.classList.remove('busy');
+      let r: Awaited<ReturnType<typeof attempt<'start'>>>;
+      try {
+        r = await attempt('start', { text: S.draft.text, auto: S.draft.auto, no: S.draft.no, key: S.draft.key || undefined, effort: S.draft.effort, scenario: this.scenario(), group, instructions });
+      } finally {
+        this.starting = false;
+        btn.disabled = false;
+        btn.classList.remove('busy');
+      }
       if (!r) return;
       S.draft = { text: '', no: [], auto: false, key: '', effort: {}, scenario: 'auto', group: '', instructions: [] };
       this.detected = null;
@@ -1758,7 +1770,7 @@ interface Views {
       e.preventDefault();
       t.click();
     }
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.repeat) {
       if (t && (t.id === 'composer-text' || t.id === 'composer-key')) {
         e.preventDefault();
         views.home.start();
