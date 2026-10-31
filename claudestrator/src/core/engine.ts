@@ -267,6 +267,11 @@ class Engine extends EventEmitter {
   sessions: Map<string, ClaudeSession>;
   /** What Stop ends besides the agent: the checks of a step, a commit hook, a pre-push hook. */
   gateRuns = new Map<string, AbortController>();
+  /**
+   * Tasks whose agent is working on a turn now. Between turns (its checks run, its report is read) a message would set
+   * it working where nothing waits for it: its edits would go unchecked into the next stage.
+   */
+  inTurn = new Set<string>();
   /** Each running task's run, which settles once it has recorded its last event. */
   runEnds = new Map<string, Promise<void>>();
   running: Set<string>;
@@ -692,6 +697,15 @@ class Engine extends EventEmitter {
    */
   async turnOf(taskId: string, session: Pick<ClaudeSession, 'turn' | 'interrupt'>): Promise<TurnResult> {
     this.activity.set(taskId, Date.now());
+    this.inTurn.add(taskId);
+    try {
+      return await this.watchTurn(taskId, session);
+    } finally {
+      this.inTurn.delete(taskId);
+    }
+  }
+
+  async watchTurn(taskId: string, session: Pick<ClaudeSession, 'turn' | 'interrupt'>): Promise<TurnResult> {
     let timer: NodeJS.Timeout | undefined;
     const every = Math.max(50, Math.min(30000, Math.floor(this.stallMs / 4)));
     const stalled = new Promise<true>((resolve) => {
@@ -1560,6 +1574,7 @@ class Engine extends EventEmitter {
   sendMessage(taskId: string, text: string): void {
     const session = this.sessions.get(taskId);
     if (!session) throw new EngineError('no_agent', 'No agent is running for this task right now');
+    if (!this.inTurn.has(taskId)) throw new EngineError('agent_busy', 'The agent is not working right now (its checks run, or its report is read); send it once it works again');
     session.send(text);
   }
 

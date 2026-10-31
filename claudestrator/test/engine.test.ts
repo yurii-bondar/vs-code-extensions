@@ -663,3 +663,22 @@ test('engine: deleting a running task stops it, waits for its run to end, and le
     h.hooks.dispose();
   }
 });
+
+test('engine: a message to the agent is taken while it works, not while its checks run', async () => {
+  const ws = workspace(['api'], 'pipeline: [planner, developer]\nrepos:\n  api:\n    gates:\n      - { name: slow, cmd: sleep 3 }\n');
+  const h = await harness(ws, { FAKE_REPOS: 'api' });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
+    const run = runTask(h.engine, taskId);
+    await waitFor(async () => {
+      const live = h.engine.live(taskId);
+      return live && live.phase === 'gates';
+    }, 60000);
+    assert.throws(() => h.engine.sendMessage(taskId, 'also rename X'), /not working right now/);
+    assert.equal((await view.detail(h.engine, taskId)).canMessage, false, 'the box says so too');
+    const s = await run;
+    assert.equal(s.checkpoint && s.checkpoint.id, 'confirm-push');
+  } finally {
+    h.hooks.dispose();
+  }
+});

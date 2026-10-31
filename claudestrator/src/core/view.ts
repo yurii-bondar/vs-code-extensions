@@ -17,6 +17,7 @@ interface ViewEngine {
   liveCost: Map<string, number>;
   liveUsage: Map<string, UsageItem & { key: string }>;
   sessions: Map<string, unknown>;
+  inTurn: Set<string>;
   svc: {
     events(taskId: string): Promise<OrchEvent[]>;
     state(taskId: string): Promise<TaskState>;
@@ -329,7 +330,7 @@ async function detail(engine: ViewEngine, taskId: string): Promise<TaskDetail> {
     files: await engine.svc.files(taskId),
     taskDir: engine.svc.dir(taskId),
     permissions: engine.pendingPermissions(taskId),
-    canMessage: engine.sessions.has(taskId),
+    canMessage: engine.sessions.has(taskId) && engine.inTurn.has(taskId),
     liveUsage: engine.liveUsage.get(taskId) || null,
   };
 }
