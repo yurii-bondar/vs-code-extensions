@@ -493,6 +493,32 @@ test('guard: an agent writes files only where its stage works or in a temp folde
   await check(reviewer, ['npm test', 'cat src/x.ts | grep foo', 'echo x > /tmp/notes.md', 'git log > /tmp/log'], true);
 });
 
+test('guard: an agent makes no link to git metadata or to Claudestrator\'s config, and .git is .git in any case', async () => {
+  const policy = { protectedBranches: ['main'], draftPrsOnly: true, forbidAiAttribution: false, allowNoVerify: false, sandbox: true, network: [], writable: [], checkEnv: [] };
+  const ctx: GuardContext = { policy, cwd: '/ws/api', workspace: '/ws', home: '/home/u', agent: true, task: { taskId: 'T', canPush: false }, writeRoots: ['/ws/api'], protect: ['/ws/.claudestrator'], branchOf: async () => 'feat/x', isRepoRoot: async (d) => d === '/ws/api', readFile: async () => null };
+  // A write through the link would land in the file it leads to: Write and Edit run outside the sandbox.
+  for (const command of [
+    'ln -s .git/config cfg',
+    'ln -sf .git/hooks h',
+    'ln .git/config hard',
+    'ln -s ../.git/config src/cfg',
+    'ln -s /ws/api/.git gitdir',
+    'ln -t src .git/config',
+    'link .git/config x',
+    'cp -l .git/config x',
+    'cp -s .git/config x',
+    'cp -al .git/hooks hooks',
+    'ln -s ../.claudestrator/config.yaml settings.yaml',
+    'echo x >> .GIT/config',
+    'cd .Git && echo x > config',
+  ]) {
+    assert.equal((await guard(command, ctx)).allow, false, command);
+  }
+  for (const command of ['ln -s src/a.ts b.ts', 'ln -s ../shared/x.ts src/x.ts', 'cp .git/config /tmp/config.txt', 'cp -r src lib']) {
+    assert.equal((await guard(command, ctx)).allow, true, command);
+  }
+});
+
 test('hook: a tool call that is not in the expected shape is refused, never passed as an unknown tool', async () => {
   assert.deepEqual(parseHookRequest(JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'ls' }, cwd: '/ws' })), { tool: 'Bash', input: { command: 'ls' }, cwd: '/ws' });
   assert.deepEqual(parseHookRequest(JSON.stringify({ tool_name: 'Read' })), { tool: 'Read', input: {}, cwd: '' });

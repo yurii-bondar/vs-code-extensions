@@ -66,6 +66,8 @@ async function guardBash(command: string, ctx: GuardContext): Promise<Verdict> {
     }
     const writes = checkWrites([...redirectTargets(segment), ...writeTargets(cmd, args)], cmd, dir, ctx);
     if (!writes.allow) return writes;
+    const links = checkLinks(cmd, args, dir, ctx);
+    if (!links.allow) return links;
     const verdict = await checkCommand(cmd, args, dir, ctx);
     if (!verdict.allow) return verdict;
   }
@@ -143,19 +145,49 @@ function writeTargets(cmd: string, args: string[]): string[] {
 
 const TEMP_DIRS = (): string[] => [...new Set([path.resolve(os.tmpdir()), '/tmp', '/private/tmp'])];
 
+const within = (abs: string, root: string): boolean => abs === root || abs.startsWith(root + path.sep);
+
 /** An agent writes only where its stage works (or a temp folder), and never into git metadata. */
 function checkWrites(targets: string[], cmd: string, dir: string, ctx: GuardContext): Verdict {
   if (!ctx.writeRoots || !targets.length) return allow;
   const roots = ctx.writeRoots.map((r) => path.resolve(r));
-  const within = (abs: string, root: string): boolean => abs === root || abs.startsWith(root + path.sep);
   for (const t of targets) {
     if (/\$(?!\{?HOME\}?(\/|$))|`/.test(t)) return deny(`${cmd} writes to ${t}: spell out the path instead of a variable`);
     const abs = resolveIn(dir, t, ctx);
-    if (abs.split(path.sep).includes('.git')) return deny(`${cmd} would write into git metadata (${abs}); Claudestrator owns git`);
+    if (inGitMetadata(abs)) return deny(`${cmd} would write into git metadata (${abs}); Claudestrator owns git`);
     if ((ctx.protect || []).some((p) => within(abs, path.resolve(p)))) return deny(`${cmd} writes ${abs}: Claudestrator's config and task state are not an agent's to change`);
     if (TEMP_DIRS().some((tmp) => within(abs, tmp))) continue;
     if (roots.some((root) => within(abs, root))) continue;
     return deny(roots.length ? `${cmd} writes ${abs}, outside ${roots.join(', ')}: this stage works only there` : `${cmd} writes ${abs}: this stage does not change files (a temp folder is fine)`);
+  }
+  return allow;
+}
+
+/** What `ln`, `link` and `cp -l`/`cp -s` make links to, and where the link goes (undefined: here). */
+function linkedTo(cmd: string, args: string[]): { sources: string[]; at: string | undefined } | null {
+  const flags = flagSet(args);
+  if (cmd !== 'ln' && cmd !== 'link' && !(cmd === 'cp' && ['-l', '--link', '-s', '--symbolic-link'].some((f) => flags.has(f)))) return null;
+  const t = args.findIndex((a) => a === '-t' || a === '--target-directory');
+  const plain = args.filter((a, i) => !a.startsWith('-') && (t === -1 || i !== t + 1));
+  const into = t !== -1 ? args[t + 1] : args.find((a) => a.startsWith('--target-directory='))?.slice('--target-directory='.length);
+  if (into !== undefined || plain.length === 1) return { sources: plain, at: into };
+  return { sources: plain.slice(0, -1), at: plain[plain.length - 1] };
+}
+
+/**
+ * An agent links to nothing it may not write: Write and Edit run outside the sandbox, so a write through a link to
+ * `.git/config` or Claudestrator's config would land there.
+ */
+function checkLinks(cmd: string, args: string[], dir: string, ctx: GuardContext): Verdict {
+  const link = ctx.writeRoots && linkedTo(cmd, args);
+  if (!link) return allow;
+  const at = link.at === undefined ? dir : resolveIn(dir, link.at, ctx);
+  for (const s of link.sources) {
+    // A symlink's target counts from where the link is (`ln -s ../.git/config src/cfg`), a hard link's from here.
+    for (const abs of [resolveIn(dir, s, ctx), path.resolve(at, s), path.resolve(path.dirname(at), s)]) {
+      if (inGitMetadata(abs)) return deny(`${cmd} would link to git metadata (${s}): a write through the link would change it, and Claudestrator owns git`);
+      if ((ctx.protect || []).some((p) => within(abs, path.resolve(p)))) return deny(`${cmd} would link to ${abs}: Claudestrator's config and task state are not an agent's to change`);
+    }
   }
   return allow;
 }
@@ -624,7 +656,7 @@ async function checkRm(args: string[], dir: string, ctx: GuardContext): Promise<
     if (abs === '/' || abs === home || roots.some(contains)) return deny(`rm -r ${t} would delete ${abs}, which contains the workspace, a repository or your home`);
     const ground = roots.some(inside);
     if (ground && (await ctx.isRepoRoot(abs))) return deny(`rm -r ${t} would delete the repository ${abs}`);
-    if (ground && abs.split(path.sep).includes('.git')) return deny(`rm -r ${t} would delete git metadata`);
+    if (ground && inGitMetadata(abs)) return deny(`rm -r ${t} would delete git metadata`);
     if (!ground && !inside(tmp) && !inside('/tmp') && !inside('/private/tmp')) return deny(`rm -r outside the workspace and its repos (${abs}) is not allowed; ask the user`);
   }
   return allow;
