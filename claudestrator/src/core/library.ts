@@ -7,7 +7,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as YAML from 'yaml';
 import { CONFIG_DIR, LIBRARY_FILE, PROMPTS_DIR, editProjectConfig, editYamlFile, libraryFile, libraryLabel, projectConfigFile, readProjectLayer, userConfigFile, withConfigRollback } from './config';
-import { exists } from './files';
+import { exists, writeAtomic } from './files';
 import { validateConfigLayer, validateLibraryLayer } from './protocol';
 import type { AgentLayer, ConfigLayer } from './config';
 import type { LibraryView as LibraryInfo } from './wire';
@@ -106,7 +106,7 @@ async function addLibrary({ dir, scope, create = false, ...where }: Where & { di
     if (!(await exists(file))) {
       await remember(file);
       await fs.promises.mkdir(path.dirname(file), { recursive: true });
-      await fs.promises.writeFile(file, LIBRARY_TEMPLATE);
+      await writeAtomic(file, LIBRARY_TEMPLATE);
     }
     const entries = await entriesOf(config);
     await editYamlFile(config, (doc) => doc.setIn(['libraries'], doc.createNode([...entries, entry])), { validate: validateConfigLayer, what: config });
@@ -167,7 +167,7 @@ async function moveToLibrary({ library, agents = [], scenarios = [], ...where }:
           if (there !== null && path.resolve(dest) !== source && there !== content) throw new Error(`Library ${target.label} already has a different ${rel}`);
           await remember(dest);
           await fs.promises.mkdir(path.dirname(dest), { recursive: true });
-          await fs.promises.writeFile(dest, content);
+          await writeAtomic(dest, content);
           def = { ...def, instructions: { ...ins, file: `./${rel}` } };
           // The project's copy goes, unless it lives outside its prompts/ (a file the user keeps elsewhere).
           if (source.startsWith(path.join(projectDir, PROMPTS_DIR) + path.sep) && path.resolve(dest) !== source) leftBehind.push(source);

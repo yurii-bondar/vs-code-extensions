@@ -8,6 +8,7 @@ import { AsyncLocalStorage } from 'async_hooks';
 import { validateConfigLayer, validateAgentPatch, validateLibraryLayer, SCENARIO_OUTPUT, JIRA_KEY } from './protocol';
 import { ORCH_DIR } from './store';
 import { SECRET_PATHS, GITHUB_TOKENS } from './settings';
+import { signature, writeAtomic } from './files';
 import type { Agent, Config, CustomScenario, Diagnostic, Effort, Gate, GitMode, GroupType, Output, Policy, RepoConfig, Runs, ScenarioStep, TaskGroup, TaskInstruction } from './types';
 
 // ---------- the shapes of a config layer, as written in config.yaml ----------
@@ -945,10 +946,7 @@ async function readIfThere(file: string): Promise<string | null> {
   }
 }
 
-async function writeMaking(file: string, text: string): Promise<void> {
-  await fs.promises.mkdir(path.dirname(file), { recursive: true });
-  await fs.promises.writeFile(file, text);
-}
+const writeMaking = writeAtomic;
 
 /** Whether the edit running now was started inside another one (an agent added with its scenario set). */
 const inEdit = new AsyncLocalStorage<true>();
@@ -988,6 +986,7 @@ function editProjectConfig(workspace: string, mutate: (doc: YAML.Document) => un
  */
 function editYamlFile(file: string, mutate: (doc: YAML.Document) => unknown, { validate, what }: { validate: (raw: unknown) => string[]; what: string }): Promise<string> {
   return serialized(async () => {
+    const read = await signature(file);
     const doc = YAML.parseDocument((await readIfThere(file)) ?? '');
     if (doc.errors.length) throw new Error(`${file}: ${doc.errors[0]!.message}`);
     if (doc.contents === null) doc.contents = doc.createNode({}) as unknown as typeof doc.contents;
@@ -996,6 +995,8 @@ function editYamlFile(file: string, mutate: (doc: YAML.Document) => unknown, { v
     pruneEmpty(doc, ['agents']);
     const issues = validate(doc.toJS() ?? {});
     if (issues.length) throw new Error(`the change would make ${what} invalid: ${issues.join('; ')}`);
+    // Edits of this window take turns (serialized); another window or the CLI may have written it meanwhile.
+    if ((await signature(file)) !== read) throw new Error(`${file} changed while it was being edited (in another window?); nothing was written, try again`);
     await writeMaking(file, doc.toString());
     return file;
   });
@@ -1173,7 +1174,7 @@ function withConfigRollback<T>({ workspace, home, explain }: { workspace: string
     } catch (e) {
       for (const [file, content] of saved) {
         if (content === null) await fs.promises.rm(file, { force: true });
-        else await fs.promises.writeFile(file, content);
+        else await writeAtomic(file, content);
       }
       throw e;
     }

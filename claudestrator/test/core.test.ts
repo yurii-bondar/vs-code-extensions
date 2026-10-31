@@ -1694,3 +1694,23 @@ test('view: a task without its ticket yet is titled by what was typed, without t
   const engine = { isRunning: () => false, lastError: () => null, pendingPermissions: () => [], live: () => null, liveCost: new Map(), svc } as unknown as ViewEngine;
   assert.equal((await summary(engine, { taskId, state: await svc.state(taskId) })).title, 'Add the feature everywhere');
 });
+
+test('config: an edit writes the whole file or nothing, keeps a linked config a link, and never writes over another window', async () => {
+  const dir = fs.realpathSync(tmp('cs-write-'));
+  const dotfiles = path.join(dir, 'dotfiles', 'claudestrator.yaml');
+  fs.mkdirSync(path.dirname(dotfiles));
+  fs.writeFileSync(dotfiles, 'language: German # mine\n');
+  const file = path.join(dir, 'config.yaml');
+  fs.symlinkSync(dotfiles, file);
+  await config.editYamlFile(file, (doc) => doc.setIn(['baseBranch'], 'develop'), { validate: validateConfigLayer, what: 'the config' });
+  assert.ok(fs.lstatSync(file).isSymbolicLink(), 'still a link to your dotfiles');
+  assert.equal(fs.readFileSync(dotfiles, 'utf8'), 'language: German # mine\nbaseBranch: develop\n');
+  assert.deepEqual(fs.readdirSync(path.dirname(dotfiles)), ['claudestrator.yaml'], 'no temporary file left');
+
+  // Another window (or the CLI) writes the file while this edit is under way.
+  await assert.rejects(
+    () => config.editYamlFile(file, (doc) => (fs.writeFileSync(dotfiles, 'language: Ukrainian\n'), doc.setIn(['baseBranch'], 'main')), { validate: validateConfigLayer, what: 'the config' }),
+    /changed while it was being edited/
+  );
+  assert.equal(fs.readFileSync(dotfiles, 'utf8'), 'language: Ukrainian\n', "the other window's edit stays");
+});

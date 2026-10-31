@@ -10,6 +10,7 @@ import * as path from 'path';
 import * as YAML from 'yaml';
 import { CONFIG_DIR, PROMPTS_DIR, loadConfig, projectConfigFile, readProjectLayer, removeScenario, setAgentLayer, setCustomScenario, setPipeline, setScenario, withConfigRollback } from './config';
 import { validateConfigLayer } from './protocol';
+import { writeAtomic } from './files';
 import type { AgentLayer, ConfigLayer } from './config';
 import type { ScenarioStep } from './types';
 
@@ -252,7 +253,7 @@ async function restoreBackup({ workspace, backup, home }: { workspace: string; b
         const content = Object.entries(backup.files).find(([rel]) => fileKey(rel) === key)![1];
         await remember(abs);
         await fs.promises.mkdir(path.dirname(abs), { recursive: true });
-        await fs.promises.writeFile(abs, content);
+        await writeAtomic(abs, content);
         // The config names the file the way it was written (`./prompts/a.md`), whatever OS made the backup.
         def = { ...def, instructions: { ...own, file: `./${key}` } };
       }
