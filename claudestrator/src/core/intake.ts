@@ -336,6 +336,8 @@ function inline(n: AdfNode): string {
       return String((n.attrs && n.attrs.url) ?? '');
     case 'date':
       return dateOf(n.attrs && n.attrs.timestamp);
+    case 'status':
+      return `[${String((n.attrs && n.attrs.text) ?? '')}]`;
     default:
       return kids(n).map(inline).join('');
   }
@@ -376,6 +378,19 @@ function blocks(raw: unknown, depth: number): string {
       );
     case 'table':
       return kids(n).map((row) => `| ${kids(row).map((cell) => blocks(cell, 0).trim().replace(/\n+/g, ' ')).join(' | ')} |`).join('\n') + '\n\n';
+    // Jira's action items and decisions: a checklist, often the acceptance criteria themselves.
+    case 'taskList':
+    case 'decisionList':
+      return (
+        kids(n)
+          .map((item) => {
+            if (item.type === 'taskList' || item.type === 'decisionList') return blocks(item, depth + 1).trimEnd();
+            const state = item.attrs && item.attrs.state;
+            const mark = item.type === 'taskItem' ? (state === 'DONE' ? '[x] ' : '[ ] ') : '';
+            return `${indent}- ${mark}${inline(item).trim()}`;
+          })
+          .join('\n') + '\n\n'
+      );
     default:
       return n.content ? kids(n).map((c) => blocks(c, depth)).join('') : inline(n);
   }
@@ -398,6 +413,12 @@ function dateOf(timestamp: unknown): string {
 function storageToText(html: string): string {
   return html
     .replace(/<ac:structured-macro[^>]*ac:name="code"[^>]*>[\s\S]*?<!\[CDATA\[([\s\S]*?)\]\]>[\s\S]*?<\/ac:structured-macro>/g, '\n```\n$1\n```\n')
+    // Other plain-text bodies (noformat): their text is all CDATA, which the tag stripping below would drop.
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '\n```\n$1\n```\n')
+    // Task lists: a checklist item each, without the task's id.
+    .replace(/<ac:task-id>[^<]*<\/ac:task-id>/g, '')
+    .replace(/<ac:task>\s*<ac:task-status>\s*(complete|incomplete)\s*<\/ac:task-status>/g, (_, st: string) => `\n- ${st === 'complete' ? '[x]' : '[ ]'} `)
+    .replace(/<ac:task>/g, '\n- ')
     .replace(/<h([1-6])[^>]*>/g, (_, l) => `\n\n${'#'.repeat(Number(l))} `)
     .replace(/<\/h[1-6]>/g, '\n\n')
     .replace(/<li[^>]*>/g, '\n- ')

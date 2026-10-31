@@ -614,6 +614,24 @@ test('intake: invocations, sources and acceptance criteria', async () => {
   // One malformed node does not fail the whole ticket.
   assert.equal(adfToText({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Due ' }, { type: 'date', attrs: { timestamp: 'soon' } }, { type: 'date', attrs: { timestamp: '1767225600000' } }] }] }), 'Due 2026-01-01');
   assert.equal(storageToText('<p>A &#99999999; B &#x1F680; &amp; &bogus;</p>'), 'A &#99999999; B 🚀 & &bogus;');
+  // Jira action items and decisions are a checklist, often the acceptance criteria; a status lozenge keeps its word.
+  const t = (text: string) => ({ type: 'text', text });
+  const jira = adfToText({ type: 'doc', content: [
+    { type: 'heading', attrs: { level: 2 }, content: [t('Acceptance criteria')] },
+    { type: 'taskList', attrs: { localId: 'x' }, content: [
+      { type: 'taskItem', attrs: { localId: 'a', state: 'TODO' }, content: [t('Refund is created')] },
+      { type: 'taskItem', attrs: { localId: 'b', state: 'DONE' }, content: [t('Email is sent')] },
+    ] },
+    { type: 'decisionList', content: [{ type: 'decisionItem', attrs: { state: 'DECIDED' }, content: [t('Refunds go to the card')] }] },
+    { type: 'paragraph', content: [t('Status: '), { type: 'status', attrs: { text: 'BLOCKED' } }] },
+  ] });
+  assert.equal(jira, '## Acceptance criteria\n\n- [ ] Refund is created\n- [x] Email is sent\n\n- Refunds go to the card\n\nStatus: [BLOCKED]');
+  assert.deepEqual(extractAcceptanceCriteria(jira).slice(0, 2), ['Refund is created', 'Email is sent']);
+  // Confluence's task lists and noformat blocks, the same way.
+  const page = storageToText('<h2>Acceptance criteria</h2><ac:task-list><ac:task><ac:task-id>1</ac:task-id><ac:task-status>incomplete</ac:task-status><ac:task-body>Refund is created</ac:task-body></ac:task><ac:task><ac:task-id>2</ac:task-id><ac:task-status>complete</ac:task-status><ac:task-body>Email is sent</ac:task-body></ac:task></ac:task-list><h2>API</h2><ac:structured-macro ac:name="noformat"><ac:plain-text-body><![CDATA[curl -X POST /refunds]]></ac:plain-text-body></ac:structured-macro>');
+  assert.deepEqual(extractAcceptanceCriteria(page), ['Refund is created', 'Email is sent']);
+  assert.match(page, /```\ncurl -X POST \/refunds\n```/);
+  assert.doesNotMatch(page, /incomplete|1Refund/);
   assert.equal(classify('https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=../../x').kind, 'text', 'a page id is digits');
   assert.equal((classify('https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=4242') as Extract<Source, { kind: 'confluence' }>).pageId, '4242');
 });
