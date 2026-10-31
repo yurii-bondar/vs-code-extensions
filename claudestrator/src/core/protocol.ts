@@ -27,6 +27,11 @@ const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 const RUNS: Runs[] = ['per-repo', 'all-repos'];
 const AGENT_COLORS = ['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'pink', 'cyan'];
 const AGENT_NAME = /^[a-z][a-z0-9-]*$/;
+/**
+ * A repo's name: a folder name of its own, since a worktree lives at `.orch/worktrees/<task>/<name>`. No separator and
+ * no `..`, which would put that folder (and its removal) somewhere else.
+ */
+const REPO_NAME = /^(?![.-])(?!.*\.\.)[A-Za-z0-9._-]+$/;
 const PLAN_TYPES = ['feat', 'fix', 'chore', 'refactor'];
 /** A plan's slug: the end of the branch name. */
 const SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
@@ -207,7 +212,7 @@ const CONFIG_LAYER = T.obj({
   'limits?': T.obj({ 'reviewRounds?': T.int(0, 20), 'gateAttempts?': T.int(1, 20), 'budgetUsd?': T.pos(), 'parallelTasks?': T.int(1, 20) }),
   'language?': T.str(1),
   'baseBranch?': BRANCH,
-  'repos?': T.rec(T.str(1), T.obj({ 'role?': T.str(1), 'path?': T.str(1), 'baseBranch?': BRANCH, 'gates?': T.arr(GATE) })),
+  'repos?': T.rec(T.re(REPO_NAME, 'a repo name is letters, digits, ".", "_" and "-", e.g. api or web-app'), T.obj({ 'role?': T.str(1), 'path?': T.str(1), 'baseBranch?': BRANCH, 'gates?': T.arr(GATE) })),
   'jira?': T.obj({ 'allowedProjects?': T.arr(T.str(1)) }),
   // The sandbox's lists go to sandbox-runtime as its settings: a few entries each, never an unbounded list to validate.
   'policy?': T.obj({ 'protectedBranches?': T.arr(T.str(1), 0, SANDBOX_LIST), 'draftPrsOnly?': T.bool(), 'forbidAiAttribution?': T.bool(), 'allowNoVerify?': T.bool(), 'sandbox?': T.bool(), 'network?': T.arr(T.re(/^[A-Za-z0-9*.:[\]-]+$/, 'a host name, e.g. npm.acme.corp or *.acme.corp'), 0, SANDBOX_LIST), 'writable?': T.arr(T.re(/^(~[\\/]|\/|[A-Za-z]:[\\/])(?=.*[^\\/~.\s])/, 'a folder below ~ or the filesystem root, e.g. ~/.cache/go-build'), 0, SANDBOX_LIST), 'checkEnv?': T.arr(T.re(/^[A-Za-z_][A-Za-z0-9_]*$/, 'a variable name, e.g. DATABASE_URL'), 0, SANDBOX_LIST) }),
@@ -386,6 +391,7 @@ export {
   RUNS,
   EFFORTS,
   AGENT_NAME,
+  REPO_NAME,
   PLAN_TYPES,
   GROUP_TYPES,
   JIRA_KEY,

@@ -1679,6 +1679,13 @@ test('config: a base branch is a branch name, never something git would read as 
   }
 });
 
+test('config: a repo name is a folder name of its own, never a path out of the worktrees folder', () => {
+  for (const name of ['api', 'web-app', 'svc_2', 'api.v2']) assert.deepEqual(validateConfigLayer({ repos: { [name]: {} } }), [], name);
+  for (const name of ['..', '../../..', 'a/b', 'a\\b', '.hidden', '-rf', 'x..y', '/abs', 'two words']) {
+    assert.ok(validateConfigLayer({ repos: { [name]: { path: 'api' } } }).length > 0, name);
+  }
+});
+
 test('config: the safety policy\'s lists are a few entries, as sandbox-runtime gets them', () => {
   assert.deepEqual(validateConfigLayer({ policy: { network: Array.from({ length: 100 }, (_, i) => `h${i}.acme.corp`) } }), []);
   assert.match(validateConfigLayer({ policy: { network: Array.from({ length: 101 }, (_, i) => `h${i}.acme.corp`) } })[0]!, /policy\.network: at most 100 items, got 101/);

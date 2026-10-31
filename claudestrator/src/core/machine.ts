@@ -1,6 +1,6 @@
 // The task state machine. Pure: the same events always give the same state, and an illegal
 // event (a skipped approval, an extra review round, a push before it was confirmed) is rejected.
-import { CHECKPOINT_OPTIONS, JIRA_ONLY_OPTIONS, isBlocking, isInfoEvent } from './protocol';
+import { CHECKPOINT_OPTIONS, JIRA_ONLY_OPTIONS, REPO_NAME, isBlocking, isInfoEvent } from './protocol';
 import { onRepos } from './pipeline';
 import type { Checkpoint, CheckpointId, Finding, NextMode, Output, OrchEvent, PlanRepo, Stage, Step, StepRef, TaskState, Transition } from './types';
 
@@ -143,7 +143,7 @@ function created(e: Ev<'task_created'>): TaskState {
  */
 function unknownRepos(s: TaskState, repos: PlanRepo[]): string[] {
   const names = repos.map((r) => r.name);
-  if (s.knownRepos.length === 0) return names.filter((n) => !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(n) || n.includes('..'));
+  if (s.knownRepos.length === 0) return names.filter((n) => !REPO_NAME.test(n));
   return names.filter((n) => !s.knownRepos.includes(n));
 }
 
