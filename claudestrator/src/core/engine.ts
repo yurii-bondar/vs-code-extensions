@@ -1432,8 +1432,13 @@ class Engine extends EventEmitter {
     this.launch(taskId);
   }
 
-  async answer(taskId: string, checkpointId: string, option: string, feedback?: string): Promise<void> {
+  /**
+   * Answers the open question. With `at` (when the question you saw was asked) it answers that one only: a page that
+   * had not caught up with a new plan must not approve one you never read.
+   */
+  async answer(taskId: string, checkpointId: string, option: string, feedback?: string, at?: string): Promise<void> {
     let s = await this.svc.state(taskId);
+    if (at !== undefined && s.checkpoint && s.checkpoint.at !== at) throw new EngineError('stale_checkpoint', 'The question changed since this page showed it (a new plan, say): look at it again and answer that one');
     if (s.status === 'stopped' && s.checkpoint) s = (await this.dispatch(taskId, { type: 'resumed' })).state;
     const r = await this.dispatch(taskId, { type: 'checkpoint_answered', id: checkpointId, option, ...(feedback && { feedback }) });
     if (option === 'approve-post') {

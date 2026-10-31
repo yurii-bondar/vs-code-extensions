@@ -327,7 +327,7 @@ interface Views {
         }
         $$<HTMLButtonElement>('.checkpoint button').forEach((b) => (b.disabled = true));
         el.classList.add('busy');
-        const ok = await attempt('answer', { taskId: T.taskId, checkpointId, option, feedback: spec?.feedback ? feedback || undefined : undefined });
+        const ok = await attempt('answer', { taskId: T.taskId, checkpointId, option, feedback: spec?.feedback ? feedback || undefined : undefined, at: T.d!.checkpointFull!.at });
         $$<HTMLButtonElement>('.checkpoint button').forEach((b) => (b.disabled = false));
         el.classList.remove('busy');
         if (ok !== undefined) {

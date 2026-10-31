@@ -489,6 +489,24 @@ test('engine: when a PR description cannot list the other PRs, the PRs stay open
   }
 });
 
+test('engine: an answer from a page that showed an earlier question does not answer the new one', async () => {
+  const ws = workspace(['api'], 'pipeline: [planner, developer]\nrepos:\n  api: {}\n');
+  const h = await harness(ws, { FAKE_REPOS: 'api' });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Plan the feature' });
+    const s = await runTask(h.engine, taskId);
+    assert.equal(s.checkpoint && s.checkpoint.id, 'approve-plan');
+    // The page still showed the plan before a re-plan: its question was asked at another time.
+    await assert.rejects(() => h.engine.answer(taskId, 'approve-plan', 'approve', undefined, '2020-01-01T00:00:00.000Z'), /question changed since this page showed it/);
+    assert.equal((await h.engine.svc.state(taskId)).checkpoint!.id, 'approve-plan', 'still asked');
+    await h.engine.answer(taskId, 'approve-plan', 'approve', undefined, s.checkpoint!.at);
+    const after = await waitFor(async () => (h.engine.isRunning(taskId) ? null : await h.engine.svc.state(taskId)));
+    assert.equal(after.checkpoint && after.checkpoint.id, 'confirm-push', 'the plan it was asked about was approved');
+  } finally {
+    h.hooks.dispose();
+  }
+});
+
 test('engine: a step remembers the account it ran under, where its session can be continued', async () => {
   const ws = workspace(['api'], 'pipeline: [planner]\nrepos:\n  api: {}\n');
   const account = path.join(ws, 'account-b');

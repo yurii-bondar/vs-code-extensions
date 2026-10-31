@@ -832,7 +832,8 @@ export interface Rpc {
   transcript: { params: { taskId: string; key: string }; result: TranscriptItem[] };
   run: { params: { taskId: string }; result: Void };
   stop: { params: { taskId: string }; result: Void };
-  answer: { params: { taskId: string; checkpointId: string; option: string; feedback?: string | undefined }; result: Void };
+  /** `at`: when the question the page showed was asked; another one asked since (a new plan) is not answered by it. */
+  answer: { params: { taskId: string; checkpointId: string; option: string; feedback?: string | undefined; at?: string | undefined }; result: Void };
   postReport: { params: { taskId: string }; result: CommentResult };
   retryComment: { params: { taskId: string; seq: number }; result: CommentResult };
   message: { params: { taskId: string; text: string }; result: Void };

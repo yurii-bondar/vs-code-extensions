@@ -348,9 +348,9 @@ class DashboardPanel implements RpcHandlers {
     await (this.orch.engineOf(taskId) ?? this.engine).stop(taskId);
   }
 
-  async $answer({ taskId, checkpointId, option, feedback }: Rpc['answer']['params']) {
+  async $answer({ taskId, checkpointId, option, feedback, at }: Rpc['answer']['params']) {
     await this.orch.ensureReady();
-    await this.engine.answer(taskId, checkpointId, option, feedback);
+    await this.engine.answer(taskId, checkpointId, option, feedback, at);
   }
 
   async $postReport({ taskId }: { taskId: string }) {

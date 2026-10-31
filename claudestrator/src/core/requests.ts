@@ -76,7 +76,7 @@ const PARAMS: { [M in keyof Rpc]: Check } = {
   transcript: obj({ taskId: id, key: id }),
   run: task,
   stop: task,
-  answer: obj({ taskId: id, checkpointId: id, option: id, 'feedback?': T.str() }),
+  answer: obj({ taskId: id, checkpointId: id, option: id, 'feedback?': T.str(), 'at?': T.str(1) }),
   postReport: task,
   retryComment: obj({ taskId: id, seq: T.int(1) }),
   message: obj({ taskId: id, text: T.str(1) }),
