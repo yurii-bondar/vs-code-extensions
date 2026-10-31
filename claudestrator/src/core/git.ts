@@ -79,6 +79,12 @@ const HOST_GIT = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false'
  */
 const paths = (stdout: string): string[] => stdout.split('\0').filter(Boolean);
 
+/**
+ * Submodules are not the task's: an agent commits nothing, so it never moves one, and a submodule at another commit
+ * than the branch says is the checkout's (origin moved it; you have not updated it). Counting it would commit it back.
+ */
+const NO_SUBMODULES = '--ignore-submodules=all';
+
 // Machine state and config of the orchestrator never count as the user's changes.
 const OWN = [`${ORCH_DIR}/`, '.claudestrator/'];
 const isOwn = (file: string): boolean => OWN.some((p) => file === p.slice(0, -1) || file.startsWith(p));
@@ -119,7 +125,7 @@ class GitRepo {
 
   /** `git status --porcelain` lines (`XY path`): uncommitted and untracked work. */
   async dirty(): Promise<string[]> {
-    const entries = paths((await this.git('status', '--porcelain', '-z')).stdout);
+    const entries = paths((await this.git('status', '--porcelain', '-z', NO_SUBMODULES)).stdout);
     const out: string[] = [];
     for (let i = 0; i < entries.length; i++) {
       const e = entries[i]!;
@@ -149,7 +155,7 @@ class GitRepo {
 
   /** Files changed since the base, committed or not, plus untracked ones. */
   async changedFiles(base: string): Promise<string[]> {
-    const tracked = paths((await this.git('diff', '--name-only', '-z', await this.baseRef(base))).stdout).filter((f) => !isOwn(f));
+    const tracked = paths((await this.git('diff', '--name-only', '-z', NO_SUBMODULES, await this.baseRef(base))).stdout).filter((f) => !isOwn(f));
     return [...new Set([...tracked, ...(await this.untracked())])].sort();
   }
 
@@ -184,7 +190,7 @@ class GitRepo {
         env = { GIT_INDEX_FILE: index };
         await this.gitWith({ env, input: untracked.join('\0') }, 'add', '--intent-to-add', '--pathspec-from-file=-', '--pathspec-file-nul');
       }
-      const runs = [await this.gitWith({ env }, '--no-pager', 'diff', '--stat', ref, '--', '.', ...EXCLUDE), await this.gitWith({ env }, '--no-pager', 'diff', ref, '--', '.', ...EXCLUDE)];
+      const runs = [await this.gitWith({ env }, '--no-pager', 'diff', NO_SUBMODULES, '--stat', ref, '--', '.', ...EXCLUDE), await this.gitWith({ env }, '--no-pager', 'diff', NO_SUBMODULES, ref, '--', '.', ...EXCLUDE)];
       const cut = runs.some((r) => r.code === 125);
       return [...runs.map((r) => r.stdout), cut ? `[this diff is larger than ${MAX_OUTPUT / 1024 / 1024} MB and was cut: review the rest with git diff in the repo, file by file]` : ''].filter((p) => p.trim()).join('\n');
     } finally {
@@ -198,9 +204,15 @@ class GitRepo {
     return r.code === 0 ? [...new Set(r.stdout.split('\n').map((l) => l.trim()).filter(Boolean))] : [path.join(this.dir, '.git')];
   }
 
-  /** Stages everything except the orchestrator's own folders. */
-  addAll(): Promise<ExecResult> {
-    return this.git('add', '-A', '--', '.', ...EXCLUDE);
+  /** Stages everything except the orchestrator's own folders and the submodules' pointers, which stay as the branch has them. */
+  async addAll(): Promise<ExecResult> {
+    const r = await this.git('add', '-A', '--', '.', ...EXCLUDE);
+    if (r.code !== 0) return r;
+    const submodules = (await this.git('ls-tree', '-r', '-z', '--full-tree', 'HEAD')).stdout
+      .split('\0')
+      .filter((e) => e.startsWith('160000 commit '))
+      .map((e) => e.slice(e.indexOf('\t') + 1));
+    return submodules.length ? this.gitWith({ input: submodules.join('\0') }, 'reset', '-q', '--pathspec-from-file=-', '--pathspec-file-nul') : r;
   }
 
   async aheadBehind(base: string): Promise<{ ahead: number | undefined; behind: number | undefined } | null> {

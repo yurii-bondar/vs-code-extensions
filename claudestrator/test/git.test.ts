@@ -151,3 +151,27 @@ test('git: a worktree an earlier task with the same id kept is never removed to 
   assert.equal(git(repo!.dir, 'rev-parse', '--abbrev-ref', 'HEAD'), 'feat/cap-bets', 'and on its own branch');
   assert.ok((await prepareRepos(ws, first, config)).ok, 'the task it belongs to finds it ready');
 });
+
+test("git: a submodule at another commit than the branch says is the checkout's, never the task's change", async () => {
+  const ws = workspace(['api', 'lib'], '');
+  const api = path.join(ws, 'api');
+  const lib = path.join(ws, 'lib');
+  const x = git(lib, 'rev-parse', 'HEAD');
+  fs.writeFileSync(path.join(lib, 'v2.txt'), 'two\n');
+  git(lib, 'add', '.');
+  git(lib, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'v2');
+  const y = git(lib, 'rev-parse', 'HEAD');
+  git(api, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', lib, 'vendor/lib');
+  git(api, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'add lib at v2');
+  // Your submodule checkout is still at the older commit: the branch says y, the folder holds x.
+  git(path.join(api, 'vendor', 'lib'), 'checkout', '-q', x);
+  const repo = new GitRepo(api);
+  assert.deepEqual(await repo.dirty(), [], 'not uncommitted work of the task');
+  assert.deepEqual(await repo.changedFiles('main'), []);
+
+  fs.writeFileSync(path.join(api, 'feature.txt'), 'new\n');
+  assert.equal((await repo.addAll()).code, 0);
+  assert.deepEqual(git(api, 'diff', '--cached', '--name-only').split('\n'), ['feature.txt'], 'the agent\'s file, not the submodule');
+  assert.equal(git(api, 'ls-files', '-s', 'vendor/lib').split(' ')[1], y, 'the branch keeps the commit it had');
+  assert.doesNotMatch((await taskDiff(taskRepos(ws, task(['api'], 'branch'), config, ['api']))).text, /Subproject commit/);
+});
