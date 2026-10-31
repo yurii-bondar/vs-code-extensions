@@ -15,8 +15,8 @@ interface ClaudeJson {
 }
 
 /** One of Claude Code's config files, parsed once per change (`readJsonFresh`). */
-const readJson = (file: string): ClaudeJson | null => {
-  const value = readJsonFresh(file);
+const readJson = async (file: string): Promise<ClaudeJson | null> => {
+  const value = await readJsonFresh(file);
   return typeof value === 'object' && value !== null ? (value as ClaudeJson) : null;
 };
 
@@ -25,12 +25,12 @@ const readJson = (file: string): ClaudeJson | null => {
  * `configDir` is CLAUDE_CONFIG_DIR as the CLI gets it; without one Claude Code keeps its config in ~/.claude.json
  * (not ~/.claude/.claude.json, which may be a stale copy).
  */
-function configuredMcpServers(workspace: string, configDir?: string | null): McpServer[] {
+async function configuredMcpServers(workspace: string, configDir?: string | null): Promise<McpServer[]> {
   const dir = configDir;
-  const global = readJson(dir ? path.join(dir, '.claude.json') : path.join(os.homedir(), '.claude.json')) || {};
+  const global = (await readJson(dir ? path.join(dir, '.claude.json') : path.join(os.homedir(), '.claude.json'))) || {};
   const project = (global.projects && global.projects[workspace]) || {};
   const disabled = new Set(Array.isArray(project.disabledMcpServers) ? project.disabledMcpServers : []);
-  const local = readJson(path.join(workspace, '.claude', 'settings.local.json')) || {};
+  const local = (await readJson(path.join(workspace, '.claude', 'settings.local.json'))) || {};
   const disabledJson = new Set(Array.isArray(local.disabledMcpjsonServers) ? local.disabledMcpjsonServers : []);
   const out: McpServer[] = [];
   const add = (servers: ClaudeJson['mcpServers'], scope: string, isDisabled: (name: string) => boolean): void => {
@@ -42,7 +42,7 @@ function configuredMcpServers(workspace: string, configDir?: string | null): Mcp
   };
   add(global.mcpServers, 'user', (n) => disabled.has(n));
   add(project.mcpServers, 'local', (n) => disabled.has(n));
-  add((readJson(path.join(workspace, '.mcp.json')) || ({} as ClaudeJson)).mcpServers, 'project', (n) => disabledJson.has(n) || disabled.has(n));
+  add(((await readJson(path.join(workspace, '.mcp.json'))) || ({} as ClaudeJson)).mcpServers, 'project', (n) => disabledJson.has(n) || disabled.has(n));
   return out;
 }
 
@@ -97,7 +97,7 @@ function mergeMcp(configured: McpServer[], checked: McpServer[], checkOk = false
 
 /** Runs Claude Code's own health check. Takes a few seconds: each server is contacted. */
 async function checkMcpServers({ command, workspace, configDir, env }: { command: string; workspace: string; configDir?: string | null | undefined; env?: NodeJS.ProcessEnv | undefined }): Promise<{ servers: McpServer[]; checkedAt: string; error?: string }> {
-  const configured = configuredMcpServers(workspace, configDir);
+  const configured = await configuredMcpServers(workspace, configDir);
   const r = await exec(command, ['mcp', 'list'], { cwd: workspace, timeoutMs: 90000, env });
   const checked = parseMcpList(r.stdout);
   return {

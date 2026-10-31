@@ -243,14 +243,14 @@ class DashboardPanel implements RpcHandlers {
     };
   }
 
-  healthSummary(): HealthSummary {
+  async healthSummary(): Promise<HealthSummary> {
     const h = this.orch.health;
     if (!h) {
       // The dashboard is the first to need them: start the checks; the page refreshes when they are done.
       void this.orch.ensureReady();
       return { checking: true };
     }
-    const account = this.orch.account();
+    const account = await this.orch.account();
     return {
       checkedAt: h.checkedAt,
       claude: { ok: h.claude.ok, version: h.claude.version, path: h.claude.path, error: h.claude.error },
@@ -258,7 +258,7 @@ class DashboardPanel implements RpcHandlers {
       gh: { ok: h.gh.ok, version: h.gh.version, account: h.gh.account, error: h.gh.error, installed: Boolean(h.gh.path) },
       account,
       atlassian: Boolean(this.orch.atlassianAuth()),
-      atlassianMcp: (this.orch.mcpIntakeServer() || ({} as { server?: string })).server || null,
+      atlassianMcp: ((await this.orch.mcpIntakeServer()) || ({} as { server?: string })).server || null,
     };
   }
 
@@ -270,11 +270,11 @@ class DashboardPanel implements RpcHandlers {
       languages: LANGUAGES,
       hasConfig: await this.orch.hasProjectConfig(),
       config: this.root ? await this.configSummary() : null,
-      health: this.healthSummary(),
+      health: await this.healthSummary(),
       tasks: engine ? await Promise.all((await this.orch.list()).map((entry) => view.summary(engine, entry))) : [],
-      limits: this.orch.limits(),
-      account: this.orch.account(),
-      accounts: this.orch.accounts(),
+      limits: await this.orch.limits(),
+      account: await this.orch.account(),
+      accounts: await this.orch.accounts(),
       mcp: (() => {
         const list = this.orch.mcp.servers;
         const n = (st: string): number => list.filter((s) => s.state === st).length;
@@ -447,7 +447,7 @@ class DashboardPanel implements RpcHandlers {
     if (!step || !step.sessionId) throw new Error('This step has no Claude session to continue');
     // It comes from the task log, and goes on a shell's command line.
     if (!SESSION_ID.test(step.sessionId)) throw new Error('This step\'s session id is not one Claude Code makes');
-    const dir = this.orch.account().dir;
+    const dir = this.orch.accountChoice().dir;
     const terminal = vscode.window.createTerminal({
       name: `Claude · ${step.agent}${step.repo ? `@${step.repo}` : ''}`,
       cwd: step.cwd && (await exists(step.cwd)) ? step.cwd : this.root,
@@ -471,7 +471,7 @@ class DashboardPanel implements RpcHandlers {
   // ---------- MCP ----------
 
   async $accounts() {
-    return { current: this.orch.account(), accounts: this.orch.accounts() };
+    return { current: await this.orch.account(), accounts: await this.orch.accounts() };
   }
 
   async $claudeLogin() {
@@ -485,8 +485,8 @@ class DashboardPanel implements RpcHandlers {
 
   async $mcp({ refresh }: { refresh?: boolean }) {
     const stale = !this.orch.mcp.checkedAt || Date.now() - new Date(this.orch.mcp.checkedAt).getTime() > 2 * 60000;
-    if (refresh || stale) this.orch.refreshMcp();
-    const health = this.healthSummary();
+    if (refresh || stale) await this.orch.refreshMcp();
+    const health = await this.healthSummary();
     return { ...this.orch.mcpState(), account: health.checking ? undefined : health.account };
   }
 
@@ -832,10 +832,10 @@ class DashboardPanel implements RpcHandlers {
       notifications: s.get<string>('notifications'),
       workspaceFolder: s.get<string>('workspaceFolder'),
       root: this.root,
-      accounts: this.orch.accounts(),
-      account: this.orch.account(),
-      atlassian: { site: s.get('atlassian.site') || '', email: s.get('atlassian.email') || '', hasToken: Boolean(this.orch.token), fromEnv: !this.orch.token && Boolean(process.env.ATLASSIAN_API_TOKEN), connected: Boolean(auth), mcp: this.orch.mcpIntakeServer() },
-      health: this.healthSummary(),
+      accounts: await this.orch.accounts(),
+      account: await this.orch.account(),
+      atlassian: { site: s.get('atlassian.site') || '', email: s.get('atlassian.email') || '', hasToken: Boolean(this.orch.token), fromEnv: !this.orch.token && Boolean(process.env.ATLASSIAN_API_TOKEN), connected: Boolean(auth), mcp: await this.orch.mcpIntakeServer() },
+      health: await this.healthSummary(),
     };
   }
 

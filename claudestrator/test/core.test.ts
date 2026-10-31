@@ -696,7 +696,7 @@ shadcn: npx shadcn mcp - ⏸ Pending approval
   const cfg = tmp('cs-mcp-cfg-');
   fs.writeFileSync(path.join(cfg, '.claude.json'), JSON.stringify({ mcpServers: { Grafana: { type: 'http', url: 'http://x', headers: { Authorization: 'secret' } } }, projects: { [ws]: { mcpServers: { db: { command: 'npx' } }, disabledMcpServers: ['db'] } } }));
   fs.writeFileSync(path.join(ws, '.mcp.json'), JSON.stringify({ mcpServers: { sentry: { type: 'sse', url: 'https://s' } } }));
-  const configured = mcp.configuredMcpServers(ws, cfg);
+  const configured = await mcp.configuredMcpServers(ws, cfg);
   assert.deepEqual(configured.map((s) => [s.name, s.scope, s.transport, Boolean(s.disabled)]), [['Grafana', 'user', 'http', false], ['db', 'local', 'stdio', true], ['sentry', 'project', 'sse', false]]);
   assert.ok(!JSON.stringify(configured).includes('secret'), 'server configs carry secrets; only names leave the file');
   const merged = mcp.mergeMcp(configured, list);
@@ -714,7 +714,7 @@ shadcn: npx shadcn mcp - ⏸ Pending approval
   const realHome = os.homedir;
   os.homedir = () => home;
   try {
-    assert.deepEqual(mcp.configuredMcpServers(ws, undefined).map((s) => s.name).filter((n) => n !== 'sentry'), ['real'], 'the default account reads ~/.claude.json, not ~/.claude/.claude.json');
+    assert.deepEqual((await mcp.configuredMcpServers(ws, undefined)).map((s) => s.name).filter((n) => n !== 'sentry'), ['real'], 'the default account reads ~/.claude.json, not ~/.claude/.claude.json');
   } finally {
     os.homedir = realHome;
   }
@@ -1520,13 +1520,13 @@ test("env: Claude Code's big JSON files are parsed once per change, and looked a
   const file = path.join(tmp('cs-json-'), '.claude.json');
   fs.writeFileSync(file, JSON.stringify({ oauthAccount: { emailAddress: 'a@x' } }));
   const t = 1_000_000;
-  assert.deepEqual(readJsonFresh(file, t), { oauthAccount: { emailAddress: 'a@x' } });
+  assert.deepEqual(await readJsonFresh(file, t), { oauthAccount: { emailAddress: 'a@x' } });
   fs.writeFileSync(file, JSON.stringify({ oauthAccount: { emailAddress: 'b@x' }, pad: 'x'.repeat(10) }));
-  assert.deepEqual(readJsonFresh(file, t + 1000), { oauthAccount: { emailAddress: 'a@x' } }, 'within the window the file is not even looked at');
-  assert.deepEqual(readJsonFresh(file, t + 6000), { oauthAccount: { emailAddress: 'b@x' }, pad: 'x'.repeat(10) }, 'after it, a change is read');
+  assert.deepEqual(await readJsonFresh(file, t + 1000), { oauthAccount: { emailAddress: 'a@x' } }, 'within the window the file is not even looked at');
+  assert.deepEqual(await readJsonFresh(file, t + 6000), { oauthAccount: { emailAddress: 'b@x' }, pad: 'x'.repeat(10) }, 'after it, a change is read');
   fs.writeFileSync(file, '{"half');
-  assert.equal(readJsonFresh(file, t + 12000), undefined, 'a file caught mid-write is no value, not an error');
-  assert.equal(readJsonFresh(path.join(path.dirname(file), 'none.json'), t), undefined);
+  assert.equal(await readJsonFresh(file, t + 12000), undefined, 'a file caught mid-write is no value, not an error');
+  assert.equal(await readJsonFresh(path.join(path.dirname(file), 'none.json'), t), undefined);
 });
 
 test('store: an append keeps the cached state and events current, and a write by another process is still seen', async () => {

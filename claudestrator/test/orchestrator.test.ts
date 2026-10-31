@@ -2,6 +2,9 @@
 import test from 'node:test';
 import * as assert from 'node:assert/strict';
 import Module from 'module';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 
 import type { Engine } from '../src/core/engine';
 import type { PermissionRequest } from '../src/core/wire';
@@ -61,4 +64,24 @@ test('orchestrator: rebuilds of the engine run one after another, and a failed o
   const results = await Promise.allSettled(runs);
   assert.deepEqual(log, ['start 1', 'end 1', 'start 2', 'end 2', 'start 3', 'end 3'], 'never two at once, even when a later one would finish first');
   assert.deepEqual(results.map((r) => r.status), ['fulfilled', 'rejected', 'fulfilled']);
+});
+
+test('orchestrator: an MCP check shows the configured servers once it starts, and two refreshes start one check', async () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-orch-mcp-'));
+  const account = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-orch-acct-'));
+  fs.writeFileSync(path.join(account, '.claude.json'), JSON.stringify({ mcpServers: { Grafana: { type: 'http', url: 'http://g' } } }));
+  fs.writeFileSync(path.join(ws, '.mcp.json'), JSON.stringify({ mcpServers: { sentry: { type: 'sse', url: 'https://s' } } }));
+  let checks = 0;
+  const orch = Object.assign(Object.create(Orchestrator.prototype) as InstanceType<typeof Orchestrator>, {
+    root: ws,
+    mcp: { servers: [], checking: false, checkedAt: null, error: null },
+    agentEnv: () => ({ CLAUDE_CONFIG_DIR: account }),
+    fire: () => {},
+  });
+  // The check itself runs `claude mcp list`; here it only counts.
+  (orch as unknown as { checkMcp: () => Promise<void> }).checkMcp = async () => void checks++;
+  await Promise.all([orch.refreshMcp(), orch.refreshMcp()]);
+  assert.deepEqual(orch.mcp.servers.map((s) => s.name), ['Grafana', 'sentry']);
+  assert.equal(orch.mcp.checking, true);
+  assert.equal(checks, 1);
 });

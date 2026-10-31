@@ -109,7 +109,7 @@ interface EngineOptions {
   runner: Pick<ClaudeRunner, 'start'>;
   hooks: HookServer;
   atlassian?: (() => AtlassianClient | null) | undefined;
-  mcpIntake?: (() => McpIntake | null) | undefined;
+  mcpIntake?: (() => Promise<McpIntake | null>) | undefined;
   askPermissions?: (() => boolean) | undefined;
   now?: (() => Date) | undefined;
   /** How long an agent may show no sign of work before it is stopped. */
@@ -211,7 +211,7 @@ class Engine extends EventEmitter {
   runner: Pick<ClaudeRunner, 'start'>;
   hooks: HookServer;
   atlassian: () => AtlassianClient | null;
-  mcpIntake: () => McpIntake | null;
+  mcpIntake: () => Promise<McpIntake | null>;
   askPermissions: () => boolean;
   secretFiles: () => string[];
   sandbox: (policy: SandboxPolicy) => Launcher;
@@ -243,7 +243,7 @@ class Engine extends EventEmitter {
     this.hooks = opts.hooks;
     this.atlassian = opts.atlassian || (() => null);
     /** `() => ({ server, site }) | null`: an Atlassian MCP server to read tickets with when there is no API token. */
-    this.mcpIntake = opts.mcpIntake || (() => null);
+    this.mcpIntake = opts.mcpIntake || (async () => null);
     this.askPermissions = opts.askPermissions || (() => false);
     this.secretFiles = opts.secretFiles || (() => []);
     this.sandbox = opts.sandbox || sandboxLauncher;
@@ -529,7 +529,7 @@ class Engine extends EventEmitter {
   async intake(s: TaskState): Promise<void> {
     this.setLive(s.taskId, { phase: 'intake', text: s.source.kind === 'text' ? 'Writing the ticket' : `Reading ${s.source.kind === 'jira' ? s.source.key : 'the Confluence page'}` });
     let spec: Spec;
-    const via = s.source.kind !== 'text' && !this.atlassian() ? this.mcpIntake() : null;
+    const via = s.source.kind !== 'text' && !this.atlassian() ? await this.mcpIntake() : null;
     try {
       if (via) spec = await this.intakeViaMcp(s, via);
       else spec = await runIntake(s.taskId, s.source, { atlassian: this.atlassian(), allowedProjects: (await this.config()).jira.allowedProjects });
@@ -1216,7 +1216,7 @@ class Engine extends EventEmitter {
     if (s.source.kind !== 'jira') return { ok: false, error: 'the task is not a Jira issue' };
     const key = s.source.key;
     const client = this.atlassian();
-    const via = client ? null : this.mcpIntake();
+    const via = client ? null : await this.mcpIntake();
     const record = async (r: CommentResult): Promise<CommentResult> => {
       try {
         await this.svc.record(s.taskId, { type: 'jira_comment', key, what, ok: r.ok, via: client ? 'api' : via ? `mcp:${via.server}` : 'none', ...(r.error && { error: r.error }), ...(r.id && { commentId: r.id }), text });

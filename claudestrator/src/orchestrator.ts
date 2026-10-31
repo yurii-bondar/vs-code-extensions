@@ -12,13 +12,16 @@ import * as mcp from './core/mcp';
 import { exec } from './core/git';
 import { AtlassianClient } from './core/intake';
 import * as os from 'os';
-import { probe, expand, statuslineSnapshot, claudeAccounts } from './core/env';
+import { probe, expand, accountLabel, statuslineSnapshot, claudeAccounts } from './core/env';
 import { projectConfigFile, loadConfig, type ResolveResult } from './core/config';
 import type { Defaults } from './core/defaults';
 import type { Probe, StatuslineSnapshot } from './core/env';
 import type { TaskEntry } from './core/view';
 import type { Diagnostic } from './core/types';
 import type { Account, AccountEntry, EngineEvent, LimitWindow, StoredLimits, PermissionRequest } from './core/wire';
+
+/** Which account the agents use and why: from settings and the environment, without reading a file. */
+type AccountChoice = Pick<Account, 'dir' | 'shownDir' | 'label' | 'source' | 'sourceText'>;
 
 const SECRET_KEY = 'claudestrator.atlassianToken';
 
@@ -131,11 +134,11 @@ class Orchestrator {
   }
 
   async init(): Promise<void> {
-    this.lastAccount = this.account().dir;
+    this.lastAccount = this.accountChoice().dir;
     // ctx-man switches the account by writing these settings; follow it unless an account is chosen here.
     this.configSub = vscode.workspace.onDidChangeConfiguration((e) => {
       if (!['claudestrator.claudeConfigDir', 'terminal.integrated.env', 'claudeCode.environmentVariables'].some((k) => e.affectsConfiguration(k))) return;
-      const dir = this.account().dir;
+      const dir = this.accountChoice().dir;
       if (dir === this.lastAccount) return;
       this.lastAccount = dir;
       this.onAccountChanged();
@@ -169,7 +172,7 @@ class Orchestrator {
       setChildEnv(this.health.env!);
       this.refreshDefaults(true);
       this.refreshAuth();
-      if (!this.mcp.checkedAt) this.refreshMcp();
+      if (!this.mcp.checkedAt) void this.refreshMcp();
     } catch (e) {
       this.health = { error: (e as Error).message, claude: { ok: false, error: (e as Error).message }, git: {}, gh: {} };
     }
@@ -210,7 +213,7 @@ class Orchestrator {
       settingSources: () => settings().get<string[]>('settingSources') || null,
       mcpConfig: () => mcp.writeUserMcpConfig(this.agentMcpFile(), this.agentEnv().CLAUDE_CONFIG_DIR),
       env: (): NodeJS.ProcessEnv => {
-        const dir = this.account().dir;
+        const dir = this.accountChoice().dir;
         return dir ? { CLAUDE_CONFIG_DIR: dir } : {};
       },
     });
@@ -285,7 +288,7 @@ class Orchestrator {
 
   /** The config folder of the agents' account (where its status-line snapshots live). */
   accountDir(): string {
-    return this.account().shownDir;
+    return this.accountChoice().shownDir;
   }
 
   limitsKey(): string {
@@ -296,9 +299,9 @@ class Orchestrator {
    * The account's 5-hour and weekly limits: whichever is newer of what agents last reported and the account's
    * newest status-line snapshot. A window whose reset time has passed is reported as fresh (0%).
    */
-  limits(): StoredLimits | null {
+  async limits(): Promise<StoredLimits | null> {
     const stored = this.context.globalState.get<StoredLimits>(this.limitsKey());
-    const snap: StatuslineSnapshot | null = statuslineSnapshot(this.accountDir());
+    const snap: StatuslineSnapshot | null = await statuslineSnapshot(this.accountDir());
     const best = ([stored, snap].filter(Boolean) as StoredLimits[]).sort((a, b) => (b.at || 0) - (a.at || 0))[0];
     if (!best) return null;
     const now = Date.now() / 1000;
@@ -315,7 +318,7 @@ class Orchestrator {
     const r = await this.config();
     const aliases = ['inherit', ...(r.ok ? Object.values(r.config.agents).map((a) => a.model) : [])];
     const sources = settings().get<string[]>('settingSources') || null;
-    const dir = this.account().dir;
+    const dir = this.accountChoice().dir;
     const key = JSON.stringify([this.root, dir, sources, [...new Set(aliases)].sort()]);
     if (!force && key === this.defaultsKey) return this.defaults;
     if (this.resolving && this.resolving.key === key) return this.resolving.run;
@@ -343,7 +346,7 @@ class Orchestrator {
    * this extension's setting, then the account ctx-man made active for VS Code terminals or the Claude Code
    * extension, then VS Code's own environment, else the default (~/.claude with ~/.claude.json).
    */
-  account(): Account {
+  accountChoice(): AccountChoice {
     const platform = ({ darwin: 'osx', win32: 'windows' } as Record<string, string>)[process.platform] || 'linux';
     const all = vscode.workspace.getConfiguration();
     const fromExtension = (all.get<{ name?: string; value?: string }[]>('claudeCode.environmentVariables') || []).find((e) => e && e.name === 'CLAUDE_CONFIG_DIR');
@@ -355,25 +358,23 @@ class Orchestrator {
     ];
     const hit = candidates.find(([, v]) => v);
     const dir = hit ? path.resolve(expand(hit[1]!)) : null;
-    const home = path.join(os.homedir(), '.claude');
-    const info: Partial<ReturnType<typeof claudeAccounts>[number]> = claudeAccounts().find((a) => a.dir === (dir || home)) || {};
-    const auth = this.auth.get(dir || home);
-    return {
-      ...(auth && { loggedIn: auth.loggedIn, ...(auth.plan && { plan: auth.plan }) }),
-      dir,
-      shownDir: dir || home,
-      label: info.label || (dir ? path.basename(dir).replace(/^\.claude-?/, '') || 'default' : 'default'),
-      ...(info.email && { email: info.email }),
-      source: hit ? hit[0] : 'default',
-      sourceText: hit ? hit[2] : 'no account chosen: the default ~/.claude',
-    };
+    const shownDir = dir || path.join(os.homedir(), '.claude');
+    return { dir, shownDir, label: accountLabel(shownDir), source: hit ? hit[0] : 'default', sourceText: hit ? hit[2] : 'no account chosen: the default ~/.claude' };
+  }
+
+  /** The account with its email (from its config files) and what `claude auth status` said about it. */
+  async account(): Promise<Account> {
+    const choice = this.accountChoice();
+    const email = (await claudeAccounts()).find((a) => a.dir === choice.shownDir)?.email;
+    const auth = this.auth.get(choice.shownDir);
+    return { ...(auth && { loggedIn: auth.loggedIn, ...(auth.plan && { plan: auth.plan }) }), ...choice, ...(email && { email }) };
   }
 
   /** Every Claude Code account on this machine, without the ones hidden in ctx-man. */
-  accounts(): AccountEntry[] {
+  async accounts(): Promise<AccountEntry[]> {
     const hidden = vscode.workspace.getConfiguration('ctxMan').get<string[]>('hiddenAccounts') || [];
-    const current = this.account().shownDir;
-    return claudeAccounts()
+    const current = this.accountChoice().shownDir;
+    return (await claudeAccounts())
       .filter((a) => a.dir === current || !hidden.some((h) => h === a.label || path.resolve(expand(h)) === a.dir))
       .map((a) => {
         const auth = this.auth.get(a.dir);
@@ -388,7 +389,7 @@ class Orchestrator {
     const base = { ...getChildEnv() };
     delete base.ELECTRON_RUN_AS_NODE;
     await Promise.all(
-      claudeAccounts().map(async (a) => {
+      (await claudeAccounts()).map(async (a) => {
         const env: NodeJS.ProcessEnv = { ...base };
         // The default account is the one without CLAUDE_CONFIG_DIR (its config is ~/.claude.json).
         if (a.dir === home) delete env.CLAUDE_CONFIG_DIR;
@@ -410,8 +411,8 @@ class Orchestrator {
   /** `claude auth login` for the agents' account, in a terminal (it opens the browser and may ask for a code). */
   claudeLogin(): void {
     if (this.claudeLoginTerminal && !this.claudeLoginTerminal.exitStatus) return this.claudeLoginTerminal.show();
-    const dir = this.account().dir;
-    const terminal = vscode.window.createTerminal({ name: `Claude sign-in · ${this.account().label}`, shellPath: this.claudeCommand(), shellArgs: ['auth', 'login'], cwd: os.homedir(), env: { PATH: getChildEnv().PATH, CLAUDE_CONFIG_DIR: dir || null }, iconPath: new vscode.ThemeIcon('account') });
+    const { dir, label } = this.accountChoice();
+    const terminal = vscode.window.createTerminal({ name: `Claude sign-in · ${label}`, shellPath: this.claudeCommand(), shellArgs: ['auth', 'login'], cwd: os.homedir(), env: { PATH: getChildEnv().PATH, CLAUDE_CONFIG_DIR: dir || null }, iconPath: new vscode.ThemeIcon('account') });
     terminal.show();
     this.claudeLoginTerminal = terminal;
     // eslint-disable-next-line prefer-const -- assigned after the closures that read it
@@ -420,9 +421,10 @@ class Orchestrator {
       clearInterval(poll);
       if (sub) sub.dispose();
       this.claudeLoginTerminal = null;
-      this.refreshAuth().then(() => {
-        const ok = this.account().loggedIn === true;
-        this._onEngine.fire({ name: 'mcpLogin', data: { ok, kind: ok ? 'ok' : 'info', message: ok ? `Signed in to Claude as ${this.account().email || this.account().label}` : 'The Claude sign-in did not finish' } });
+      this.refreshAuth().then(async () => {
+        const account = await this.account();
+        const ok = account.loggedIn === true;
+        this._onEngine.fire({ name: 'mcpLogin', data: { ok, kind: ok ? 'ok' : 'info', message: ok ? `Signed in to Claude as ${account.email || account.label}` : 'The Claude sign-in did not finish' } });
         if (ok) this.onAccountChanged();
       });
     };
@@ -440,7 +442,7 @@ class Orchestrator {
     this.mcp = { servers: [], checking: false, checkedAt: null, error: null };
     this.refreshAuth();
     this.refreshDefaults(true);
-    this.refreshMcp();
+    void this.refreshMcp();
     this.fire();
   }
 
@@ -451,7 +453,7 @@ class Orchestrator {
   }
 
   agentEnv(): NodeJS.ProcessEnv {
-    const dir = this.account().dir;
+    const dir = this.accountChoice().dir;
     const env = { ...getChildEnv() };
     if (dir) env.CLAUDE_CONFIG_DIR = dir;
     else delete env.CLAUDE_CONFIG_DIR;
@@ -466,25 +468,36 @@ class Orchestrator {
 
   // ---------- MCP ----------
 
-  /** Starts a health check unless one runs; the configured list shows at once, states arrive after a few seconds. */
-  refreshMcp(): void {
+  /**
+   * Starts a health check unless one runs. Resolves once the configured list is in (it shows at once); the states
+   * arrive after a few seconds. Never rejects: a failed check is its `error`.
+   */
+  async refreshMcp(): Promise<void> {
     if (!this.root || this.mcp.checking) return;
+    const workspace = this.root;
     // Exactly the CLAUDE_CONFIG_DIR the CLI gets (none means ~/.claude.json), so the list matches `claude mcp list`.
     const configDir = this.agentEnv().CLAUDE_CONFIG_DIR;
-    const servers = this.mcp.servers.length ? this.mcp.servers : mcp.configuredMcpServers(this.root, configDir);
-    this.mcp = { ...this.mcp, servers, checking: true };
+    this.mcp = { ...this.mcp, checking: true };
+    const servers = this.mcp.servers.length ? this.mcp.servers : await mcp.configuredMcpServers(workspace, configDir).catch(() => []);
+    this.mcp = { ...this.mcp, servers };
     this.fire();
-    mcp
-      .checkMcpServers({ command: this.claudeCommand(), workspace: this.root, configDir, env: this.agentEnv() })
-      .then((r) => (this.mcp = { ...r, checking: false, error: r.error || null }))
-      .catch((e) => (this.mcp = { servers, checking: false, checkedAt: new Date().toISOString(), error: e.message }))
-      .finally(() => this.fire());
+    void this.checkMcp({ workspace, configDir, servers });
+  }
+
+  private async checkMcp({ workspace, configDir, servers }: { workspace: string; configDir: string | undefined; servers: mcp.McpServer[] }): Promise<void> {
+    try {
+      const r = await mcp.checkMcpServers({ command: this.claudeCommand(), workspace, configDir, env: this.agentEnv() });
+      this.mcp = { ...r, checking: false, error: r.error || null };
+    } catch (e) {
+      this.mcp = { servers, checking: false, checkedAt: new Date().toISOString(), error: (e as Error).message };
+    }
+    this.fire();
   }
 
   /** A connected (or, before the first check, configured) Atlassian MCP server the intake can read Jira with. */
-  mcpIntakeServer() {
+  async mcpIntakeServer() {
     const isAtlassian = (x: mcp.McpServer): boolean => /atlassian|jira|confluence/i.test(`${x.name} ${x.target || ''}`) && !x.missing && !x.disabled;
-    const list = this.mcp.servers.length ? this.mcp.servers : this.root ? mcp.configuredMcpServers(this.root, this.agentEnv().CLAUDE_CONFIG_DIR) : [];
+    const list = this.mcp.servers.length ? this.mcp.servers : this.root ? await mcp.configuredMcpServers(this.root, this.agentEnv().CLAUDE_CONFIG_DIR) : [];
     const hit = list.find((x) => isAtlassian(x) && x.state === 'connected') || (!this.mcp.checkedAt && list.find(isAtlassian));
     return hit ? { server: hit.name, site: settings().get<string>('atlassian.site') || undefined } : null;
   }
@@ -507,7 +520,7 @@ class Orchestrator {
       open.terminal.show();
       return;
     }
-    const dir = this.account().dir;
+    const dir = this.accountChoice().dir;
     const terminal = vscode.window.createTerminal({
       name: `MCP sign-in · ${name}`,
       shellPath: this.claudeCommand(),
@@ -529,7 +542,7 @@ class Orchestrator {
       this.mcpLogins.delete(name);
       const message = code === 0 ? `${name}: signed in` : code === undefined ? `${name}: sign-in terminal closed; checking the server again` : `${name}: sign-in did not finish (exit ${code}); see the terminal`;
       this._onEngine.fire({ name: 'mcpLogin', data: { server: name, ok: code === 0, kind: code === 0 ? 'ok' : code === undefined ? 'info' : 'error', message } });
-      this.refreshMcp();
+      void this.refreshMcp();
     };
     // exitStatus is set when the process ends, even while the terminal stays open.
     const poll = setInterval(() => terminal.exitStatus && finish(terminal.exitStatus.code), 1000);

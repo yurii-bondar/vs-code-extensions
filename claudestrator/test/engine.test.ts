@@ -216,7 +216,7 @@ test('engine: a repo outside the workspace folder (absolute path) is branched, c
 test('engine: a Jira task is read through an Atlassian MCP server when there is no API token, read-only', async () => {
   const ws = workspace(['api'], 'repos:\n  api: {}\npipeline: [planner]\n');
   const h = await harness(ws, { FAKE_REPOS: 'api' });
-  h.engine.mcpIntake = () => ({ server: 'Atlassian', site: 'acme.atlassian.net' });
+  h.engine.mcpIntake = async () => ({ server: 'Atlassian', site: 'acme.atlassian.net' });
   try {
     const { taskId } = await h.engine.start({ text: 'PROJ-805' });
     assert.equal(taskId, 'PROJ-805');
@@ -244,7 +244,7 @@ test('engine: a Jira task is read through an Atlassian MCP server when there is 
 test('engine: a signed-out Claude Code is reported as such, and agents get the account MCP servers', async () => {
   const ws = workspace(['api'], 'repos:\n  api: {}\npipeline: [planner]\n');
   const h = await harness(ws, { FAKE_REPOS: 'api', FAKE_AUTH_FAIL: '1' });
-  h.engine.mcpIntake = () => ({ server: 'Atlassian' });
+  h.engine.mcpIntake = async () => ({ server: 'Atlassian' });
   try {
     const { taskId } = await h.engine.start({ text: 'PROJ-9' });
     h.engine.launch(taskId);
@@ -285,7 +285,7 @@ test('engine: "PROJ-805 перевір готовність…" runs a read-only
   const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-gh-'));
   fs.writeFileSync(path.join(bin, 'gh'), `#!/bin/sh\ncase "$*" in *"pr list --search PROJ-805"*) echo '[{"number":42,"title":"PROJ-805 cap bets","url":"https://github.com/acme/api/pull/42","state":"MERGED","isDraft":false,"headRefName":"feat/PROJ-805-cap","baseRefName":"main","mergedAt":"2026-10-01T10:00:00Z"}]';; *) exit 1;; esac\n`, { mode: 0o755 });
   const h = await harness(ws, { FAKE_REPOS: 'api', PATH: `${bin}${path.delimiter}${process.env.PATH}` });
-  h.engine.mcpIntake = () => ({ server: 'Atlassian', site: 'acme.atlassian.net' });
+  h.engine.mcpIntake = async () => ({ server: 'Atlassian', site: 'acme.atlassian.net' });
   try {
     const request = 'PROJ-805 перевір готовність виконання таски і закриття всіх критеріїв приймання';
     const p = await previewOf(h.engine, { text: request });

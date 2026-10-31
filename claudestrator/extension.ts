@@ -69,9 +69,13 @@ const resetIn = (unix?: number): string => {
   return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
 };
 
+let limitsShown = 0;
+
 /** `5h 31% · wk 26%`, like the Claude Code status line; warning colours from 80%. */
-function updateLimits(item: vscode.StatusBarItem, o: Orchestrator): void {
-  const l = o.limits();
+async function updateLimits(item: vscode.StatusBarItem, o: Orchestrator): Promise<void> {
+  const n = ++limitsShown;
+  const l = await o.limits();
+  if (n !== limitsShown) return; // a newer update is on its way
   if (!l) return item.hide();
   const part = (label: string, w?: { pct: number }): string => (w ? `${label} ${w.pct}%` : '');
   item.text = `$(pulse) ${[part('5h', l.fiveHour), part('wk', l.sevenDay)].filter(Boolean).join(' · ')}`;
@@ -104,7 +108,7 @@ function activate(context: vscode.ExtensionContext) {
     const c = tree.counts();
     treeView.badge = c.attention ? { value: c.attention, tooltip: `${c.attention} task${c.attention === 1 ? '' : 's'} need${c.attention === 1 ? 's' : ''} you` } : undefined;
     updateStatus(status, tree);
-    updateLimits(limitsItem, orch);
+    await updateLimits(limitsItem, orch);
   };
 
   orch.init().then(refresh, (e: Error) => void vscode.window.showErrorMessage(`Claudestrator could not start: ${e.message}`));
