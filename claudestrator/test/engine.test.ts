@@ -604,3 +604,24 @@ test('engine: a scenario without a planner works in the repos the task names, on
     h.hooks.dispose();
   }
 });
+
+test('engine: a task another VS Code window runs is shown as running there, and is not run here as well', async () => {
+  const ws = workspace(['api'], 'pipeline: [planner, developer]\nrepos:\n  api: {}\n');
+  const h = await harness(ws, { FAKE_REPOS: 'api' });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
+    fs.writeFileSync(path.join(h.engine.svc.dir(taskId), 'run.lease'), `${process.ppid}\n`);
+    await assert.rejects(() => h.engine.run(taskId), (e: { code?: string }) => e.code === 'running_elsewhere');
+    assert.equal(h.engine.isRunning(taskId), false);
+    const card = await view.summary(h.engine, { taskId, state: await h.engine.svc.state(taskId) });
+    assert.deepEqual([card.status.key, card.status.resumable], ['elsewhere', false]);
+    assert.equal(only(await h.engine.svc.events(taskId), 'stage_started').length, 0, 'no agent started here');
+
+    fs.rmSync(path.join(h.engine.svc.dir(taskId), 'run.lease'));
+    const s = await runTask(h.engine, taskId);
+    assert.equal(s.checkpoint && s.checkpoint.id, 'confirm-push', JSON.stringify(h.engine.lastError(taskId)));
+    assert.ok(!fs.existsSync(path.join(h.engine.svc.dir(taskId), 'run.lease')), 'released when the run ends');
+  } finally {
+    h.hooks.dispose();
+  }
+});

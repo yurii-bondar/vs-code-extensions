@@ -104,3 +104,38 @@ test('store: a long transcript is read from its end, whole lines only, also wher
   assert.equal((await svc.readTranscript('T-1', '0001-dev', 30000)).length, 20000, 'a limit above the length reads it all');
   assert.deepEqual(await svc.readTranscript('T-1', 'none'), [], 'no file yet');
 });
+
+test('store: a task another live process runs is not run here, and a lease nobody holds any more is taken over', async () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-lease-'));
+  const svc = new TaskService({ workspace: ws });
+  fs.mkdirSync(svc.dir('T-1'), { recursive: true });
+  const lease = path.join(svc.dir('T-1'), 'run.lease');
+
+  const mine = await svc.takeLease('T-1');
+  assert.ok(mine.ok);
+  assert.equal(await svc.runsElsewhere('T-1'), null, 'this process is not elsewhere');
+  await mine.release();
+  assert.ok(!fs.existsSync(lease), 'released');
+
+  // Another VS Code window: alive, and not this process.
+  fs.writeFileSync(lease, `${process.ppid}\n`);
+  const held = await svc.takeLease('T-1');
+  assert.deepEqual(held, { ok: false, pid: process.ppid });
+  assert.equal(await svc.runsElsewhere('T-1'), process.ppid);
+  assert.deepEqual(await svc.runningElsewhere(), ['T-1']);
+
+  // That window stopped renewing it (hung, or its pid went to another program).
+  const old = new Date(Date.now() - 60000);
+  fs.utimesSync(lease, old, old);
+  assert.equal(await svc.runsElsewhere('T-1'), null);
+  const taken = await svc.takeLease('T-1');
+  assert.ok(taken.ok, 'an unrenewed lease is taken over');
+  await taken.release();
+
+  // A window that crashed holding it.
+  const dead = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' });
+  fs.writeFileSync(lease, `${dead.stdout}\n`);
+  const after = await svc.takeLease('T-1');
+  assert.ok(after.ok, 'the lease of a process that is gone is taken over');
+  await after.release();
+});

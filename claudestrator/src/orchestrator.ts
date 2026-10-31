@@ -247,7 +247,12 @@ class Orchestrator {
     const elsewhere = (uri: vscode.Uri): void => {
       const engine = this.engine;
       if (!engine) return changed();
-      void engine.svc.isOwnWrite(path.basename(path.dirname(uri.fsPath))).then((own) => own || changed(), changed);
+      const taskId = path.basename(path.dirname(uri.fsPath));
+      void engine.svc.isOwnWrite(taskId).then((own) => {
+        if (own) return;
+        changed();
+        void engine.changedElsewhere(taskId).catch(() => undefined);
+      }, changed);
     };
     const tasks = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(base, '.orch/tasks/*/events.ndjson'));
     tasks.onDidChange(elsewhere);

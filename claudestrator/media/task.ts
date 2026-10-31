@@ -476,6 +476,9 @@ interface Views {
       } else if (message.includes('\n')) body += `<pre class="log small">${esc(message.split('\n').slice(1).join('\n'))}</pre>`;
       parts.push(`<div class="banner error">${icon('alert')}<div class="grow">${body}</div><div class="banner-actions">${action}</div></div>`);
     }
+    if (d.status.key === 'elsewhere') {
+      parts.push(`<div class="banner muted">${icon('info')}<div class="grow"><b>This task runs in another VS Code window</b> on this workspace. Its steps, decisions and output show up here as they are recorded; Stop here stops it there too.</div></div>`);
+    }
     if (d.status.key === 'interrupted') {
       parts.push(`<div class="banner warn">${icon('alert')}<div class="grow"><b>This step was interrupted.</b> VS Code closed while it ran, or it runs in another tool (the claudestrator CLI or plugin). Resume here to start the step again.</div><div class="banner-actions"><button class="btn sm primary" data-action="run">${icon('play')}Resume here</button></div></div>`);
     }

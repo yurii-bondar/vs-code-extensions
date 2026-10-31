@@ -22,6 +22,7 @@ interface ViewEngine {
     state(taskId: string): Promise<TaskState>;
     files(taskId: string): Promise<{ path: string; size: number; mtime: number }[]>;
     dir(taskId: string): string;
+    runsElsewhere(taskId: string): Promise<number | null>;
   };
 }
 
@@ -168,15 +169,25 @@ function stepsOf(events: OrchEvent[], state: TaskState, { running }: { running: 
 /** What Resume runs from where it is. */
 const RESUMABLE = new Set(['stopped', 'failed', 'interrupted', 'ready']);
 
-function statusOf(state: TaskState | null, flags: { running?: boolean; error?: unknown; corrupt?: boolean; asking?: boolean }): Status {
+interface StatusFlags {
+  running?: boolean;
+  /** Another VS Code window on this workspace runs the task now. */
+  elsewhere?: boolean;
+  error?: unknown;
+  corrupt?: boolean;
+  asking?: boolean;
+}
+
+function statusOf(state: TaskState | null, flags: StatusFlags): Status {
   const status = baseStatus(state, flags);
   return { ...status, resumable: RESUMABLE.has(status.key) };
 }
 
-function baseStatus(state: TaskState | null, { running, error, corrupt, asking }: { running?: boolean; error?: unknown; corrupt?: boolean; asking?: boolean }): Omit<Status, 'resumable'> {
+function baseStatus(state: TaskState | null, { running, elsewhere, error, corrupt, asking }: StatusFlags): Omit<Status, 'resumable'> {
   if (corrupt) return { key: 'corrupt', label: 'Unreadable', tone: 'error', group: 'attention' };
   if (running && asking) return { key: 'running', label: 'Asks your permission', tone: 'warn', group: 'attention' };
   if (running) return { key: 'running', label: 'Running', tone: 'accent', group: 'running' };
+  if (elsewhere && state!.status === 'active') return { key: 'elsewhere', label: 'Running in another window', tone: 'accent', group: 'running' };
   if (state!.status === 'waiting') return { key: 'waiting', label: CHECKPOINT_TITLE[state!.checkpoint!.id] || 'Needs you', tone: 'warn', group: 'attention' };
   if (state!.status === 'done') {
     const r = resultOf(state!);
@@ -256,6 +267,7 @@ async function summary(engine: ViewEngine, entry: TaskEntry): Promise<Card> {
   if (entry.corrupt) return corruptCard(taskId, entry.error, entry.at);
   const state = entry.state!;
   const running = engine.isRunning(taskId);
+  const elsewhere = !running && state.status === 'active' && (await engine.svc.runsElsewhere(taskId)) !== null;
   const error = engine.lastError(taskId);
   const { steps, cost, lastStop } = await derive(engine, taskId, state, running);
   const agentSteps = steps.filter((s) => s.kind !== 'human' || s.status !== 'pending');
@@ -268,7 +280,7 @@ async function summary(engine: ViewEngine, entry: TaskEntry): Promise<Card> {
     ...(state.scenarioLabel && { scenarioLabel: state.scenarioLabel }),
     ...(state.group && { group: state.group }),
     ...(result && { result: result.kind === 'readiness' ? { kind: 'readiness', verdict: result.verdict, met: result.met, total: result.criteria.length } : { kind: 'audit', counts: result.counts } }),
-    status: statusOf(state, { running, error, asking: engine.pendingPermissions(taskId).length > 0 }),
+    status: statusOf(state, { running, elsewhere, error, asking: engine.pendingPermissions(taskId).length > 0 }),
     checkpoint: state.checkpoint ? { id: state.checkpoint.id, title: CHECKPOINT_TITLE[state.checkpoint.id], hint: state.checkpoint.id === 'review-limit' && state.review.emptyRounds >= MAX_EMPTY_ROUNDS ? EMPTY_DIFF_HINT : CHECKPOINT_HINT[state.checkpoint.id] } : null,
     live: engine.live(taskId),
     error,

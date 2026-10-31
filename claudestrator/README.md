@@ -69,7 +69,7 @@ The orchestration is code, not a prompt: a pure state machine decides what runs 
   - **Agent output** streams live: text as it is written, every tool call (reads, edits as diffs, commands with output), what the guard blocked, check runs. While an agent works you can **message it** ("reuse formatDate from utils/date.ts"). *Continue in terminal* opens `claude --resume <session>` for any finished step.
   - **Report** (readiness and audit): the verdict with every criterion and its evidence, or the findings with a filter per severity. *Open report* opens `report.md`; *Post to Jira* comments the result on the issue; *Start a task to close the gaps* / *Start a task to fix it* opens a delivery task prefilled with what was found.
   - **Activity** (the event log), **Files** (ticket, plan, reports, reviews, check logs) and **Ticket & plan**.
-  - **Stop / Resume**: stopping kills the agent; resuming re-runs the same step. Tasks survive VS Code restarts.
+  - **Stop / Resume**: stopping kills the agent; resuming re-runs the same step. Tasks survive VS Code restarts. A task runs in one VS Code window at a time: another window on the same workspace shows it as *Running in another window* (its Stop stops it there too), and neither it nor a branch-mode task that would switch the same checkouts starts there meanwhile.
 - **Status line, as in Claude Code**:
   - every step shows its model, effort, context used (`ctx ▰▱ 53%`), tokens, cost and turns, live while the agent works;
   - the header and the status bar show the account's 5-hour and weekly limits with time to reset. They come from what Claude Code reports to the agents, or, before any agent ran, from your status line's snapshots in `<account>/statusline/` (ctx-man writes them).

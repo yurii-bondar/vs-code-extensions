@@ -522,6 +522,12 @@ class Engine extends EventEmitter {
     this.run(taskId).catch(async (e) => {
       // Stopped mid-step: what the step did next was refused, which is the point of stopping.
       if (e.code === 'stopped' || e.code === 'task_stopped') return;
+      // Another window runs it: the task screen says so, and nothing failed.
+      if (e.code === 'running_elsewhere') {
+        this.log('info', e.message, taskId);
+        this.emit('changed', taskId);
+        return;
+      }
       const err = { code: e.code || 'internal', message: e.message || String(e), ...(e.blocked && { blocked: e.blocked }), at: new Date().toISOString() };
       this.errors.set(taskId, err);
       try {
@@ -539,10 +545,11 @@ class Engine extends EventEmitter {
     const s = await this.svc.state(taskId);
     const touchesRepos = (st: TaskState): boolean => st.gitMode === 'branch' && st.pipeline.stages.some(onRepos);
     if (!touchesRepos(s)) return;
-    for (const other of this.running) {
+    // Here, and in another VS Code window on this workspace: its tasks switch the same checkouts.
+    for (const other of new Set([...this.running, ...(await this.svc.runningElsewhere())])) {
       if (other === taskId) continue;
       try {
-        if (touchesRepos(await this.svc.state(other))) throw new EngineError('busy', `${other} is running and branch mode shares your checkouts. Wait for it, or switch Git mode to worktrees in Settings.`);
+        if (touchesRepos(await this.svc.state(other))) throw new EngineError('busy', `${other} is running${this.running.has(other) ? '' : ' in another VS Code window'} and branch mode shares your checkouts. Wait for it, or switch Git mode to worktrees in Settings.`);
       } catch (e) {
         if (e instanceof EngineError) throw e;
       }
@@ -552,8 +559,9 @@ class Engine extends EventEmitter {
   /** `limits.parallelTasks` caps how many tasks run agents at once; one more waits until you resume it. */
   async checkCapacity(taskId: string): Promise<void> {
     const cap = (await this.config()).limits.parallelTasks;
-    const others = [...this.running].filter((id) => id !== taskId);
-    if (cap !== undefined && others.length >= cap) {
+    if (cap === undefined) return;
+    const others = [...new Set([...this.running, ...(await this.svc.runningElsewhere())])].filter((id) => id !== taskId);
+    if (others.length >= cap) {
       throw new EngineError('busy', `${others.join(', ')} ${others.length === 1 ? 'is' : 'are'} running, as many tasks as limits.parallelTasks (${cap}) allows; resume ${taskId} when one of them finishes`);
     }
   }
@@ -563,11 +571,20 @@ class Engine extends EventEmitter {
     if (this.running.has(taskId)) throw new EngineError('already_running', `task ${taskId} is already running`);
     // Taken before the first await: two launches of one task never both pass the check.
     this.running.add(taskId);
+    let lease: Awaited<ReturnType<TaskService['takeLease']>>;
+    try {
+      lease = await this.svc.takeLease(taskId);
+      if (!lease.ok) throw new EngineError('running_elsewhere', `${taskId} runs in another VS Code window (process ${lease.pid}); it goes on there`);
+    } catch (e) {
+      this.running.delete(taskId);
+      throw e;
+    }
     try {
       await this.checkExclusive(taskId);
       await this.checkCapacity(taskId);
     } catch (e) {
       this.running.delete(taskId);
+      await lease.release();
       throw e;
     }
     this.emit('changed', taskId);
@@ -600,6 +617,7 @@ class Engine extends EventEmitter {
         }
       }
     } finally {
+      await lease.release();
       this.running.delete(taskId);
       this.prepared.delete(taskId);
       this.setLive(taskId, null);
@@ -1497,6 +1515,19 @@ class Engine extends EventEmitter {
   async stop(taskId: string, reason = 'stopped by you'): Promise<void> {
     const s = await this.svc.state(taskId);
     if (s.status !== 'stopped' && s.status !== 'done') await this.dispatch(taskId, { type: 'stopped', reason });
+    this.denyPermissions(taskId, 'the task was stopped');
+    const gates = this.gateRuns.get(taskId);
+    if (gates) gates.abort();
+    const session = this.sessions.get(taskId);
+    if (session) await session.interrupt();
+  }
+
+  /**
+   * Another process wrote this task's log: a Stop in another VS Code window (or the CLI) of a task this one runs stops
+   * its agent here too, instead of at its next tool call.
+   */
+  async changedElsewhere(taskId: string): Promise<void> {
+    if (!this.running.has(taskId) || (await this.svc.state(taskId)).status !== 'stopped') return;
     this.denyPermissions(taskId, 'the task was stopped');
     const gates = this.gateRuns.get(taskId);
     if (gates) gates.abort();

@@ -31,6 +31,33 @@ async function holderGone(file: string): Promise<boolean> {
   }
 }
 
+/** How often a running task's lease is renewed, and how long one goes unrenewed before it counts as abandoned. */
+const LEASE_RENEW_MS = 10000;
+const LEASE_STALE_MS = 45000;
+const LEASE_FILE = 'run.lease';
+
+/** Whether a process with this pid is there (EPERM: it is, under another user). */
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/** The pid of another live process holding this lease and renewing it, or null. */
+async function otherHolder(file: string): Promise<number | null> {
+  try {
+    const [text, st] = await Promise.all([fs.promises.readFile(file, 'utf8'), fs.promises.stat(file)]);
+    const pid = Number(text.trim());
+    if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return null;
+    return Date.now() - st.mtimeMs < LEASE_STALE_MS && alive(pid) ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Cross-process mutex on a lock file (O_EXCL create), held for a read-transition-append. Only the claudestrator CLI or
  * plugin can hold it besides this process; waiting for them is a timer, so the extension host keeps running meanwhile.
@@ -395,6 +422,55 @@ class TaskService {
     return entries.filter((e): e is TaskEntry => e !== null).sort((a, b) => ((b.state && b.state.updatedAt) || b.at || '').localeCompare((a.state && a.state.updatedAt) || a.at || ''));
   }
 
+  // ---------- which process runs a task ----------
+
+  /**
+   * Takes the task's run lease (`run.lease`: this process's pid, renewed while it runs), or says which other process
+   * holds it: another VS Code window on this workspace runs the task, and running it here too would put two agents on
+   * the same step in the same checkout. A lease whose process is gone, or that nobody renewed, is taken over.
+   */
+  async takeLease(taskId: string): Promise<{ ok: true; release: () => Promise<void> } | { ok: false; pid: number }> {
+    const file = path.join(this.dir(taskId), LEASE_FILE);
+    for (;;) {
+      try {
+        const handle = await fs.promises.open(file, 'wx');
+        await handle.writeFile(`${process.pid}\n`);
+        await handle.close();
+        break;
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+        const pid = await otherHolder(file);
+        if (pid !== null) return { ok: false, pid };
+        await fs.promises.rm(file, { force: true });
+      }
+    }
+    const renew = setInterval(() => {
+      const now = new Date();
+      fs.promises.utimes(file, now, now).catch(() => undefined);
+    }, LEASE_RENEW_MS);
+    renew.unref();
+    return {
+      ok: true,
+      release: async () => {
+        clearInterval(renew);
+        const text = await fs.promises.readFile(file, 'utf8').catch(() => '');
+        if (Number(text.trim()) === process.pid) await fs.promises.rm(file, { force: true });
+      },
+    };
+  }
+
+  /** The pid of another process that runs this task now, or null. */
+  runsElsewhere(taskId: string): Promise<number | null> {
+    return otherHolder(path.join(this.dir(taskId), LEASE_FILE));
+  }
+
+  /** Tasks another process runs now. */
+  async runningElsewhere(): Promise<string[]> {
+    const dirs = await fs.promises.readdir(this.root, { withFileTypes: true }).catch(() => []);
+    const held = await Promise.all(dirs.filter((d) => d.isDirectory() && TASK_ID.test(d.name)).map(async (d) => ((await this.runsElsewhere(d.name)) !== null ? d.name : null)));
+    return held.filter((id): id is string => id !== null);
+  }
+
   async remove(taskId: string): Promise<void> {
     await fs.promises.rm(this.dir(taskId), { recursive: true, force: true });
     this.cache.delete(taskId);
@@ -434,7 +510,7 @@ class TaskService {
         const abs = path.join(d, e.name);
         if (e.isDirectory()) {
           if (e.name !== 'transcripts') await walk(abs);
-        } else if (!['.lock', TASK_FILES.events].includes(e.name)) {
+        } else if (!['.lock', LEASE_FILE, TASK_FILES.events].includes(e.name)) {
           const st = await fs.promises.stat(abs).catch(() => null);
           if (st) out.push({ path: path.relative(dir, abs).split(path.sep).join('/'), size: st.size, mtime: st.mtimeMs });
         }

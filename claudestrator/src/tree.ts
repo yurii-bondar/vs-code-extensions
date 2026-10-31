@@ -25,6 +25,7 @@ const STATUS_ICON: Record<string, [string, string]> = {
   waiting: ['bell-dot', 'charts.yellow'],
   failed: ['error', 'errorForeground'],
   interrupted: ['debug-disconnect', 'charts.orange'],
+  elsewhere: ['window', 'charts.blue'],
   corrupt: ['warning', 'errorForeground'],
   stopped: ['debug-pause', 'descriptionForeground'],
   ready: ['debug-continue', 'descriptionForeground'],
