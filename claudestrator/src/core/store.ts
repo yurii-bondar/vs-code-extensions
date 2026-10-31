@@ -14,13 +14,11 @@ const ORCH_DIR = '.orch';
 const TASK_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 
-const pause = (ms: number): 'ok' | 'not-equal' | 'timed-out' => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-
 /** Whether the process that wrote a lock file is gone (it crashed holding the lock). */
-function holderGone(file: string): boolean {
+async function holderGone(file: string): Promise<boolean> {
   let pid: number;
   try {
-    pid = Number(fs.readFileSync(file, 'utf8').trim());
+    pid = Number((await fs.promises.readFile(file, 'utf8')).trim());
   } catch {
     return false;
   }
@@ -34,40 +32,38 @@ function holderGone(file: string): boolean {
 }
 
 /**
- * Cross-process mutex on a lock file (O_EXCL create). Synchronous on purpose: it is held only for a
- * read-transition-append, which takes milliseconds, so the wait is short. Within this process calls never overlap; only
- * the claudestrator CLI or plugin can hold it, and the extension host waits for them at most `timeoutMs`. A lock left
- * by a crashed process is taken over at once, one older than `staleMs` (a holder that hangs) as well.
+ * Cross-process mutex on a lock file (O_EXCL create), held for a read-transition-append. Only the claudestrator CLI or
+ * plugin can hold it besides this process; waiting for them is a timer, so the extension host keeps running meanwhile.
+ * A lock left by a crashed process is taken over at once, one older than `staleMs` (a holder that hangs) as well.
  */
-function withLock<T>(file: string, fn: () => T, { timeoutMs = 2000, staleMs = 5000 }: { timeoutMs?: number; staleMs?: number } = {}): T {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+async function withLock<T>(file: string, fn: () => Promise<T>, { timeoutMs = 10000, staleMs = 10000 }: { timeoutMs?: number; staleMs?: number } = {}): Promise<T> {
+  await fs.promises.mkdir(path.dirname(file), { recursive: true });
   const started = Date.now();
   for (;;) {
     try {
-      const fd = fs.openSync(file, 'wx');
-      fs.writeSync(fd, `${process.pid}\n`);
-      fs.closeSync(fd);
+      const handle = await fs.promises.open(file, 'wx');
+      await handle.writeFile(`${process.pid}\n`);
+      await handle.close();
       break;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
-      let age: number;
-      try {
-        age = Date.now() - fs.statSync(file).mtimeMs;
-      } catch {
-        continue; // released between our open and stat
-      }
-      if (age > staleMs || holderGone(file)) {
-        fs.rmSync(file, { force: true });
+      const age = await fs.promises.stat(file).then(
+        (st) => Date.now() - st.mtimeMs,
+        () => null
+      );
+      if (age === null) continue; // released between our open and stat
+      if (age > staleMs || (await holderGone(file))) {
+        await fs.promises.rm(file, { force: true });
         continue;
       }
       if (Date.now() - started > timeoutMs) throw new Error(`timed out after ${timeoutMs}ms waiting for ${file}`);
-      pause(15);
+      await new Promise((r) => setTimeout(r, 15));
     }
   }
   try {
-    return fn();
+    return await fn();
   } finally {
-    fs.rmSync(file, { force: true });
+    await fs.promises.rm(file, { force: true });
   }
 }
 
@@ -87,8 +83,22 @@ class EventStore {
   }
 
   readAll(): OrchEvent[] {
-    if (!this.exists()) return [];
-    const lines = fs.readFileSync(this.file, 'utf8').split('\n').slice(0, -1);
+    return this.exists() ? this.parse(fs.readFileSync(this.file, 'utf8')) : [];
+  }
+
+  /** The events, read without blocking; none when there is no log yet. */
+  async read(): Promise<OrchEvent[]> {
+    try {
+      return this.parse(await fs.promises.readFile(this.file, 'utf8'));
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw e;
+    }
+  }
+
+  /** The log's complete lines as events; a torn last line is left out. */
+  parse(text: string): OrchEvent[] {
+    const lines = text.split('\n').slice(0, -1);
     return lines
       .filter((line) => line.trim() !== '')
       .map((line, i) => {
@@ -104,31 +114,31 @@ class EventStore {
   }
 
   /** Appends an event as number `seq` when the caller knows how many there are, else counts them. */
-  append(event: NewEvent, seq?: number): OrchEvent {
-    fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    const torn = this.cutTornTail();
-    const stored = { seq: seq !== undefined && !torn ? seq : this.readAll().length + 1, ...event } as OrchEvent;
-    fs.appendFileSync(this.file, `${JSON.stringify(stored)}\n`);
+  async append(event: NewEvent, seq?: number): Promise<OrchEvent> {
+    await fs.promises.mkdir(path.dirname(this.file), { recursive: true });
+    const torn = await this.cutTornTail();
+    const stored = { seq: seq !== undefined && !torn ? seq : (await this.read()).length + 1, ...event } as OrchEvent;
+    await fs.promises.appendFile(this.file, `${JSON.stringify(stored)}\n`);
     return stored;
   }
 
   /** Cuts a torn last line off, and says whether there was one. Only its last byte is read when there is none. */
-  cutTornTail(): boolean {
-    let fd: number;
+  async cutTornTail(): Promise<boolean> {
+    let handle: fs.promises.FileHandle;
     try {
-      fd = fs.openSync(this.file, 'r');
+      handle = await fs.promises.open(this.file, 'r');
     } catch {
       return false;
     }
     try {
-      const size = fs.fstatSync(fd).size;
+      const { size } = await handle.stat();
       const last = Buffer.alloc(1);
-      if (size === 0 || (fs.readSync(fd, last, 0, 1, size - 1) === 1 && last[0] === 0x0a)) return false;
+      if (size === 0 || ((await handle.read(last, 0, 1, size - 1)).bytesRead === 1 && last[0] === 0x0a)) return false;
     } finally {
-      fs.closeSync(fd);
+      await handle.close();
     }
-    const buf = fs.readFileSync(this.file);
-    fs.truncateSync(this.file, buf.lastIndexOf(0x0a) + 1);
+    const buf = await fs.promises.readFile(this.file);
+    await fs.promises.truncate(this.file, buf.lastIndexOf(0x0a) + 1);
     return true;
   }
 }
@@ -178,26 +188,28 @@ class TaskService {
   }
 
   /** `.orch/` holds machine state and worktrees; it never belongs in a commit. */
-  ensureOrchDir(): void {
+  async ensureOrchDir(): Promise<void> {
     const dir = path.join(this.workspace, ORCH_DIR);
-    fs.mkdirSync(dir, { recursive: true });
-    const ignore = path.join(dir, '.gitignore');
-    if (!fs.existsSync(ignore)) fs.writeFileSync(ignore, '*\n');
+    await fs.promises.mkdir(dir, { recursive: true });
+    await fs.promises.writeFile(path.join(dir, '.gitignore'), '*\n', { flag: 'wx' }).catch((e: NodeJS.ErrnoException) => {
+      if (e.code !== 'EEXIST') throw e;
+    });
   }
 
-  current(): string | null {
+  /** The task last started here (`.orch/current`), shared with the CLI. */
+  currentTask(): string | null {
     if (!fs.existsSync(this.currentFile)) return null;
     const id = fs.readFileSync(this.currentFile, 'utf8').trim();
     return id && TASK_ID.test(id) && this.exists(id) ? id : null;
   }
 
-  setCurrent(taskId: string): void {
-    this.ensureOrchDir();
-    fs.writeFileSync(this.currentFile, `${taskId}\n`);
+  async setCurrent(taskId: string): Promise<void> {
+    await this.ensureOrchDir();
+    await fs.promises.writeFile(this.currentFile, `${taskId}\n`);
   }
 
-  clearCurrent(): void {
-    fs.rmSync(this.currentFile, { force: true });
+  async clearCurrent(): Promise<void> {
+    await fs.promises.rm(this.currentFile, { force: true });
   }
 
   dir(taskId: string): string {
@@ -205,8 +217,32 @@ class TaskService {
     return path.join(this.root, taskId);
   }
 
-  locked<T>(taskId: string, fn: () => T): T {
-    return withLock(path.join(this.dir(taskId), '.lock'), fn);
+  /** Each task's writes in this process, one after another: a dispatch reads, decides and appends with nothing between. */
+  queues = new Map<string, Promise<unknown>>();
+
+  /** Runs `fn` with the task's log to itself: after this process's earlier writes to it, and under its lock file. */
+  locked<T>(taskId: string, fn: () => Promise<T>): Promise<T> {
+    const lock = path.join(this.dir(taskId), '.lock');
+    const run = (this.queues.get(taskId) ?? Promise.resolve()).then(() => withLock(lock, fn));
+    const tail = run.catch(() => undefined);
+    this.queues.set(taskId, tail);
+    void tail.then(() => {
+      if (this.queues.get(taskId) === tail) this.queues.delete(taskId);
+    });
+    return run;
+  }
+
+  /** The task's state as its log is now, read without blocking (and cached as `state` keeps it); null without a log. */
+  async current(taskId: string): Promise<TaskState | null> {
+    const file = path.join(this.dir(taskId), TASK_FILES.events);
+    const sig = await signatureAsync(file);
+    if (!sig) return null;
+    const hit = this.cache.get(taskId);
+    if (hit && hit.sig === sig) return hit.state;
+    const events = await this.store(taskId).read();
+    const state = replay(events);
+    this.cache.set(taskId, { sig, state, events });
+    return state;
   }
 
   store(taskId: string): EventStore {
@@ -217,12 +253,12 @@ class TaskService {
    * Appends to a task's log. When the cached state was read from the log as it was, it follows the append (`next`, or
    * the same state for an informational event) instead of being replayed from the file on the next read.
    */
-  append(taskId: string, event: NewEvent, next?: TaskState): OrchEvent {
+  async append(taskId: string, event: NewEvent, next?: TaskState): Promise<OrchEvent> {
     const store = this.store(taskId);
     const hit = this.cache.get(taskId);
-    const current = hit && hit.sig === signature(store.file) ? hit : undefined;
-    const stored = store.append(event, current ? current.events.length + 1 : undefined);
-    const sig = signature(store.file);
+    const current = hit && hit.sig === (await signatureAsync(store.file)) ? hit : undefined;
+    const stored = await store.append(event, current ? current.events.length + 1 : undefined);
+    const sig = await signatureAsync(store.file);
     this.written.set(taskId, sig);
     // A new object for a new log, also when nothing changed: what is derived from a state is cached by it.
     if (current && stored.seq === current.events.length + 1) this.cache.set(taskId, { sig, state: next ?? { ...current.state }, events: [...current.events, stored] });
@@ -262,7 +298,7 @@ class TaskService {
   }
 
   /** Creates a task, or returns the existing one `idFor` points at. */
-  start(req: StartRequest): { taskId: string; created: boolean; state: TaskState } {
+  async start(req: StartRequest): Promise<{ taskId: string; created: boolean; state: TaskState }> {
     const scenario = req.scenario || 'deliver';
     const { taskId, exists } = this.idFor({ taskId: req.taskId, source: req.source, scenario });
     if (exists) return { taskId, created: false, state: this.state(taskId) };
@@ -288,11 +324,12 @@ class TaskService {
     };
     const r = transition(null, event);
     if (!r.ok) throw new Error(r.error.message);
-    this.ensureOrchDir();
+    await this.ensureOrchDir();
     const id = taskId;
-    return this.locked(id, () => {
-      if (this.exists(id)) return { taskId: id, created: false, state: this.state(id) };
-      this.append(id, event);
+    return this.locked(id, async () => {
+      const there = await this.current(id);
+      if (there) return { taskId: id, created: false, state: there };
+      await this.append(id, event);
       return { taskId: id, created: true, state: r.state };
     });
   }
@@ -329,13 +366,13 @@ class TaskService {
   }
 
   /** The single entry point for changing a task: validate, transition, then persist, or log the rejection. */
-  dispatch(taskId: string, body: EventBody): DispatchResult {
+  dispatch(taskId: string, body: EventBody): Promise<DispatchResult> {
     return this.locked(taskId, () => this.dispatchUnlocked(taskId, body));
   }
 
-  dispatchUnlocked(taskId: string, body: EventBody): DispatchResult {
+  async dispatchUnlocked(taskId: string, body: EventBody): Promise<DispatchResult> {
     // Under the lock the cached state is current unless another process appended, which its signature shows.
-    const state = this.exists(taskId) ? this.state(taskId) : null;
+    const state = await this.current(taskId);
     if (!body || typeof body.type !== 'string' || !STATE_EVENTS.has(body.type)) {
       return this.reject(taskId, state, body, { code: 'invalid_event', message: `unknown event type ${body && (body as { type?: string }).type}` });
     }
@@ -343,18 +380,18 @@ class TaskService {
     const event = { ...body, at: this.now().toISOString() } as NewEvent;
     const r = transition(state, event as OrchEvent);
     if (!r.ok) return this.reject(taskId, state, body, r.error);
-    const stored = this.append(taskId, event, r.state);
-    if (r.state.status === 'done' && this.current() === taskId) this.clearCurrent();
+    const stored = await this.append(taskId, event, r.state);
+    if (r.state.status === 'done' && this.currentTask() === taskId) await this.clearCurrent();
     return { ok: true, event: stored, state: r.state, next: nextAction(r.state) };
   }
 
-  reject(taskId: string, state: TaskState | null, body: unknown, error: { code: string; message: string }): DispatchResult {
-    if (state) this.append(taskId, { type: 'transition_rejected', event: body, code: error.code, error: error.message, at: this.now().toISOString() });
+  async reject(taskId: string, state: TaskState | null, body: unknown, error: { code: string; message: string }): Promise<DispatchResult> {
+    if (state) await this.append(taskId, { type: 'transition_rejected', event: body, code: error.code, error: error.message, at: this.now().toISOString() });
     return { ok: false, error, state };
   }
 
   /** Appends an informational event. These never change state, so no transition runs. */
-  record(taskId: string, body: EventBody): OrchEvent {
+  async record(taskId: string, body: EventBody): Promise<OrchEvent> {
     if (!INFO_EVENTS.has(body.type)) throw new Error(`${body.type} is not informational; use dispatch()`);
     return this.locked(taskId, () => this.append(taskId, { ...body, at: this.now().toISOString() } as NewEvent));
   }
@@ -375,10 +412,10 @@ class TaskService {
       .sort((a, b) => ((b.state && b.state.updatedAt) || b.at || '').localeCompare((a.state && a.state.updatedAt) || a.at || ''));
   }
 
-  remove(taskId: string): void {
-    fs.rmSync(this.dir(taskId), { recursive: true, force: true });
+  async remove(taskId: string): Promise<void> {
+    await fs.promises.rm(this.dir(taskId), { recursive: true, force: true });
     this.cache.delete(taskId);
-    if (this.current() === null) this.clearCurrent();
+    if (this.currentTask() === null) await this.clearCurrent();
   }
 
   /** Artifact paths are relative to the task folder and may not leave it. */
@@ -504,6 +541,13 @@ function signatureTime(file: string): string {
     return new Date(0).toISOString();
   }
 }
+
+/** The same, read without blocking. */
+const signatureAsync = (file: string): Promise<string> =>
+  fs.promises.stat(file).then(
+    (st) => `${st.size}:${st.mtimeMs}`,
+    () => ''
+  );
 
 /** Size and mtime of a file, or '' when it is gone: enough to tell whether it changed since. */
 function signature(file: string): string {

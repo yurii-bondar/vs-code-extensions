@@ -236,7 +236,7 @@ const broadcast = (msg: unknown) => {
         let body = '';
         req.on('data', (d: Buffer) => (body += d));
         req.on('end', () => {
-          panel.onMessage(JSON.parse(body));
+          void panel.onMessage(JSON.parse(body));
           res.writeHead(204).end();
         });
         return;

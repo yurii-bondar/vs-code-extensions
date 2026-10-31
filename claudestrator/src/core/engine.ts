@@ -285,8 +285,8 @@ class Engine extends EventEmitter {
     return this.lives.get(taskId) || null;
   }
 
-  dispatch(taskId: string, body: EventBody): Extract<DispatchResult, { ok: true }> {
-    const r = this.svc.dispatch(taskId, body);
+  async dispatch(taskId: string, body: EventBody): Promise<Extract<DispatchResult, { ok: true }>> {
+    const r = await this.svc.dispatch(taskId, body);
     if (!r.ok) throw new EngineError(r.error.code, `${body.type} rejected: ${r.error.message}`);
     return r;
   }
@@ -408,7 +408,7 @@ class Engine extends EventEmitter {
     const taskModel: Record<string, string> = Object.fromEntries(Object.entries(defaults.model).filter(([name]) => pipeline.stages.some((st) => st.agent === name)));
     const extras = this.extras(config, group, instructions);
     const extra = [...(no.length ? [`--no ${no.join(',')}`] : []), ...(auto && !inv.auto ? ['--auto'] : []), ...(scenario && scenario !== 'auto' && !inv.scenario ? [`--scenario ${scenario}`] : [])].join(' ');
-    const started = this.svc.start({
+    const started = await this.svc.start({
       input: extra ? `${text.trim()} ${extra}` : text.trim(),
       source,
       scenario: sc.scenario,
@@ -421,7 +421,7 @@ class Engine extends EventEmitter {
       model: taskModel,
       ...((key || inv.key) && { taskId: key || inv.key }),
     });
-    this.svc.setCurrent(started.taskId);
+    await this.svc.setCurrent(started.taskId);
     pipeline.warnings.forEach((w) => this.log('warn', w.message, started.taskId));
     return { taskId: started.taskId, created: started.created };
   }
@@ -438,13 +438,13 @@ class Engine extends EventEmitter {
   launch(taskId: string): void {
     if (this.running.has(taskId)) return;
     this.errors.delete(taskId);
-    this.run(taskId).catch((e) => {
+    this.run(taskId).catch(async (e) => {
       // Stopped mid-step: what the step did next was refused, which is the point of stopping.
       if (e.code === 'stopped' || e.code === 'task_stopped') return;
       const err = { code: e.code || 'internal', message: e.message || String(e), ...(e.blocked && { blocked: e.blocked }), at: new Date().toISOString() };
       this.errors.set(taskId, err);
       try {
-        this.svc.record(taskId, { type: 'note', message: `Run failed: ${err.message}` });
+        await this.svc.record(taskId, { type: 'note', message: `Run failed: ${err.message}` });
       } catch {
         // the task folder may be gone
       }
@@ -541,7 +541,7 @@ class Engine extends EventEmitter {
     if (s.source.note && !spec.request) spec = { ...spec, request: s.source.note };
     this.svc.writeArtifact(s.taskId, TASK_FILES.ticketJson, `${JSON.stringify(spec, null, 2)}\n`);
     this.svc.writeArtifact(s.taskId, TASK_FILES.ticket, renderTicket(spec));
-    this.dispatch(s.taskId, { type: 'intake_completed', spec });
+    await this.dispatch(s.taskId, { type: 'intake_completed', spec });
   }
 
   /** Streams an agent session's output to the UI and its transcript. */
@@ -663,7 +663,7 @@ class Engine extends EventEmitter {
       this.liveCost.delete(s.taskId);
       this.activity.delete(s.taskId);
       const u: SessionUsage = session.usage ? session.usage() : {};
-      this.svc.record(s.taskId, { type: 'agent_stopped', agent: 'intake', payload: { costUsd: t.costUsd || session.costUsd || 0, turns: t.turns || session.turns || 0, sessionId: t.sessionId || session.sessionId, cwd: this.workspace, transcript: INTAKE_KEY, ...(u.model && { model: u.model }), ...(u.effort && { effort: u.effort }) } });
+      await this.svc.record(s.taskId, { type: 'agent_stopped', agent: 'intake', payload: { costUsd: t.costUsd || session.costUsd || 0, turns: t.turns || session.turns || 0, sessionId: t.sessionId || session.sessionId, cwd: this.workspace, transcript: INTAKE_KEY, ...(u.model && { model: u.model }), ...(u.effort && { effort: u.effort }) } });
       await this.svc.flushTranscripts();
     }
   }
@@ -749,7 +749,7 @@ class Engine extends EventEmitter {
     const spent = budget !== undefined ? this.spentUsd(taskId) : 0;
     if (budget !== undefined && spent >= budget) {
       this.log('warn', `Budget of $${budget} spent ($${spent.toFixed(2)}); the task stopped`, taskId);
-      this.dispatch(taskId, { type: 'stopped', reason: `budget of $${budget} spent` });
+      await this.dispatch(taskId, { type: 'stopped', reason: `budget of $${budget} spent` });
       return;
     }
     const usedUp = usedUpWindow(this.limits, Date.now());
@@ -779,19 +779,19 @@ class Engine extends EventEmitter {
     }
 
     let seq: number;
-    if (next.kind === 'run') seq = this.dispatch(taskId, { type: 'stage_started', agent: step.agent, ...(step.repo && { repo: step.repo }) }).event.seq!;
+    if (next.kind === 'run') seq = (await this.dispatch(taskId, { type: 'stage_started', agent: step.agent, ...(step.repo && { repo: step.repo }) })).event.seq!;
     else {
       const started = this.svc.events(taskId).filter((e): e is EventOf<'stage_started'> => e.type === 'stage_started' && sameStep(e, step));
       seq = started.length ? started[started.length - 1]!.seq! : 0;
     }
     const key = transcriptKey(seq, step);
-    const fail = (error: string) => {
+    const fail = async (error: string) => {
       const usedUpNow = usedUpWindow(this.limits, Date.now());
-      return this.dispatch(taskId, { type: 'stage_failed', agent: step.agent, ...(step.repo && { repo: step.repo }), error: usedUpNow ? `${error} (${usedUpNow})` : error });
+      return await this.dispatch(taskId, { type: 'stage_failed', agent: step.agent, ...(step.repo && { repo: step.repo }), error: usedUpNow ? `${error} (${usedUpNow})` : error });
     };
 
     if (!agent || !agent.enabled) {
-      fail(`agent "${step.agent}" is no longer enabled in the config`);
+      await fail(`agent "${step.agent}" is no longer enabled in the config`);
       return;
     }
 
@@ -841,7 +841,7 @@ class Engine extends EventEmitter {
       // It did not start (a CLI too old to be guarded, its MCP config not written): a failed step to retry, not a task
       // left "running" with its guard token still registered.
       this.hooks.unregister(hook.token);
-      fail(`the agent did not start: ${(e as Error).message}`);
+      await fail(`the agent did not start: ${(e as Error).message}`);
       return;
     }
     this.sessions.set(taskId, session);
@@ -854,7 +854,7 @@ class Engine extends EventEmitter {
       if (stopped()) return void (await session.interrupt());
       t = await this.turnOf(taskId, session);
       if (stopped()) return;
-      if (!t.ok) return void fail(t.error || 'the agent failed');
+      if (!t.ok) return void (await fail(t.error || 'the agent failed'));
 
       let gates: 'none' | 'pass' | 'fail' = 'none';
       // The repos whose checks run after this step: its own, or every repo a `repos` stage worked in.
@@ -889,7 +889,7 @@ class Engine extends EventEmitter {
             summary: runs.map((x) => x.summary).join('\n'),
             results: runs.flatMap((x) => x.results.map(({ gate, status, ms }) => ({ gate: runs.length > 1 ? `${x.repo} · ${gate}` : gate, status, ms }))),
           };
-          this.svc.record(taskId, { type: 'gates_ran', agent: step.agent, ...(step.repo ? { repo: step.repo } : { repos: targets.map((r) => r.name) }), status: g.status, attempt, summary: g.summary });
+          await this.svc.record(taskId, { type: 'gates_ran', agent: step.agent, ...(step.repo ? { repo: step.repo } : { repos: targets.map((r) => r.name) }), status: g.status, attempt, summary: g.summary });
           emitItem({ type: 'gates', status: g.status, attempt, summary: g.summary, results: g.results });
           if (g.status !== 'fail') {
             gates = g.status === 'pass' ? 'pass' : 'none';
@@ -904,7 +904,7 @@ class Engine extends EventEmitter {
           this.setLive(taskId, { phase: 'agent', step, key, text: `${label} is fixing red gates in ${where.includes(',') ? red : where}` });
           t = await this.turnOf(taskId, session);
           if (stopped()) return;
-          if (!t.ok) return void fail(t.error || 'the agent failed while fixing gates');
+          if (!t.ok) return void (await fail(t.error || 'the agent failed while fixing gates'));
         }
       }
 
@@ -923,16 +923,16 @@ class Engine extends EventEmitter {
         session.send(`Your report could not be read: ${parsed.error}. Reply again with the complete, corrected report.`, { from: 'orchestrator' });
         t = await this.turnOf(taskId, session);
         if (stopped()) return;
-        if (!t.ok) return void fail(t.error || 'the agent failed while correcting its report');
+        if (!t.ok) return void (await fail(t.error || 'the agent failed while correcting its report'));
         parsed = check();
       }
-      if (!parsed.ok) return void fail(`report still invalid after ${REPORT_RETRIES} corrections: ${parsed.error}`);
+      if (!parsed.ok) return void (await fail(`report still invalid after ${REPORT_RETRIES} corrections: ${parsed.error}`));
 
       const artifact = artifactPath(stage.output, step.agent, state.review.round, step.repo);
       // The artifact reads as before: the report, then its data as a json block (structured output comes apart).
       const text = t.structured !== undefined ? `${t.report}\n\n\`\`\`json\n${JSON.stringify(t.structured, null, 2)}\n\`\`\`` : t.report;
       this.svc.writeArtifact(taskId, artifact, text.endsWith('\n') ? text : `${text}\n`);
-      this.dispatch(taskId, {
+      await this.dispatch(taskId, {
         type: 'stage_completed',
         agent: step.agent,
         ...(step.repo && { repo: step.repo }),
@@ -954,7 +954,7 @@ class Engine extends EventEmitter {
       this.liveUsage.delete(taskId);
       this.activity.delete(taskId);
       const u: SessionUsage = session.usage ? session.usage() : {};
-      this.svc.record(taskId, {
+      await this.svc.record(taskId, {
         type: 'agent_stopped',
         agent: step.agent,
         payload: {
@@ -1107,7 +1107,7 @@ class Engine extends EventEmitter {
           // package.json script): in the sandbox, which lets git write its objects and refs, not its config or hooks.
           const c = await runShell(`git commit -F ${shq(message)}`, { cwd: r.dir, env: withoutCredentials(getChildEnv(), config.policy.checkEnv), timeoutMs: 15 * 60000, launch: this.sandboxFor(config, [r.dir, ...(await r.git.gitDirs())], { git: true }) });
           if (c.code !== 0) {
-            this.dispatch(s.taskId, { type: 'commit_failed', repo: r.name, output: c.output.trim().slice(-8000) });
+            await this.dispatch(s.taskId, { type: 'commit_failed', repo: r.name, output: c.output.trim().slice(-8000) });
             return;
           }
         }
@@ -1116,7 +1116,7 @@ class Engine extends EventEmitter {
     } finally {
       await fs.promises.rm(tmp, { recursive: true, force: true });
     }
-    this.dispatch(s.taskId, { type: 'committed', repos: committed });
+    await this.dispatch(s.taskId, { type: 'committed', repos: committed });
   }
 
   /**
@@ -1191,7 +1191,7 @@ class Engine extends EventEmitter {
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
-    this.dispatch(s.taskId, { type: 'published', prs });
+    await this.dispatch(s.taskId, { type: 'published', prs });
     if (s.answers.some((a) => a.id === 'confirm-push' && a.option === 'push-comment')) {
       this.setLive(s.taskId, { phase: 'publishing', text: `Commenting on ${(s.source as Extract<Source, { kind: 'jira' }>).key}` });
       await this.comment(s, `Draft PRs, in merge order:\n\n${s.repos.filter((r) => prs[r.name]).map((r) => `${r.name}: ${prs[r.name]}`).join('\n')}`, 'prs');
@@ -1214,9 +1214,9 @@ class Engine extends EventEmitter {
     const key = s.source.key;
     const client = this.atlassian();
     const via = client ? null : this.mcpIntake();
-    const record = (r: CommentResult): CommentResult => {
+    const record = async (r: CommentResult): Promise<CommentResult> => {
       try {
-        this.svc.record(s.taskId, { type: 'jira_comment', key, what, ok: r.ok, via: client ? 'api' : via ? `mcp:${via.server}` : 'none', ...(r.error && { error: r.error }), ...(r.id && { commentId: r.id }), text });
+        await this.svc.record(s.taskId, { type: 'jira_comment', key, what, ok: r.ok, via: client ? 'api' : via ? `mcp:${via.server}` : 'none', ...(r.error && { error: r.error }), ...(r.id && { commentId: r.id }), text });
       } catch {
         // the task folder may be gone
       }
@@ -1278,7 +1278,7 @@ class Engine extends EventEmitter {
       session.close();
       this.hooks.unregister(hook.token);
       const u: SessionUsage = session.usage ? session.usage() : {};
-      this.svc.record(s.taskId, { type: 'agent_stopped', agent: 'jira-comment', payload: { costUsd: t.costUsd || session.costUsd || 0, turns: t.turns || session.turns || 0, sessionId: t.sessionId || session.sessionId, cwd: this.workspace, transcript, ...(u.model && { model: u.model }) } });
+      await this.svc.record(s.taskId, { type: 'agent_stopped', agent: 'jira-comment', payload: { costUsd: t.costUsd || session.costUsd || 0, turns: t.turns || session.turns || 0, sessionId: t.sessionId || session.sessionId, cwd: this.workspace, transcript, ...(u.model && { model: u.model }) } });
       await this.svc.flushTranscripts();
     }
   }
@@ -1318,21 +1318,21 @@ class Engine extends EventEmitter {
       return { name, output: a.output, runs: a.runs };
     });
     const pipeline = taskPipeline(agents, { scenario: s.scenario, auto: s.auto, maxRounds: s.limits.reviewRounds });
-    this.dispatch(taskId, { type: 'pipeline_changed', pipeline: { mode: pipeline.mode, stages: pipeline.stages, reviewLoop: pipeline.reviewLoop } });
+    await this.dispatch(taskId, { type: 'pipeline_changed', pipeline: { mode: pipeline.mode, stages: pipeline.stages, reviewLoop: pipeline.reviewLoop } });
     pipeline.warnings.forEach((w) => this.log('warn', w.message, taskId));
     return { warnings: pipeline.warnings.map((w) => w.message) };
   }
 
-  resume(taskId: string): void {
+  async resume(taskId: string): Promise<void> {
     const s = this.svc.state(taskId);
-    if (s.status === 'stopped') this.dispatch(taskId, { type: 'resumed' });
+    if (s.status === 'stopped') await this.dispatch(taskId, { type: 'resumed' });
     this.launch(taskId);
   }
 
   async answer(taskId: string, checkpointId: string, option: string, feedback?: string): Promise<void> {
     let s = this.svc.state(taskId);
-    if (s.status === 'stopped' && s.checkpoint) s = this.dispatch(taskId, { type: 'resumed' }).state;
-    const r = this.dispatch(taskId, { type: 'checkpoint_answered', id: checkpointId, option, ...(feedback && { feedback }) });
+    if (s.status === 'stopped' && s.checkpoint) s = (await this.dispatch(taskId, { type: 'resumed' })).state;
+    const r = await this.dispatch(taskId, { type: 'checkpoint_answered', id: checkpointId, option, ...(feedback && { feedback }) });
     if (option === 'approve-post') {
       const ctx = await this.checkpointContext(s, s.checkpoint);
       this.comment(r.state, `Plan approved.\n\n${(ctx.text || '').slice(0, 20000)}`, 'plan');
@@ -1349,7 +1349,7 @@ class Engine extends EventEmitter {
   /** Stops the running agent (if any) and the task; resuming later re-runs the same step. */
   async stop(taskId: string, reason = 'stopped by you'): Promise<void> {
     const s = this.svc.state(taskId);
-    if (s.status !== 'stopped' && s.status !== 'done') this.dispatch(taskId, { type: 'stopped', reason });
+    if (s.status !== 'stopped' && s.status !== 'done') await this.dispatch(taskId, { type: 'stopped', reason });
     this.denyPermissions(taskId, 'the task was stopped');
     const gates = this.gateRuns.get(taskId);
     if (gates) gates.abort();
@@ -1415,7 +1415,7 @@ class Engine extends EventEmitter {
   async remove(taskId: string): Promise<void> {
     this.pushContext.delete(taskId);
     if (this.running.has(taskId)) await this.stop(taskId);
-    this.svc.remove(taskId);
+    await this.svc.remove(taskId);
     this.errors.delete(taskId);
     this.emit('changed', taskId);
   }

@@ -167,7 +167,7 @@ function activate(context: vscode.ExtensionContext) {
       if (!taskId) return;
       await orch.ensureReady();
       try {
-        orch.engine!.resume(taskId);
+        await orch.engine!.resume(taskId);
       } catch (e) {
         vscode.window.showErrorMessage((e as Error).message);
       }

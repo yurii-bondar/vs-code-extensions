@@ -156,7 +156,7 @@ test('engine: dirty checkouts block branch mode, stop interrupts a hanging agent
     assert.equal(view.summary(h.engine, { taskId, state: s }).mini.find((m) => m.agent === 'developer')!.status, 'paused');
 
     setChildEnv({ ...getChildEnv(), FAKE_HANG: '' });
-    h.engine.resume(taskId);
+    await h.engine.resume(taskId);
     s = await waitFor(() => (!h.engine.isRunning(taskId) && h.engine.svc.state(taskId).checkpoint ? h.engine.svc.state(taskId) : null), 30000);
     assert.equal(s.checkpoint!.id, 'confirm-push');
     assert.equal(only(h.engine.svc.events(taskId), 'stage_started').filter((e) => e.agent === 'developer').length, 1, 'resume continued the same step');

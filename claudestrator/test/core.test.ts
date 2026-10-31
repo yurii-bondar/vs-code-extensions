@@ -571,16 +571,16 @@ test('store: tasks persist, rejections are logged, torn tails are ignored', asyn
   const ws = tmp('cs-store-');
   const { pipeline, config: cfg } = defaultPipeline();
   const svc = new TaskService({ workspace: ws });
-  const started = svc.start({ input: 'x', source: { kind: 'text', text: 'x' }, auto: false, pipeline, config: cfg });
+  const started = await svc.start({ input: 'x', source: { kind: 'text', text: 'x' }, auto: false, pipeline, config: cfg });
   assert.ok(started.created);
   assert.ok(fs.existsSync(path.join(ws, '.orch', '.gitignore')));
-  const second = svc.start({ input: 'y', source: { kind: 'text', text: 'y' }, auto: false, pipeline, config: cfg });
+  const second = await svc.start({ input: 'y', source: { kind: 'text', text: 'y' }, auto: false, pipeline, config: cfg });
   assert.notEqual(second.taskId, started.taskId);
-  failed(svc.dispatch(started.taskId, { type: 'stage_started', agent: 'planner' }));
+  failed(await svc.dispatch(started.taskId, { type: 'stage_started', agent: 'planner' }));
   assert.equal(svc.events(started.taskId).at(-1)!.type, 'transition_rejected');
   fs.appendFileSync(path.join(svc.dir(started.taskId), 'events.ndjson'), '{"seq": 3, "type": "no');
   assert.equal(svc.state(started.taskId).phase, 'intake');
-  assert.ok(svc.dispatch(started.taskId, { type: 'intake_completed', spec }).ok);
+  assert.ok((await svc.dispatch(started.taskId, { type: 'intake_completed', spec })).ok);
   assert.equal(svc.list().length, 2);
 });
 
@@ -830,7 +830,7 @@ test('scenarios: the state machine finishes a report scenario without git; intak
   const svc = new TaskService({ workspace: ws });
   const jira: Source = { kind: 'jira', key: 'PROJ-9' };
   assert.deepEqual(svc.idFor({ source: jira, scenario: 'readiness' }), { taskId: 'PROJ-9-check', exists: false });
-  svc.start({ input: 'PROJ-9', source: jira, scenario: 'readiness', auto: false, pipeline: bp(c, { scenario: 'readiness' }), config: c });
+  await svc.start({ input: 'PROJ-9', source: jira, scenario: 'readiness', auto: false, pipeline: bp(c, { scenario: 'readiness' }), config: c });
   assert.deepEqual(svc.idFor({ source: jira, scenario: 'readiness' }), { taskId: 'PROJ-9-check', exists: true }, 'an unfinished check continues');
   assert.deepEqual(svc.idFor({ source: jira }), { taskId: 'PROJ-9', exists: false }, 'the delivery task has its own id');
   assert.equal(svc.state('PROJ-9-check').scenario, 'readiness');
@@ -1061,7 +1061,7 @@ test('groups and instructions: written in the composer, frozen into a task, and 
   assert.deepEqual(engine.svc.state((await engine.start({ text: 'Plain' })).taskId).instructions, [], 'none picked: none given');
 
   // Every agent's prompt names the group and carries the instructions verbatim.
-  engine.dispatch(r.taskId, { type: 'intake_completed', spec: { ...spec, id: r.taskId } });
+  await engine.dispatch(r.taskId, { type: 'intake_completed', spec: { ...spec, id: r.taskId } });
   s = engine.svc.state(r.taskId);
   const prompt = buildAgentPrompt({ state: s, next: runOf(nx(s)), taskDir: ws, language: 'English' });
   assert.match(prompt, /Part of the epic "Payments" \(Jira CP-7\)\./);
@@ -1399,7 +1399,7 @@ test('view: a task whose log does not replay gets a whole card, so the list and 
   const ws = tmp('cs-corrupt-');
   const { pipeline, config: cfg } = defaultPipeline();
   const svc = new TaskService({ workspace: ws });
-  const ok = svc.start({ input: 'x', source: { kind: 'text', text: 'x' }, auto: false, pipeline, config: cfg });
+  const ok = await svc.start({ input: 'x', source: { kind: 'text', text: 'x' }, auto: false, pipeline, config: cfg });
   const bad = path.join(ws, '.orch', 'tasks', 'T-BROKEN');
   fs.mkdirSync(bad, { recursive: true });
   fs.writeFileSync(path.join(bad, 'events.ndjson'), '{"seq":1,"type":"stage_started","agent":"x","at":"2026-01-01T00:00:00.000Z"}\n');
@@ -1492,24 +1492,24 @@ test('store: an append keeps the cached state and events current, and a write by
   const ws = tmp('cs-store-');
   const { pipeline, config: cfg } = defaultPipeline();
   const svc = new TaskService({ workspace: ws });
-  const { taskId } = svc.start({ input: 'x', source: { kind: 'text', text: 'x' }, auto: false, pipeline, config: cfg });
+  const { taskId } = await svc.start({ input: 'x', source: { kind: 'text', text: 'x' }, auto: false, pipeline, config: cfg });
   const file = path.join(ws, '.orch', 'tasks', taskId, 'events.ndjson');
   const before = svc.state(taskId);
-  svc.record(taskId, { type: 'note', message: 'one' });
+  await svc.record(taskId, { type: 'note', message: 'one' });
   const after = svc.state(taskId);
   assert.notEqual(after, before, 'a new log is a new state object: what the dashboard derives from it is cached by it');
   assert.deepEqual(after, before);
   assert.deepEqual(svc.events(taskId).map((e) => e.seq), [1, 2]);
-  const r = svc.dispatch(taskId, { type: 'intake_completed', spec: { id: taskId, source: { kind: 'text', text: 'x' }, title: 'x', description: '', acceptanceCriteria: [], links: [] } });
+  const r = await svc.dispatch(taskId, { type: 'intake_completed', spec: { id: taskId, source: { kind: 'text', text: 'x' }, title: 'x', description: '', acceptanceCriteria: [], links: [] } });
   assert.ok(r.ok);
   assert.equal(svc.state(taskId), r.state, 'the state the transition made, without a replay');
   // The claudestrator CLI appends to the same log: the signature changes, and it is read again.
   fs.appendFileSync(file, `${JSON.stringify({ seq: 4, type: 'note', message: 'from the CLI', at: new Date().toISOString() })}\n`);
   assert.equal(svc.events(taskId).at(-1)!.type, 'note');
-  assert.equal(svc.record(taskId, { type: 'note', message: 'two' }).seq, 5, 'numbered after it');
+  assert.equal((await svc.record(taskId, { type: 'note', message: 'two' })).seq, 5, 'numbered after it');
   // A torn line left by a crash is cut and the next event numbered from what is whole.
   fs.appendFileSync(file, '{"seq":6,"type":"no');
-  assert.equal(svc.record(taskId, { type: 'note', message: 'three' }).seq, 6);
+  assert.equal((await svc.record(taskId, { type: 'note', message: 'three' })).seq, 6);
   assert.deepEqual(fs.readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l).seq), [1, 2, 3, 4, 5, 6]);
 });
 

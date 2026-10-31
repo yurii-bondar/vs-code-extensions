@@ -345,7 +345,7 @@ class DashboardPanel implements RpcHandlers {
 
   async $run({ taskId }: { taskId: string }) {
     await this.orch.ensureReady();
-    this.engine.resume(taskId);
+    await this.engine.resume(taskId);
   }
 
   async $stop({ taskId }: { taskId: string }) {
