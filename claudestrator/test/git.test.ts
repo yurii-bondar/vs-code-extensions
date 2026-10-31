@@ -117,3 +117,18 @@ test("git: the review diff takes in many new files at once and leaves the checko
   assert.equal(git(api, 'status', '--porcelain', '--', 'gen').split('\n').filter(Boolean).length, 1, 'still untracked: ?? gen/');
   assert.equal(git(api, 'diff', '--cached', '--name-only'), '', 'nothing staged in your index');
 });
+
+test('git: when one repo cannot be put on the task branch, the ones before it are put back', async () => {
+  for (const mode of ['branch', 'worktree'] as const) {
+    const ws = workspace(['api', 'web'], '');
+    // web's base does not exist, so its branch cannot be made from it.
+    const cfg = { repos: { api: { name: 'api', path: 'api', baseBranch: 'main' }, web: { name: 'web', path: 'web', baseBranch: 'develop' } }, baseBranch: 'main' } as unknown as Pick<Config, 'repos' | 'baseBranch'>;
+    const p = await prepareRepos(ws, task(['api', 'web'], mode), cfg);
+    assert.ok(!p.ok && p.code === 'switch_failed' && /web:/.test(p.error), JSON.stringify(p));
+    const api = path.join(ws, 'api');
+    assert.equal(git(api, 'rev-parse', '--abbrev-ref', 'HEAD'), 'main', `${mode}: api is where it was`);
+    assert.equal(git(api, 'branch', '--list', 'feat/cap-bets'), '', `${mode}: the branch it got is gone`);
+    assert.equal(fs.existsSync(path.join(ws, '.orch', 'worktrees', 'T-1', 'api')), false, `${mode}: no worktree left`);
+    assert.doesNotMatch(git(api, 'worktree', 'list'), /worktrees/, `${mode}: none registered either`);
+  }
+});

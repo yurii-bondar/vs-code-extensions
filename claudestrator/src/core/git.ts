@@ -306,6 +306,8 @@ async function prepareRepos(workspace: string, state: TaskState, config: RepoLoo
   if (blocked.length) return { ok: false, code: 'repos_not_ready', error: 'some repos are not ready; nothing was changed', branch, blocked };
 
   const results: PrepareResult[] = [];
+  /** What this call changed, to put back if a later repo fails: all or nothing. */
+  const undo: (() => Promise<unknown>)[] = [];
   for (const { name, checkout, dir, base, git } of repos) {
     if ((await git.isRepo()) && (await git.branch()) === branch) {
       results.push({ repo: name, dir, status: 'ready' });
@@ -315,21 +317,35 @@ async function prepareRepos(workspace: string, state: TaskState, config: RepoLoo
     const fetched = (await main.git('fetch', 'origin', base)).code === 0;
     const from = fetched || (await main.git('rev-parse', '--verify', '--quiet', `origin/${base}`)).code === 0 ? `origin/${base}` : base;
     const note = fetched ? {} : { note: 'fetch failed; branched from the local ref' };
+    const had = await main.hasBranch(branch);
+    const dropBranch = (): Promise<unknown> => (had ? Promise.resolve() : main.git('branch', '-D', branch));
     let r: ExecResult;
     if (worktree) {
       await fs.promises.mkdir(path.dirname(dir), { recursive: true });
-      r = (await main.hasBranch(branch)) ? await main.git('worktree', 'add', dir, branch) : await main.git('worktree', 'add', '-b', branch, dir, from);
-    } else if (await main.hasBranch(branch)) {
-      r = await main.git('switch', branch);
-      if (r.code === 0) {
-        results.push({ repo: name, dir, status: 'switched' });
-        continue;
-      }
-    } else r = await main.git('switch', '-c', branch, from);
-    results.push(r.code === 0 ? { repo: name, dir, status: 'created', from, ...note } : { repo: name, dir, status: 'failed', error: r.stderr.trim() });
+      r = had ? await main.git('worktree', 'add', dir, branch) : await main.git('worktree', 'add', '-b', branch, dir, from);
+      // A worktree half made (a timeout on a big repo) would make the next try fail with "already exists".
+      const removeWorktree = async (): Promise<void> => {
+        await main.git('worktree', 'remove', '--force', dir);
+        await fs.promises.rm(dir, { recursive: true, force: true });
+        await main.git('worktree', 'prune');
+      };
+      if (r.code === 0) undo.push(async () => (await removeWorktree(), dropBranch()));
+      else await removeWorktree();
+    } else {
+      // Where the checkout was: its branch, or the commit of a detached HEAD.
+      const previous = await main.branch();
+      const back = previous === 'HEAD' ? ['--detach', (await main.git('rev-parse', 'HEAD')).stdout.trim()] : previous ? [previous] : null;
+      r = had ? await main.git('switch', branch) : await main.git('switch', '-c', branch, from);
+      if (r.code === 0 && back) undo.push(async () => (await main.git('switch', ...back), dropBranch()));
+    }
+    results.push(r.code !== 0 ? { repo: name, dir, status: 'failed', error: r.stderr.trim() } : had && !worktree ? { repo: name, dir, status: 'switched' } : { repo: name, dir, status: 'created', from, ...note });
+    if (r.code !== 0) break;
   }
   const failed = results.filter((r) => r.status === 'failed');
-  if (failed.length) return { ok: false, code: 'switch_failed', error: failed.map((f) => `${f.repo}: ${f.error}`).join('\n'), branch };
+  if (failed.length) {
+    for (const step of undo.reverse()) await step();
+    return { ok: false, code: 'switch_failed', error: `${failed.map((f) => `${f.repo}: ${f.error}`).join('\n')}\nThe repos prepared before it were put back as they were.`, branch };
+  }
   return { ok: true, branch, repos: results };
 }
 
