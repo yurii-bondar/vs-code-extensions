@@ -278,7 +278,8 @@ class Engine extends EventEmitter {
   permissions: Map<string, { request: PermissionRequest; resolve: (a: PermissionAnswer) => void }>;
   liveCost: Map<string, number>;
   liveUsage: Map<string, UsageItem & { key: string }>;
-  limits: EngineLimits | null;
+  /** Each account's latest 5-hour and weekly limits, as agents last saw them, by its config folder. */
+  limitsBy = new Map<string, EngineLimits>();
   svc: TaskService;
   stallMs: number;
   /** When each task's agent last showed a sign of work: any output, a tool call, a question to you. */
@@ -304,8 +305,6 @@ class Engine extends EventEmitter {
     this.permissions = new Map();
     this.liveCost = new Map();
     this.liveUsage = new Map();
-    /** The account's latest 5-hour and weekly limits, as agents last saw them. */
-    this.limits = null;
     this.svc = new TaskService({ workspace: opts.workspace, now: opts.now, onAppend: (taskId) => this.emit('changed', taskId) });
     this.stallMs = opts.stallMs ?? STALL_MS;
   }
@@ -519,6 +518,22 @@ class Engine extends EventEmitter {
 
   lastError(taskId: string) {
     return this.errors.get(taskId) || null;
+  }
+
+  /** The account agents start under now: its config folder, '' for Claude Code's default. */
+  account(): string {
+    const opts = (this.runner as Partial<Pick<ClaudeRunner, 'opts'>>).opts;
+    return (opts && opts.env().CLAUDE_CONFIG_DIR) || '';
+  }
+
+  /** The limits of the account agents start under now: another account's used-up window does not hold this one back. */
+  get limits(): EngineLimits | null {
+    return this.limitsBy.get(this.account()) ?? null;
+  }
+
+  set limits(limits: EngineLimits | null) {
+    if (limits) this.limitsBy.set(this.account(), limits);
+    else this.limitsBy.delete(this.account());
   }
 
   /** Runs in the background and reports failures as events instead of throwing. */
@@ -976,10 +991,11 @@ class Engine extends EventEmitter {
       env: this.agentEnv(hook.env, config),
       name: `claudestrator ${taskId} · ${label}`,
       onOutput: emitItem,
-      onLimits: (limits) => {
-        this.limits = limits;
+      // The account the session started under: switching accounts meanwhile does not move its limits to the other.
+      onLimits: ((account) => (limits: EngineLimits) => {
+        this.limitsBy.set(account, limits);
         this.emit('limits', limits);
-      },
+      })(this.account()),
       ...(budget !== undefined && { maxBudgetUsd: Math.max(0.01, budget - spent) }),
       });
     } catch (e) {

@@ -30,6 +30,28 @@ test('limits: no agent starts while Claude Code reports the account limit as use
   }
 });
 
+test("limits: one account's used-up window does not hold back agents of another", async () => {
+  const ws = workspace(['api'], 'repos:\n  api: {}\n');
+  const h = await harness(ws, { FAKE_REPOS: 'api' });
+  try {
+    const opts = (h.engine.runner as unknown as { opts: { env: () => NodeJS.ProcessEnv } }).opts;
+    opts.env = () => ({ CLAUDE_CONFIG_DIR: '/accounts/work' });
+    const resetsAt = Math.round(Date.now() / 1000) + 3600;
+    h.engine.limits = { fiveHour: { pct: 100, resetsAt, status: 'rejected' }, sevenDay: undefined, at: Date.now() };
+    // You switch to your other account in the header.
+    opts.env = () => ({ CLAUDE_CONFIG_DIR: '/accounts/personal' });
+    const limitsNow = () => h.engine.limits;
+    assert.equal(limitsNow(), null);
+    const { taskId } = await h.engine.start({ text: 'Do a thing' });
+    const s = await h.engine.run(taskId);
+    assert.equal(s!.checkpoint!.id, 'approve-plan', JSON.stringify(h.engine.lastError(taskId)));
+    opts.env = () => ({ CLAUDE_CONFIG_DIR: '/accounts/work' });
+    assert.equal(limitsNow()!.fiveHour!.status, 'rejected', 'the first account still waits for its reset');
+  } finally {
+    h.hooks.dispose();
+  }
+});
+
 test('limits: limits.parallelTasks keeps one more task from starting', async () => {
   const ws = workspace(['api'], 'repos:\n  api: {}\ngit: { mode: worktree }\nlimits: { parallelTasks: 1 }\n');
   const h = await harness(ws, { FAKE_REPOS: 'api' });
