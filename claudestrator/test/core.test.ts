@@ -1495,7 +1495,60 @@ test('config: what the project config relaxes of your safety policy is said, not
   };
   const said = await project("policy: { sandbox: false, network: ['*'], protectedBranches: [main], forbidAiAttribution: false, allowNoVerify: true, draftPrsOnly: false }\njira: { allowedProjects: [CP, OPS] }\n");
   for (const m of [/turns the sandbox off/, /reach any host/, /no longer protects master/, /allows AI attribution/, /git hooks be skipped/, /not as drafts|instead of as drafts/, /Jira projects you did not \(OPS\)/]) assert.ok(said.some((x) => m.test(x)), `${m}: ${said.join(' | ')}`);
-  assert.deepEqual(await project("policy: { sandbox: true, protectedBranches: [main, master, release], network: [npm.acme.corp] }\njira: { allowedProjects: [CP] }\n"), [], 'tightening it says nothing');
+  assert.deepEqual(await project("policy: { sandbox: true, protectedBranches: [main, master, release] }\njira: { allowedProjects: [CP] }\n"), [], 'tightening it says nothing');
+  // What widens the sandbox without turning it off: a host, a folder, a credential for the checks, a tool that reaches out.
+  const wider = await project('policy: { network: [evil.example], writable: [~/Library/LaunchAgents], checkEnv: [GH_TOKEN, DATABASE_URL] }\nagents:\n  developer: { tools: [Read, Edit, Write, Bash, WebFetch, mcp__github] }\n');
+  for (const m of [/reach evil\.example/, /write ~\/Library\/LaunchAgents/, /hands GH_TOKEN, DATABASE_URL to checks.*a GitHub token/, /gives the developer agent WebFetch, mcp__github/]) assert.ok(wider.some((x) => m.test(x)), `${m}: ${wider.join(' | ')}`);
+  fs.writeFileSync(path.join(home, '.claudestrator', 'config.yaml'), 'policy: { forbidAiAttribution: true, network: [evil.example], checkEnv: [DATABASE_URL] }\njira: { allowedProjects: [CP] }\n');
+  assert.ok(!(await project('policy: { network: [evil.example], checkEnv: [DATABASE_URL] }\n')).some((x) => /evil|DATABASE_URL/.test(x)), 'what your own config already allows is not news');
+});
+
+test("config: a project's or a library's instruction files stay inside it, and none is a credential or a system file", async () => {
+  const home = fs.realpathSync(tmp('cs-home-'));
+  const ws = fs.realpathSync(tmp('cs-ws-'));
+  const lib = fs.realpathSync(tmp('cs-lib-'));
+  fs.mkdirSync(path.join(home, '.aws'));
+  fs.writeFileSync(path.join(home, '.aws', 'credentials'), '[default]\naws_secret_access_key = x\n');
+  fs.writeFileSync(path.join(home, 'notes.md'), 'Mine.\n');
+  fs.mkdirSync(path.join(ws, '.claudestrator', 'prompts'), { recursive: true });
+  fs.writeFileSync(path.join(ws, '.claudestrator', 'prompts', 'dev.md'), 'Be brief.\n');
+  fs.symlinkSync(path.join(home, 'notes.md'), path.join(ws, '.claudestrator', 'prompts', 'link.md'));
+  fs.writeFileSync(path.join(lib, 'library.yaml'), 'agents:\n  security: { extends: reviewer, instructions: { mode: append, file: ../outside.md } }\n');
+  fs.writeFileSync(path.join(path.dirname(lib), 'outside.md'), 'x\n');
+  const load = async (projectYaml: string, userYaml = '') => {
+    fs.writeFileSync(path.join(ws, '.claudestrator', 'config.yaml'), projectYaml);
+    fs.mkdirSync(path.join(home, '.claudestrator'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.claudestrator', 'config.yaml'), userYaml);
+    return config.loadConfig({ workspace: ws, home });
+  };
+  const refused = async (projectYaml: string, userYaml?: string): Promise<string> => {
+    const r = await load(projectYaml, userYaml);
+    assert.ok(!r.ok, `refused: ${projectYaml}`);
+    return r.errors.map((e) => e.message).join('\n');
+  };
+  assert.ok((await load('agents:\n  developer: { instructions: { mode: append, file: ./prompts/dev.md } }\n')).ok);
+  assert.match(await refused('agents:\n  developer: { instructions: { file: ../../outside.md } }\n'), /outside the workspace/);
+  assert.match(await refused('agents:\n  developer: { instructions: { file: ./prompts/link.md } }\n'), /outside the workspace/, 'a link out of it too');
+  assert.match(await refused(`agents:\n  developer: { instructions: { file: ${path.join(home, '.aws', 'credentials')} } }\n`), /holds credentials/);
+  const unused = await load(`libraries: [${lib}]\n`);
+  assert.ok(unused.ok && unused.warnings.some((w) => w.agent === 'security' && /outside the library/.test(w.message)), 'an agent nothing runs is a warning, as for a missing file');
+  assert.match(await refused(`libraries: [${lib}]\npipeline: [planner, developer, security]\n`), /outside the library/);
+  assert.match(await refused('', `agents:\n  developer: { instructions: { file: ${path.join(home, '.aws', 'credentials')} } }\n`), /holds credentials/, 'your own config names no credential either');
+  assert.ok((await load('', `agents:\n  developer: { instructions: { mode: append, file: ${path.join(home, 'notes.md')} } }\n`)).ok, 'your own config names any other file');
+  if (fs.existsSync('/proc/self/environ')) assert.match(await refused('agents:\n  developer: { instructions: { file: /proc/self/environ } }\n'), /system file/);
+});
+
+test('config: policy.writable opens no home folder, nothing above it and not the whole disk', async () => {
+  for (const w of ['~', '~/', '/', '~/.']) assert.ok(validateConfigLayer({ policy: { writable: [w] } }).length, `${w} is refused by the schema`);
+  assert.deepEqual(validateConfigLayer({ policy: { writable: ['~/.cache/go-build', '/opt/cache dir'] } }), []);
+  const home = fs.realpathSync(tmp('cs-home-'));
+  const ws = tmp('cs-ws-');
+  fs.mkdirSync(path.join(ws, '.claudestrator'));
+  for (const w of [path.dirname(home), `${home}/x/..`]) {
+    fs.writeFileSync(path.join(ws, '.claudestrator', 'config.yaml'), `policy: { writable: ['${w}'] }\n`);
+    const r = await config.loadConfig({ workspace: ws, home });
+    assert.ok(!r.ok && r.errors.some((e) => e.code === 'writable_too_wide'), w);
+  }
 });
 
 test('view: streamed text of one step merges into one message, other items keep their order', async () => {
@@ -1538,7 +1591,7 @@ test('config: read again only when a file it comes from changes, and a path to a
     assert.ok(r.ok && r.warnings.some((w) => w.code === 'context_missing' && w.source === '/dev/zero'), 'a context file that cannot be read is a warning, not a hang');
     fs.writeFileSync(path.join(dir, 'config.yaml'), 'agents:\n  developer: { instructions: { file: /dev/zero } }\n');
     const bad = await config.loadConfig({ workspace: ws, home });
-    assert.ok(!bad.ok && bad.errors.some((e) => /not a regular file/.test(e.message)), 'instructions from a device are an error, not a hang');
+    assert.ok(!bad.ok && bad.errors.some((e) => /system file|not a regular file/.test(e.message)), 'instructions from a device are an error, not a hang');
   }
 });
 

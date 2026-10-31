@@ -7,6 +7,7 @@ import * as YAML from 'yaml';
 import { AsyncLocalStorage } from 'async_hooks';
 import { validateConfigLayer, validateAgentPatch, validateLibraryLayer, SCENARIO_OUTPUT, JIRA_KEY } from './protocol';
 import { ORCH_DIR } from './store';
+import { SECRET_PATHS, GITHUB_TOKENS } from './settings';
 import type { Agent, Config, CustomScenario, Diagnostic, Effort, Gate, GitMode, GroupType, Output, Policy, RepoConfig, Runs, ScenarioStep, TaskGroup, TaskInstruction } from './types';
 
 // ---------- the shapes of a config layer, as written in config.yaml ----------
@@ -83,6 +84,8 @@ interface InstructionOp {
   source: string;
   /** The folder of the config that names these instructions: `{{dir}}` in them becomes this path. */
   dir: string;
+  /** The layer that names them: `project`, `user`, `library:<name>` or `builtin`. */
+  layer: string;
 }
 
 /** An agent while the layers are merged: its fields so far, before `extends` is followed. */
@@ -428,13 +431,13 @@ const defined = <T extends object>(obj: T): Partial<T> => Object.fromEntries(Obj
 function toOp(layer: Layer, input: InstructionsInput | undefined): InstructionOp | undefined {
   if (input === undefined) return undefined;
   const dir = layer.baseDir;
-  if (typeof input === 'string') return { mode: 'replace', text: input, source: `${layer.name} (inline)`, dir };
+  if (typeof input === 'string') return { mode: 'replace', text: input, source: `${layer.name} (inline)`, dir, layer: layer.name };
   const mode = input.mode || 'replace';
   if (input.file !== undefined) {
     const file = path.resolve(layer.baseDir, input.file);
-    return { mode, file, source: file, dir };
+    return { mode, file, source: file, dir, layer: layer.name };
   }
-  return { mode, text: input.text ?? '', source: `${layer.name} (inline)`, dir };
+  return { mode, text: input.text ?? '', source: `${layer.name} (inline)`, dir, layer: layer.name };
 }
 
 function mergeLayers(layers: Layer[]): Merged {
@@ -801,14 +804,77 @@ async function loadConfig({ workspace, home, flags }: { workspace: string; home?
   return result;
 }
 
+const within = (abs: string, root: string): boolean => abs === root || abs.startsWith(root + path.sep);
+/** A path with its links followed; one that is not there yet, from its nearest folder that is. */
+async function realOrSame(p: string): Promise<string> {
+  const rest: string[] = [];
+  for (let cur = path.resolve(p); ; ) {
+    try {
+      return path.join(await fs.promises.realpath(cur), ...rest);
+    } catch {
+      const parent = path.dirname(cur);
+      if (parent === cur) return path.resolve(p);
+      rest.unshift(path.basename(cur));
+      cur = parent;
+    }
+  }
+}
+/** Folders whose files are the system's, not text: `/proc/self/environ` reads as a file of your environment. */
+const SYSTEM_DIRS = ['/proc', '/sys', '/dev'];
+
+/** Whether a path is one of SECRET_PATHS (`~/.ssh`, `~/.claude*\/.credentials.json`) or inside one. */
+function secretPath(abs: string, home: string): boolean {
+  return SECRET_PATHS.some((p) => {
+    const parts = p.replace(/^~(?=\/)/, home).split('/');
+    const re = new RegExp(`^${parts.map((part) => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*')).join('/')}(/|$)`);
+    return re.test(abs.split(path.sep).join('/'));
+  });
+}
+
+/**
+ * Why an agent's instruction file may not be read, or null. Its text goes into the agent's system prompt, so a
+ * project's config (a repo someone else wrote) names one inside the workspace, and a library one inside the library;
+ * no config names a credential or a system file.
+ */
+async function instructionFileProblem(op: InstructionOp, workspace: string, home: string): Promise<string | null> {
+  const file = op.file!;
+  const real = await realOrSame(file);
+  if (SYSTEM_DIRS.some((d) => within(real, d))) return `${file} is a system file, not instructions`;
+  if (secretPath(real, await realOrSame(home)) || secretPath(path.resolve(file), home)) return `${file} holds credentials, not instructions`;
+  const root = op.layer === 'project' ? workspace : isLibraryLayer(op.layer) ? op.dir : null;
+  if (root && !within(real, await realOrSame(root))) return `${file} is outside ${op.layer === 'project' ? 'the workspace' : `the library (${op.dir})`}: ${op.layer === 'project' ? "a project's config names instruction files in the workspace" : 'a library names instruction files in its own folder'}`;
+  return null;
+}
+
+/** `policy.writable` entries that open your home folder, one above it or the whole disk to sandboxed commands. */
+function tooWide(writable: string[], home: string): string[] {
+  const homeDir = path.resolve(home);
+  return writable.filter((w) => {
+    const abs = path.resolve(w.replace(/^~(?=$|[\\/])/, homeDir));
+    return abs === path.parse(abs).root || within(homeDir, abs);
+  });
+}
+
 /** Reads the layers, then every instruction and context file they name, then resolves them (`resolveConfig`). */
 async function readConfig({ workspace, home, flags }: { workspace: string; home?: string | undefined; flags?: Flags | undefined }): Promise<ResolveResult> {
   const { layers, diagnostics, files } = await loadLayers({ workspace, ...(home && { home }) });
   const loadErrors = diagnostics.filter((d) => d.level === 'error');
   if (loadErrors.length) return { ok: false, errors: loadErrors, warnings: diagnostics.filter((d) => d.level === 'warning') };
   const merged = mergeLayers(layers);
+  const homeDir = home ?? os.homedir();
+  const wide = tooWide(merged.policy.writable ?? [], homeDir);
+  if (wide.length) {
+    const error: Diagnostic = { level: 'error', code: 'writable_too_wide', message: `policy.writable opens ${wide.join(', ')} to sandboxed commands: your home folder, a folder above it or the whole disk. Name the folder a tool writes (~/.cache/go-build)` };
+    return { ok: false, errors: [error], warnings: diagnostics.filter((d) => d.level === 'warning') };
+  }
+  // A file no layer may name is not read: it counts as one that cannot be read (an error for an agent that runs).
+  const refused = new Map<string, Error>();
+  for (const op of [...merged.agents.values()].flatMap((d) => d.ops)) {
+    const problem = op.file !== undefined && !refused.has(op.file) ? await instructionFileProblem(op, workspace, homeDir) : null;
+    if (problem) refused.set(op.file!, new Error(problem));
+  }
   const named = [...new Set([...[...merged.agents.values()].flatMap((d) => d.ops.flatMap((op) => (op.file !== undefined ? [op.file] : []))), ...(merged.context ?? [])])];
-  const read = new Map(await Promise.all(named.map(async (f): Promise<[string, string | Error]> => [f, await readBounded(f).catch((e: Error) => e)])));
+  const read = new Map(await Promise.all(named.map(async (f): Promise<[string, string | Error]> => [f, refused.get(f) ?? (await readBounded(f).catch((e: Error) => e))])));
   const readFile: ReadFile = (p) => {
     const v = read.get(p);
     if (v === undefined) throw new Error(`${p} was not read`);
@@ -839,6 +905,19 @@ function loosened(layers: Layer[]): Diagnostic[] {
   if (p.forbidAiAttribution === false && was.forbidAiAttribution) out.push('allows AI attribution in commits and PRs');
   const unprotected = p.protectedBranches ? was.protectedBranches.filter((b) => !p.protectedBranches!.includes(b)) : [];
   if (unprotected.length) out.push(`no longer protects ${unprotected.join(', ')}`);
+  const added = (mine: string[] | undefined, theirs: string[] | undefined): string[] => (mine ?? []).filter((x) => x !== '*' && !(theirs ?? []).includes(x));
+  const network = added(p.network, under.policy.network);
+  if (network.length) out.push(`lets sandboxed commands and MCP reads reach ${network.join(', ')}`);
+  const writable = added(p.writable, under.policy.writable);
+  if (writable.length) out.push(`lets sandboxed commands, checks and git hooks write ${writable.join(', ')}`);
+  const checkEnv = added(p.checkEnv, under.policy.checkEnv);
+  const github = checkEnv.filter((v) => GITHUB_TOKENS.includes(v));
+  if (checkEnv.length) out.push(`hands ${checkEnv.join(', ')} to checks and git hooks${github.length ? ` (${github.join(', ')}: a GitHub token, which can push and merge)` : ''}`);
+  for (const [name, agent] of Object.entries(project.config.agents ?? {})) {
+    const before = (under.agents.get(name) ?? { tools: undefined }).tools ?? [];
+    const reach = (agent.tools ?? []).filter((t) => (t === 'WebFetch' || t === 'WebSearch' || t.startsWith('WebFetch(') || t.startsWith('mcp__')) && !before.includes(t));
+    if (reach.length) out.push(`gives the ${name} agent ${reach.join(', ')}, which reach${reach.length === 1 ? 'es' : ''} outside the sandbox`);
+  }
   const projects = project.config.jira && project.config.jira.allowedProjects;
   const allowed = under.jira.allowedProjects ?? [];
   if (projects && allowed.length && (!projects.length || projects.some((k) => !allowed.includes(k)))) out.push(projects.length ? `allows Jira projects you did not (${projects.filter((k) => !allowed.includes(k)).join(', ')})` : 'allows every Jira project, where your config allows some');

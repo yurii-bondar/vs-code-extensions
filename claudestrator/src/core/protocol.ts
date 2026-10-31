@@ -210,7 +210,7 @@ const CONFIG_LAYER = T.obj({
   'repos?': T.rec(T.str(1), T.obj({ 'role?': T.str(1), 'path?': T.str(1), 'baseBranch?': BRANCH, 'gates?': T.arr(GATE) })),
   'jira?': T.obj({ 'allowedProjects?': T.arr(T.str(1)) }),
   // The sandbox's lists go to sandbox-runtime as its settings: a few entries each, never an unbounded list to validate.
-  'policy?': T.obj({ 'protectedBranches?': T.arr(T.str(1), 0, SANDBOX_LIST), 'draftPrsOnly?': T.bool(), 'forbidAiAttribution?': T.bool(), 'allowNoVerify?': T.bool(), 'sandbox?': T.bool(), 'network?': T.arr(T.re(/^[A-Za-z0-9*.:[\]-]+$/, 'a host name, e.g. npm.acme.corp or *.acme.corp'), 0, SANDBOX_LIST), 'writable?': T.arr(T.re(/^(~|\/|[A-Za-z]:[\\/])/, 'a folder from ~ or the filesystem root, e.g. ~/.cache/go-build'), 0, SANDBOX_LIST), 'checkEnv?': T.arr(T.re(/^[A-Za-z_][A-Za-z0-9_]*$/, 'a variable name, e.g. DATABASE_URL'), 0, SANDBOX_LIST) }),
+  'policy?': T.obj({ 'protectedBranches?': T.arr(T.str(1), 0, SANDBOX_LIST), 'draftPrsOnly?': T.bool(), 'forbidAiAttribution?': T.bool(), 'allowNoVerify?': T.bool(), 'sandbox?': T.bool(), 'network?': T.arr(T.re(/^[A-Za-z0-9*.:[\]-]+$/, 'a host name, e.g. npm.acme.corp or *.acme.corp'), 0, SANDBOX_LIST), 'writable?': T.arr(T.re(/^(~[\\/]|\/|[A-Za-z]:[\\/])(?=.*[^\\/~.\s])/, 'a folder below ~ or the filesystem root, e.g. ~/.cache/go-build'), 0, SANDBOX_LIST), 'checkEnv?': T.arr(T.re(/^[A-Za-z_][A-Za-z0-9_]*$/, 'a variable name, e.g. DATABASE_URL'), 0, SANDBOX_LIST) }),
   'git?': T.obj({ 'mode?': T.oneOf(['branch', 'worktree']) }),
   'editor?': T.str(1),
   'context?': T.arr(T.str(1)),
