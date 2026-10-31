@@ -233,6 +233,9 @@ npm install
 npm test          # state machine, config, guard, intake, and the engine end to end against a fake Claude CLI and real git repos
 npm run preview   # the dashboard in a browser at http://127.0.0.1:4780, on the real engine with a fake agent
 npm run test:live # one small task on haiku against your installed Claude Code: guard, sandbox, commit (a few cents)
+npm run eval      # the agents' instructions against cases with a known answer (below)
 ```
+
+`npm run eval` runs a few cases through the real engine and your installed Claude Code, each a small workspace with a known answer: the reviewer blocks a planted bug and lets a correct, tested change through; the planner names only the repo a ticket is about and plans a bug as a fix; the auditor rates a planted command injection critical or high. Run it after changing an agent's instructions, model or effort. The agents run with their configured models (a dollar or so); `EVAL_MODEL=haiku EVAL_EFFORT=low` makes a run of a few cents, `EVAL_CASES=reviewer-blocks,planner-scope` picks cases, and a failed case keeps its workspace to look at.
 
 Press F5 in VS Code to run the extension. To package, run `npx @vscode/vsce package` and install the `.vsix`.

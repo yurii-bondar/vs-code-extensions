@@ -44,6 +44,7 @@
     "lint": "eslint .",
     "test": "npm run build && node --test dist/test/*.test.js",
     "test:live": "npm run build && node dist/test/live/smoke.js",
+    "eval": "npm run build && node dist/test/live/eval.js",
     "package": "npx @vscode/vsce package",
     "preview": "npm run build && node dist/test/harness/server.js",
     "vscode:prepublish": "npm run build"
