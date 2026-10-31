@@ -2,8 +2,10 @@
 import test from 'node:test';
 import * as assert from 'node:assert/strict';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 
+import { statuslineSnapshot } from '../src/core/env';
 import { workspace, harness, waitFor } from './helpers/e2e';
 
 test('limits: no agent starts while Claude Code reports the account limit as used up', async () => {
@@ -42,4 +44,16 @@ test('limits: limits.parallelTasks keeps one more task from starting', async () 
   } finally {
     h.hooks.dispose();
   }
+});
+
+test("limits: the status line's snapshots are looked for no more than every few seconds", async () => {
+  const account = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-acct-'));
+  fs.mkdirSync(path.join(account, 'statusline'));
+  const write = (pct: number): void => fs.writeFileSync(path.join(account, 'statusline', 's1.json'), JSON.stringify({ five_hour: { used_percentage: pct, resets_at: 1900000000 }, updated_at: 1800000000 }));
+  write(10);
+  const t = 1_000_000;
+  assert.equal((await statuslineSnapshot(account, t))!.fiveHour!.pct, 10);
+  write(55);
+  assert.equal((await statuslineSnapshot(account, t + 1000))!.fiveHour!.pct, 10, 'a refresh a second later reads nothing');
+  assert.equal((await statuslineSnapshot(account, t + 6000))!.fiveHour!.pct, 55, 'a few seconds later it looks again');
 });

@@ -260,7 +260,21 @@ interface StatuslineSnapshot {
   effort?: string;
 }
 
-async function statuslineSnapshot(configDir: string): Promise<StatuslineSnapshot | null> {
+const snapshots = new Map<string, { at: number; value: Promise<StatuslineSnapshot | null> }>();
+
+/**
+ * The account's newest status line snapshot (ctx-man writes one per session to `<account>/statusline/`), looked for no
+ * more than every FRESH_MS: the dashboard asks for the limits on every refresh, and each look reads the whole folder.
+ */
+function statuslineSnapshot(configDir: string, now: number = Date.now()): Promise<StatuslineSnapshot | null> {
+  const hit = snapshots.get(configDir);
+  if (hit && now - hit.at < FRESH_MS) return hit.value;
+  const value = readStatusline(configDir);
+  snapshots.set(configDir, { at: now, value });
+  return value;
+}
+
+async function readStatusline(configDir: string): Promise<StatuslineSnapshot | null> {
   const dir = path.join(configDir, 'statusline');
   let newest: { name: string; mtimeMs: number } | null = null;
   let names: string[] = [];
