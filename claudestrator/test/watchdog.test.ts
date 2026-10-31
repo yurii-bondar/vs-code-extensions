@@ -12,7 +12,7 @@ test('watchdog: a hung agent is interrupted and the step fails with the reason',
   h.engine.stallMs = 1500; // wide enough for a slow start of the fake CLI on a busy machine
   try {
     setChildEnv({ ...getChildEnv(), FAKE_HANG: 'developer' });
-    const { taskId } = h.engine.start({ text: 'Do a thing', auto: true });
+    const { taskId } = await h.engine.start({ text: 'Do a thing', auto: true });
     const s = await runTask(h.engine, taskId);
     assert.equal(s.checkpoint!.id, 'agent-failure');
     assert.match(s.checkpoint!.reason!, /no sign of work for 1 min and was stopped/);
@@ -29,7 +29,7 @@ test('watchdog: a question waiting for you does not count as a hung agent', asyn
   h.engine.askPermissions = () => true;
   h.engine.on('permission', (req: PermissionRequest) => setTimeout(() => h.engine.permissionReply(req.requestId, true), 2500));
   try {
-    const { taskId } = h.engine.start({ text: 'Do a thing', auto: true });
+    const { taskId } = await h.engine.start({ text: 'Do a thing', auto: true });
     const s = await runTask(h.engine, taskId);
     assert.equal(s.checkpoint!.id, 'confirm-push', JSON.stringify(s.checkpoint));
   } finally {

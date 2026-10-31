@@ -71,8 +71,8 @@ async function runTask(engine: Engine, taskId: string): Promise<TaskState> {
 }
 
 /** What the composer's preview says about a valid input; the test fails for an empty or rejected one. */
-function previewOf(engine: Engine, args: ComposerArgs) {
-  const p = engine.preview(args);
+async function previewOf(engine: Engine, args: ComposerArgs) {
+  const p = await engine.preview(args);
   assert.ok(p.ok && !('empty' in p), JSON.stringify(p));
   return p as Extract<typeof p, { pipeline: unknown }>;
 }

@@ -53,7 +53,7 @@ const SAMPLES: Record<string, { good: unknown; bad: unknown[] }> = {
   },
 };
 
-test('schemas: every report schema accepts what its checker accepts and rejects what it rejects', () => {
+test('schemas: every report schema accepts what its checker accepts and rejects what it rejects', async () => {
   assert.deepEqual(Object.keys(REPORT_SCHEMAS).sort(), ['audit', 'plan', 'readiness', 'verdict']);
   for (const [output, { good, bad }] of Object.entries(SAMPLES)) {
     const schema = REPORT_SCHEMAS[output as Output]!;
@@ -67,14 +67,14 @@ test('schemas: every report schema accepts what its checker accepts and rejects 
   }
 });
 
-test('schemas: the checker keeps the last word on what a schema cannot say', () => {
+test('schemas: the checker keeps the last word on what a schema cannot say', async () => {
   const verdict = { status: 'approved', summary: 'fine', findings: [{ severity: 'major', problem: 'no test for the new branch' }] };
   assert.ok(valid(REPORT_SCHEMAS.verdict!, verdict), 'the shape is right');
   const r = parseStageReport('verdict', '', verdict);
   assert.ok(!r.ok && /changes_requested exactly when/.test(r.error), 'but approved with a major finding is refused, and sent back');
 });
 
-test('schemas: a json block the agent also wrote is cut from the end of its report only', () => {
+test('schemas: a json block the agent also wrote is cut from the end of its report only', async () => {
   assert.equal(withoutTrailingJson('## Review\n\nFine.\n\n```json\n{"status":"approved"}\n```\n'), '## Review\n\nFine.');
   const example = '## Contract\n\n```json\n{"id": 1}\n```\n\nThe rest of the report.';
   assert.equal(withoutTrailingJson(example), example, 'an example in the middle stays');
@@ -85,7 +85,7 @@ test('schemas: report stages hand their data over as structured output, and the 
   const ws = workspace(['api'], 'repos:\n  api: {}\n');
   const h = await harness(ws, { FAKE_REPOS: 'api' });
   try {
-    const { taskId } = h.engine.start({ text: 'Do a thing', auto: true });
+    const { taskId } = await h.engine.start({ text: 'Do a thing', auto: true });
     const s = await runTask(h.engine, taskId);
     assert.equal(s.checkpoint!.id, 'confirm-push');
     const nameOf = (c: { args: string[] }): string => c.args[c.args.indexOf('--name') + 1] || '';
@@ -112,7 +112,7 @@ test('schemas: a CLI without --json-schema still runs the pipeline on the json b
   const ws = workspace(['api'], 'repos:\n  api: {}\n');
   const h = await harness(ws, { FAKE_REPOS: 'api' }, { flags: CLI_FLAGS.filter((f) => f !== '--json-schema') });
   try {
-    const { taskId } = h.engine.start({ text: 'Do a thing', auto: true });
+    const { taskId } = await h.engine.start({ text: 'Do a thing', auto: true });
     const s = await runTask(h.engine, taskId);
     assert.equal(s.checkpoint!.id, 'confirm-push');
     assert.ok(!h.calls().some((c: { args: string[] }) => c.args.includes('--json-schema')));

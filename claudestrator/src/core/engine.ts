@@ -262,8 +262,8 @@ class Engine extends EventEmitter {
   }
 
   /** Always read fresh: an edited instruction applies to the very next agent run. */
-  config(flags?: { no?: string[] | undefined; only?: string[] | undefined }): Config {
-    const r = loadConfig({ workspace: this.workspace, ...(this.home && { home: this.home }), flags });
+  async config(flags?: { no?: string[] | undefined; only?: string[] | undefined }): Promise<Config> {
+    const r = await loadConfig({ workspace: this.workspace, ...(this.home && { home: this.home }), flags });
     if (!r.ok) throw new EngineError('config_invalid', r.errors.map((e) => e.message).join('\n'));
     return r.config;
   }
@@ -323,7 +323,7 @@ class Engine extends EventEmitter {
   }
 
   /** What a composer input would do, without creating anything. */
-  preview({ text = '', auto = false, no = [], key, effort = {}, scenario }: ComposerArgs = {}): Preview {
+  async preview({ text = '', auto = false, no = [], key, effort = {}, scenario }: ComposerArgs = {}): Promise<Preview> {
     let inv: Invocation;
     try {
       inv = parseInvocation(text);
@@ -333,7 +333,7 @@ class Engine extends EventEmitter {
     const input = inv.input;
     if (!input && !(key || inv.key)) return { ok: true, empty: true };
     const flags = { no: [...new Set([...(inv.flags.no || []), ...no])], ...(inv.flags.only && { only: inv.flags.only }) };
-    const r = loadConfig({ workspace: this.workspace, ...(this.home && { home: this.home }), flags });
+    const r = await loadConfig({ workspace: this.workspace, ...(this.home && { home: this.home }), flags });
     if (!r.ok) return { ok: false, error: r.errors.map((e) => e.message).join('\n') };
     let sc: ReturnType<Engine['resolveScenario']>;
     try {
@@ -388,11 +388,11 @@ class Engine extends EventEmitter {
     return { ...(g && { group: g }), instructions: instructions.map((id) => config.instructions[id]!) };
   }
 
-  start({ text = '', auto = false, no = [], key, effort = {}, scenario, group, instructions = [] }: ComposerArgs = {}): { taskId: string; created: boolean } {
+  async start({ text = '', auto = false, no = [], key, effort = {}, scenario, group, instructions = [] }: ComposerArgs = {}): Promise<{ taskId: string; created: boolean }> {
     const inv = parseInvocation(text);
     if (!inv.input && !(key || inv.key)) throw new EngineError('no_input', 'Describe the task, or paste a Jira key or a Confluence link');
     const flags = { no: [...new Set([...(inv.flags.no || []), ...no])], ...(inv.flags.only && { only: inv.flags.only }) };
-    const config = this.config(flags);
+    const config = await this.config(flags);
     const sc = this.resolveScenario({ ...inv, input: (inv.input || key || inv.key) as string }, scenario, config);
     const source = sc.source;
     if (source.kind === 'jira') {
@@ -469,8 +469,8 @@ class Engine extends EventEmitter {
   }
 
   /** `limits.parallelTasks` caps how many tasks run agents at once; one more waits until you resume it. */
-  checkCapacity(taskId: string): void {
-    const cap = this.config().limits.parallelTasks;
+  async checkCapacity(taskId: string): Promise<void> {
+    const cap = (await this.config()).limits.parallelTasks;
     const others = [...this.running].filter((id) => id !== taskId);
     if (cap !== undefined && others.length >= cap) {
       throw new EngineError('busy', `${others.join(', ')} ${others.length === 1 ? 'is' : 'are'} running, as many tasks as limits.parallelTasks (${cap}) allows; resume ${taskId} when one of them finishes`);
@@ -480,9 +480,15 @@ class Engine extends EventEmitter {
   /** Drives the task until it is done, stopped or waiting for you. */
   async run(taskId: string): Promise<TaskState | undefined> {
     if (this.running.has(taskId)) throw new EngineError('already_running', `task ${taskId} is already running`);
-    this.checkExclusive(taskId);
-    this.checkCapacity(taskId);
+    // Taken before the first await: two launches of one task never both pass the check.
     this.running.add(taskId);
+    try {
+      this.checkExclusive(taskId);
+      await this.checkCapacity(taskId);
+    } catch (e) {
+      this.running.delete(taskId);
+      throw e;
+    }
     this.emit('changed', taskId);
     try {
       for (;;) {
@@ -526,7 +532,7 @@ class Engine extends EventEmitter {
     const via = s.source.kind !== 'text' && !this.atlassian() ? this.mcpIntake() : null;
     try {
       if (via) spec = await this.intakeViaMcp(s, via);
-      else spec = await runIntake(s.taskId, s.source, { atlassian: this.atlassian(), allowedProjects: this.config().jira.allowedProjects });
+      else spec = await runIntake(s.taskId, s.source, { atlassian: this.atlassian(), allowedProjects: (await this.config()).jira.allowedProjects });
     } catch (e) {
       if (e instanceof IntakeError) throw new EngineError(e.code, e.code === 'atlassian_not_configured' ? 'Jira and Confluence are not reachable: sign in to an Atlassian MCP server (MCP tab), or add an API token in Settings → Jira & Confluence' : e.message);
       throw e;
@@ -589,7 +595,7 @@ class Engine extends EventEmitter {
   async intakeViaMcp(s: TaskState, via: McpIntake): Promise<Spec> {
     const src = s.source;
     if (src.kind === 'jira') {
-      const allowed = this.config().jira.allowedProjects;
+      const allowed = (await this.config()).jira.allowedProjects;
       const project = src.key.split('-')[0]!;
       if (allowed.length && !allowed.includes(project)) throw new EngineError('project_not_allowed', `Jira project ${project} is not allowed (allowed: ${allowed.join(', ')})`);
     }
@@ -607,7 +613,7 @@ class Engine extends EventEmitter {
       return { allow: false, reason: 'Claudestrator: the intake only reads; use the get/search/fetch tools' };
     });
     this.setLive(s.taskId, { phase: 'intake', key: INTAKE_KEY, text: `Reading ${src.kind === 'jira' ? src.key : 'the page'} via ${via.server}` });
-    const session = await this.runner.start({ agent, prompt, cwd: this.workspace, settings: this.agentSettings({ writeRoots: [], cwd: this.workspace, config: this.config() }), additionalDirectories: [], env: this.agentEnv(hook.env, this.config()), name: `claudestrator ${s.taskId} · intake`, onOutput: emitItem }).catch((e: Error) => {
+    const session = await this.runner.start({ agent, prompt, cwd: this.workspace, settings: this.agentSettings({ writeRoots: [], cwd: this.workspace, config: await this.config() }), additionalDirectories: [], env: this.agentEnv(hook.env, await this.config()), name: `claudestrator ${s.taskId} · intake`, onOutput: emitItem }).catch((e: Error) => {
       this.hooks.unregister(hook.token);
       throw e;
     });
@@ -729,7 +735,7 @@ class Engine extends EventEmitter {
   async runStep(s: TaskState, next: NextAction): Promise<void> {
     const taskId = s.taskId;
     const step = (next as RunAction | Extract<NextAction, { kind: 'running' }>).step;
-    const config = this.config();
+    const config = await this.config();
     const taskDir = this.svc.dir(taskId);
     const stage = s.pipeline.stages[step.stage]!;
     const configured = config.agents[step.agent];
@@ -1079,7 +1085,7 @@ class Engine extends EventEmitter {
 
   async commit(s: TaskState): Promise<void> {
     this.setLive(s.taskId, { phase: 'committing', text: 'Committing' });
-    const config = this.config();
+    const config = await this.config();
     await this.ensureSandbox(config);
     const subject = commitSubject(s, config.policy.forbidAiAttribution);
     const body = s.source.kind === 'jira' ? `Refs: ${s.taskId}` : '';
@@ -1140,7 +1146,7 @@ class Engine extends EventEmitter {
   }
 
   async publish(s: TaskState): Promise<void> {
-    const config = this.config();
+    const config = await this.config();
     const branch = branchName(s) as string;
     const taskDir = this.svc.dir(s.taskId);
     const all = taskRepos(this.workspace, s, config, s.repos.map((r) => r.name));
@@ -1252,7 +1258,7 @@ class Engine extends EventEmitter {
       return { allow: false, reason: posted ? 'Claudestrator: the comment is already posted; stop and report' : 'Claudestrator: only the add-comment and read tools are allowed here' };
     });
     const agent = { name: 'jira-comment', description: 'Posts one Jira comment', model: 'haiku', effort: 'low' as const, instructions: COMMENT_INSTRUCTIONS, output: 'plan' };
-    const session = await this.runner.start({ agent, prompt, cwd: this.workspace, settings: this.agentSettings({ writeRoots: [], cwd: this.workspace, config: this.config() }), additionalDirectories: [], env: this.agentEnv(hook.env, this.config()), name: `claudestrator ${s.taskId} · Jira comment`, onOutput: append }).catch((e: Error) => {
+    const session = await this.runner.start({ agent, prompt, cwd: this.workspace, settings: this.agentSettings({ writeRoots: [], cwd: this.workspace, config: await this.config() }), additionalDirectories: [], env: this.agentEnv(hook.env, await this.config()), name: `claudestrator ${s.taskId} · Jira comment`, onOutput: append }).catch((e: Error) => {
       this.hooks.unregister(hook.token);
       throw e;
     });
@@ -1282,7 +1288,7 @@ class Engine extends EventEmitter {
     const s = this.svc.state(taskId);
     if (!(s.reports || []).length) throw new EngineError('no_report', 'There is no report to post yet');
     if (s.source.kind !== 'jira') throw new EngineError('not_jira', 'This task did not come from a Jira issue');
-    return this.comment(s, jiraText(s, this.config().language), 'report');
+    return this.comment(s, jiraText(s, (await this.config()).language), 'report');
   }
 
   /** Posts a comment that failed again, with the same text. */
@@ -1298,10 +1304,10 @@ class Engine extends EventEmitter {
    * Reshapes what is still to come in a task: `names` is the whole new order. Stages that ran keep their place;
    * an agent the task already has keeps its role, a new one comes from the config. A running task carries on with it.
    */
-  editPipeline(taskId: string, names: string[]): { warnings: string[] } {
+  async editPipeline(taskId: string, names: string[]): Promise<{ warnings: string[] }> {
     const s = this.svc.state(taskId);
     if (editableFrom(s) === -1) throw new EngineError('pipeline_locked', 'The stages of this task are through; its pipeline can no longer change');
-    const config = this.config();
+    const config = await this.config();
     const agents: StageSource[] = names.map((name) => {
       const kept = s.pipeline.stages.find((st) => st.agent === name);
       // An agent the task has keeps its place and scope, also one from before a scope changed meaning.
@@ -1380,7 +1386,7 @@ class Engine extends EventEmitter {
         // the same question is open.
         const hit = this.pushContext.get(s.taskId);
         if (hit && hit.at === cp.at) return hit.value;
-        const config = this.config();
+        const config = await this.config();
         const parts: string[] = [];
         const repos: { name: string; branch: string | null; base: string; files: number; dir: string }[] = [];
         const branch = branchName(s) as string;
@@ -1402,7 +1408,8 @@ class Engine extends EventEmitter {
 
   async cleanup(taskId: string, force?: boolean) {
     const s = this.svc.state(taskId);
-    return removeWorktrees(this.workspace, s, (loadConfig({ workspace: this.workspace }) as { config?: Config }).config || null, force);
+    const r = await loadConfig({ workspace: this.workspace, ...(this.home && { home: this.home }) });
+    return removeWorktrees(this.workspace, s, r.ok ? r.config : null, force);
   }
 
   async remove(taskId: string): Promise<void> {
@@ -1415,7 +1422,7 @@ class Engine extends EventEmitter {
 
   /** Runs one repo's gates on its current changes, outside any task. */
   async runGatesNow(repoName: string, force?: boolean) {
-    const config = this.config();
+    const config = await this.config();
     const repo = config.repos[repoName];
     if (!repo) throw new EngineError('unknown_repo', `no repo "${repoName}" in the config`);
     const dir = path.resolve(this.workspace, repo.path);
@@ -1424,7 +1431,7 @@ class Engine extends EventEmitter {
   }
 
   async repoStatus() {
-    const config = this.config();
+    const config = await this.config();
     const out: RepoStatus[] = [];
     for (const repo of Object.values(config.repos)) {
       const dir = path.resolve(this.workspace, repo.path);

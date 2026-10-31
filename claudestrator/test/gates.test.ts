@@ -60,7 +60,7 @@ test('gates: Stop during the gates ends them and leaves the step to resume', { s
   const ws = workspace(['api'], 'repos:\n  api:\n    gates:\n      - { name: slow, cmd: sleep 30 }\npipeline: [planner, developer]\n');
   const h = await harness(ws, { FAKE_REPOS: 'api' });
   try {
-    const { taskId } = h.engine.start({ text: 'Do a thing', auto: true });
+    const { taskId } = await h.engine.start({ text: 'Do a thing', auto: true });
     h.engine.launch(taskId);
     await waitFor(() => h.engine.live(taskId) && h.engine.live(taskId)!.phase === 'gates' && h.engine.gateRuns.has(taskId));
     const started = Date.now();

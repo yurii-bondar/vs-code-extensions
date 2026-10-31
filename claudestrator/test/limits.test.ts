@@ -12,7 +12,7 @@ test('limits: no agent starts while Claude Code reports the account limit as use
   try {
     const resetsAt = Math.round(Date.now() / 1000) + 3600;
     h.engine.limits = { fiveHour: { pct: 100, resetsAt, status: 'rejected' }, sevenDay: { pct: 40, resetsAt: resetsAt + 86400, status: 'allowed' }, at: Date.now() };
-    const { taskId } = h.engine.start({ text: 'Do a thing' });
+    const { taskId } = await h.engine.start({ text: 'Do a thing' });
     h.engine.launch(taskId);
     const err = await waitFor(() => h.engine.lastError(taskId));
     assert.equal(err.code, 'limit_reached');
@@ -32,8 +32,8 @@ test('limits: limits.parallelTasks keeps one more task from starting', async () 
   const ws = workspace(['api'], 'repos:\n  api: {}\ngit: { mode: worktree }\nlimits: { parallelTasks: 1 }\n');
   const h = await harness(ws, { FAKE_REPOS: 'api' });
   try {
-    const a = h.engine.start({ text: 'First thing' }).taskId;
-    const b = h.engine.start({ text: 'Second thing' }).taskId;
+    const a = (await h.engine.start({ text: 'First thing' })).taskId;
+    const b = (await h.engine.start({ text: 'Second thing' })).taskId;
     h.engine.running.add(a);
     await assert.rejects(h.engine.run(b), (e: Error & { code?: string }) => e.code === 'busy' && /limits\.parallelTasks \(1\)/.test(e.message));
     h.engine.running.delete(a);

@@ -222,15 +222,15 @@ function planRestore({ backup, known, existing }: { backup: Backup; known: Reado
 }
 
 /** The agents this workspace has now (built-in ones included); throws while its config does not load. */
-function currentAgents({ workspace, home }: { workspace: string; home?: string | undefined }): Set<string> {
-  const r = loadConfig({ workspace, home });
+async function currentAgents({ workspace, home }: { workspace: string; home?: string | undefined }): Promise<Set<string>> {
+  const r = await loadConfig({ workspace, home });
   if (!r.ok) throw new Error(`Fix the config first: ${r.errors.map((e) => e.message).join('; ')}`);
   return new Set(Object.keys(r.config.agents));
 }
 
 /** What a restore would change, for the question asked before it runs. */
-function previewRestore({ workspace, backup, home }: { workspace: string; backup: Backup; home?: string | undefined }): RestorePlan {
-  return planRestore({ backup, known: currentAgents({ workspace, home }), existing: readProjectLayer(workspace) });
+async function previewRestore({ workspace, backup, home }: { workspace: string; backup: Backup; home?: string | undefined }): Promise<RestorePlan> {
+  return planRestore({ backup, known: await currentAgents({ workspace, home }), existing: readProjectLayer(workspace) });
 }
 
 /**
@@ -239,10 +239,10 @@ function previewRestore({ workspace, backup, home }: { workspace: string; backup
  * run is left out and reported. If the result would not resolve (code and report agents mixed, say), the config file
  * and the instruction files go back to what they were and the error is thrown: a bad config breaks every task.
  */
-function restoreBackup({ workspace, backup, home }: { workspace: string; backup: Backup; home?: string | undefined }): RestorePlan {
-  const plan = previewRestore({ workspace, backup, home });
+async function restoreBackup({ workspace, backup, home }: { workspace: string; backup: Backup; home?: string | undefined }): Promise<RestorePlan> {
+  const plan = await previewRestore({ workspace, backup, home });
   const dir = configDirOf(workspace);
-  withConfigRollback({ workspace, home }, (remember) => {
+  await withConfigRollback({ workspace, home }, (remember) => {
     for (const name of [...plan.agents.add, ...plan.agents.replace]) {
       let def = backup.agents[name]!;
       const own = def.instructions;

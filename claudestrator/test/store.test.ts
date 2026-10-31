@@ -24,7 +24,7 @@ test('store: transcript lines are written asynchronously, in order, and readable
   assert.ok(!fs.existsSync(svc.dir('T-1')), 'a deleted task does not come back as a folder of transcripts');
 });
 
-test('store: a lock left by a crashed process is taken over at once', () => {
+test('store: a lock left by a crashed process is taken over at once', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-lock-'));
   const lock = path.join(dir, '.lock');
   const dead = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' });

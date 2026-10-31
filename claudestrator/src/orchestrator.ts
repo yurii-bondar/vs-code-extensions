@@ -294,7 +294,7 @@ class Orchestrator {
    */
   async refreshDefaults(force?: boolean): Promise<Defaults | null | undefined> {
     if (!this.root || !this.health || !this.health.claude || !this.health.claude.ok) return this.defaults;
-    const r = this.config();
+    const r = await this.config();
     const aliases = ['inherit', ...(r.ok ? Object.values(r.config.agents).map((a) => a.model) : [])];
     const sources = settings().get<string[]>('settingSources') || null;
     const dir = this.account().dir;
@@ -559,7 +559,7 @@ class Orchestrator {
   }
 
   /** The resolved config, or `{ ok: false, errors }`; never throws. */
-  config(): ConfigResult {
+  async config(): Promise<ConfigResult> {
     if (!this.root) return { ok: false, errors: [{ message: 'Open a folder first' }], warnings: [] };
     return loadConfig({ workspace: this.root });
   }

@@ -82,7 +82,7 @@ async function main(): Promise<void> {
   const results: [string, boolean, string][] = [];
   const check = (name: string, ok: boolean, detail = ''): void => void results.push([name, ok, detail]);
   try {
-    const { taskId } = engine.start({ text: TASK, instructions: ['env-checks'] });
+    const { taskId } = await engine.start({ text: TASK, instructions: ['env-checks'] });
     let s = await engine.run(taskId);
     const err = engine.lastError(taskId);
     check('the task reaches the push question', Boolean(s && s.checkpoint && s.checkpoint.id === 'confirm-push'), err ? `${err.code}: ${err.message}` : s && s.checkpoint ? s.checkpoint.id : String(s && s.status));

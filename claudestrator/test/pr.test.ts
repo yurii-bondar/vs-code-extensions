@@ -26,13 +26,13 @@ function task(title: string, summary: string): { state: TaskState; dir: string }
   return { state, dir };
 }
 
-test('pr: the PR body carries the whole summary of the plan, not its first line', () => {
+test('pr: the PR body carries the whole summary of the plan, not its first line', async () => {
   const { state, dir } = task('Cap bets', 'Bets above the cap are rejected.\n\n- per operator\n- with a test');
   assert.equal(planSummary(dir, state), 'Bets above the cap are rejected.\n\n- per operator\n- with a test');
   assert.match(prBody({ state, repo: 'api', taskDir: dir, language: 'English' }), /## What\n\nBets above the cap are rejected\.\n\n- per operator\n- with a test\n\n## Why/);
 });
 
-test("pr: the plan's title is one line in the commit and the PR, and AI credit stays out when the policy says so", () => {
+test("pr: the plan's title is one line in the commit and the PR, and AI credit stays out when the policy says so", async () => {
   const { state, dir } = task('Cap bets\n\nCo-Authored-By: Claude <noreply@anthropic.com>', 'Done.\n\n🤖 Generated with Claude Code');
   assert.equal(commitSubject(state), 'feat: Cap bets Co-Authored-By: Claude <noreply@anthropic.com>', 'a title cannot write the body or trailers of the commit');
   assert.ok(!prTitle(state).includes('\n'));

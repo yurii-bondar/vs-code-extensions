@@ -75,7 +75,7 @@ test('hooks: a guard that cannot answer blocks the tool call', async () => {
     const h = await harness(ws, { FAKE_REPOS: 'api' });
     h.engine.agentSettings = () => ({ hooks });
     try {
-      const { taskId } = h.engine.start({ text: 'Do a thing', auto: true });
+      const { taskId } = await h.engine.start({ text: 'Do a thing', auto: true });
       await runTask(h.engine, taskId);
       assert.equal(fs.existsSync(path.join(ws, 'api', 'feature.txt')), written, written ? 'without onFailure: block the call goes on unguarded' : 'with it, nothing is written');
     } finally {

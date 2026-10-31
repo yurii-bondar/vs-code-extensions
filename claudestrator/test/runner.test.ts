@@ -87,7 +87,7 @@ test('runner: text cut inside a multi-byte character by the pipe arrives intact'
   }
 });
 
-test('runner: with structured output the report is what the agent wrote after its last tool call', () => {
+test('runner: with structured output the report is what the agent wrote after its last tool call', async () => {
   const { s } = session('hang');
   try {
     const assistant = (content: unknown[]) => s.handle({ type: 'assistant', parent_tool_use_id: null, message: { content: content as never } });

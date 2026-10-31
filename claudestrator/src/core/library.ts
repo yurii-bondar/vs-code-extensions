@@ -89,13 +89,13 @@ scenarios: {}
  * Lists a library folder in the user or the project config. Without a library.yaml in it, `create` writes an empty
  * one; otherwise that is an error. Undone if the config no longer resolves with it (a broken library.yaml).
  */
-function addLibrary({ dir, scope, create = false, ...where }: Where & { dir: string; scope: Scope; create?: boolean }): LibraryInfo {
+async function addLibrary({ dir, scope, create = false, ...where }: Where & { dir: string; scope: Scope; create?: boolean }): Promise<LibraryInfo> {
   const file = libraryFile(dir, process.cwd(), homeOf(where.home));
   if (listLibraries(where).some((l) => l.file === file)) throw new Error(`${libraryLabel(file)} is already one of this project's libraries`);
   if (!fs.existsSync(file) && !create) throw new Error(`There is no ${LIBRARY_FILE} in ${path.dirname(file)}`);
   const config = configOf(scope, where);
   const entry = entryFor(path.dirname(file), scope, where);
-  withConfigRollback(where, (remember) => {
+  await withConfigRollback(where, (remember) => {
     remember(config);
     if (!fs.existsSync(file)) {
       remember(file);
@@ -108,10 +108,10 @@ function addLibrary({ dir, scope, create = false, ...where }: Where & { dir: str
 }
 
 /** Stops listing a library. Undone, with the reason, when the project needs it (a scenario names its agents). */
-function removeLibrary({ file, scope, ...where }: Where & { file: string; scope: Scope }): void {
+async function removeLibrary({ file, scope, ...where }: Where & { file: string; scope: Scope }): Promise<void> {
   const config = configOf(scope, where);
   const rest = entriesOf(config).filter((e) => libraryFile(e, path.dirname(config), homeOf(where.home)) !== file);
-  withConfigRollback(where, (remember) => {
+  await withConfigRollback(where, (remember) => {
     remember(config);
     editYamlFile(config, (doc) => (rest.length ? doc.setIn(['libraries'], doc.createNode(rest)) : doc.deleteIn(['libraries'])), { validate: validateConfigLayer, what: config });
   });
@@ -124,7 +124,7 @@ const defined = <T extends object>(obj: T): Partial<T> => Object.fromEntries(Obj
  * agents of this project's own that it runs; an agent brings its instructions file (prompts/<file> in the library, and
  * the project's copy is removed). The same names in the library are replaced. Undone if the config no longer resolves.
  */
-function moveToLibrary({ library, agents = [], scenarios = [], ...where }: Where & { library: string; agents?: string[]; scenarios?: string[] }): { agents: string[]; scenarios: string[] } {
+async function moveToLibrary({ library, agents = [], scenarios = [], ...where }: Where & { library: string; agents?: string[]; scenarios?: string[] }): Promise<{ agents: string[]; scenarios: string[] }> {
   const target = listLibraries(where).find((l) => l.file === library);
   if (!target) throw new Error('That is not one of this project\'s libraries');
   if (!target.exists) throw new Error(`Library ${target.label} is not at ${target.file}`);

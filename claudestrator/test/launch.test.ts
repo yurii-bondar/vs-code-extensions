@@ -38,7 +38,7 @@ const OLD_SHIM = `@IF EXIST "%~dp0\\node.exe" (
 )
 `;
 
-test('launch: the target of an npm shim is found in both shim formats', () => {
+test('launch: the target of an npm shim is found in both shim formats', async () => {
   const dir = path.join('npm-global');
   const cli = path.join(dir, 'node_modules', '@anthropic-ai', 'claude-code', 'cli.js');
   assert.equal(npmShimTarget(SHIM, dir), cli);
@@ -46,13 +46,13 @@ test('launch: the target of an npm shim is found in both shim formats', () => {
   assert.equal(npmShimTarget('@echo off\r\nclaude-native.exe %*\r\n', dir), null, 'a script of another shape is not guessed at');
 });
 
-test('launch: a registered shim runs its target with the arguments, anything else runs as it is', () => {
+test('launch: a registered shim runs its target with the arguments, anything else runs as it is', async () => {
   setShim('C:\\npm\\claude.cmd', { file: 'C:\\node\\node.exe', args: ['C:\\npm\\cli.js'] });
   assert.deepEqual(launch('C:\\npm\\claude.cmd', ['-p', '--verbose']), ['C:\\node\\node.exe', ['C:\\npm\\cli.js', '-p', '--verbose']]);
   assert.deepEqual(launch('/usr/local/bin/claude', ['--version']), ['/usr/local/bin/claude', ['--version']]);
 });
 
-test('git: the branch of a checkout is read from HEAD, in a worktree and a subfolder too', () => {
+test('git: the branch of a checkout is read from HEAD, in a worktree and a subfolder too', async () => {
   const run = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
   const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cs-head-')));
   run(repo, 'init', '-q', '-b', 'main');

@@ -14,7 +14,7 @@ import { setChildEnv } from '../src/core/git';
 import { FAKE, git, workspace, waitFor } from './helpers/e2e';
 import type { SandboxPolicy } from '../src/core/sandbox';
 
-test('sandbox: there is none on native Windows, and it needs a Node of VS Code 1.101 or newer', () => {
+test('sandbox: there is none on native Windows, and it needs a Node of VS Code 1.101 or newer', async () => {
   assert.match(sandboxProblem('win32', '22.15.0')!, /no sandbox on win32/);
   assert.match(sandboxProblem('darwin', '20.18.0')!, /needs Node 22\.12 or newer, and Claudestrator runs on 20\.18\.0/);
   assert.equal(sandboxProblem('linux', '22.12.0'), null);
@@ -72,7 +72,7 @@ test('sandbox: a commit hook that writes the repo works; one that changes git co
   const engine = new Engine({ workspace: ws, home: state, runner: new ClaudeRunner({ command: () => FAKE, flags: () => new Set(['--tools', '--setting-sources', '--name']), settingSources: () => ['project'], env: () => ({}) }), hooks });
   try {
     fs.writeFileSync(path.join(api, '.git', 'hooks', 'pre-commit'), `#!/bin/sh\necho hooked > hooked.txt\necho "[core]\\n\\tfsmonitor = evil" >> .git/config || exit 1\n`, { mode: 0o755 });
-    const { taskId } = engine.start({ text: 'Add the feature', auto: true });
+    const { taskId } = await engine.start({ text: 'Add the feature', auto: true });
     let s = await engine.run(taskId);
     assert.equal(s!.checkpoint!.id, 'hook-failure', JSON.stringify(engine.lastError(taskId)));
     assert.match(s!.checkpoint!.reason!, /Operation not permitted|Read-only file system/);

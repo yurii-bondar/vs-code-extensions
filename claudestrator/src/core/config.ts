@@ -330,20 +330,22 @@ const MAX_FILE = 1024 * 1024;
  * Reads a config, instruction or context file: a regular file of at most MAX_FILE. A path a config names may point
  * anywhere, and `/dev/zero` or a FIFO would otherwise hang the extension host for every extension in the window.
  */
-function readBounded(file: string): string {
-  const st = fs.statSync(file);
+async function readBounded(file: string): Promise<string> {
+  const st = await fs.promises.stat(file);
   if (!st.isFile()) throw new Error(`${file} is not a regular file`);
   if (st.size > MAX_FILE) throw new Error(`${file} is larger than ${MAX_FILE / 1024} KB`);
-  return fs.readFileSync(file, 'utf8');
+  return fs.promises.readFile(file, 'utf8');
 }
 
+const missing = (e: unknown): boolean => (e as NodeJS.ErrnoException).code === 'ENOENT';
+
 /** A missing file is not an error: that layer simply does not exist. */
-function loadLayerFile(file: string, name: string): { layer?: Layer; diagnostics: Diagnostic[] } {
-  if (!fs.existsSync(file)) return { diagnostics: [] };
+async function loadLayerFile(file: string, name: string): Promise<{ layer?: Layer; diagnostics: Diagnostic[] }> {
   let raw: ConfigLayer;
   try {
-    raw = YAML.parse(readBounded(file)) ?? {};
+    raw = YAML.parse(await readBounded(file)) ?? {};
   } catch (e) {
+    if (missing(e)) return { diagnostics: [] };
     return { diagnostics: [{ level: 'error', code: 'yaml_invalid', source: file, message: `${file}: ${(e as Error).message}` }] };
   }
   const issues = validateConfigLayer(raw);
@@ -355,14 +357,14 @@ function loadLayerFile(file: string, name: string): { layer?: Layer; diagnostics
  * The layers in order: built-in, the libraries (those the user config lists, then the project's), the user config,
  * the project config. A later layer wins field by field, so a project can change what a library defines.
  */
-function loadLayers({ workspace, home = os.homedir() }: { workspace: string; home?: string }): { layers: Layer[]; diagnostics: Diagnostic[]; files: string[] } {
+async function loadLayers({ workspace, home = os.homedir() }: { workspace: string; home?: string }): Promise<{ layers: Layer[]; diagnostics: Diagnostic[]; files: string[] }> {
   const diagnostics: Diagnostic[] = [];
   const own: Layer[] = [];
   const files: [string, string][] = [['user', userConfigFile(home)], ['project', projectConfigFile(workspace)]];
   // A workspace inside the home folder must not load the same file twice.
   if (path.resolve(files[0]![1]) === path.resolve(files[1]![1])) files.shift();
   for (const [name, file] of files) {
-    const r = loadLayerFile(file, name);
+    const r = await loadLayerFile(file, name);
     diagnostics.push(...r.diagnostics);
     if (r.layer) own.push(r.layer);
   }
@@ -375,7 +377,7 @@ function loadLayers({ workspace, home = os.homedir() }: { workspace: string; hom
       seen.add(file);
       let label = libraryLabel(file);
       for (let n = 2; libraries.some((l) => l.name === `${LIBRARY_PREFIX}${label}`); n++) label = `${libraryLabel(file)}-${n}`;
-      const r = loadLibraryFile(file, label);
+      const r = await loadLibraryFile(file, label);
       diagnostics.push(...r.diagnostics);
       if (r.layer) libraries.push(r.layer);
     }
@@ -405,12 +407,12 @@ function libraryLabel(file: string): string {
  * scenario that needs its agents says so. A library that does not parse or holds more than agents and scenarios is an
  * error, as config.yaml would be.
  */
-function loadLibraryFile(file: string, label: string): { layer?: Layer; diagnostics: Diagnostic[] } {
-  if (!fs.existsSync(file)) return { diagnostics: [{ level: 'warning', code: 'library_missing', source: file, message: `library "${label}" is not at ${file}; its agents and scenarios are not loaded` }] };
+async function loadLibraryFile(file: string, label: string): Promise<{ layer?: Layer; diagnostics: Diagnostic[] }> {
   let raw: unknown;
   try {
-    raw = YAML.parse(readBounded(file)) ?? {};
+    raw = YAML.parse(await readBounded(file)) ?? {};
   } catch (e) {
+    if (missing(e)) return { diagnostics: [{ level: 'warning', code: 'library_missing', source: file, message: `library "${label}" is not at ${file}; its agents and scenarios are not loaded` }] };
     return { diagnostics: [{ level: 'error', code: 'yaml_invalid', source: file, message: `${file}: ${(e as Error).message}` }] };
   }
   const issues = validateLibraryLayer(raw);
@@ -481,8 +483,16 @@ function applyFlags(merged: Merged, flags: Flags, diagnostics: Diagnostic[]): vo
 
 // ---------- resolving ----------
 
+/**
+ * Resolves layers into a config. Pure: the instruction and context files it names come in `readFile`, read beforehand
+ * (`readConfig`); without one, a layer that names a file gets a diagnostic for it.
+ */
 function resolveConfig(layers: Layer[], opts: { flags?: Flags | undefined; readFile?: ReadFile | undefined } = {}): ResolveResult {
-  const readFile: ReadFile = opts.readFile ?? readBounded;
+  const readFile: ReadFile =
+    opts.readFile ??
+    ((p) => {
+      throw new Error(`${p} was not read`);
+    });
   // The files the config is made of besides its layers: instruction and context files.
   const sources = new Set(layers.flatMap((l) => (l.file ? [l.file] : [])));
   const read: ReadFile = (p) => {
@@ -760,17 +770,17 @@ function resolvePipeline(pipeline: Merged['pipeline'], drafts: Map<string, Draft
 
 /** Loads every layer and resolves it. */
 /** Size and mtime of each file, '' for one that is not there: equal signatures, the same config. */
-const signatureOf = (files: string[]): string =>
-  files
-    .map((f) => {
-      try {
-        const st = fs.statSync(f);
-        return `${f}:${st.size}:${st.mtimeMs}`;
-      } catch {
-        return `${f}:`;
-      }
-    })
-    .join('\n');
+const signatureOf = async (files: string[]): Promise<string> =>
+  (
+    await Promise.all(
+      files.map((f) =>
+        fs.promises.stat(f).then(
+          (st) => `${f}:${st.size}:${st.mtimeMs}`,
+          () => `${f}:`
+        )
+      )
+    )
+  ).join('\n');
 
 /** Configs already read, by workspace, home and flags, with the signature of the files they came from. */
 const loaded = new Map<string, { signature: string; sources: string[]; result: ResolveResult }>();
@@ -779,22 +789,31 @@ const loaded = new Map<string, { signature: string; sources: string[]; result: R
  * The config, read again only when one of the files it comes from changed: the engine and the dashboard ask for it on
  * every stage and screen refresh, and reading means parsing every layer and reading every instruction file.
  */
-function loadConfig({ workspace, home, flags, readFile }: { workspace: string; home?: string | undefined; flags?: Flags | undefined; readFile?: ReadFile | undefined }): ResolveResult {
-  if (readFile) return readConfig({ workspace, home, flags, readFile });
+async function loadConfig({ workspace, home, flags }: { workspace: string; home?: string | undefined; flags?: Flags | undefined }): Promise<ResolveResult> {
   const key = JSON.stringify([workspace, home ?? null, flags ?? null]);
   const hit = loaded.get(key);
-  if (hit && signatureOf(hit.sources) === hit.signature) return structuredClone(hit.result);
-  const result = readConfig({ workspace, home, flags });
+  if (hit && (await signatureOf(hit.sources)) === hit.signature) return structuredClone(hit.result);
+  const result = await readConfig({ workspace, home, flags });
   // A config with errors names no files; it is read again next time.
-  if (result.ok) loaded.set(key, { signature: signatureOf(result.config.sources), sources: result.config.sources, result: structuredClone(result) });
+  if (result.ok) loaded.set(key, { signature: await signatureOf(result.config.sources), sources: result.config.sources, result: structuredClone(result) });
   else loaded.delete(key);
   return result;
 }
 
-function readConfig({ workspace, home, flags, readFile }: { workspace: string; home?: string | undefined; flags?: Flags | undefined; readFile?: ReadFile | undefined }): ResolveResult {
-  const { layers, diagnostics, files } = loadLayers({ workspace, ...(home && { home }) });
+/** Reads the layers, then every instruction and context file they name, then resolves them (`resolveConfig`). */
+async function readConfig({ workspace, home, flags }: { workspace: string; home?: string | undefined; flags?: Flags | undefined }): Promise<ResolveResult> {
+  const { layers, diagnostics, files } = await loadLayers({ workspace, ...(home && { home }) });
   const loadErrors = diagnostics.filter((d) => d.level === 'error');
   if (loadErrors.length) return { ok: false, errors: loadErrors, warnings: diagnostics.filter((d) => d.level === 'warning') };
+  const merged = mergeLayers(layers);
+  const named = [...new Set([...[...merged.agents.values()].flatMap((d) => d.ops.flatMap((op) => (op.file !== undefined ? [op.file] : []))), ...(merged.context ?? [])])];
+  const read = new Map(await Promise.all(named.map(async (f): Promise<[string, string | Error]> => [f, await readBounded(f).catch((e: Error) => e)])));
+  const readFile: ReadFile = (p) => {
+    const v = read.get(p);
+    if (v === undefined) throw new Error(`${p} was not read`);
+    if (v instanceof Error) throw v;
+    return v;
+  };
   const r = resolveConfig(layers, { flags, readFile });
   if (r.ok) r.config.sources = [...new Set([...files, ...r.config.sources])];
   return { ...r, warnings: [...diagnostics, ...loosened(layers), ...r.warnings] };
@@ -1027,7 +1046,7 @@ function configRelative(workspace: string, file: string): string {
  * `change` named through `remember` before writing it, go back to what they were, and the problems are thrown: a config
  * that does not resolve would stop every task. `explain` picks the problems worth showing (all of them by default).
  */
-function withConfigRollback<T>({ workspace, home, explain }: { workspace: string; home?: string | undefined; explain?: (errors: Diagnostic[]) => Diagnostic[] }, change: (remember: (file: string) => void) => T): T {
+async function withConfigRollback<T>({ workspace, home, explain }: { workspace: string; home?: string | undefined; explain?: (errors: Diagnostic[]) => Diagnostic[] }, change: (remember: (file: string) => void) => T | Promise<T>): Promise<T> {
   const configFile = projectConfigFile(workspace);
   const saved = new Map<string, string | null>();
   const remember = (file: string): void => {
@@ -1035,8 +1054,8 @@ function withConfigRollback<T>({ workspace, home, explain }: { workspace: string
   };
   remember(configFile);
   try {
-    const result = change(remember);
-    const after = loadConfig({ workspace, home });
+    const result = await change(remember);
+    const after = await loadConfig({ workspace, home });
     if (!after.ok) {
       const shown = explain ? explain(after.errors) : after.errors;
       throw new Error((shown.length ? shown : after.errors).map((e) => e.message).join('; '));
@@ -1066,8 +1085,8 @@ const RESERVED_SCENARIOS = ['deliver', 'auto', ...Object.keys(SCENARIO_OUTPUT)];
  * Creates or changes a custom scenario. Without `id` a new one is named after its label (`Quick fix` → `quick-fix`,
  * `-2` for a taken one; a label without Latin letters gets `scenario`). Labels are unique, ignoring case. Returns the id.
  */
-function saveCustomScenario({ workspace, home, id, label, description, agents = [] }: { workspace: string; home?: string | undefined; id?: string | undefined; label?: string | undefined; description?: string | undefined; agents?: ScenarioStep[] | undefined }): string {
-  const r = loadConfig({ workspace, home });
+async function saveCustomScenario({ workspace, home, id, label, description, agents = [] }: { workspace: string; home?: string | undefined; id?: string | undefined; label?: string | undefined; description?: string | undefined; agents?: ScenarioStep[] | undefined }): Promise<string> {
+  const r = await loadConfig({ workspace, home });
   const custom = r.ok ? r.config.custom : {};
   const clean = String(label || '').trim();
   if (!clean) throw new Error('Give the scenario a name');
@@ -1075,7 +1094,7 @@ function saveCustomScenario({ workspace, home, id, label, description, agents = 
   if (Object.values(custom).some((sc) => sc.id !== id && sc.label.toLowerCase() === clean.toLowerCase())) throw new Error(`A scenario called "${clean}" already exists`);
   const finalId = id || idFromLabel(clean, new Set([...RESERVED_SCENARIOS, ...Object.keys(custom)]), 'scenario');
   // Some mistakes (an unknown agent, code and report agents mixed) only show once the agents resolve.
-  withConfigRollback({ workspace, home, explain: (errors) => errors.filter((e) => e.message.includes(`"${finalId}"`)) }, () =>
+  await withConfigRollback({ workspace, home, explain: (errors) => errors.filter((e) => e.message.includes(`"${finalId}"`)) }, () =>
     setCustomScenario(workspace, finalId, { label: clean, description: description && description.trim(), agents })
   );
   return finalId;
@@ -1113,8 +1132,8 @@ interface SaveGroupArgs {
  * Creates or changes a task group: an epic, a story or a plain group, with an optional Jira key (`cp-123` is written
  * `CP-123`), optional instructions for every task in it, and the instructions it ticks when picked. Returns its id.
  */
-function saveGroup({ workspace, home, id, type, label, jira, instructions, defaultInstructions = [] }: SaveGroupArgs): string {
-  const r = loadConfig({ workspace, home });
+async function saveGroup({ workspace, home, id, type, label, jira, instructions, defaultInstructions = [] }: SaveGroupArgs): Promise<string> {
+  const r = await loadConfig({ workspace, home });
   const ticks = [...new Set(defaultInstructions)];
   const missing = ticks.filter((x) => !(r.ok && r.config.instructions[x]));
   if (missing.length) throw new Error(`There is no instruction ${missing.map((x) => `"${x}"`).join(', ')}`);
@@ -1126,8 +1145,8 @@ function saveGroup({ workspace, home, id, type, label, jira, instructions, defau
 }
 
 /** Creates or changes an instruction tasks can pick. Returns its id. */
-function saveInstruction({ workspace, home, id, label, text }: { workspace: string; home?: string | undefined; id?: string | undefined; label: string; text: string }): string {
-  const r = loadConfig({ workspace, home });
+async function saveInstruction({ workspace, home, id, label, text }: { workspace: string; home?: string | undefined; id?: string | undefined; label: string; text: string }): Promise<string> {
+  const r = await loadConfig({ workspace, home });
   if (!text.trim()) throw new Error('Write the instruction');
   return saveEntry(workspace, 'instructions', r.ok ? r.config.instructions : {}, id, { label: label.trim(), text: text.trim() });
 }
@@ -1159,12 +1178,12 @@ function removeEntry(workspace: string, section: EntrySection, id: string): stri
  * based on another (`base`) adds to that agent's instructions and runs right after it; one based on a readiness or
  * audit agent joins that report scenario. Returns the instructions file, for the user to write.
  */
-function addAgent({ workspace, home, name, base, description, output, model, effort }: { workspace: string; home?: string | undefined; name?: string | undefined; base?: string | undefined; description?: string | undefined; output?: Output | undefined; model?: string | undefined; effort?: Effort | undefined }): string {
+async function addAgent({ workspace, home, name, base, description, output, model, effort }: { workspace: string; home?: string | undefined; name?: string | undefined; base?: string | undefined; description?: string | undefined; output?: Output | undefined; model?: string | undefined; effort?: Effort | undefined }): Promise<string> {
   if (!name || !/^[a-z][a-z0-9-]*$/.test(name)) throw new Error('Use lowercase letters, digits and dashes, starting with a letter (e.g. security-reviewer)');
-  const before = loadConfig({ workspace, home });
+  const before = await loadConfig({ workspace, home });
   if (before.ok && before.config.agents[name]) throw new Error(`An agent called "${name}" already exists`);
   const file = path.join(workspace, CONFIG_DIR, PROMPTS_DIR, `${name}.md`);
-  return withConfigRollback({ workspace, home }, (remember) => {
+  return withConfigRollback({ workspace, home }, async (remember) => {
     remember(file);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     if (!fs.existsSync(file)) {
@@ -1178,7 +1197,7 @@ function addAgent({ workspace, home, name, base, description, output, model, eff
       ...(effort && { effort }),
       instructions: { mode: base ? 'append' : 'replace', file: `./${PROMPTS_DIR}/${name}.md` },
     });
-    const now = loadConfig({ workspace, home });
+    const now = await loadConfig({ workspace, home });
     if (!now.ok) return file; // the rollback reports it
     const scenario = base ? Object.keys(now.config.scenarios).find((sc) => now.config.scenarios[sc]!.includes(base)) : Object.keys(SCENARIO_OUTPUT).find((sc) => SCENARIO_OUTPUT[sc] === output);
     if (scenario) setScenario(workspace, scenario, [...now.config.scenarios[scenario]!, name]);

@@ -208,8 +208,8 @@ class DashboardPanel implements RpcHandlers {
     return { route, platform: process.platform, version: this.context.extension.packageJSON.version };
   }
 
-  configSummary(): ConfigSummary {
-    const r = this.orch.config();
+  async configSummary(): Promise<ConfigSummary> {
+    const r = await this.orch.config();
     if (!r.ok) return { ok: false, errors: r.errors.map((e) => e.message), warnings: (r.warnings || []).map((w) => w.message) };
     const c = r.config;
     type Entry = [string, string, Partial<ScenarioStep>?];
@@ -269,7 +269,7 @@ class DashboardPanel implements RpcHandlers {
       rootName: this.root ? path.basename(this.root) : null,
       languages: LANGUAGES,
       hasConfig: this.orch.hasProjectConfig(),
-      config: this.root ? this.configSummary() : null,
+      config: this.root ? await this.configSummary() : null,
       health: this.healthSummary(),
       tasks: engine ? this.orch.list().map((entry) => view.summary(engine, entry)) : [],
       limits: this.orch.limits(),
@@ -294,7 +294,7 @@ class DashboardPanel implements RpcHandlers {
   // ---------- tasks ----------
 
   async $preview(p: ComposerArgs): Promise<Preview> {
-    const r = this.engine.preview(p);
+    const r = await this.engine.preview(p);
     return r.ok && !r.empty ? { ...r, outline: outline(r.pipeline) } : r;
   }
 
@@ -305,7 +305,7 @@ class DashboardPanel implements RpcHandlers {
       const go = await vscode.window.showWarningMessage(`${problem}, so agents cannot run.`, { modal: true, detail: 'Install or update Claude Code, or set its path in Claudestrator → Settings. The task is created either way and you can run it later.' }, 'Create Task Anyway');
       if (!go) throw Object.assign(new Error(problem), { code: 'cancelled' });
     }
-    const r = this.engine.start(p);
+    const r = await this.engine.start(p);
     this.engine.launch(r.taskId);
     return r;
   }
@@ -317,15 +317,15 @@ class DashboardPanel implements RpcHandlers {
       ...view.detail(engine, taskId),
       ...(state.checkpoint && { checkpointContext: await engine.checkpointContext(state, state.checkpoint), checkpointFull: state.checkpoint }),
       ticket: engine.svc.readArtifact(taskId, 'ticket.md'),
-      pipelineEdit: this.pipelineEdit(state),
+      pipelineEdit: await this.pipelineEdit(state),
     };
   }
 
   /** What the task's pipeline editor shows: its stages, from which one they can change, and the agents to add. */
-  pipelineEdit(state: TaskState): PipelineEdit | null {
+  async pipelineEdit(state: TaskState): Promise<PipelineEdit | null> {
     const from = editableFrom(state);
     if (from === -1) return null;
-    const r = this.orch.config();
+    const r = await this.orch.config();
     const agents: Record<string, Agent> = r.ok ? r.config.agents : {};
     const stages = state.pipeline.stages.map((st) => ({ agent: st.agent, output: st.output, scope: st.scope, color: agents[st.agent] && agents[st.agent]!.color }));
     const { warnings } = taskPipeline(stages.map((st) => ({ name: st.agent, output: st.output, scope: st.scope })), { scenario: state.scenario, auto: state.auto, maxRounds: state.limits.reviewRounds });
@@ -378,7 +378,7 @@ class DashboardPanel implements RpcHandlers {
 
   async $openFile({ taskId, file, preview }: { taskId?: string; file: string; preview?: boolean }): Promise<unknown> {
     const abs = taskId ? this.engine.svc.artifactFile(taskId, file) : file;
-    if (!taskId && !openable(abs, this.openableRoots())) throw new Error(`${file} is outside the workspace and its repos; open it yourself if you need it`);
+    if (!taskId && !openable(abs, await this.openableRoots())) throw new Error(`${file} is outside the workspace and its repos; open it yourself if you need it`);
     if (!(await exists(abs))) throw new Error(`${path.basename(abs)} does not exist (yet)`);
     const uri = vscode.Uri.file(abs);
     if (preview && abs.endsWith('.md')) return vscode.commands.executeCommand('markdown.showPreviewToSide', uri);
@@ -389,8 +389,8 @@ class DashboardPanel implements RpcHandlers {
   }
 
   /** Where a path the page sends may lead: the workspace, the configured repos, and the files the config comes from. */
-  openableRoots(): string[] {
-    const r = this.orch.config();
+  async openableRoots(): Promise<string[]> {
+    const r = await this.orch.config();
     if (!r.ok) return [this.root];
     return [this.root, ...Object.values(r.config.repos).map((repo) => path.resolve(this.root, repo.path)), ...r.config.sources];
   }
@@ -400,7 +400,7 @@ class DashboardPanel implements RpcHandlers {
     const engine = this.engine;
     const state = engine.svc.state(taskId);
     if (!state.repos.length) throw new Error('No repos have changes yet');
-    const r = this.orch.config();
+    const r = await this.orch.config();
     const diff = await taskDiff(taskRepos(this.root, state, r.ok ? r.config : null, state.repos.map((x) => x.name)));
     engine.svc.writeArtifact(taskId, 'diff.patch', diff.text);
     await this.$openFile({ taskId, file: 'diff.patch' });
@@ -408,7 +408,7 @@ class DashboardPanel implements RpcHandlers {
 
   async $openRepo({ taskId, repo }: { taskId: string; repo: string }) {
     const state = this.engine.svc.state(taskId);
-    const r = this.orch.config();
+    const r = await this.orch.config();
     const [tr] = taskRepos(this.root, state, r.ok ? r.config : null, [repo]);
     await vscode.commands.executeCommand('revealInExplorer', vscode.Uri.file(tr!.dir));
   }
@@ -509,7 +509,7 @@ class DashboardPanel implements RpcHandlers {
   // ---------- agents & pipeline ----------
 
   async $config(): Promise<ConfigData> {
-    const r = this.orch.config();
+    const r = await this.orch.config();
     const layer = this.root ? cfg.readProjectLayer(this.root) : {};
     const base = { root: this.root, hasConfig: this.orch.hasProjectConfig(), files: { project: this.root && cfg.projectConfigFile(this.root), user: cfg.userConfigFile() }, layer, colors: AGENT_COLORS, outputs: OUTPUTS, efforts: EFFORTS, builtins: cfg.builtinAgentNames(), languages: LANGUAGES, libraries: this.root ? libraries.listLibraries({ workspace: this.root }) : [] };
     if (!r.ok) return { ...base, ok: false, errors: r.errors.map((e) => e.message), warnings: (r.warnings || []).map((w) => w.message) };
@@ -549,11 +549,11 @@ class DashboardPanel implements RpcHandlers {
    * its label. Returns its id.
    */
   async $saveScenario({ id, label, description, agents = [] }: SaveScenarioParams) {
-    return { id: cfg.saveCustomScenario({ workspace: this.root, id, label, description, agents }) };
+    return { id: await cfg.saveCustomScenario({ workspace: this.root, id, label, description, agents }) };
   }
 
   async $deleteScenario({ id }: { id: string }) {
-    const r = this.orch.config();
+    const r = await this.orch.config();
     const label = (r.ok && r.config.custom[id] && r.config.custom[id]!.label) || ({ readiness: 'Check readiness', audit: 'Audit' } as Record<string, string>)[id] || id;
     const builtin = id === 'readiness' || id === 'audit';
     const ok = await vscode.window.showWarningMessage(`Delete the scenario "${label}"?`, { modal: true, detail: builtin ? 'It disappears from the menu. You can bring it back from the same menu.' : 'Its agents stay; only this scenario (their order, models and effort) is removed from config.yaml. Tasks already started keep running.' }, 'Delete');
@@ -569,7 +569,7 @@ class DashboardPanel implements RpcHandlers {
   // ---------- task groups and instructions ----------
 
   async $saveGroup({ id, type, label, jira, instructions, defaultInstructions }: SaveGroupParams) {
-    return { id: cfg.saveGroup({ workspace: this.root, id, type, label, jira, instructions, defaultInstructions }) };
+    return { id: await cfg.saveGroup({ workspace: this.root, id, type, label, jira, instructions, defaultInstructions }) };
   }
 
   async $deleteGroup({ id }: { id: string }) {
@@ -577,7 +577,7 @@ class DashboardPanel implements RpcHandlers {
   }
 
   async $saveInstruction({ id, label, text }: SaveInstructionParams) {
-    return { id: cfg.saveInstruction({ workspace: this.root, id, label, text }) };
+    return { id: await cfg.saveInstruction({ workspace: this.root, id, label, text }) };
   }
 
   async $deleteInstruction({ id }: { id: string }) {
@@ -585,7 +585,7 @@ class DashboardPanel implements RpcHandlers {
   }
 
   private async deleteEntry(section: cfg.EntrySection, id: string, detail: string): Promise<boolean> {
-    const r = this.orch.config();
+    const r = await this.orch.config();
     const label = (r.ok && r.config[section][id] && r.config[section][id]!.label) || id;
     const ok = await vscode.window.showWarningMessage(`Delete the ${section === 'groups' ? 'group' : 'instruction'} "${label}"?`, { modal: true, detail: `It is removed from config.yaml. ${detail}` }, 'Delete');
     if (!ok) return false;
@@ -615,7 +615,7 @@ class DashboardPanel implements RpcHandlers {
     if (!uri) return nothing;
     const parsed = backups.parseBackup(await fs.promises.readFile(uri.fsPath, 'utf8'));
     if (!parsed.ok) throw new Error(parsed.error);
-    const plan = backups.previewRestore({ workspace: this.root, backup: parsed.backup });
+    const plan = await backups.previewRestore({ workspace: this.root, backup: parsed.backup });
     const count = plan.agents.add.length + plan.agents.replace.length + plan.scenarios.add.length + plan.scenarios.replace.length + (plan.pipeline ? 1 : 0);
     const left = plan.skipped.map((x) => `${x.kind === 'pipeline' ? 'the pipeline' : `${x.kind} ${x.id}`} (${x.reason})`).join('; ');
     if (!count) throw new Error(`Nothing can be restored from this backup: ${left}`);
@@ -631,7 +631,7 @@ class DashboardPanel implements RpcHandlers {
     ].filter(Boolean).join('\n\n');
     const ok = await vscode.window.showWarningMessage(`Restore ${count} item${count === 1 ? '' : 's'} from the backup?`, { modal: true, detail }, 'Restore');
     if (!ok) return nothing;
-    const done = backups.restoreBackup({ workspace: this.root, backup: parsed.backup });
+    const done = await backups.restoreBackup({ workspace: this.root, backup: parsed.backup });
     return { cancelled: false, agents: [...done.agents.add, ...done.agents.replace], pipeline: done.pipeline, scenarios: [...done.scenarios.add, ...done.scenarios.replace], skipped: done.skipped };
   }
 
@@ -649,7 +649,7 @@ class DashboardPanel implements RpcHandlers {
     }
     const scope = await vscode.window.showInformationMessage(`Use ${name} in…`, { modal: true, detail: 'All my projects: listed in ~/.claudestrator/config.yaml.\n\nThis project: listed in its .claudestrator/config.yaml, so teammates get it too (a folder inside the project is listed by a relative path).' }, 'All my projects', 'This project');
     if (!scope) return none;
-    const info = libraries.addLibrary({ workspace: this.root, dir: uri.fsPath, scope: scope === 'This project' ? 'project' : 'user', create: !exists });
+    const info = await libraries.addLibrary({ workspace: this.root, dir: uri.fsPath, scope: scope === 'This project' ? 'project' : 'user', create: !exists });
     return { added: info.label };
   }
 
@@ -657,7 +657,7 @@ class DashboardPanel implements RpcHandlers {
     const label = cfg.libraryLabel(file);
     const ok = await vscode.window.showWarningMessage(`Stop using the library ${label}?`, { modal: true, detail: `It is taken out of ${scope === 'user' ? '~/.claudestrator/config.yaml' : 'this project\'s config.yaml'}; the folder stays on disk. If this project still runs one of its agents, nothing changes and you are told which.` }, 'Stop using it');
     if (!ok) return { removed: false };
-    libraries.removeLibrary({ workspace: this.root, file, scope });
+    await libraries.removeLibrary({ workspace: this.root, file, scope });
     return { removed: true };
   }
 
@@ -665,17 +665,17 @@ class DashboardPanel implements RpcHandlers {
     const what = [...scenarios.map((s) => `scenario ${s}`), ...agents.map((a) => `agent ${a}`)].join(', ');
     const ok = await vscode.window.showInformationMessage(`Move ${what} to the library ${cfg.libraryLabel(library)}?`, { modal: true, detail: 'It leaves this project\'s config.yaml and is kept in the library, with its instructions file; a scenario takes along the agents of this project it runs. The project keeps using it through the library. The same names in the library are replaced.' }, 'Move');
     if (!ok) return { moved: false, agents: [], scenarios: [] };
-    return { moved: true, ...libraries.moveToLibrary({ workspace: this.root, library, agents, scenarios }) };
+    return { moved: true, ...(await libraries.moveToLibrary({ workspace: this.root, library, agents, scenarios })) };
   }
 
   async $newAgent({ name, base, description, output, model, effort }: NewAgentParams) {
-    const file = cfg.addAgent({ workspace: this.root, name, base, description, output, model, effort });
+    const file = await cfg.addAgent({ workspace: this.root, name, base, description, output, model, effort });
     await vscode.window.showTextDocument(vscode.Uri.file(file), { viewColumn: vscode.ViewColumn.Beside });
   }
 
 
   async $editInstructions({ name }: { name: string }) {
-    const r = this.orch.config();
+    const r = await this.orch.config();
     if (!r.ok) throw new Error(r.errors[0]!.message);
     const file = cfg.ensureInstructionsFile(this.root, name, r.config.agents[name]);
     await vscode.window.showTextDocument(vscode.Uri.file(file), { viewColumn: vscode.ViewColumn.Beside });
@@ -699,7 +699,7 @@ class DashboardPanel implements RpcHandlers {
   // ---------- repos ----------
 
   async $repos(): Promise<ReposData> {
-    const r = this.orch.config();
+    const r = await this.orch.config();
     const configured = r.ok ? r.config.repos : {};
     const status = r.ok ? await this.engine.repoStatus() : [];
     const known = new Set(Object.values(configured).map((x) => path.resolve(this.root, x.path)));
@@ -743,7 +743,7 @@ class DashboardPanel implements RpcHandlers {
       title: 'Pick a git repository, several, or a folder that contains repositories',
     });
     if (!picked || !picked.length) return null;
-    const r = this.orch.config();
+    const r = await this.orch.config();
     const existing = !forSetup && r.ok ? Object.values(r.config.repos) : [];
     return reposFromFolders(this.root, picked.map((u) => u.fsPath), { names: existing.map((x) => x.name), dirs: existing.map((x) => path.resolve(this.root, x.path)) });
   }
@@ -767,21 +767,21 @@ class DashboardPanel implements RpcHandlers {
   async $addContext() {
     const picked = await vscode.window.showOpenDialog({ canSelectMany: true, defaultUri: vscode.Uri.file(this.root), openLabel: 'Give to every agent', filters: { 'Text files': ['md', 'txt', 'yaml', 'yml', 'json'] } });
     if (!picked) return;
-    const r = this.orch.config();
+    const r = await this.orch.config();
     const current = r.ok ? r.config.context : [];
     const all = [...new Set([...current, ...picked.map((u) => u.fsPath)])].map((f) => cfg.configRelative(this.root, f));
     cfg.setProjectValue(this.root, ['context'], all);
   }
 
   async $removeContext({ file }: { file: string }) {
-    const r = this.orch.config();
+    const r = await this.orch.config();
     const rest = (r.ok ? r.config.context : []).filter((f) => f !== file).map((f) => cfg.configRelative(this.root, f));
     cfg.setProjectValue(this.root, ['context'], rest.length ? rest : undefined);
   }
 
   async $createWorkspaceMap() {
     const file = path.join(this.root, cfg.CONFIG_DIR, 'workspace.md');
-    const r = this.orch.config();
+    const r = await this.orch.config();
     if (!(await exists(file))) {
       const repos = r.ok ? Object.values(r.config.repos).map((x) => ({ name: x.name, path: x.path, ...describeRepo(path.resolve(this.root, x.path)) })) : [];
       await fs.promises.mkdir(path.dirname(file), { recursive: true });

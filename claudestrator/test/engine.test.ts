@@ -32,7 +32,7 @@ repos:
   );
   const h = await harness(ws, { FAKE_REPOS: 'api,web', FAKE_REVIEW: 'fail-once' });
   try {
-    const { taskId, created } = h.engine.start({ text: 'Add the feature everywhere', effort: { reviewer: 'low' } });
+    const { taskId, created } = await h.engine.start({ text: 'Add the feature everywhere', effort: { reviewer: 'low' } });
     assert.ok(created);
     assert.match(taskId, /^T-\d{8}-\d{4}$/);
 
@@ -136,7 +136,7 @@ test('engine: dirty checkouts block branch mode, stop interrupts a hanging agent
   fs.writeFileSync(path.join(ws, 'api', 'wip.txt'), 'uncommitted');
   const h = await harness(ws, { FAKE_REPOS: 'api' });
   try {
-    const { taskId } = h.engine.start({ text: 'Do a thing --auto' });
+    const { taskId } = await h.engine.start({ text: 'Do a thing --auto' });
     h.engine.launch(taskId);
     await waitFor(() => h.engine.lastError(taskId));
     assert.equal(h.engine.lastError(taskId)!.code, 'repos_not_ready');
@@ -180,7 +180,7 @@ test('engine: ask-me mode routes tool calls to the user', async () => {
     h.engine.permissionReply(req.requestId, req.tool !== 'Write' || !/feature\.txt$/.test(text((req.input as { file_path?: unknown }).file_path)), 'not this file');
   });
   try {
-    const { taskId } = h.engine.start({ text: 'Small thing', auto: true });
+    const { taskId } = await h.engine.start({ text: 'Small thing', auto: true });
     const s = await runTask(h.engine, taskId);
     assert.equal(s.checkpoint!.id, 'confirm-push');
     assert.ok(asked.some((r) => r.tool === 'Write'));
@@ -201,7 +201,7 @@ test('engine: a repo outside the workspace folder (absolute path) is branched, c
   const ws = workspace([], `pipeline: [planner, developer]\nrepos:\n  billing:\n    path: ${dir}\n    gates:\n      - { name: has-feature, cmd: test -f feature.txt }\n`);
   const h = await harness(ws, { FAKE_REPOS: 'billing' });
   try {
-    const { taskId } = h.engine.start({ text: 'Outside repo', auto: true });
+    const { taskId } = await h.engine.start({ text: 'Outside repo', auto: true });
     const s = await runTask(h.engine, taskId);
     assert.equal(s.checkpoint && s.checkpoint.id, 'confirm-push', JSON.stringify(h.engine.lastError(taskId)));
     assert.equal(git(dir, 'rev-parse', '--abbrev-ref', 'HEAD'), 'feat/add-feature');
@@ -218,7 +218,7 @@ test('engine: a Jira task is read through an Atlassian MCP server when there is 
   const h = await harness(ws, { FAKE_REPOS: 'api' });
   h.engine.mcpIntake = () => ({ server: 'Atlassian', site: 'acme.atlassian.net' });
   try {
-    const { taskId } = h.engine.start({ text: 'PROJ-805' });
+    const { taskId } = await h.engine.start({ text: 'PROJ-805' });
     assert.equal(taskId, 'PROJ-805');
     await h.engine.run(taskId);
     const s = h.engine.svc.state(taskId);
@@ -246,7 +246,7 @@ test('engine: a signed-out Claude Code is reported as such, and agents get the a
   const h = await harness(ws, { FAKE_REPOS: 'api', FAKE_AUTH_FAIL: '1' });
   h.engine.mcpIntake = () => ({ server: 'Atlassian' });
   try {
-    const { taskId } = h.engine.start({ text: 'PROJ-9' });
+    const { taskId } = await h.engine.start({ text: 'PROJ-9' });
     h.engine.launch(taskId);
     await waitFor(() => h.engine.lastError(taskId));
     assert.equal(h.engine.lastError(taskId)!.code, 'claude_login');
@@ -288,14 +288,14 @@ test('engine: "PROJ-805 перевір готовність…" runs a read-only
   h.engine.mcpIntake = () => ({ server: 'Atlassian', site: 'acme.atlassian.net' });
   try {
     const request = 'PROJ-805 перевір готовність виконання таски і закриття всіх критеріїв приймання';
-    const p = previewOf(h.engine, { text: request });
+    const p = await previewOf(h.engine, { text: request });
     assert.equal(p.scenario, 'readiness');
     assert.ok(p.scenarioDetected, 'picked from the words');
     assert.equal(p.source.kind, 'jira');
     assert.equal(p.taskId, 'PROJ-805-check', 'next to the delivery task PROJ-805, not on top of it');
     assert.deepEqual(p.pipeline.stages.map((st) => st.agent), ['verifier']);
 
-    const { taskId } = h.engine.start({ text: request });
+    const { taskId } = await h.engine.start({ text: request });
     const s = await runTask(h.engine, taskId);
     assert.equal(s.status, 'done', JSON.stringify(h.engine.lastError(taskId)));
     assert.equal(s.scenario, 'readiness');
@@ -332,7 +332,7 @@ test('engine: "PROJ-805 перевір готовність…" runs a read-only
     assert.equal(commentLog.filter((i) => i.type === 'blocked' && i.tool === 'mcp__Atlassian__addCommentToJiraIssue').length, 1, 'and only once');
 
     // Checking again after it finished is a new run.
-    assert.equal(previewOf(h.engine, { text: request }).taskId, 'PROJ-805-check-2');
+    assert.equal((await previewOf(h.engine, { text: request })).taskId, 'PROJ-805-check-2');
   } finally {
     h.hooks.dispose();
   }
@@ -343,10 +343,10 @@ test('engine: an audit finds bugs and bottlenecks, rates them and reports; a Jir
   const h = await harness(ws, { FAKE_REPOS: 'api' });
   try {
     const request = 'Аудит проекту на вузькі місця, перформанс і помилки';
-    assert.equal(previewOf(h.engine, { text: request }).scenario, 'audit');
-    assert.equal(previewOf(h.engine, { text: 'Add caching to the report endpoint' }).scenario, 'deliver');
-    assert.equal(previewOf(h.engine, { text: 'Add caching', scenario: 'audit' }).scenario, 'audit', 'a choice in the composer wins');
-    const { taskId } = h.engine.start({ text: request });
+    assert.equal((await previewOf(h.engine, { text: request })).scenario, 'audit');
+    assert.equal((await previewOf(h.engine, { text: 'Add caching to the report endpoint' })).scenario, 'deliver');
+    assert.equal((await previewOf(h.engine, { text: 'Add caching', scenario: 'audit' })).scenario, 'audit', 'a choice in the composer wins');
+    const { taskId } = await h.engine.start({ text: request });
     assert.match(taskId, /^AUDIT-\d{8}-\d{4}$/);
     const s = await runTask(h.engine, taskId);
     assert.equal(s.status, 'done', JSON.stringify(h.engine.lastError(taskId)));
@@ -394,7 +394,7 @@ test('engine: checks and git hooks get no credential of yours, and the pre-push 
   const { remote, path: PATH } = remoteSetup(ws, '#!/bin/sh\necho "$1 $2 $(cat) token=${ACME_DEPLOY_TOKEN:-none}" >> "$FAKE_STATE/pre-push.log"\n');
   const h = await harness(ws, { FAKE_REPOS: 'api', ACME_DEPLOY_TOKEN: 's3cret', DATABASE_URL: 'postgres://u:p@db/x', PATH });
   try {
-    const { taskId } = h.engine.start({ text: 'Add the feature', auto: true });
+    const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
     let s = await runTask(h.engine, taskId);
     assert.equal(s.checkpoint && s.checkpoint.id, 'confirm-push', JSON.stringify(h.engine.lastError(taskId)));
     const gates = only(h.engine.svc.events(taskId), 'gates_ran');
@@ -419,7 +419,7 @@ test('engine: a failing pre-push hook stops the push and says why', async () => 
   const { remote, path: PATH } = remoteSetup(ws, '#!/bin/sh\necho "lint: 3 problems"\nexit 1\n');
   const h = await harness(ws, { FAKE_REPOS: 'api', PATH });
   try {
-    const { taskId } = h.engine.start({ text: 'Add the feature', auto: true });
+    const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
     await runTask(h.engine, taskId);
     await h.engine.answer(taskId, 'confirm-push', 'push');
     await waitFor(() => !h.engine.isRunning(taskId));
@@ -439,7 +439,7 @@ test('engine: an agent that cannot start is a failed step to retry, and one stop
   try {
     // A CLI the guard cannot rely on: start() throws before any process runs.
     h.engine.runner = { start: async (req) => (/developer/.test(req.name ?? '') ? Promise.reject(new Error('Claude Code 2.1.290 is older than 2.1.302')) : real.start(req)) };
-    const { taskId } = h.engine.start({ text: 'Add the feature', auto: true });
+    const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
     let s = await runTask(h.engine, taskId);
     assert.equal(s.checkpoint && s.checkpoint.id, 'agent-failure');
     assert.match(s.checkpoint!.reason!, /did not start: Claude Code 2\.1\.290 is older/);
@@ -472,7 +472,7 @@ test('engine: when a PR description cannot list the other PRs, the PRs stay open
   const warnings: string[] = [];
   h.engine.on('log', (l: { level: string; message: string }) => l.level === 'warn' && warnings.push(l.message));
   try {
-    const { taskId } = h.engine.start({ text: 'Add the feature', auto: true });
+    const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
     await runTask(h.engine, taskId);
     await h.engine.answer(taskId, 'confirm-push', 'push');
     const s = await waitFor(() => (h.engine.isRunning(taskId) ? null : h.engine.svc.state(taskId)));
@@ -488,7 +488,7 @@ test('engine: a plan for a repo the workspace does not have goes back to the pla
   const ws = workspace(['api'], 'pipeline: [planner, developer]\nrepos:\n  api: { role: Betting API }\n');
   const h = await harness(ws, { FAKE_REPOS: 'api', FAKE_PLAN_REPOS_FIRST: 'betting-service' });
   try {
-    const { taskId } = h.engine.start({ text: 'Add the feature', auto: true });
+    const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
     const s = await runTask(h.engine, taskId);
     assert.equal(s.checkpoint && s.checkpoint.id, 'confirm-push', JSON.stringify(h.engine.lastError(taskId)));
     assert.deepEqual(s.repos.map((r) => r.name), ['api']);

