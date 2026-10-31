@@ -625,3 +625,24 @@ test('engine: a task another VS Code window runs is shown as running there, and 
     h.hooks.dispose();
   }
 });
+
+test('engine: Stop ends a commit hook that runs, and no repo after it is committed', { skip: process.platform === 'win32' }, async () => {
+  const ws = workspace(['api', 'web'], 'pipeline: [planner, developer]\nrepos:\n  api: {}\n  web: {}\n');
+  const marker = path.join(ws, 'hook-started');
+  fs.writeFileSync(path.join(ws, 'api', '.git', 'hooks', 'pre-commit'), `#!/bin/sh\ntouch '${marker}'\nsleep 30\n`, { mode: 0o755 });
+  const h = await harness(ws, { FAKE_REPOS: 'api,web' });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
+    const run = runTask(h.engine, taskId);
+    await waitFor(async () => fs.existsSync(marker), 20000);
+    const started = Date.now();
+    await h.engine.stop(taskId);
+    const s = await run;
+    assert.ok(Date.now() - started < 10000, `the hook was ended, not waited for (${Date.now() - started} ms)`);
+    assert.equal(s.status, 'stopped');
+    assert.equal(git(path.join(ws, 'web'), 'log', '-1', '--format=%s'), 'init', 'web was not committed after it');
+    assert.equal(only(await h.engine.svc.events(taskId), 'commit_failed').length, 0, 'a stopped hook is not a failed commit');
+  } finally {
+    h.hooks.dispose();
+  }
+});

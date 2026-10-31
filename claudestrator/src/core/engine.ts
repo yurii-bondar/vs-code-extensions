@@ -265,7 +265,7 @@ class Engine extends EventEmitter {
   /** Whether the sandbox started here once: it is not probed again. */
   sandboxReady = false;
   sessions: Map<string, ClaudeSession>;
-  /** Stops the gates a task runs right now; Stop aborts it. */
+  /** What Stop ends besides the agent: the checks of a step, a commit hook, a pre-push hook. */
   gateRuns = new Map<string, AbortController>();
   running: Set<string>;
   prepared: Set<string>;
@@ -1259,10 +1259,15 @@ class Engine extends EventEmitter {
     const branch = branchName(s) as string;
     const committed: string[] = [];
     const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cs-commit-'));
+    // Stop ends a commit hook that runs (it can take minutes), and no repo after it is committed.
+    const abort = new AbortController();
+    this.gateRuns.set(s.taskId, abort);
+    const stopped = async (): Promise<boolean> => abort.signal.aborted || (await this.svc.state(s.taskId)).status === 'stopped';
     try {
       const message = path.join(tmp, 'message.txt');
       await fs.promises.writeFile(message, body ? `${subject}\n\n${body}\n` : `${subject}\n`);
       for (const r of taskRepos(this.workspace, s, config, s.repos.map((x) => x.name))) {
+        if (await stopped()) return;
         if (!(await r.git.isRepo())) continue;
         if ((await r.git.dirty()).length) {
           // The work is committed on the task branch only: another branch checked out meanwhile (main, another task's)
@@ -1272,7 +1277,8 @@ class Engine extends EventEmitter {
           await r.git.addAll();
           // The repo's commit hooks run here, and they are code the agents could change (`.husky/pre-commit`, a
           // package.json script): in the sandbox, which lets git write its objects and refs, not its config or hooks.
-          const c = await runShell(`git commit -F ${shq(message)}`, { cwd: r.dir, env: withoutCredentials(getChildEnv(), config.policy.checkEnv), timeoutMs: 15 * 60000, launch: this.sandboxFor(config, [r.dir, ...(await r.git.gitDirs())], { git: true, runsOutside: await this.runsOutside([r.dir]) }) });
+          const c = await runShell(`git commit -F ${shq(message)}`, { cwd: r.dir, env: withoutCredentials(getChildEnv(), config.policy.checkEnv), timeoutMs: 15 * 60000, signal: abort.signal, launch: this.sandboxFor(config, [r.dir, ...(await r.git.gitDirs())], { git: true, runsOutside: await this.runsOutside([r.dir]) }) });
+          if (await stopped()) return;
           if (c.code !== 0) {
             await this.dispatch(s.taskId, { type: 'commit_failed', repo: r.name, output: c.output.trim().slice(-8000) });
             return;
@@ -1281,6 +1287,7 @@ class Engine extends EventEmitter {
         if ((await r.git.branchChanges(r.base, branch)).length) committed.push(r.name);
       }
     } finally {
+      if (this.gateRuns.get(s.taskId) === abort) this.gateRuns.delete(s.taskId);
       await fs.promises.rm(tmp, { recursive: true, force: true });
     }
     await this.dispatch(s.taskId, { type: 'committed', repos: committed });
@@ -1290,7 +1297,7 @@ class Engine extends EventEmitter {
    * Runs the repo's pre-push hook the way git would, in the sandbox: git itself pushes with your credentials and
    * network, which the hook (code the agents could change) must not get. Null when it passes or there is none.
    */
-  async prePush(r: TaskRepo, branch: string, config: Config): Promise<string | null> {
+  async prePush(r: TaskRepo, branch: string, config: Config, signal?: AbortSignal): Promise<string | null> {
     const hooks = await r.git.hooksDir();
     if (!hooks) return null;
     const hook = path.join(hooks, 'pre-push');
@@ -1307,6 +1314,7 @@ class Engine extends EventEmitter {
       env: withoutCredentials(getChildEnv(), config.policy.checkEnv),
       timeoutMs: 15 * 60000,
       input: `refs/heads/${branch} ${local} refs/heads/${branch} ${remote}\n`,
+      ...(signal && { signal }),
       launch: this.sandboxFor(config, [r.dir, ...(await r.git.gitDirs())], { git: true, runsOutside: await this.runsOutside([r.dir]) }),
     });
     return run.code === 0 ? null : run.output.trim().slice(-8000) || `the pre-push hook exited with ${run.code}`;
@@ -1327,11 +1335,17 @@ class Engine extends EventEmitter {
       await fs.promises.writeFile(f, await prBody({ state: await this.svc.state(s.taskId), repo, taskDir, language: config.language, prs, forbidAttribution: config.policy.forbidAiAttribution }));
       return f;
     };
+    // Stop ends a pre-push hook that runs, and nothing after it is pushed or opened; a resume finds what was.
+    const abort = new AbortController();
+    this.gateRuns.set(s.taskId, abort);
+    const stopped = async (): Promise<boolean> => abort.signal.aborted || (await this.svc.state(s.taskId)).status === 'stopped';
     try {
       for (const r of repos) {
         if (prs[r.name]) continue;
+        if (await stopped()) return;
         this.setLive(s.taskId, { phase: 'publishing', text: `Checking ${r.name} before the push` });
-        const refused = await this.prePush(r, branch, config);
+        const refused = await this.prePush(r, branch, config, abort.signal);
+        if (await stopped()) return;
         if (refused) throw new EngineError('push_failed', `${r.name}: the pre-push hook failed:\n${refused}`);
         this.setLive(s.taskId, { phase: 'publishing', text: `Pushing ${r.name}` });
         // The hook has run, in the sandbox; git would run it again outside.
@@ -1348,6 +1362,7 @@ class Engine extends EventEmitter {
         if (pr.code !== 0) throw new EngineError('pr_failed', `${r.name}: ${pr.stderr.trim() || pr.stdout.trim()}`);
         prs[r.name] = pr.stdout.trim().split('\n').reverse().find((l) => /^https?:\/\//.test(l.trim()))?.trim() || pr.stdout.trim();
       }
+      if (await stopped()) return;
       // Every body lists the others, so link them once all exist.
       if (Object.keys(prs).length > 1) {
         for (const r of repos) {
@@ -1356,6 +1371,7 @@ class Engine extends EventEmitter {
         }
       }
     } finally {
+      if (this.gateRuns.get(s.taskId) === abort) this.gateRuns.delete(s.taskId);
       await fs.promises.rm(tmp, { recursive: true, force: true });
     }
     await this.dispatch(s.taskId, { type: 'published', prs });
