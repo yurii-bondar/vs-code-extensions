@@ -24,7 +24,7 @@ import { buildArgs, limitsOf } from '../src/core/runner';
 import { Engine } from '../src/core/engine';
 import { resolveDefaults, effectiveFor, modelName } from '../src/core/defaults';
 import * as mcp from '../src/core/mcp';
-import { reposFromFolders, repoLayerOf } from '../src/core/setup';
+import { findRepos, reposFromFolders, repoLayerOf } from '../src/core/setup';
 import { execFileSync } from 'child_process';
 import { parseReadiness, parseAudit, validateSetting, validateConfigLayer } from '../src/core/protocol';
 import { renderReport, jiraText } from '../src/core/report';
@@ -744,6 +744,34 @@ shadcn: npx shadcn mcp - ⏸ Pending approval
   assert.equal(r.servers.find((s) => s.name === 'Atlassian')!.state, 'connected', 'connected after signing in');
 });
 
+test('setup: repos two levels down are found, with the gates, stack, role and base branch they suggest', async () => {
+  const ws = tmp('cs-find-');
+  const repo = (...parts: string[]): string => {
+    const d = path.join(ws, ...parts);
+    fs.mkdirSync(d, { recursive: true });
+    execFileSync('git', ['init', '-q'], { cwd: d });
+    return d;
+  };
+  const web = repo('web');
+  fs.writeFileSync(path.join(web, 'package.json'), JSON.stringify({ description: 'Storefront', scripts: { lint: 'eslint .', typecheck: 'vue-tsc', test: 'vitest' }, devDependencies: { nuxt: '3', typescript: '5' } }));
+  fs.writeFileSync(path.join(web, 'pnpm-lock.yaml'), '');
+  fs.mkdirSync(path.join(web, '.git', 'refs', 'remotes', 'origin'), { recursive: true });
+  fs.writeFileSync(path.join(web, '.git', 'refs', 'remotes', 'origin', 'HEAD'), 'ref: refs/remotes/origin/trunk\n');
+  const api = repo('services', 'api');
+  fs.writeFileSync(path.join(api, 'pyproject.toml'), '[tool.ruff]\n[tool.pytest.ini_options]\n');
+  fs.writeFileSync(path.join(api, '.git', 'packed-refs'), '0000000000000000000000000000000000000000 refs/heads/master\n');
+  repo('a', 'b', 'too-deep');
+  repo('node_modules', 'pkg');
+
+  const found = (await findRepos(ws)).sort((x, y) => x.name.localeCompare(y.name));
+  assert.deepEqual(found.map((r) => [r.name, r.path, r.stack, r.role, r.baseBranch]), [
+    ['api', 'services/api', ['Python'], undefined, 'master'],
+    ['web', 'web', ['Nuxt', 'TypeScript'], 'Storefront', 'trunk'],
+  ]);
+  assert.deepEqual(found[1]!.gates.map((g) => g.cmd), ['pnpm lint', 'pnpm typecheck', 'pnpm test']);
+  assert.deepEqual(found[0]!.gates.map((g) => g.cmd), ['ruff check .', 'pytest -q']);
+});
+
 test('repos outside the workspace: picked folders, paths and the guard', async () => {
   const ws = tmp('cs-ws-');
   const outer = tmp('cs-outer-');
@@ -753,12 +781,12 @@ test('repos outside the workspace: picked folders, paths and the guard', async (
   }
   fs.writeFileSync(path.join(outer, 'billing', 'go.mod'), 'module billing\n');
   fs.mkdirSync(path.join(outer, 'plain'));
-  const r = reposFromFolders(ws, [path.join(ws, 'inner'), outer, path.join(outer, 'plain')], { names: ['inner'], dirs: [] });
+  const r = await reposFromFolders(ws, [path.join(ws, 'inner'), outer, path.join(outer, 'plain')], { names: ['inner'], dirs: [] });
   assert.deepEqual(r.repos.map((x) => [x.name, x.outside, path.isAbsolute(x.path)]), [['inner-2', false, false], ['billing', true, true], ['auth', true, true]]);
   assert.equal(r.repos[0]!.path, 'inner');
   assert.deepEqual(r.repos[1]!.gates.map((g) => g.name), ['vet', 'test']);
   assert.deepEqual(r.notRepos, [path.join(outer, 'plain')]);
-  assert.equal(reposFromFolders(ws, [outer], { names: [], dirs: [path.join(outer, 'billing'), path.join(outer, 'group', 'auth')] }).repos.length, 0, 'already configured repos are skipped');
+  assert.equal((await reposFromFolders(ws, [outer], { names: [], dirs: [path.join(outer, 'billing'), path.join(outer, 'group', 'auth')] })).repos.length, 0, 'already configured repos are skipped');
 
   const policy = { protectedBranches: ['main'], draftPrsOnly: true, forbidAiAttribution: false, allowNoVerify: false, sandbox: true, network: [], writable: [], checkEnv: [] };
   const ctx = { policy, cwd: path.join(outer, 'billing'), workspace: ws, repoDirs: [path.join(outer, 'billing')], agent: true, branchOf: async () => 'feat/x', isRepoRoot: async (d: string) => d === path.join(outer, 'billing'), readFile: async () => null };

@@ -1,6 +1,7 @@
 // First-run help: finds the git repositories of a workspace and suggests gates from what each repo uses.
 import * as fs from 'fs';
 import * as path from 'path';
+import { exists } from './files';
 import type { FoundRepo, RepoGuess, SuggestedGate } from './wire';
 import type { RepoLayer } from './config';
 import type { Gate } from './types';
@@ -15,70 +16,68 @@ interface PackageJson {
   devDependencies?: Record<string, string>;
 }
 
-const isGitRoot = (dir: string): boolean => fs.existsSync(path.join(dir, '.git'));
-const readJson = (file: string): PackageJson | null => {
+const isGitRoot = (dir: string): Promise<boolean> => exists(path.join(dir, '.git'));
+const read = (file: string): Promise<string> => fs.promises.readFile(file, 'utf8').catch(() => '');
+const readJson = async (file: string): Promise<PackageJson | null> => {
   try {
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
+    return JSON.parse(await fs.promises.readFile(file, 'utf8'));
   } catch {
     return null;
   }
 };
-const read = (file: string): string => {
-  try {
-    return fs.readFileSync(file, 'utf8');
-  } catch {
-    return '';
-  }
-};
+/** Whether any of these files is in `dir`. */
+const hasAny = async (dir: string, ...names: string[]): Promise<boolean> => (await Promise.all(names.map((n) => exists(path.join(dir, n))))).includes(true);
 
 const safeName = (s: string): string => s.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'repo';
 
 /** Git repos at the workspace root and up to two levels below it. */
-function findRepos(workspace: string): FoundRepo[] {
+async function findRepos(workspace: string): Promise<FoundRepo[]> {
   const found: string[] = [];
-  const visit = (dir: string, depth: number): void => {
-    if (isGitRoot(dir)) {
+  const visit = async (dir: string, depth: number): Promise<void> => {
+    if (await isGitRoot(dir)) {
       found.push(dir);
       if (dir !== workspace) return; // nested repos inside a repo are its own business
     }
     if (depth >= 2) return;
     let entries: fs.Dirent[] = [];
     try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
+      entries = await fs.promises.readdir(dir, { withFileTypes: true });
     } catch {
       return;
     }
     for (const e of entries) {
       if (!e.isDirectory() || e.name.startsWith('.') || SKIP.has(e.name)) continue;
-      visit(path.join(dir, e.name), depth + 1);
+      await visit(path.join(dir, e.name), depth + 1);
     }
   };
-  visit(workspace, 0);
+  await visit(workspace, 0);
   // A root repo that also contains repos (a "workspace" repo) is rarely where the work happens.
   const names = new Set<string>();
-  return found.map((dir) => {
-    let name = safeName(dir === workspace ? path.basename(workspace) : path.relative(workspace, dir).split(path.sep).pop()!);
-    while (names.has(name)) name = `${name}-2`;
-    names.add(name);
-    const rel = path.relative(workspace, dir) || '.';
-    return { name, path: rel.split(path.sep).join('/'), dir, ...describeRepo(dir) };
-  });
+  return Promise.all(
+    found.map(async (dir) => {
+      let name = safeName(dir === workspace ? path.basename(workspace) : path.relative(workspace, dir).split(path.sep).pop()!);
+      while (names.has(name)) name = `${name}-2`;
+      names.add(name);
+      const rel = path.relative(workspace, dir) || '.';
+      return { name, path: rel.split(path.sep).join('/'), dir, ...(await describeRepo(dir)) };
+    })
+  );
 }
 
-function packageManager(dir: string): string {
-  if (fs.existsSync(path.join(dir, 'pnpm-lock.yaml'))) return 'pnpm';
-  if (fs.existsSync(path.join(dir, 'yarn.lock'))) return 'yarn';
-  if (fs.existsSync(path.join(dir, 'bun.lockb')) || fs.existsSync(path.join(dir, 'bun.lock'))) return 'bun';
+async function packageManager(dir: string): Promise<string> {
+  if (await hasAny(dir, 'pnpm-lock.yaml')) return 'pnpm';
+  if (await hasAny(dir, 'yarn.lock')) return 'yarn';
+  if (await hasAny(dir, 'bun.lockb', 'bun.lock')) return 'bun';
   return 'npm';
 }
 
 /** Suggested gates and a guessed role for one repo. */
-function describeRepo(dir: string): RepoGuess {
+async function describeRepo(dir: string): Promise<RepoGuess> {
   const gates: SuggestedGate[] = [];
   const stack: string[] = [];
-  const pkg = readJson(path.join(dir, 'package.json'));
+  const pkg = await readJson(path.join(dir, 'package.json'));
   if (pkg) {
-    const pm = packageManager(dir);
+    const pm = await packageManager(dir);
     const runScript = (s: string): string => (pm === 'npm' ? `npm run ${s}` : `${pm} ${s}`);
     const scripts = pkg.scripts || {};
     const deps = { ...pkg.dependencies, ...pkg.devDependencies };
@@ -92,24 +91,24 @@ function describeRepo(dir: string): RepoGuess {
     if (types) gates.push({ name: 'typecheck', cmd: runScript(types) });
     if (test && !/no test specified/.test(scripts[test]!)) gates.push({ name: 'test', cmd: test === 'test' && pm === 'npm' ? 'npm test' : runScript(test) });
   }
-  if (fs.existsSync(path.join(dir, 'go.mod'))) {
+  if (await hasAny(dir, 'go.mod')) {
     stack.push('Go');
     gates.push({ name: 'vet', cmd: 'go vet ./...' }, { name: 'test', cmd: 'go test ./...' });
-    if (fs.existsSync(path.join(dir, '.golangci.yml')) || fs.existsSync(path.join(dir, '.golangci.yaml'))) gates.unshift({ name: 'lint', cmd: 'golangci-lint run' });
+    if (await hasAny(dir, '.golangci.yml', '.golangci.yaml')) gates.unshift({ name: 'lint', cmd: 'golangci-lint run' });
   }
-  if (fs.existsSync(path.join(dir, 'Cargo.toml'))) {
+  if (await hasAny(dir, 'Cargo.toml')) {
     stack.push('Rust');
     gates.push({ name: 'check', cmd: 'cargo check --all-targets --quiet' }, { name: 'test', cmd: 'cargo test --quiet' });
   }
-  const pyproject = read(path.join(dir, 'pyproject.toml'));
-  if (pyproject || fs.existsSync(path.join(dir, 'requirements.txt'))) {
+  const pyproject = await read(path.join(dir, 'pyproject.toml'));
+  if (pyproject || (await hasAny(dir, 'requirements.txt'))) {
     stack.push('Python');
     if (/ruff/.test(pyproject)) gates.push({ name: 'lint', cmd: 'ruff check .' });
     if (/mypy/.test(pyproject)) gates.push({ name: 'typecheck', cmd: 'mypy .' });
-    if (/pytest/.test(pyproject) || fs.existsSync(path.join(dir, 'pytest.ini')) || fs.existsSync(path.join(dir, 'tests'))) gates.push({ name: 'test', cmd: 'pytest -q' });
+    if (/pytest/.test(pyproject) || (await hasAny(dir, 'pytest.ini', 'tests'))) gates.push({ name: 'test', cmd: 'pytest -q' });
   }
   if (!gates.length) {
-    const make = read(path.join(dir, 'Makefile'));
+    const make = await read(path.join(dir, 'Makefile'));
     for (const target of ['lint', 'test']) if (new RegExp(`^${target}:`, 'm').test(make)) gates.push({ name: target, cmd: `make ${target}` });
   }
   const seen = new Set<string>();
@@ -117,18 +116,18 @@ function describeRepo(dir: string): RepoGuess {
     gates: gates.filter((g) => !seen.has(g.name) && seen.add(g.name)),
     stack: [...new Set(stack)],
     role: (pkg && pkg.description) || undefined,
-    baseBranch: guessBase(dir),
+    baseBranch: await guessBase(dir),
   };
 }
 
 /** origin's HEAD branch if git recorded it, else main/master by what exists. */
-function guessBase(dir: string): string | undefined {
-  const head = read(path.join(dir, '.git', 'refs', 'remotes', 'origin', 'HEAD')).trim();
+async function guessBase(dir: string): Promise<string | undefined> {
+  const head = (await read(path.join(dir, '.git', 'refs', 'remotes', 'origin', 'HEAD'))).trim();
   const m = head.match(/refs\/remotes\/origin\/(.+)$/);
   if (m) return m[1];
-  const packed = read(path.join(dir, '.git', 'packed-refs'));
+  const packed = await read(path.join(dir, '.git', 'packed-refs'));
   for (const b of ['main', 'master', 'develop']) {
-    if (fs.existsSync(path.join(dir, '.git', 'refs', 'heads', b)) || packed.includes(`refs/heads/${b}`)) return b;
+    if (packed.includes(`refs/heads/${b}`) || (await exists(path.join(dir, '.git', 'refs', 'heads', b)))) return b;
   }
   return undefined;
 }
@@ -155,13 +154,13 @@ ${repos.map((r) => `- **${r.name}** (\`${r.path}\`): ${r.role || 'what it is, wh
  * found inside it. Paths inside the workspace become relative, the rest stay absolute.
  * Returns `{ repos, notRepos }`; `taken` holds names and folders already configured.
  */
-function reposFromFolders(root: string, folders: string[], taken: { names: string[]; dirs: string[] } = { names: [], dirs: [] }): { repos: (FoundRepo & { outside: boolean })[]; notRepos: string[] } {
+async function reposFromFolders(root: string, folders: string[], taken: { names: string[]; dirs: string[] } = { names: [], dirs: [] }): Promise<{ repos: (FoundRepo & { outside: boolean })[]; notRepos: string[] }> {
   const names = new Set(taken.names);
   const dirs = new Set(taken.dirs.map((d) => path.resolve(d)));
   const repos: (FoundRepo & { outside: boolean })[] = [];
   const notRepos: string[] = [];
   for (const folder of folders) {
-    const found = isGitRoot(folder) ? [folder] : findRepos(folder).map((r) => r.dir);
+    const found = (await isGitRoot(folder)) ? [folder] : (await findRepos(folder)).map((r) => r.dir);
     if (!found.length) notRepos.push(folder);
     for (const dir of found) {
       if (dirs.has(path.resolve(dir))) continue;
@@ -171,7 +170,7 @@ function reposFromFolders(root: string, folders: string[], taken: { names: strin
       names.add(name);
       const rel = path.relative(root, dir);
       const outside = rel.startsWith('..') || path.isAbsolute(rel);
-      repos.push({ name, path: outside ? dir : (rel || '.').split(path.sep).join('/'), dir, outside, ...describeRepo(dir) });
+      repos.push({ name, path: outside ? dir : (rel || '.').split(path.sep).join('/'), dir, outside, ...(await describeRepo(dir)) });
     }
   }
   return { repos, notRepos };

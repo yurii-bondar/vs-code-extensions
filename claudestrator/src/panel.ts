@@ -703,12 +703,12 @@ class DashboardPanel implements RpcHandlers {
     const configured = r.ok ? r.config.repos : {};
     const status = r.ok ? await this.engine.repoStatus() : [];
     const known = new Set(Object.values(configured).map((x) => path.resolve(this.root, x.path)));
-    const detected = this.root ? findRepos(this.root).filter((d) => !known.has(d.dir)) : [];
+    const detected = this.root ? (await findRepos(this.root)).filter((d) => !known.has(d.dir)) : [];
     const ctxDir = path.join(this.root, cfg.CONFIG_DIR);
     return {
       ok: r.ok,
       errors: r.ok ? [] : r.errors.map((e) => e.message),
-      repos: Object.values(configured).map((x) => ({ ...x, status: status.find((s) => s.name === x.name), suggested: describeRepo(path.resolve(this.root, x.path)).gates })),
+      repos: await Promise.all(Object.values(configured).map(async (x) => ({ ...x, status: status.find((s) => s.name === x.name), suggested: (await describeRepo(path.resolve(this.root, x.path))).gates }))),
       detected,
       context: r.ok ? await Promise.all(r.config.context.map(async (f) => ({ file: f, rel: path.relative(this.root, f), exists: await exists(f), ref: path.relative(ctxDir, f) }))) : [],
       baseBranch: r.ok ? r.config.baseBranch : 'main',
@@ -783,7 +783,7 @@ class DashboardPanel implements RpcHandlers {
     const file = path.join(this.root, cfg.CONFIG_DIR, 'workspace.md');
     const r = await this.orch.config();
     if (!(await exists(file))) {
-      const repos = r.ok ? Object.values(r.config.repos).map((x) => ({ name: x.name, path: x.path, ...describeRepo(path.resolve(this.root, x.path)) })) : [];
+      const repos = r.ok ? await Promise.all(Object.values(r.config.repos).map(async (x) => ({ name: x.name, path: x.path, ...(await describeRepo(path.resolve(this.root, x.path))) }))) : [];
       await fs.promises.mkdir(path.dirname(file), { recursive: true });
       await fs.promises.writeFile(file, WORKSPACE_MAP(repos));
     }
@@ -798,7 +798,7 @@ class DashboardPanel implements RpcHandlers {
 
   async $detect() {
     if (!this.root) return { repos: [] };
-    return { root: this.root, repos: findRepos(this.root) };
+    return { root: this.root, repos: await findRepos(this.root) };
   }
 
   async $setup({ repos, language, gitMode, map, baseBranch }: SetupParams) {
