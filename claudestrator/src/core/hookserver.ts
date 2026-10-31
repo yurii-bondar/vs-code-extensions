@@ -106,6 +106,14 @@ class HookServer {
     }
     const token = (String(req.headers.authorization || '').match(/^Bearer (\S+)$/) || [])[1];
     const decide = token ? this.sessions.get(token) : undefined;
+    // Answered before its body is read, which is dropped unread: any local process (or a page in a browser that found
+    // the port) could otherwise have the extension host hold many large bodies at once.
+    if (!decide) {
+      res.setHeader('Connection', 'close');
+      reply({ allow: false, reason: 'this agent session is no longer active in Claudestrator' });
+      req.resume();
+      return;
+    }
     let body = '';
     let size = 0;
     req.setEncoding('utf8');
@@ -115,7 +123,6 @@ class HookServer {
         if (size > MAX_BODY) return reply({ allow: false, reason: 'Claudestrator: the tool call is too large to check' });
         body += chunk;
       }
-      if (!decide) return reply({ allow: false, reason: 'this agent session is no longer active in Claudestrator' });
       const call = parseHookRequest(body);
       if (!call) return reply({ allow: false, reason: 'Claudestrator could not read the tool call' });
       reply(await decide(call));

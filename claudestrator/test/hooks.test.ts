@@ -2,6 +2,7 @@
 import test from 'node:test';
 import * as assert from 'node:assert/strict';
 import * as fs from 'fs';
+import * as net from 'net';
 import * as path from 'path';
 
 import { HookServer, TOKEN_ENV } from '../src/core/hookserver';
@@ -81,5 +82,34 @@ test('hooks: a guard that cannot answer blocks the tool call', async () => {
     } finally {
       h.hooks.dispose();
     }
+  }
+});
+
+test('hooks: a call without a live token is refused before its body is read', async () => {
+  const server = new HookServer();
+  await server.listen();
+  try {
+    // A body that never ends: answered all the same, and nothing of it is held.
+    const { port } = new URL(server.url!);
+    const reply = await new Promise<string>((resolve, reject) => {
+      const socket = net.connect(Number(port), '127.0.0.1', () => {
+        socket.write(`POST /pretooluse HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer ${'0'.repeat(48)}\r\nContent-Type: application/json\r\nContent-Length: 31000000\r\n\r\n{"tool_name":"Read",`);
+      });
+      let got = '';
+      socket.on('data', (d) => {
+        got += d;
+        if (got.includes('\r\n\r\n') && got.includes('}}')) {
+          socket.destroy();
+          resolve(got);
+        }
+      });
+      socket.on('error', reject);
+      setTimeout(() => reject(new Error('no answer without the body')), 3000).unref();
+    });
+    assert.match(reply, /^HTTP\/1\.1 200/);
+    assert.match(reply, /"permissionDecision":"deny"/);
+    assert.match(reply, /no longer active/);
+  } finally {
+    server.dispose();
   }
 });
