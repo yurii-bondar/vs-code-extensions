@@ -249,6 +249,9 @@ function parsePlanMeta(raw: unknown): ParseResult<PlanMeta> {
   const v = dropNulls(raw) as RawPlan;
   const issues = PLAN(v, '');
   if (issues.length) return { ok: false, issues };
+  // Each repo once: the pipeline runs a step per repo, and a repo named twice would run its step again and again.
+  const twice = [...new Set(v.repos.map((r) => r.name).filter((n, i, all) => all.indexOf(n) !== i))];
+  if (twice.length) return { ok: false, issues: [`repos: ${twice.join(', ')} ${twice.length === 1 ? 'is' : 'are'} named more than once; name each repo once`] };
   return {
     ok: true,
     value: {

@@ -26,7 +26,7 @@ import { resolveDefaults, effectiveFor, modelName } from '../src/core/defaults';
 import * as mcp from '../src/core/mcp';
 import { findRepos, reposFromFolders, repoLayerOf } from '../src/core/setup';
 import { execFileSync } from 'child_process';
-import { parseReadiness, parseAudit, validateSetting, validateConfigLayer } from '../src/core/protocol';
+import { parseReadiness, parseAudit, parsePlanMeta, validateSetting, validateConfigLayer } from '../src/core/protocol';
 import { renderReport, jiraText } from '../src/core/report';
 import type { Agent, Config, EventBody, EventOf, OrchEvent, Output, PlanMeta, PlanRepo, Source, Spec, StoredPipeline, TaskState } from '../src/core/types';
 import type { GuardContext, GuardVerdict } from '../src/core/guard';
@@ -214,6 +214,16 @@ test('git: what a task branch publishes does not depend on what is checked out',
   assert.deepEqual(await repo.changedFiles('main'), ['c.txt'], 'HEAD-based diff would have seen only what is on main');
   assert.deepEqual(await repo.branchChanges('main', 'main'), []);
   assert.match(git('log', '--format=%s', `${await repo.baseRef('main', 'feat/x')}..feat/x`), /work/);
+});
+
+test('machine: a plan that names a repo twice runs its step once', async () => {
+  const { pipeline } = defaultPipeline();
+  const twice: PlanMeta = { ...PLAN, repos: [{ name: 'api', mode: 'full' }, { name: 'api', mode: 'full' }] };
+  assert.ok(!parsePlanMeta(twice).ok, 'the engine has the planner correct it');
+  // Recorded anyway (an older task, another tool): the machine takes each repo once.
+  const s = rpl(timed([createdEvent(pipeline), { type: 'intake_completed', spec }, { type: 'stage_started', agent: 'planner' }, { type: 'stage_completed', agent: 'planner', artifact: 'p', plan: twice }]));
+  assert.deepEqual(s.repos.map((r) => r.name), ['api']);
+  assert.deepEqual(passSteps(s).map((p) => `${p.agent}@${p.repo || ''}`), ['planner@', 'developer@api', 'tester@', 'reviewer@']);
 });
 
 test('machine: review limit, stop keeps the question, resume asks again', async () => {

@@ -561,3 +561,19 @@ test('engine: a plan for a repo the workspace does not have goes back to the pla
     h.hooks.dispose();
   }
 });
+
+test('engine: a plan that names a repo twice goes back to the planner, and its repo runs once', async () => {
+  const ws = workspace(['api'], 'pipeline: [planner, developer]\nrepos:\n  api: {}\n');
+  const h = await harness(ws, { FAKE_REPOS: 'api', FAKE_PLAN_REPOS_FIRST: 'api,api' });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
+    const s = await runTask(h.engine, taskId);
+    assert.equal(s.checkpoint && s.checkpoint.id, 'confirm-push', JSON.stringify(h.engine.lastError(taskId)));
+    const started = only(await h.engine.svc.events(taskId), 'stage_started').map((e) => `${e.agent}${e.repo ? `@${e.repo}` : ''}`);
+    assert.deepEqual(started, ['planner', 'developer@api']);
+    const planner = await h.engine.svc.readTranscript(taskId, (await view.detail(h.engine, taskId)).steps.find((st) => st.agent === 'planner')!.key!);
+    assert.ok(planner.some((i) => i.type === 'user' && i.from === 'orchestrator' && /api is named more than once/.test(text(i.text))));
+  } finally {
+    h.hooks.dispose();
+  }
+});

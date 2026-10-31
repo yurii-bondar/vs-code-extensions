@@ -197,7 +197,9 @@ function stageCompleted(s: TaskState, e: Ev<'stage_completed'>): Transition {
   switch (stage.output) {
     case 'plan':
       s.plan = e.plan!;
-      s.repos = e.plan!.repos;
+      // Each repo once (the engine has the planner correct a plan that names one twice): a step per repo would
+      // otherwise find its own first copy and run again and again.
+      s.repos = e.plan!.repos.filter((r, i, all) => all.findIndex((x) => x.name === r.name) === i);
       if (stage.approval) openCheckpoint(s, 'approve-plan', e.at, step);
       else advance(s, step);
       return ok(s);

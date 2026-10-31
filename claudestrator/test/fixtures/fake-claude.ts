@@ -300,7 +300,7 @@ function main(): void {
           continue;
         }
         first(text, m.uuid);
-      } else if (role === 'planner' && /repos this workspace does not have/.test(text)) plan(process.env.FAKE_REPOS || 'api', m.uuid);
+      } else if (role === 'planner' && /repos this workspace does not have|named more than once/.test(text)) plan(process.env.FAKE_REPOS || 'api', m.uuid);
       else if (role === 'planner' && /choose another slug/.test(text)) plan(process.env.FAKE_REPOS || 'api', m.uuid, 'add-feature-again');
       else reply(`Follow-up handled: ${text.split('\n')[0]!.slice(0, 60)}`, m.uuid);
     }
