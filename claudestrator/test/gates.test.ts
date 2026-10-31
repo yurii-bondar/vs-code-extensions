@@ -94,3 +94,9 @@ test('gates: a log is written as a file of its own, never through a link planted
   await assert.rejects(() => runGates({ repo, dir, logDir, force: true }), /is a link/);
   assert.deepEqual(fs.readdirSync(elsewhere), []);
 });
+
+test('gates: run as on a CI server, so a test runner that watches by default runs once and exits', async () => {
+  const dir = changedRepo();
+  const repo = { name: 'api', baseBranch: 'main', gates: [{ name: 'ci', cmd: 'test "$CI" = true && test "$NO_COLOR" = 1' }] } as unknown as RepoConfig;
+  assert.equal((await runGates({ repo, dir, logDir: path.join(dir, '.orch', 'gates'), force: true })).status, 'pass');
+});

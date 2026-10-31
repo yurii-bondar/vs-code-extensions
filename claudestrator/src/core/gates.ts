@@ -15,7 +15,8 @@ const KEEP_CHARS = 4 * 1024 * 1024;
 /** How long a gate gets after SIGTERM before its process group is killed. */
 const KILL_GRACE_MS = 3000;
 // Gate commands print plain text: colour codes are noise in the tail an agent reads, and some tools only colour on a terminal anyway.
-const PLAIN_ENV = { NO_COLOR: '1', FORCE_COLOR: '0' };
+// CI: test runners that watch by default (react-scripts test, ng test, vitest) run once and exit, as on a CI server.
+const PLAIN_ENV = { NO_COLOR: '1', FORCE_COLOR: '0', CI: 'true' };
 const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`, 'g');
 const slug = (s: string): string => s.replace(/[^A-Za-z0-9._-]+/g, '_');
 
