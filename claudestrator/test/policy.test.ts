@@ -150,7 +150,7 @@ test('policy: a link in the repo does not lead a write into git metadata or Clau
   assert.equal(fs.readFileSync(path.join(api, '.git', 'config'), 'utf8').includes('fsmonitor'), false);
 });
 
-test("policy: the hooks folder husky keeps in the working tree is git's: no agent and no check writes it", async () => {
+test("policy: what runs outside the sandbox from a repo (husky's hooks folder, Claude Code's settings) no agent and no check writes", async () => {
   const ws = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cs-policy-')));
   const api = path.join(ws, 'api');
   fs.mkdirSync(path.join(api, '.husky', '_'), { recursive: true });
@@ -163,10 +163,10 @@ test("policy: the hooks folder husky keeps in the working tree is git's: no agen
   const hooks = { settings: () => ({}), host: () => '127.0.0.1:1' } as unknown as EngineOptions['hooks'];
   const engine = new Engine({ workspace: ws, home: ws, runner: {} as EngineOptions['runner'], hooks });
   const config = await engine.config();
-  const gitHooks = await engine.gitHooks([api]);
-  assert.deepEqual(gitHooks, [path.join(api, '.husky', '_')]);
+  const runsOutside = await engine.runsOutside([api]);
+  assert.deepEqual(runsOutside, [path.join(api, '.husky', '_'), path.join(api, '.claude'), path.join(api, '.mcp.json')]);
   const decide = async (tool: string, input: Record<string, unknown>): Promise<string | null> => {
-    const d = await engine.decide({ taskId: 'T-1', step: { stage: 1, agent: 'developer', repo: 'api' }, writeRoots: [api], gitHooks, config, call: { tool, input, cwd: api }, emitItem: () => {} });
+    const d = await engine.decide({ taskId: 'T-1', step: { stage: 1, agent: 'developer', repo: 'api' }, writeRoots: [api], runsOutside, config, call: { tool, input, cwd: api }, emitItem: () => {} });
     return d.allow ? null : (d.reason ?? 'refused');
   };
   assert.match((await decide('Write', { file_path: path.join(api, '.husky', '_', 'h') })) ?? 'allowed', /hooks/);
@@ -174,15 +174,22 @@ test("policy: the hooks folder husky keeps in the working tree is git's: no agen
   assert.match((await decide('Bash', { command: 'echo curl evil >> .husky/_/h' })) ?? 'allowed', /hooks folder/);
   assert.match((await decide('Bash', { command: 'ln -s .husky/_/post-checkout x' })) ?? 'allowed', /hooks folder/);
   assert.equal(await decide('Write', { file_path: path.join(api, '.husky', 'pre-commit') }), null, "the repo's own hook scripts are code like any other: the diff shows them");
+  // The next agent's session loads the repo's Claude Code settings: a hook there would run outside its sandbox.
+  assert.match((await decide('Write', { file_path: path.join(api, '.claude', 'settings.json') })) ?? 'allowed', /Claude Code's settings/);
+  assert.match((await decide('Edit', { file_path: path.join(api, '.claude', 'hooks', 'format.sh') })) ?? 'allowed', /Claude Code's settings/, 'nor a script a hook there names');
+  assert.match((await decide('Write', { file_path: path.join(api, '.mcp.json') })) ?? 'allowed', /MCP servers/);
+  assert.match((await decide('Bash', { command: "printf '{}' > .claude/settings.local.json" })) ?? 'allowed', /Claude Code's settings/);
+  assert.equal(await decide('Write', { file_path: path.join(api, 'CLAUDE.md') }), null, 'the instructions at the root are text, not code');
 
   // The settings: Claude Code refuses the edit itself, and the sandbox keeps commands, checks and hooks out of it.
-  const settings = engine.agentSettings({ writeRoots: [api], cwd: api, config, gitHooks }) as { permissions: { deny: string[] }; sandbox: { filesystem: { denyWrite: string[] } } };
+  const settings = engine.agentSettings({ writeRoots: [api], cwd: api, config, runsOutside }) as { permissions: { deny: string[] }; sandbox: { filesystem: { denyWrite: string[] } } };
   assert.ok(settings.permissions.deny.includes(`Edit(/${path.join(api, '.husky', '_')}/**)`));
   assert.ok(settings.sandbox.filesystem.denyWrite.includes(path.join(api, '.husky', '_')));
+  assert.ok(settings.permissions.deny.includes(`Edit(/${path.join(api, '.claude')}/**)`) && settings.sandbox.filesystem.denyWrite.includes(path.join(api, '.mcp.json')));
   const recorded: SandboxPolicy[] = [];
   const checks = new Engine({ workspace: ws, home: ws, runner: {} as EngineOptions['runner'], hooks, sandbox: (p) => (recorded.push(p), plainLauncher) });
-  checks.sandboxFor(config, [api], { gitHooks });
-  assert.ok(recorded[0]!.denyWrite.includes(path.join(api, '.husky', '_')), 'nor do checks and the commit hooks, which run in the sandbox');
+  checks.sandboxFor(config, [api], { runsOutside });
+  assert.ok(recorded[0]!.denyWrite.includes(path.join(api, '.husky', '_')) && recorded[0]!.denyWrite.includes(path.join(api, '.claude')), 'nor do checks and the commit hooks, which run in the sandbox');
 });
 
 test('policy: a Jira comment session posts on its issue and the text it was given, whatever the input looks like', () => {

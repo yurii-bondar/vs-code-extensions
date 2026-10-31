@@ -25,8 +25,11 @@ interface GuardContext {
   writeRoots?: string[] | undefined;
   /** What a command never writes, inside the write roots too: Claudestrator's config and task state. */
   protect?: string[] | undefined;
-  /** Folders git runs hooks from that sit in the working tree (husky's `.husky/_`): git's, like its metadata. */
-  gitHooks?: string[] | undefined;
+  /**
+   * What of the working tree runs outside the sandbox (`Engine.runsOutside`): the hooks folder git runs (husky's
+   * `.husky/_`), Claude Code's settings (`.claude/`, `.mcp.json`). Never written, like git metadata.
+   */
+  runsOutside?: string[] | undefined;
   branchOf(dir: string): Promise<string | null>;
   isRepoRoot(dir: string): Promise<boolean>;
   readFile(file: string): Promise<string | null>;
@@ -149,9 +152,15 @@ const TEMP_DIRS = (): string[] => [...new Set([path.resolve(os.tmpdir()), '/tmp'
 
 const within = (abs: string, root: string): boolean => abs === root || abs.startsWith(root + path.sep);
 
-/** What of git's a path is in: its metadata, or the hooks folder it runs from the working tree. Null: neither. */
-const gitOwned = (abs: string, ctx: GuardContext): string | null =>
-  inGitMetadata(abs) ? 'git metadata' : (ctx.gitHooks || []).some((h) => within(abs, path.resolve(h))) ? 'the hooks folder git runs' : null;
+/** What a path of `Engine.runsOutside` is: Claude Code's settings, or the hooks folder git runs. */
+const outsideLabel = (p: string): string => (/(^|[\\/])(\.claude|\.mcp\.json)$/.test(p) ? "Claude Code's settings and MCP servers of the repo" : 'the hooks folder git runs');
+
+/** What a write there would change that is not an agent's: git metadata, or what runs outside the sandbox. Null: none. */
+function ownedBy(abs: string, ctx: GuardContext): string | null {
+  if (inGitMetadata(abs)) return 'git metadata';
+  const root = (ctx.runsOutside || []).find((h) => within(abs, path.resolve(h)));
+  return root ? `${outsideLabel(root)}, which run outside the sandbox` : null;
+}
 
 /** An agent writes only where its stage works (or a temp folder), and never into git metadata. */
 function checkWrites(targets: string[], cmd: string, dir: string, ctx: GuardContext): Verdict {
@@ -160,7 +169,7 @@ function checkWrites(targets: string[], cmd: string, dir: string, ctx: GuardCont
   for (const t of targets) {
     if (/\$(?!\{?HOME\}?(\/|$))|`/.test(t)) return deny(`${cmd} writes to ${t}: spell out the path instead of a variable`);
     const abs = resolveIn(dir, t, ctx);
-    const owned = gitOwned(abs, ctx);
+    const owned = ownedBy(abs, ctx);
     if (owned) return deny(`${cmd} would write into ${owned} (${abs}); Claudestrator owns git`);
     if ((ctx.protect || []).some((p) => within(abs, path.resolve(p)))) return deny(`${cmd} writes ${abs}: Claudestrator's config and task state are not an agent's to change`);
     if (TEMP_DIRS().some((tmp) => within(abs, tmp))) continue;
@@ -192,7 +201,7 @@ function checkLinks(cmd: string, args: string[], dir: string, ctx: GuardContext)
   for (const s of link.sources) {
     // A symlink's target counts from where the link is (`ln -s ../.git/config src/cfg`), a hard link's from here.
     for (const abs of [resolveIn(dir, s, ctx), path.resolve(at, s), path.resolve(path.dirname(at), s)]) {
-      const owned = gitOwned(abs, ctx);
+      const owned = ownedBy(abs, ctx);
       if (owned) return deny(`${cmd} would link to ${owned} (${s}): a write through the link would change it, and Claudestrator owns git`);
       if ((ctx.protect || []).some((p) => within(abs, path.resolve(p)))) return deny(`${cmd} would link to ${abs}: Claudestrator's config and task state are not an agent's to change`);
     }
@@ -671,4 +680,4 @@ async function checkRm(args: string[], dir: string, ctx: GuardContext): Promise<
 }
 
 export type { GuardContext, Verdict as GuardVerdict };
-export { guardBash, inGitMetadata, simpleCommands, AI_CREDIT };
+export { guardBash, inGitMetadata, outsideLabel, simpleCommands, AI_CREDIT };
