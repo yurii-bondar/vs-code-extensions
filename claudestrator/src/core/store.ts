@@ -500,7 +500,7 @@ class TaskService {
       const writes = this.started.get(file) ?? 0;
       const pending = this.writes.get(file);
       if (pending) await pending;
-      const read = await fs.promises.readFile(file, 'utf8').catch(() => ''); // nothing written yet
+      const read = await readTail(file, limit + 1);
       if ((this.started.get(file) ?? 0) !== writes || this.writes.get(file) !== undefined) continue;
       text = read + (this.queued.get(file) || []).join('');
       break;
@@ -525,6 +525,39 @@ const changedAt = (file: string): Promise<string> =>
     (st) => st.mtime.toISOString(),
     () => new Date(0).toISOString()
   );
+
+/**
+ * The last `lines` lines of a file, read from its end in chunks: a long agent's transcript runs to megabytes, and a
+ * step shows its tail. '' when there is no file yet.
+ */
+async function readTail(file: string, lines: number): Promise<string> {
+  let handle: fs.promises.FileHandle;
+  try {
+    handle = await fs.promises.open(file, 'r');
+  } catch {
+    return '';
+  }
+  try {
+    const { size } = await handle.stat();
+    const chunks: Buffer[] = [];
+    let newlines = 0;
+    let pos = size;
+    while (pos > 0 && newlines <= lines) {
+      const len = Math.min(TAIL_CHUNK, pos);
+      pos -= len;
+      const buf = Buffer.alloc(len);
+      await handle.read(buf, 0, len, pos);
+      chunks.unshift(buf);
+      for (let i = buf.indexOf(0x0a); i !== -1; i = buf.indexOf(0x0a, i + 1)) newlines++;
+    }
+    const all = Buffer.concat(chunks);
+    // Started mid-file: from the first whole line on, which also never cuts a character in two.
+    return all.subarray(pos > 0 ? all.indexOf(0x0a) + 1 : 0).toString('utf8');
+  } finally {
+    await handle.close();
+  }
+}
+const TAIL_CHUNK = 256 * 1024;
 
 /** Size and mtime of a file, or '' when it is gone: enough to tell whether it changed since. */
 const signatureAsync = (file: string): Promise<string> =>

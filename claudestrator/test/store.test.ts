@@ -87,3 +87,20 @@ test('store: a transcript read while lines are being written has each line once,
   for (const items of reads) assert.deepEqual(items, Array.from({ length: items.length }, (_, i) => i), 'each line once, in order');
   assert.equal(reads.at(-1)!.length, 400);
 });
+
+test('store: a long transcript is read from its end, whole lines only, also where a chunk cuts a character', async () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-tail-'));
+  const svc = new TaskService({ workspace: ws });
+  const file = svc.transcriptFile('T-1', '0001-dev');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  // 20,000 items of mixed length with Cyrillic in them: several megabytes, chunk borders anywhere.
+  const lines: string[] = [];
+  for (let i = 0; i < 20000; i++) lines.push(`${JSON.stringify({ type: 'text', text: `${i} ${'ї'.repeat(i % 97)}` })}\n`);
+  fs.writeFileSync(file, lines.join(''));
+  const items = await svc.readTranscript('T-1', '0001-dev');
+  assert.equal(items.length, 1500);
+  assert.deepEqual(items.map((i) => Number(String('text' in i ? i.text : '').split(' ')[0])), Array.from({ length: 1500 }, (_, k) => 18500 + k));
+  assert.ok(items.every((i) => !String('text' in i ? i.text : '').includes('�')), 'no character cut in two');
+  assert.equal((await svc.readTranscript('T-1', '0001-dev', 30000)).length, 20000, 'a limit above the length reads it all');
+  assert.deepEqual(await svc.readTranscript('T-1', 'none'), [], 'no file yet');
+});
