@@ -94,7 +94,15 @@ class DashboardPanel implements RpcHandlers {
       }
     }, null, this.disposables);
     this.panel.webview.onDidReceiveMessage((msg) => this.onMessage(msg), null, this.disposables);
+    this.listen();
+  }
 
+  /**
+   * What the page hears of the engine and the config: streamed output in batches, the rest as it comes. Apart from the
+   * constructor so the preview harness, which has no webview, sends the page exactly what VS Code's panel would.
+   */
+  listen(): void {
+    const orch = this.orch;
     orch.onEngine((e) => {
       switch (e.name) {
         case 'output':
