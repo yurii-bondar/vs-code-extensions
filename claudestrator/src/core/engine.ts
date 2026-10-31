@@ -675,12 +675,12 @@ class Engine extends EventEmitter {
    * A session's settings (`--settings`): the guard hook in front of every tool call, and what Claude Code enforces
    * itself: deny rules for secrets and pushes, and the sandbox around shell commands (writes only in `writeRoots`).
    */
-  agentSettings({ writeRoots, cwd, config }: { writeRoots: string[]; cwd: string; config: Config }): Record<string, unknown> {
+  agentSettings({ writeRoots, cwd, config, gitHooks = [] }: { writeRoots: string[]; cwd: string; config: Config; gitHooks?: string[] }): Record<string, unknown> {
     return sessionSettings({
       hooks: this.hooks.settings(),
       guard: this.hooks.host(),
       writeRoots,
-      protect: configPaths(this.workspace, config),
+      protect: [...configPaths(this.workspace, config), ...gitHooks],
       secrets: this.secretFiles(),
       envVars: credentialVars({ ...getChildEnv(), [TOKEN_ENV]: '' }),
       cwd,
@@ -695,14 +695,24 @@ class Engine extends EventEmitter {
    * credential, reaching only the registries: the agents' own sandbox, since they run code the agents changed. None
    * with `policy.sandbox: false` or on native Windows, where the agents have none either.
    */
-  sandboxFor(config: Config, allowWrite: string[], { git = false }: { git?: boolean } = {}): Launcher | undefined {
+  sandboxFor(config: Config, allowWrite: string[], { git = false, gitHooks = [] }: { git?: boolean; gitHooks?: string[] } = {}): Launcher | undefined {
     if (!config.policy.sandbox || process.platform === 'win32') return undefined;
     return this.sandbox({
       allowWrite: [...allowWrite, ...config.policy.writable],
-      denyWrite: [...(git ? [] : allowWrite.map((d) => path.join(d, '.git'))), ...configPaths(this.workspace, config)],
+      denyWrite: [...(git ? [] : allowWrite.map((d) => path.join(d, '.git'))), ...gitHooks, ...configPaths(this.workspace, config)],
       denyRead: [...SECRET_PATHS, ...this.secretFiles()],
       network: [...REGISTRIES, ...config.policy.network],
     });
+  }
+
+  /**
+   * The folders git runs hooks from for these checkouts, where they sit outside git metadata: husky's `.husky/_`
+   * (`core.hooksPath`) is in the working tree. No agent and no check writes there: what lands there runs with your next
+   * git command, outside the sandbox, and it is git-ignored, so no diff would show it.
+   */
+  async gitHooks(dirs: string[]): Promise<string[]> {
+    const found = await Promise.all(dirs.map((d) => new GitRepo(d).hooksDir()));
+    return [...new Set(found.filter((h): h is string => h !== null && !inGitMetadata(h)))];
   }
 
   /**
@@ -819,14 +829,15 @@ class Engine extends EventEmitter {
     const writeRoots = stage.scope === 'repo' ? [repoDir as string] : workRepos.map((r) => r.dir);
     const gated = (stage.scope === 'repo' ? [step.repo] : workRepos.map((r) => r.name)).some((n) => n && config.repos[n] && config.repos[n]!.gates.length);
     if (gated) await this.ensureSandbox(config);
-    const hook = this.hooks.register((call) => this.decide({ taskId, step, writeRoots, config, call, emitItem }));
+    const gitHooks = await this.gitHooks(writeRoots);
+    const hook = this.hooks.register((call) => this.decide({ taskId, step, writeRoots, gitHooks, config, call, emitItem }));
     let session: ClaudeSession;
     try {
       session = await this.runner.start({
       agent,
       prompt,
       cwd,
-      settings: this.agentSettings({ writeRoots, cwd, config }),
+      settings: this.agentSettings({ writeRoots, cwd, config, gitHooks }),
       ...(REPORT_SCHEMAS[stage.output] && { jsonSchema: REPORT_SCHEMAS[stage.output] }),
       // Only the repos a stage writes are working directories; it reads the task folder, the workspace and other repos
       // through the guard, which allows reading.
@@ -878,7 +889,7 @@ class Engine extends EventEmitter {
                   logDir: path.join(taskDir, 'gates', `r${state.review.round}`),
                   onGate: (name) => this.setLive(taskId, { phase: 'gates', step, key, text: `Gate "${name}" in ${r.name} (attempt ${attempt})` }),
                   signal: abort.signal,
-                  launch: this.sandboxFor(config, [r.dir]),
+                  launch: this.sandboxFor(config, [r.dir], { gitHooks }),
                   keepEnv: config.policy.checkEnv,
                 })
               );
@@ -1005,7 +1016,7 @@ class Engine extends EventEmitter {
   }
 
   /** The permission policy of an agent session: the Bash guard, writes only inside the stage's repo, then (optionally) you. */
-  async decide({ taskId, step, writeRoots = [], config, call, emitItem }: { taskId: string; step: Step; writeRoots?: string[]; config: Config; call: ToolCall; emitItem: (item: TranscriptItem) => void }): Promise<Decision> {
+  async decide({ taskId, step, writeRoots = [], gitHooks = [], config, call, emitItem }: { taskId: string; step: Step; writeRoots?: string[]; gitHooks?: string[]; config: Config; call: ToolCall; emitItem: (item: TranscriptItem) => void }): Promise<Decision> {
     const { tool, input } = call;
     const blocked = (reason: string): Decision => {
       emitItem({ type: 'blocked', tool, reason, input: summarizeInput(tool, input) });
@@ -1028,6 +1039,7 @@ class Engine extends EventEmitter {
         agent: true,
         writeRoots,
         protect,
+        gitHooks,
         branchOf: branchAt,
         isRepoRoot: (dir) => exists(path.join(dir, '.git')),
         readFile: (f) => fs.promises.readFile(f, 'utf8').catch(() => null),
@@ -1043,6 +1055,7 @@ class Engine extends EventEmitter {
       if (inGitMetadata(abs) || inGitMetadata(real)) return blocked(`${tool} into git metadata (.git) is not allowed; Claudestrator owns git${inGitMetadata(abs) ? '' : ` (${target} leads to ${real})`}`);
       if (!target || !(await someAsync(writeRoots, (root) => realInside(root, abs)))) return blocked(`${tool} outside ${writeRoots.join(', ')} is not allowed: this stage works only in ${step.repo || 'the task\'s repos'}`);
       if (await someAsync(protect, (p) => realInside(p, abs))) return blocked(`${tool} of ${target}: Claudestrator's config and task state are not an agent's to change`);
+      if (await someAsync(gitHooks, (h) => realInside(h, abs))) return blocked(`${tool} of ${target}: git runs its hooks from there (core.hooksPath), outside the sandbox, and Claudestrator owns git`);
       // A hard link is the same file under another name, which no path above shows: .git/config, or another project's file.
       const st = await fs.promises.stat(abs).catch(() => null);
       if (st && st.isFile() && st.nlink > 1) return blocked(`${tool} of ${target}: the file has ${st.nlink} hard links, and writing it changes it under the other names too (git metadata or another project's files, say)`);
@@ -1114,7 +1127,7 @@ class Engine extends EventEmitter {
           await r.git.addAll();
           // The repo's commit hooks run here, and they are code the agents could change (`.husky/pre-commit`, a
           // package.json script): in the sandbox, which lets git write its objects and refs, not its config or hooks.
-          const c = await runShell(`git commit -F ${shq(message)}`, { cwd: r.dir, env: withoutCredentials(getChildEnv(), config.policy.checkEnv), timeoutMs: 15 * 60000, launch: this.sandboxFor(config, [r.dir, ...(await r.git.gitDirs())], { git: true }) });
+          const c = await runShell(`git commit -F ${shq(message)}`, { cwd: r.dir, env: withoutCredentials(getChildEnv(), config.policy.checkEnv), timeoutMs: 15 * 60000, launch: this.sandboxFor(config, [r.dir, ...(await r.git.gitDirs())], { git: true, gitHooks: await this.gitHooks([r.dir]) }) });
           if (c.code !== 0) {
             await this.dispatch(s.taskId, { type: 'commit_failed', repo: r.name, output: c.output.trim().slice(-8000) });
             return;
@@ -1133,9 +1146,9 @@ class Engine extends EventEmitter {
    * network, which the hook (code the agents could change) must not get. Null when it passes or there is none.
    */
   async prePush(r: TaskRepo, branch: string, config: Config): Promise<string | null> {
-    const found = await r.git.git('rev-parse', '--git-path', 'hooks/pre-push');
-    const hook = path.resolve(r.dir, found.stdout.trim());
-    if (found.code !== 0 || !found.stdout.trim()) return null;
+    const hooks = await r.git.hooksDir();
+    if (!hooks) return null;
+    const hook = path.join(hooks, 'pre-push');
     try {
       await fs.promises.access(hook, fs.constants.X_OK);
     } catch {
@@ -1149,7 +1162,7 @@ class Engine extends EventEmitter {
       env: withoutCredentials(getChildEnv(), config.policy.checkEnv),
       timeoutMs: 15 * 60000,
       input: `refs/heads/${branch} ${local} refs/heads/${branch} ${remote}\n`,
-      launch: this.sandboxFor(config, [r.dir, ...(await r.git.gitDirs())], { git: true }),
+      launch: this.sandboxFor(config, [r.dir, ...(await r.git.gitDirs())], { git: true, gitHooks: await this.gitHooks([r.dir]) }),
     });
     return run.code === 0 ? null : run.output.trim().slice(-8000) || `the pre-push hook exited with ${run.code}`;
   }
@@ -1436,7 +1449,7 @@ class Engine extends EventEmitter {
     if (!repo) throw new EngineError('unknown_repo', `no repo "${repoName}" in the config`);
     const dir = path.resolve(this.workspace, repo.path);
     await this.ensureSandbox(config);
-    return runGates({ repo, dir, logDir: path.join(this.workspace, '.orch', 'gates'), force, launch: this.sandboxFor(config, [dir]), keepEnv: config.policy.checkEnv });
+    return runGates({ repo, dir, logDir: path.join(this.workspace, '.orch', 'gates'), force, launch: this.sandboxFor(config, [dir], { gitHooks: await this.gitHooks([dir]) }), keepEnv: config.policy.checkEnv });
   }
 
   async repoStatus() {

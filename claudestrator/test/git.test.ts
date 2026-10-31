@@ -4,7 +4,7 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
 
-import { prepareRepos, removeWorktrees, taskDiff, taskRepos } from '../src/core/git';
+import { GitRepo, prepareRepos, removeWorktrees, taskDiff, taskRepos } from '../src/core/git';
 import { git, workspace } from './helpers/e2e';
 import type { Config, TaskState } from '../src/core/types';
 
@@ -60,4 +60,24 @@ test("git: worktree mode leaves your checkouts alone, the diff covers new files 
   assert.equal(forced[0]!.status, 'removed');
   assert.ok(!fs.existsSync(repo!.dir));
   assert.deepEqual((await removeWorktrees(ws, s, config)).map((r) => r.status), ['absent']);
+});
+
+test("git: Claudestrator's own git runs no hook, also not one husky keeps in the working tree", async () => {
+  for (const mode of ['branch', 'worktree'] as const) {
+    const ws = workspace(['api'], '');
+    const api = path.join(ws, 'api');
+    // husky: core.hooksPath points into the working tree, where agents and checks write, and `.husky/_` is git-ignored.
+    const marker = path.join(ws, 'hook-ran');
+    fs.mkdirSync(path.join(api, '.husky', '_'), { recursive: true });
+    fs.writeFileSync(path.join(api, '.husky', '_', '.gitignore'), '*\n');
+    fs.writeFileSync(path.join(api, '.husky', '_', 'post-checkout'), `#!/bin/sh\necho ran > '${marker}'\n`, { mode: 0o755 });
+    git(api, 'config', 'core.hooksPath', '.husky/_');
+    assert.equal(await new GitRepo(api).hooksDir(), path.join(api, '.husky', '_'), 'where git runs them from, absolute');
+
+    const p = await prepareRepos(ws, task(['api'], mode), config);
+    assert.ok(p.ok, JSON.stringify(p));
+    assert.equal(fs.existsSync(marker), false, `${mode}: switching the branch ran no post-checkout`);
+    git(api, 'switch', '-q', mode === 'branch' ? 'main' : '-c', ...(mode === 'branch' ? [] : ['other']));
+    assert.equal(fs.existsSync(marker), true, 'git run by you still runs it');
+  }
 });

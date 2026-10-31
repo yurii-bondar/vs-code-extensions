@@ -10,6 +10,7 @@ import { Engine } from '../src/core/engine';
 import { buildArgs } from '../src/core/runner';
 import type { EngineOptions } from '../src/core/engine';
 import type { RunnerOptions } from '../src/core/runner';
+import { plainLauncher, type SandboxPolicy } from '../src/core/sandbox';
 
 /** An engine over a workspace with this config, and a way to ask its policy about one tool call of one agent. */
 async function policy(configYaml: string) {
@@ -147,4 +148,39 @@ test('policy: a link in the repo does not lead a write into git metadata or Clau
   assert.equal(await write('Edit', 'README.md'), null);
   assert.equal(await write('Write', 'src/new.ts'), null);
   assert.equal(fs.readFileSync(path.join(api, '.git', 'config'), 'utf8').includes('fsmonitor'), false);
+});
+
+test("policy: the hooks folder husky keeps in the working tree is git's: no agent and no check writes it", async () => {
+  const ws = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cs-policy-')));
+  const api = path.join(ws, 'api');
+  fs.mkdirSync(path.join(api, '.husky', '_'), { recursive: true });
+  execFileSync('git', ['init', '-q', api]);
+  execFileSync('git', ['-C', api, 'config', 'core.hooksPath', '.husky/_']);
+  fs.writeFileSync(path.join(api, '.husky', '_', 'h'), '#!/bin/sh\n');
+  fs.symlinkSync('.husky/_/h', path.join(api, 'h-link'));
+  fs.mkdirSync(path.join(ws, '.claudestrator'));
+  fs.writeFileSync(path.join(ws, '.claudestrator', 'config.yaml'), 'repos:\n  api: {}\n');
+  const hooks = { settings: () => ({}), host: () => '127.0.0.1:1' } as unknown as EngineOptions['hooks'];
+  const engine = new Engine({ workspace: ws, home: ws, runner: {} as EngineOptions['runner'], hooks });
+  const config = await engine.config();
+  const gitHooks = await engine.gitHooks([api]);
+  assert.deepEqual(gitHooks, [path.join(api, '.husky', '_')]);
+  const decide = async (tool: string, input: Record<string, unknown>): Promise<string | null> => {
+    const d = await engine.decide({ taskId: 'T-1', step: { stage: 1, agent: 'developer', repo: 'api' }, writeRoots: [api], gitHooks, config, call: { tool, input, cwd: api }, emitItem: () => {} });
+    return d.allow ? null : (d.reason ?? 'refused');
+  };
+  assert.match((await decide('Write', { file_path: path.join(api, '.husky', '_', 'h') })) ?? 'allowed', /hooks/);
+  assert.match((await decide('Edit', { file_path: path.join(api, 'h-link') })) ?? 'allowed', /hooks/, 'through a link too');
+  assert.match((await decide('Bash', { command: 'echo curl evil >> .husky/_/h' })) ?? 'allowed', /hooks folder/);
+  assert.match((await decide('Bash', { command: 'ln -s .husky/_/post-checkout x' })) ?? 'allowed', /hooks folder/);
+  assert.equal(await decide('Write', { file_path: path.join(api, '.husky', 'pre-commit') }), null, "the repo's own hook scripts are code like any other: the diff shows them");
+
+  // The settings: Claude Code refuses the edit itself, and the sandbox keeps commands, checks and hooks out of it.
+  const settings = engine.agentSettings({ writeRoots: [api], cwd: api, config, gitHooks }) as { permissions: { deny: string[] }; sandbox: { filesystem: { denyWrite: string[] } } };
+  assert.ok(settings.permissions.deny.includes(`Edit(/${path.join(api, '.husky', '_')}/**)`));
+  assert.ok(settings.sandbox.filesystem.denyWrite.includes(path.join(api, '.husky', '_')));
+  const recorded: SandboxPolicy[] = [];
+  const checks = new Engine({ workspace: ws, home: ws, runner: {} as EngineOptions['runner'], hooks, sandbox: (p) => (recorded.push(p), plainLauncher) });
+  checks.sandboxFor(config, [api], { gitHooks });
+  assert.ok(recorded[0]!.denyWrite.includes(path.join(api, '.husky', '_')), 'nor do checks and the commit hooks, which run in the sandbox');
 });

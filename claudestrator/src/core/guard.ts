@@ -25,6 +25,8 @@ interface GuardContext {
   writeRoots?: string[] | undefined;
   /** What a command never writes, inside the write roots too: Claudestrator's config and task state. */
   protect?: string[] | undefined;
+  /** Folders git runs hooks from that sit in the working tree (husky's `.husky/_`): git's, like its metadata. */
+  gitHooks?: string[] | undefined;
   branchOf(dir: string): Promise<string | null>;
   isRepoRoot(dir: string): Promise<boolean>;
   readFile(file: string): Promise<string | null>;
@@ -147,6 +149,10 @@ const TEMP_DIRS = (): string[] => [...new Set([path.resolve(os.tmpdir()), '/tmp'
 
 const within = (abs: string, root: string): boolean => abs === root || abs.startsWith(root + path.sep);
 
+/** What of git's a path is in: its metadata, or the hooks folder it runs from the working tree. Null: neither. */
+const gitOwned = (abs: string, ctx: GuardContext): string | null =>
+  inGitMetadata(abs) ? 'git metadata' : (ctx.gitHooks || []).some((h) => within(abs, path.resolve(h))) ? 'the hooks folder git runs' : null;
+
 /** An agent writes only where its stage works (or a temp folder), and never into git metadata. */
 function checkWrites(targets: string[], cmd: string, dir: string, ctx: GuardContext): Verdict {
   if (!ctx.writeRoots || !targets.length) return allow;
@@ -154,7 +160,8 @@ function checkWrites(targets: string[], cmd: string, dir: string, ctx: GuardCont
   for (const t of targets) {
     if (/\$(?!\{?HOME\}?(\/|$))|`/.test(t)) return deny(`${cmd} writes to ${t}: spell out the path instead of a variable`);
     const abs = resolveIn(dir, t, ctx);
-    if (inGitMetadata(abs)) return deny(`${cmd} would write into git metadata (${abs}); Claudestrator owns git`);
+    const owned = gitOwned(abs, ctx);
+    if (owned) return deny(`${cmd} would write into ${owned} (${abs}); Claudestrator owns git`);
     if ((ctx.protect || []).some((p) => within(abs, path.resolve(p)))) return deny(`${cmd} writes ${abs}: Claudestrator's config and task state are not an agent's to change`);
     if (TEMP_DIRS().some((tmp) => within(abs, tmp))) continue;
     if (roots.some((root) => within(abs, root))) continue;
@@ -185,7 +192,8 @@ function checkLinks(cmd: string, args: string[], dir: string, ctx: GuardContext)
   for (const s of link.sources) {
     // A symlink's target counts from where the link is (`ln -s ../.git/config src/cfg`), a hard link's from here.
     for (const abs of [resolveIn(dir, s, ctx), path.resolve(at, s), path.resolve(path.dirname(at), s)]) {
-      if (inGitMetadata(abs)) return deny(`${cmd} would link to git metadata (${s}): a write through the link would change it, and Claudestrator owns git`);
+      const owned = gitOwned(abs, ctx);
+      if (owned) return deny(`${cmd} would link to ${owned} (${s}): a write through the link would change it, and Claudestrator owns git`);
       if ((ctx.protect || []).some((p) => within(abs, path.resolve(p)))) return deny(`${cmd} would link to ${abs}: Claudestrator's config and task state are not an agent's to change`);
     }
   }

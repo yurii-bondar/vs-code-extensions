@@ -64,6 +64,14 @@ function exec(cmd: string, args: readonly string[], { cwd, timeoutMs = 60000, en
   });
 }
 
+/**
+ * What Claudestrator's own git calls run with. They run on your machine, outside the sandbox, with your credentials,
+ * so they run no hook and no fsmonitor: husky's `core.hooksPath` points into the working tree, which agents and checks
+ * write, and `git switch` would run a post-checkout left there. The repo's hooks run in the sandbox instead: the
+ * commit's through `git commit` there, pre-push on its own (`Engine.prePush`).
+ */
+const HOST_GIT = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false'];
+
 // Machine state and config of the orchestrator never count as the user's changes.
 const OWN = [`${ORCH_DIR}/`, '.claudestrator/'];
 const isOwn = (file: string): boolean => OWN.some((p) => file === p.slice(0, -1) || file.startsWith(p));
@@ -77,7 +85,14 @@ class GitRepo {
   }
 
   async git(...args: string[]): Promise<ExecResult> {
-    return exec('git', ['-C', this.dir, ...args], { cwd: (await exists(this.dir)) ? this.dir : undefined, timeoutMs: 120000 });
+    return exec('git', [...HOST_GIT, '-C', this.dir, ...args], { cwd: (await exists(this.dir)) ? this.dir : undefined, timeoutMs: 120000 });
+  }
+
+  /** The folder git runs this checkout's hooks from (`core.hooksPath`, else `.git/hooks`), absolute; null outside a repo. */
+  async hooksDir(): Promise<string | null> {
+    // Asked without HOST_GIT, whose hooksPath would answer for itself.
+    const r = await exec('git', ['-c', 'core.fsmonitor=false', '-C', this.dir, 'rev-parse', '--path-format=absolute', '--git-path', 'hooks'], { cwd: (await exists(this.dir)) ? this.dir : undefined, timeoutMs: 120000 });
+    return r.code === 0 && r.stdout.trim() ? r.stdout.trim() : null;
   }
 
   async isRepo(): Promise<boolean> {

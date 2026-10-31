@@ -113,7 +113,10 @@ interface SessionSettingsArgs {
   guard: string;
   /** Where the session may write; empty for a stage that changes nothing. */
   writeRoots: string[];
-  /** What it never writes, inside its write roots too: Claudestrator's config and task state (`configPaths`). */
+  /**
+   * What it never writes, inside its write roots too: Claudestrator's config and task state (`configPaths`), and the
+   * hooks folder git runs from the working tree (`Engine.gitHooks`).
+   */
   protect: string[];
   /** Files it never reads besides the usual credentials: Claudestrator's own, such as the MCP config it writes. */
   secrets: string[];
