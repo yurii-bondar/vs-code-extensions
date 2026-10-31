@@ -226,7 +226,7 @@ async function runIntake(taskId: string, source: Source, opts: { allowedProjects
       if (allowed.length > 0 && !allowed.includes(project)) {
         throw new IntakeError('project_not_allowed', `Jira project ${project} is not allowed (allowed: ${allowed.join(', ')})`);
       }
-      const client = requireClient(opts);
+      const client = requireClient(opts, source);
       const issue = await attempt(() => client.issue(source.key));
       const context = issue.comments.length
         ? `## Comments\n\n${issue.comments.map((c) => `**${c.author}** (${c.created.slice(0, 10)}):\n${c.body}`).join('\n\n')}`
@@ -242,7 +242,7 @@ async function runIntake(taskId: string, source: Source, opts: { allowedProjects
       };
     }
     case 'confluence': {
-      const client = requireClient(opts);
+      const client = requireClient(opts, source);
       const page = await attempt(() => client.page(source.pageId));
       return {
         id: taskId,
@@ -264,9 +264,21 @@ function fromText(taskId: string, source: Extract<Source, { kind: 'text' }>): Sp
   return { id: taskId, source, title, description: source.text, acceptanceCriteria: extractAcceptanceCriteria(source.text), links: [] };
 }
 
-function requireClient(opts: { atlassian?: AtlassianClient | null | undefined }): AtlassianClient {
+function requireClient(opts: { atlassian?: AtlassianClient | null | undefined }, source: Source): AtlassianClient {
   if (!opts.atlassian) throw new IntakeError('atlassian_not_configured', 'Connect Atlassian in Claudestrator settings (site, email, API token) to read Jira and Confluence');
+  const other = otherSite(source, opts.atlassian.site);
+  if (other) throw new IntakeError('other_site', `${source.kind === 'jira' ? source.key : 'The page'} is on ${other}, and the API token is for ${opts.atlassian.site}: reading it there would read another issue or page`);
   return opts.atlassian;
+}
+
+/**
+ * The site a pasted Jira or Confluence link is on when it is not `site` (the one the API token is for), or null. The
+ * same key on another site is another issue: read or commented on with that token, it would be the wrong one.
+ */
+function otherSite(source: Source, site: string): string | null {
+  const host = (s: string): string => s.replace(/^[a-z]+:\/\//i, '').split(/[/?#]/)[0]!.toLowerCase();
+  const own = source.kind === 'jira' ? source.site : source.kind === 'confluence' ? source.url : undefined;
+  return own && host(own) !== host(site) ? host(own) : null;
 }
 
 async function attempt<T>(fn: () => Promise<T>): Promise<T> {
@@ -583,5 +595,6 @@ export {
   adfToText,
   storageToText,
   extractAcceptanceCriteria,
+  otherSite,
   AtlassianClient,
 };

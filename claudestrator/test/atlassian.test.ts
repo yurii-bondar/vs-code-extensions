@@ -2,7 +2,13 @@
 import test from 'node:test';
 import * as assert from 'node:assert/strict';
 
-import { AtlassianClient } from '../src/core/intake';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+
+import { AtlassianClient, IntakeError, classifyInput, otherSite, runIntake } from '../src/core/intake';
+import { Engine, type EngineOptions } from '../src/core/engine';
+import type { TaskState } from '../src/core/types';
 
 const AUTH = { site: 'acme.atlassian.net', email: 'dev@example.com', token: 't' };
 
@@ -57,4 +63,23 @@ test('atlassian: a comment is posted again only when the server says it did not 
   const broken = scripted([{ status: 502 }, { status: 201, body: { id: 'twice' } }]);
   await assert.rejects(new AtlassianClient(AUTH, { fetch: broken.fetch, sleep }).addComment('PROJ-1', 'hi'), /502/);
   assert.equal(broken.calls.length, 1, 'a 502 may come after the comment was saved');
+});
+
+test("atlassian: a link to another site is not read or commented on with this site's token", async () => {
+  const none = scripted([]);
+  const client = new AtlassianClient(AUTH, { fetch: none.fetch, sleep: async () => {} });
+  const elsewhere = classifyInput('https://clientb.atlassian.net/browse/PROJ-12');
+  assert.equal(otherSite(elsewhere, client.site), 'clientb.atlassian.net');
+  assert.equal(otherSite(classifyInput('https://ACME.atlassian.net/browse/PROJ-12'), client.site), null, 'the same site, any case');
+  assert.equal(otherSite(classifyInput('PROJ-12'), client.site), null, 'a bare key is on the token\'s site');
+  assert.equal(otherSite(classifyInput('https://clientb.atlassian.net/wiki/spaces/X/pages/123/Title'), client.site), 'clientb.atlassian.net');
+  await assert.rejects(runIntake('PROJ-12', elsewhere, { atlassian: client }), (e: IntakeError) => e.code === 'other_site' && /PROJ-12 is on clientb\.atlassian\.net/.test(e.message));
+  assert.equal(none.calls.length, 0, "acme's PROJ-12 was never asked for");
+
+  // The engine reads it through the account's Atlassian MCP server instead, and comments there too; without one it says why.
+  const ws = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cs-site-')));
+  const engine = new Engine({ workspace: ws, home: ws, runner: {} as EngineOptions['runner'], hooks: {} as EngineOptions['hooks'], atlassian: () => client });
+  const r = await engine.comment({ taskId: 'PROJ-12', source: elsewhere } as TaskState, 'Plan approved.');
+  assert.ok(!r.ok && /PROJ-12 is on clientb\.atlassian\.net, and the API token is for acme\.atlassian\.net/.test(r.error ?? ''), r.error);
+  assert.equal(none.calls.length, 0, 'no comment on the wrong issue');
 });

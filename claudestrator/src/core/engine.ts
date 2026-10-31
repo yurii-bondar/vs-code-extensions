@@ -10,7 +10,7 @@ import { exists } from './files';
 import { EFFORTS, SCENARIOS } from './protocol';
 import { buildPipeline, scenarioKind, taskPipeline, fitsScenario, onRepos } from './pipeline';
 import { nextAction, runOf, artifactPath, branchName, sameStep, editableFrom, stepRepos, unknownRepos, TASK_FILES, type NextAction, type RunAction } from './machine';
-import { parseInvocation, classifyInput, detectScenario, runIntake, renderTicket, IntakeError, extractAcceptanceCriteria } from './intake';
+import { parseInvocation, classifyInput, detectScenario, runIntake, renderTicket, IntakeError, extractAcceptanceCriteria, otherSite } from './intake';
 import { TaskService, type DispatchResult } from './store';
 import { exec, getChildEnv, GitRepo, branchAt, taskRepos, prepareRepos, taskDiff, removeWorktrees } from './git';
 import { runGates, runShell, withoutCredentials } from './gates';
@@ -571,10 +571,13 @@ class Engine extends EventEmitter {
   async intake(s: TaskState): Promise<void> {
     this.setLive(s.taskId, { phase: 'intake', text: s.source.kind === 'text' ? 'Writing the ticket' : `Reading ${s.source.kind === 'jira' ? s.source.key : 'the Confluence page'}` });
     let spec: Spec;
-    const via = s.source.kind !== 'text' && !this.atlassian() ? await this.mcpIntake() : null;
+    // A link to another site than the API token's is read through the account's Atlassian MCP server, which signs in
+    // wherever you can; over REST the same key would be another issue.
+    const client = this.atlassian();
+    const via = s.source.kind !== 'text' && (!client || otherSite(s.source, client.site)) ? await this.mcpIntake() : null;
     try {
       if (via) spec = await this.intakeViaMcp(s, via);
-      else spec = await runIntake(s.taskId, s.source, { atlassian: this.atlassian(), allowedProjects: (await this.config()).jira.allowedProjects });
+      else spec = await runIntake(s.taskId, s.source, { atlassian: client, allowedProjects: (await this.config()).jira.allowedProjects });
     } catch (e) {
       if (e instanceof IntakeError) throw new EngineError(e.code, e.code === 'atlassian_not_configured' ? 'Jira and Confluence are not reachable: sign in to an Atlassian MCP server (MCP tab), or add an API token in Settings → Jira & Confluence' : e.message);
       throw e;
@@ -1303,7 +1306,9 @@ class Engine extends EventEmitter {
   async comment(s: TaskState, text: string, what = 'note'): Promise<CommentResult> {
     if (s.source.kind !== 'jira') return { ok: false, error: 'the task is not a Jira issue' };
     const key = s.source.key;
-    const client = this.atlassian();
+    // The API token's site only: the same key on another site is another issue.
+    const token = this.atlassian();
+    const client = token && !otherSite(s.source, token.site) ? token : null;
     const via = client ? null : await this.mcpIntake();
     const record = async (r: CommentResult): Promise<CommentResult> => {
       try {
@@ -1314,7 +1319,7 @@ class Engine extends EventEmitter {
       if (!r.ok) this.log('warn', `Jira comment on ${key} failed: ${r.error}`, s.taskId);
       return r;
     };
-    if (!client && !via) return record({ ok: false, error: 'Jira is not connected: sign in to an Atlassian MCP server (MCP tab) or add an API token (Settings → Jira & Confluence)' });
+    if (!client && !via) return record({ ok: false, error: token ? `${key} is on ${otherSite(s.source, token.site)}, and the API token is for ${token.site}; sign in to an Atlassian MCP server (MCP tab) to comment there` : 'Jira is not connected: sign in to an Atlassian MCP server (MCP tab) or add an API token (Settings → Jira & Confluence)' });
     const usedUp = client ? null : usedUpWindow(this.limits, Date.now());
     if (usedUp) return record({ ok: false, error: usedUp });
     try {
