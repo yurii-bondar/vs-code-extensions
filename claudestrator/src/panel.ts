@@ -442,7 +442,8 @@ class DashboardPanel implements RpcHandlers {
     if (!step || !step.sessionId) throw new Error('This step has no Claude session to continue');
     // It comes from the task log, and goes on a shell's command line.
     if (!SESSION_ID.test(step.sessionId)) throw new Error('This step\'s session id is not one Claude Code makes');
-    const dir = this.orch.accountChoice().dir;
+    // The account the step ran under keeps its session; the one chosen now may be another (ctx-man switched it).
+    const dir = step.configDir ?? this.orch.accountChoice().dir;
     const terminal = vscode.window.createTerminal({
       name: `Claude · ${step.agent}${step.repo ? `@${step.repo}` : ''}`,
       cwd: step.cwd && (await exists(step.cwd)) ? step.cwd : this.root,

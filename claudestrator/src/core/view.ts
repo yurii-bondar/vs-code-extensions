@@ -115,6 +115,7 @@ function stepsOf(events: OrchEvent[], state: TaskState, { running }: { running: 
           st.turns = (st.turns || 0) + Number(p.turns || 0);
           if (p.sessionId) st.sessionId = p.sessionId;
           if (p.cwd) st.cwd = p.cwd;
+          if (p.configDir) st.configDir = p.configDir;
           if (p.model) st.model = p.model;
           if (p.effort) st.effort = p.effort;
           if (p.ctxPct !== undefined) st.ctxPct = p.ctxPct;

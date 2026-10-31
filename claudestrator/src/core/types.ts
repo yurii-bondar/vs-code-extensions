@@ -411,6 +411,8 @@ export interface AgentStoppedPayload {
   turns?: number;
   sessionId?: string | undefined;
   cwd?: string;
+  /** The Claude Code account (config folder) the session ran under: where `claude --resume` finds it. */
+  configDir?: string | undefined;
   model?: string | undefined;
   effort?: string | undefined;
   ctxPct?: number | undefined;

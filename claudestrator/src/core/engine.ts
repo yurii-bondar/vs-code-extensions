@@ -1048,6 +1048,7 @@ class Engine extends EventEmitter {
           turns: t.turns || session.turns || 0,
           sessionId: t.sessionId || session.sessionId,
           cwd,
+          ...(session.configDir && { configDir: session.configDir }),
           transcript: key,
           ...(u.model && { model: u.model }),
           ...(u.effort && { effort: u.effort }),

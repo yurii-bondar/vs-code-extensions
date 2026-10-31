@@ -325,6 +325,7 @@ export interface StepItem {
   turns?: number;
   sessionId?: string;
   cwd?: string;
+  configDir?: string;
   model?: string;
   effort?: string;
   ctxPct?: number;

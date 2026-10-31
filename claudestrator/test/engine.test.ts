@@ -489,6 +489,20 @@ test('engine: when a PR description cannot list the other PRs, the PRs stay open
   }
 });
 
+test('engine: a step remembers the account it ran under, where its session can be continued', async () => {
+  const ws = workspace(['api'], 'pipeline: [planner]\nrepos:\n  api: {}\n');
+  const account = path.join(ws, 'account-b');
+  const h = await harness(ws, { FAKE_REPOS: 'api', CLAUDE_CONFIG_DIR: account });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Plan the feature', auto: true });
+    await runTask(h.engine, taskId);
+    const planner = (await view.detail(h.engine, taskId)).steps.find((st) => st.agent === 'planner')!;
+    assert.equal(planner.configDir, account, 'claude --resume looks there, whatever account is chosen later');
+  } finally {
+    h.hooks.dispose();
+  }
+});
+
 test("engine: a plan whose branch is there already goes back to the planner: the task never builds on another's commits", async () => {
   const ws = workspace(['api'], 'pipeline: [planner, developer]\nrepos:\n  api: {}\n');
   const api = path.join(ws, 'api');

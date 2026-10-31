@@ -253,6 +253,8 @@ class ClaudeSession {
   hiddenTools = new Set<string>();
   closing?: boolean;
   endReason?: string;
+  /** The account (CLAUDE_CONFIG_DIR) it runs under; none: Claude Code's default. */
+  configDir: string | undefined;
 
   constructor(req: SessionRequest, opts: RunnerOptions) {
     this.req = req;
@@ -273,6 +275,7 @@ class ClaudeSession {
     delete env.ELECTRON_RUN_AS_NODE;
     delete env.CLAUDECODE;
     for (const name of GITHUB_TOKENS) delete env[name];
+    this.configDir = env.CLAUDE_CONFIG_DIR || undefined;
     const [file, argv] = launch(opts.command(), this.args);
     // A process group of its own: stopping the agent stops what it started too (a dev server, a watcher, MCP servers).
     this.proc = spawn(file, argv, { cwd: req.cwd, env, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
