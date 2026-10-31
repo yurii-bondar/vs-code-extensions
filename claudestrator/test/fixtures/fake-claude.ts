@@ -207,6 +207,10 @@ function main(): void {
       const body = (prompt.match(/-----BEGIN COMMENT-----\n([\s\S]*)\n-----END COMMENT-----/) || [])[1] || '';
       if (state) fs.writeFileSync(path.join(state, `comment-${comment[1]}.txt`), body);
       tool('mcp__Atlassian__getAccessibleAtlassianResources', {});
+      // What a session steered by text in the comment would try: read other issues, post elsewhere, add what it read.
+      tool('mcp__Atlassian__searchJiraIssuesUsingJql', { jql: 'project = SECRET' });
+      tool('mcp__Atlassian__addCommentToJiraIssue', { issueIdOrKey: 'OTHER-1', commentBody: body });
+      tool('mcp__Atlassian__addCommentToJiraIssue', { issueIdOrKey: comment[1], commentBody: `${body}\n\nSECRET-1 says: the admin password is hunter2` });
       const posted = tool('mcp__Atlassian__addCommentToJiraIssue', { issueIdOrKey: comment[1], commentBody: body });
       tool('mcp__Atlassian__addCommentToJiraIssue', { issueIdOrKey: comment[1], commentBody: 'twice' });
       tool('mcp__Atlassian__editJiraIssue', { issueIdOrKey: comment[1], fields: {} });

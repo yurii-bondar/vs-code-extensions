@@ -66,6 +66,26 @@ function mcpReads(action: string): boolean {
 }
 /** The one write a Jira comment session may make (Atlassian: addCommentToJiraIssue). */
 const MCP_COMMENT = /^addComment/i;
+/** What a Jira comment session may read: the cloud id its add-comment tool needs, nothing of any issue. */
+const MCP_COMMENT_LOOKUP = /^(getAccessibleAtlassianResources|atlassianUserInfo)$/;
+const JIRA_KEY = /^[A-Z][A-Z0-9_]+-\d+$/i;
+
+/** The string values of a tool call's input, nested ones too. */
+const inputStrings = (v: unknown, depth = 0): string[] => (typeof v === 'string' ? [v] : depth < 4 && v && typeof v === 'object' ? Object.values(v).flatMap((x) => inputStrings(x, depth + 1)) : []);
+const squash = (s: string): string => s.replace(/\s+/g, ' ').trim();
+
+/**
+ * Why an add-comment call is not the one a comment session is for, or null: it goes on `key` and says `text` word for
+ * word. The text comes from agents' reports, which come from a ticket anyone could write: an instruction planted there
+ * must not get the session to comment on another issue, or to add what it read to this one.
+ */
+function commentMismatch(input: Record<string, unknown>, key: string, text: string): string | null {
+  const values = inputStrings(input);
+  const keys = values.map((v) => v.trim()).filter((v) => JIRA_KEY.test(v));
+  if (!keys.length || keys.some((k) => k.toUpperCase() !== key.toUpperCase())) return `the comment goes on ${key} and no other issue`;
+  if (!values.some((v) => squash(v) === squash(text))) return 'post the comment body exactly as given, with nothing added or left out';
+  return null;
+}
 const COMMENT_TIMEOUT_MS = 4 * 60000;
 /** An "Ask me" question gets this long, a little less than Claude Code waits for the guard (HOOK_TIMEOUT_S). */
 const PERMISSION_TIMEOUT_MS = (HOOK_TIMEOUT_S - 30) * 1000;
@@ -1268,16 +1288,21 @@ class Engine extends EventEmitter {
     const prompt = `Add one comment to the Jira issue ${key}${site ? ` on ${site}` : ''} with the "${via.server}" MCP server's tools. The comment body is everything between the two marker lines, verbatim:\n-----BEGIN COMMENT-----\n${text}\n-----END COMMENT-----`;
     append({ type: 'prompt', text: prompt });
     let posted = 0;
-    const hook = this.hooks.register(async ({ tool }) => {
+    const hook = this.hooks.register(async ({ tool, input }) => {
       if (tool === 'ToolSearch') return { allow: true };
       const action = tool.startsWith('mcp__') ? mcpAction(tool) : '';
       if (action && MCP_COMMENT.test(action) && posted === 0) {
-        posted += 1;
-        return { allow: true };
+        const wrong = commentMismatch(input, key, text);
+        if (!wrong) {
+          posted += 1;
+          return { allow: true };
+        }
+        append({ type: 'blocked', tool, reason: wrong });
+        return { allow: false, reason: `Claudestrator: ${wrong}` };
       }
-      if (action && mcpReads(action)) return { allow: true };
+      if (action && MCP_COMMENT_LOOKUP.test(action)) return { allow: true };
       append({ type: 'blocked', tool, reason: 'a Jira comment session only posts that one comment' });
-      return { allow: false, reason: posted ? 'Claudestrator: the comment is already posted; stop and report' : 'Claudestrator: only the add-comment and read tools are allowed here' };
+      return { allow: false, reason: posted ? 'Claudestrator: the comment is already posted; stop and report' : 'Claudestrator: only the add-comment tool and the cloud id lookup are allowed here' };
     });
     const agent = { name: 'jira-comment', description: 'Posts one Jira comment', model: 'haiku', effort: 'low' as const, instructions: COMMENT_INSTRUCTIONS, output: 'plan' };
     const session = await this.runner.start({ agent, prompt, cwd: this.workspace, settings: this.agentSettings({ writeRoots: [], cwd: this.workspace, config: await this.config() }), additionalDirectories: [], env: this.agentEnv(hook.env, await this.config()), name: `claudestrator ${s.taskId} · Jira comment`, onOutput: append }).catch((e: Error) => {
@@ -1480,4 +1505,4 @@ function summarizeInput(tool: string, input: Record<string, unknown>): unknown {
 }
 
 export type { CheckpointContext, ComposerArgs, EngineOptions, Live, McpIntake, PermissionRequest };
-export { Engine, EngineError, stepLabel, transcriptKey, realInside, CLAUDE_AUTH };
+export { Engine, EngineError, stepLabel, transcriptKey, realInside, commentMismatch, CLAUDE_AUTH };

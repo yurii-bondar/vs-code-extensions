@@ -329,7 +329,12 @@ test('engine: "PROJ-805 перевір готовність…" runs a read-only
     assert.deepEqual(comments.map((c) => [c.what, c.ok, c.via]), [['report', true, 'mcp:Atlassian']]);
     const commentLog = await h.engine.svc.readTranscript(taskId, 'comment-1');
     assert.ok(commentLog.some((i) => i.type === 'blocked' && i.tool === 'mcp__Atlassian__editJiraIssue'), 'nothing but the comment is written');
-    assert.equal(commentLog.filter((i) => i.type === 'blocked' && i.tool === 'mcp__Atlassian__addCommentToJiraIssue').length, 1, 'and only once');
+    const refused = commentLog.flatMap((i) => (i.type === 'blocked' && i.tool === 'mcp__Atlassian__addCommentToJiraIssue' ? [text(i.reason)] : []));
+    assert.equal(refused.length, 3, 'not on another issue, not with more than the text, and only once');
+    assert.match(refused[0]!, /goes on PROJ-805 and no other issue/);
+    assert.match(refused[1]!, /exactly as given/);
+    assert.ok(commentLog.some((i) => i.type === 'blocked' && i.tool === 'mcp__Atlassian__searchJiraIssuesUsingJql'), 'it reads no issue');
+    assert.doesNotMatch(posted, /hunter2/);
 
     // Checking again after it finished is a new run.
     assert.equal((await previewOf(h.engine, { text: request })).taskId, 'PROJ-805-check-2');

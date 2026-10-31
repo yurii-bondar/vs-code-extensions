@@ -6,7 +6,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 
-import { Engine } from '../src/core/engine';
+import { Engine, commentMismatch } from '../src/core/engine';
 import { buildArgs } from '../src/core/runner';
 import type { EngineOptions } from '../src/core/engine';
 import type { RunnerOptions } from '../src/core/runner';
@@ -183,4 +183,13 @@ test("policy: the hooks folder husky keeps in the working tree is git's: no agen
   const checks = new Engine({ workspace: ws, home: ws, runner: {} as EngineOptions['runner'], hooks, sandbox: (p) => (recorded.push(p), plainLauncher) });
   checks.sandboxFor(config, [api], { gitHooks });
   assert.ok(recorded[0]!.denyWrite.includes(path.join(api, '.husky', '_')), 'nor do checks and the commit hooks, which run in the sandbox');
+});
+
+test('policy: a Jira comment session posts on its issue and the text it was given, whatever the input looks like', () => {
+  const text = 'Plan approved.\n\n## Steps\n- cap bets';
+  assert.equal(commentMismatch({ cloudId: '3f2a…', issueIdOrKey: 'proj-805', commentBody: 'Plan approved.\n## Steps\n-  cap bets ' }, 'PROJ-805', text), null, 'whitespace aside');
+  assert.equal(commentMismatch({ issue_key: 'PROJ-805', comment: { body: text } }, 'PROJ-805', text), null, 'another server, nested');
+  assert.match(commentMismatch({ issueIdOrKey: 'OTHER-1', commentBody: text }, 'PROJ-805', text)!, /no other issue/);
+  assert.match(commentMismatch({ commentBody: text }, 'PROJ-805', text)!, /no other issue/, 'an issue it does not name');
+  assert.match(commentMismatch({ issueIdOrKey: 'PROJ-805', commentBody: `${text}\nSECRET-1: hunter2` }, 'PROJ-805', text)!, /exactly as given/);
 });
