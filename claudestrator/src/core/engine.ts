@@ -171,6 +171,25 @@ interface SessionUsage {
 
 const stepLabel = (s: { agent: string; repo?: string | undefined }): string => (s.repo ? `${s.agent} @ ${s.repo}` : s.agent);
 
+/** A site's host: `https://acme.atlassian.net/wiki` → `acme.atlassian.net`. */
+const hostOf = (site: string): string => site.replace(/^[a-z]+:\/\//i, '').split(/[/?#]/)[0]!.replace(/^[^@]*@/, '').replace(/:\d+$/, '').toLowerCase();
+
+/** The hosts of the web addresses in a tool call's input. */
+const urlHosts = (input: unknown): string[] => [...new Set(inputStrings(input).flatMap((v) => [...v.matchAll(/\bhttps?:\/\/[^\s"'<>]+/gi)].map((m) => hostOf(m[0]))))];
+
+/** Whether a host is one of `policy.network`'s patterns: `npm.acme.corp`, `*.acme.corp`, or `*` for any. */
+const hostAllowed = (host: string, patterns: string[]): boolean =>
+  patterns.some((p) => {
+    const q = hostOf(p);
+    return q === '*' || q === host || (q.startsWith('*.') && host.endsWith(q.slice(1)));
+  });
+
+/**
+ * The hosts an MCP read names that it may not: a server that fetches what it is given (a `fetch` or `get_url` tool)
+ * reaches them from outside the sandbox, and an address with a ticket's or a repo's text in it is a way out for them.
+ */
+const strangeHosts = (input: unknown, allowed: string[]): string[] => urlHosts(input).filter((h) => !hostAllowed(h, allowed));
+
 /** The tool's own name, after `mcp__<server>__`. */
 const mcpAction = (tool: string): string => tool.split('__').pop() || '';
 
@@ -629,8 +648,14 @@ class Engine extends EventEmitter {
     const emitItem = this.emitter(s.taskId, INTAKE_KEY);
     emitItem({ type: 'prompt', text: prompt });
     const agent = { name: 'intake', description: 'Reads the task source', model: 'haiku', effort: 'low' as const, instructions: INTAKE_INSTRUCTIONS, output: 'plan' };
-    const hook = this.hooks.register(async ({ tool }) => {
+    const webHosts = await this.webHosts(s, await this.config());
+    const hook = this.hooks.register(async ({ tool, input }) => {
       if (READ_TOOLS.has(tool) || tool === 'ToolSearch') return { allow: true };
+      const strange = strangeHosts(input, webHosts);
+      if (strange.length) {
+        emitItem({ type: 'blocked', tool, reason: `reading the ticket reaches no other host (${strange.join(', ')})` });
+        return { allow: false, reason: `Claudestrator: the intake reads the ticket's own site only, not ${strange.join(', ')}` };
+      }
       if (tool.startsWith('mcp__') && mcpReads(mcpAction(tool))) return { allow: true };
       emitItem({ type: 'blocked', tool, reason: 'reading the ticket only reads: this tool could change something' });
       return { allow: false, reason: 'Claudestrator: the intake only reads; use the get/search/fetch tools' };
@@ -723,6 +748,17 @@ class Engine extends EventEmitter {
       denyRead: [...SECRET_PATHS, ...this.secretFiles()],
       network: [...REGISTRIES, ...config.policy.network],
     });
+  }
+
+  /**
+   * The hosts an MCP read of this task may name: `policy.network`, and the Atlassian site the task comes from or tickets
+   * are read on, which Atlassian's tools take as their cloud id.
+   */
+  async webHosts(s: TaskState, config: Config): Promise<string[]> {
+    const client = this.atlassian();
+    const via = s.source.kind === 'text' ? null : await this.mcpIntake().catch(() => null);
+    const sites = [s.source.kind === 'jira' ? s.source.site : s.source.kind === 'confluence' ? s.source.url : undefined, client && client.site, via && via.site];
+    return [...config.policy.network, ...sites.filter((x): x is string => Boolean(x)).map(hostOf)];
   }
 
   /**
@@ -850,7 +886,8 @@ class Engine extends EventEmitter {
     const gated = (stage.scope === 'repo' ? [step.repo] : workRepos.map((r) => r.name)).some((n) => n && config.repos[n] && config.repos[n]!.gates.length);
     if (gated) await this.ensureSandbox(config);
     const gitHooks = await this.gitHooks(writeRoots);
-    const hook = this.hooks.register((call) => this.decide({ taskId, step, writeRoots, gitHooks, config, call, emitItem }));
+    const webHosts = await this.webHosts(state, config);
+    const hook = this.hooks.register((call) => this.decide({ taskId, step, writeRoots, gitHooks, webHosts, config, call, emitItem }));
     let session: ClaudeSession;
     try {
       session = await this.runner.start({
@@ -1036,7 +1073,7 @@ class Engine extends EventEmitter {
   }
 
   /** The permission policy of an agent session: the Bash guard, writes only inside the stage's repo, then (optionally) you. */
-  async decide({ taskId, step, writeRoots = [], gitHooks = [], config, call, emitItem }: { taskId: string; step: Step; writeRoots?: string[]; gitHooks?: string[]; config: Config; call: ToolCall; emitItem: (item: TranscriptItem) => void }): Promise<Decision> {
+  async decide({ taskId, step, writeRoots = [], gitHooks = [], webHosts = [], config, call, emitItem }: { taskId: string; step: Step; writeRoots?: string[]; gitHooks?: string[]; webHosts?: string[]; config: Config; call: ToolCall; emitItem: (item: TranscriptItem) => void }): Promise<Decision> {
     const { tool, input } = call;
     const blocked = (reason: string): Decision => {
       emitItem({ type: 'blocked', tool, reason, input: summarizeInput(tool, input) });
@@ -1086,9 +1123,10 @@ class Engine extends EventEmitter {
     if (WEB_TOOLS.has(tool) && !named(tool)) return blocked(`${tool} reaches any host, outside the sandbox; the ${step.agent} agent uses it only when its tools name it (tools: [${tool}])`);
     if (tool.startsWith('mcp__')) {
       if (agent && agent.mcp === false) return blocked(`${tool}: the ${step.agent} agent runs without MCP servers`);
-      if (!mcpReads(mcpAction(tool)) && !(agent && agent.tools && agent.tools.some((rule) => mcpRuleCovers(rule, tool)))) {
-        return blocked(`${tool} may change something outside the repos; the ${step.agent} agent calls it only when its tools name it (tools: [${tool}])`);
-      }
+      const listed = Boolean(agent && agent.tools && agent.tools.some((rule) => mcpRuleCovers(rule, tool)));
+      if (!listed && !mcpReads(mcpAction(tool))) return blocked(`${tool} may change something outside the repos; the ${step.agent} agent calls it only when its tools name it (tools: [${tool}])`);
+      const strange = listed ? [] : strangeHosts(input, webHosts);
+      if (strange.length) return blocked(`${tool} names ${strange.join(', ')}: an MCP server may fetch it, outside the sandbox. Add the host to policy.network, or name the tool in the ${step.agent} agent's tools (tools: [${tool}])`);
     } else if (agent && agent.tools && !named(tool)) return blocked(`${tool} is not one of the ${step.agent} agent's tools`);
     if (!this.askPermissions()) return { allow: true };
     const requestId = crypto.randomUUID();
