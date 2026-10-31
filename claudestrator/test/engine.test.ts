@@ -489,6 +489,30 @@ test('engine: when a PR description cannot list the other PRs, the PRs stay open
   }
 });
 
+test("engine: a plan whose branch is there already goes back to the planner: the task never builds on another's commits", async () => {
+  const ws = workspace(['api'], 'pipeline: [planner, developer]\nrepos:\n  api: {}\n');
+  const api = path.join(ws, 'api');
+  // What an earlier task with the same slug left: a branch with its own commit.
+  git(api, 'switch', '-q', '-c', 'feat/add-feature');
+  fs.writeFileSync(path.join(api, 'theirs.txt'), 'another task\n');
+  git(api, 'add', '.');
+  git(api, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'another task');
+  git(api, 'switch', '-q', 'main');
+  const h = await harness(ws, { FAKE_REPOS: 'api' });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
+    const s = await runTask(h.engine, taskId);
+    assert.equal(s.checkpoint && s.checkpoint.id, 'confirm-push', JSON.stringify(h.engine.lastError(taskId)));
+    assert.equal(s.plan!.slug, 'add-feature-again');
+    assert.equal(git(api, 'rev-parse', '--abbrev-ref', 'HEAD'), 'feat/add-feature-again');
+    assert.equal(fs.existsSync(path.join(api, 'theirs.txt')), false, "the other task's commit is not on this branch");
+    const planner = await h.engine.svc.readTranscript(taskId, (await view.detail(h.engine, taskId)).steps.find((st) => st.agent === 'planner')!.key!);
+    assert.ok(planner.some((i) => i.type === 'user' && i.from === 'orchestrator' && /branch feat\/add-feature is there already in api/.test(text(i.text))));
+  } finally {
+    h.hooks.dispose();
+  }
+});
+
 test('engine: a plan for a repo the workspace does not have goes back to the planner, who sees the repos by name', async () => {
   const ws = workspace(['api'], 'pipeline: [planner, developer]\nrepos:\n  api: { role: Betting API }\n');
   const h = await harness(ws, { FAKE_REPOS: 'api', FAKE_PLAN_REPOS_FIRST: 'betting-service' });

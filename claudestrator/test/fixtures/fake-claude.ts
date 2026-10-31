@@ -189,9 +189,9 @@ function main(): void {
 
   const state = process.env.FAKE_STATE;
 
-  function plan(names: string, uuid: string) {
+  function plan(names: string, uuid: string, slug = 'add-feature') {
     const repos = names.split(',').map((name) => ({ name, mode: 'full' }));
-    return reply(`## Summary\n\nAdd the feature to every repo.\n\n## Steps\n- do it\n\n\`\`\`json\n${JSON.stringify({ type: 'feat', slug: 'add-feature', title: 'add the feature', repos, openQuestions: [] })}\n\`\`\``, uuid);
+    return reply(`## Summary\n\nAdd the feature to every repo.\n\n## Steps\n- do it\n\n\`\`\`json\n${JSON.stringify({ type: 'feat', slug, title: 'add the feature', repos, openQuestions: [] })}\n\`\`\``, uuid);
   }
 
   function first(prompt: string, uuid: string) {
@@ -299,6 +299,7 @@ function main(): void {
         }
         first(text, m.uuid);
       } else if (role === 'planner' && /repos this workspace does not have/.test(text)) plan(process.env.FAKE_REPOS || 'api', m.uuid);
+      else if (role === 'planner' && /choose another slug/.test(text)) plan(process.env.FAKE_REPOS || 'api', m.uuid, 'add-feature-again');
       else reply(`Follow-up handled: ${text.split('\n')[0]!.slice(0, 60)}`, m.uuid);
     }
   });

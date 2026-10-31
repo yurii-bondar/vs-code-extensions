@@ -980,22 +980,33 @@ class Engine extends EventEmitter {
       }
 
       // A plan for repos this workspace does not have is a report to correct, like one that does not parse: the state
-      // machine would refuse it, and the task would stop with nothing the agent could fix.
-      const check = (): StageReport => {
+      // machine would refuse it, and the task would stop with nothing the agent could fix. So is a plan whose branch is
+      // there already: the task would carry on from that branch's commits, and its PR would hold them.
+      const check = async (): Promise<StageReport> => {
         const r = parseStageReport(stage.output, t.report, t.structured);
-        const unknown = r.ok && r.plan ? unknownRepos(state, r.plan.repos) : [];
-        if (!unknown.length) return r;
-        const known = state.knownRepos.length ? `name them as configured: ${state.knownRepos.join(', ')}` : 'name them by their folders in the workspace';
-        return { ok: false, error: `the plan names repos this workspace does not have (${unknown.join(', ')}); ${known}` };
+        if (!r.ok || !r.plan) return r;
+        const unknown = unknownRepos(state, r.plan.repos);
+        if (unknown.length) {
+          const known = state.knownRepos.length ? `name them as configured: ${state.knownRepos.join(', ')}` : 'name them by their folders in the workspace';
+          return { ok: false, error: `the plan names repos this workspace does not have (${unknown.join(', ')}); ${known}` };
+        }
+        const branch = branchName({ ...state, plan: r.plan })!;
+        const repos = taskRepos(this.workspace, state, config, r.plan.repos.map((x) => x.name));
+        const taken = await filterAsync(repos, async (x) => {
+          const git = new GitRepo(x.checkout);
+          return (await git.hasBranch(branch)) || (await git.git('rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`)).code === 0;
+        });
+        if (taken.length) return { ok: false, error: `the branch ${branch} is there already in ${taken.map((x) => x.name).join(', ')}, with other work on it; choose another slug` };
+        return r;
       };
-      let parsed = check();
+      let parsed = await check();
       for (let i = 0; !parsed.ok && i < REPORT_RETRIES; i++) {
         this.setLive(taskId, { phase: 'agent', step, key, text: `${label} is correcting its report` });
         session.send(`Your report could not be read: ${parsed.error}. Reply again with the complete, corrected report.`, { from: 'orchestrator' });
         t = await this.turnOf(taskId, session);
         if (await stopped()) return;
         if (!t.ok) return void (await fail(t.error || 'the agent failed while correcting its report'));
-        parsed = check();
+        parsed = await check();
       }
       if (!parsed.ok) return void (await fail(`report still invalid after ${REPORT_RETRIES} corrections: ${parsed.error}`));
 
