@@ -136,7 +136,8 @@ const ruleRoot = (abs: string): string => `/${abs.split(path.sep).join('/').repl
 function sessionSettings({ hooks, guard, writeRoots, protect, secrets, envVars, cwd, sandbox, network, writable }: SessionSettingsArgs): Record<string, unknown> {
   return {
     hooks,
-    permissions: { deny: [...[...SECRET_FILES, ...secrets.map(ruleRoot)].map((f) => `Read(${f})`), ...protect.flatMap((p) => [`Edit(${ruleRoot(p)})`, `Edit(${ruleRoot(p)}/**)`]), ...DENIED_COMMANDS] },
+    // Edit rules cover Write too. Git metadata is here as well as in the sandbox: the sandbox holds only shell commands.
+    permissions: { deny: [...[...SECRET_FILES, ...secrets.map(ruleRoot)].map((f) => `Read(${f})`), ...[...protect, ...writeRoots.map((r) => path.join(r, '.git'))].flatMap((p) => [`Edit(${ruleRoot(p)})`, `Edit(${ruleRoot(p)}/**)`]), ...DENIED_COMMANDS] },
     ...(sandbox && {
       sandbox: {
         enabled: true,

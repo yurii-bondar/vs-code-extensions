@@ -33,6 +33,8 @@ test('settings: the sandbox lets a stage write only its repos, never their git m
   assert.equal(code.enabled, true);
   assert.equal(code.allowUnsandboxedCommands, false, 'a command blocked by the sandbox is not run again outside it');
   assert.deepEqual(code.filesystem.denyWrite, [path.join('/ws/api', '.git'), path.join('/elsewhere/web', '.git')]);
+  const deny = denyOf(sessionSettings({ hooks: {}, guard: '127.0.0.1:4100', writeRoots: ['/ws/api'], protect: [], secrets: [], envVars: [], cwd: '/ws/api', sandbox: true, network: [], writable: [] }));
+  for (const rule of ['Edit(//ws/api/.git)', 'Edit(//ws/api/.git/**)']) assert.ok(deny.includes(rule), `${rule}: Write and Edit are not in the sandbox`);
   assert.ok(code.filesystem.denyRead.includes('~/.ssh'));
   assert.deepEqual(code.network.allowedDomains, ['127.0.0.1:4100', ...REGISTRIES, 'npm.acme.corp'], "the guard's own port first: Claude Code sends the hook through the sandbox's proxy");
   assert.ok(!code.network.allowedDomains.includes('github.com'), 'git over github.com is how a push would leave');
