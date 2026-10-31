@@ -533,7 +533,9 @@ function resolveConfig(layers: Layer[], opts: { flags?: Flags | undefined; readF
       lineage: base.lineage,
       description: base.description,
       model: base.model ?? 'inherit',
-      ...(base.tools && { tools: base.tools }),
+      // An agent always runs with a list of tools: without one Claude Code would offer every tool it has, among them
+      // ones that reach outside the sandbox or run commands the guard never reads.
+      tools: base.tools ?? (base.output === 'code' || base.output === 'tests' ? WRITE : READ_ONLY),
       ...(base.disallowedTools && { disallowedTools: base.disallowedTools }),
       ...(base.mcp !== undefined && { mcp: base.mcp }),
       ...(base.maxTurns !== undefined && { maxTurns: base.maxTurns }),

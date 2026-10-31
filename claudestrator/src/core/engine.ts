@@ -37,6 +37,10 @@ const REPORT_OUTPUTS = new Set(['readiness', 'audit']);
 const READ_TOOLS = new Set(['Read', 'Grep', 'Glob', 'LS', 'TodoWrite', 'Task', 'BashOutput', 'ToolSearch', 'Skill']);
 /** Tools that reach any host from Claude Code itself, outside the sandbox's network rules: only for an agent whose tools name them. */
 const WEB_TOOLS = new Set(['WebFetch', 'WebSearch']);
+/** Claude Code's own worktree tools make branches and worktrees outside the sandbox: Claudestrator owns git. */
+const GIT_TOOLS = new Set(['EnterWorktree', 'ExitWorktree']);
+/** MCP resources, read without an `mcp__` name: through the account's MCP servers, outside the sandbox. */
+const MCP_RESOURCE_TOOLS = new Set(['ReadMcpResourceTool', 'ListMcpResourcesTool']);
 const REPORT_RETRIES = 2;
 /** What Claude Code says when its own sign-in is missing or expired (not an MCP server's). */
 const CLAUDE_AUTH = /Failed to authenticate|OAuth (session|token) (has )?expired|Invalid API key|Please run \/login|not logged in|authentication_error/i;
@@ -1157,7 +1161,11 @@ class Engine extends EventEmitter {
     if (READ_TOOLS.has(tool) || tool === 'StructuredOutput') return { allow: true };
     const cwd = writeRoots.length === 1 ? writeRoots[0]! : this.workspace;
     const protect = configPaths(this.workspace, config);
-    if (tool === 'Bash') {
+    // Commands the guard cannot read are not run: PowerShell's own syntax, and a Monitor that watches anything but a command.
+    if (tool === 'PowerShell') return blocked('PowerShell commands are not read by the guard, and native Windows has no sandbox; agents run commands with Bash');
+    if (tool === 'Monitor' && typeof input.command !== 'string') return blocked('Monitor watches a command here, nothing else');
+    if (GIT_TOOLS.has(tool)) return blocked(`${tool} makes branches and worktrees outside the sandbox; Claudestrator owns git`);
+    if (tool === 'Bash' || tool === 'Monitor') {
       const d = await guardBash(String(input.command || ''), {
         policy: config.policy,
         cwd: call.cwd && (await exists(call.cwd)) ? call.cwd : cwd,
@@ -1192,15 +1200,21 @@ class Engine extends EventEmitter {
     }
     // Claude Code is started with the agent's tools; anything else reaching the hook is refused.
     const agent = config.agents[step.agent];
-    const named = (name: string): boolean => Boolean(agent && agent.tools && agent.tools.some((t) => t === name || t.startsWith(`${name}(`)));
+    if (!agent) return blocked(`the ${step.agent} agent is no longer in the config`);
+    const named = (name: string): boolean => Boolean(agent.tools && agent.tools.some((t) => t === name || t.startsWith(`${name}(`)));
     if (WEB_TOOLS.has(tool) && !named(tool)) return blocked(`${tool} reaches any host, outside the sandbox; the ${step.agent} agent uses it only when its tools name it (tools: [${tool}])`);
+    if (MCP_RESOURCE_TOOLS.has(tool)) {
+      if (agent.mcp === false) return blocked(`${tool}: the ${step.agent} agent runs without MCP servers`);
+      const strange = strangeHosts(input, webHosts);
+      if (strange.length) return blocked(`${tool} names ${strange.join(', ')}: an MCP server may fetch it, outside the sandbox. Add the host to policy.network`);
+    }
     if (tool.startsWith('mcp__')) {
-      if (agent && agent.mcp === false) return blocked(`${tool}: the ${step.agent} agent runs without MCP servers`);
-      const listed = Boolean(agent && agent.tools && agent.tools.some((rule) => mcpRuleCovers(rule, tool)));
+      if (agent.mcp === false) return blocked(`${tool}: the ${step.agent} agent runs without MCP servers`);
+      const listed = Boolean(agent.tools && agent.tools.some((rule) => mcpRuleCovers(rule, tool)));
       if (!listed && !mcpReads(mcpAction(tool))) return blocked(`${tool} may change something outside the repos; the ${step.agent} agent calls it only when its tools name it (tools: [${tool}])`);
       const strange = listed ? [] : strangeHosts(input, webHosts);
       if (strange.length) return blocked(`${tool} names ${strange.join(', ')}: an MCP server may fetch it, outside the sandbox. Add the host to policy.network, or name the tool in the ${step.agent} agent's tools (tools: [${tool}])`);
-    } else if (agent && agent.tools && !named(tool)) return blocked(`${tool} is not one of the ${step.agent} agent's tools`);
+    } else if (!agent.tools || !named(tool)) return blocked(`${tool} is not one of the ${step.agent} agent's tools`);
     if (!this.askPermissions()) return { allow: true };
     const requestId = crypto.randomUUID();
     const request: PermissionRequest = { requestId, taskId, agent: step.agent, ...(step.repo && { repo: step.repo }), tool, input: summarizeInput(tool, input), at: Date.now() };
