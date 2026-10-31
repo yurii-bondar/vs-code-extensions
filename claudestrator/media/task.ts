@@ -98,7 +98,8 @@ interface Views {
     tab: string;
     viewKey: string | null;
     follow: boolean;
-    items: TranscriptItem[];
+    /** When the last item of the transcript as loaded was written: a push of one from before is in it already. */
+    loadedUntil: number;
     liveText: string;
     cpKey: string | null;
     feedback: string;
@@ -110,7 +111,7 @@ interface Views {
     tab: 'output',
     viewKey: null,
     follow: true,
-    items: [],
+    loadedUntil: 0,
     liveText: '',
     cpKey: null,
     feedback: '',
@@ -145,7 +146,7 @@ interface Views {
 
   views.task = {
     async enter(route) {
-      Object.assign(T, { taskId: route.taskId ?? '', d: null, viewKey: null, follow: true, items: [], liveText: '', cpKey: null, sev: 'all', tab: S.ui.taskTab || 'output' });
+      Object.assign(T, { taskId: route.taskId ?? '', d: null, viewKey: null, follow: true, loadedUntil: 0, liveText: '', cpKey: null, sev: 'all', tab: S.ui.taskTab || 'output' });
       $('#view')!.innerHTML = `
         <div class="page task-page">
           <button class="back" data-action="go-home">${icon('back')}All tasks</button>
@@ -216,13 +217,13 @@ interface Views {
       const key = T.viewKey;
       T.liveText = '';
       if (!key) {
-        T.items = [];
+        T.loadedUntil = 0;
         $('#transcript')!.innerHTML = emptyTranscript(T.d!);
         return;
       }
       const items = await call('transcript', { taskId: T.taskId, key });
       if (key !== T.viewKey) return;
-      T.items = items;
+      T.loadedUntil = items.reduce((t, i) => Math.max(t, i.t ?? 0), 0);
       const el = $('#transcript')!;
       el.innerHTML = items.length ? renderItems(items) : `<div class="t-empty">${icon('clock')}Waiting for the agent's first words…</div>`;
       scrollTranscript(true);
@@ -750,10 +751,15 @@ interface Views {
     return `<li class="todo ${status}">${mark}${esc(field(t, 'content') || field(t, 'activeForm') || '')}</li>`;
   }
 
+  /** Lines of an edit shown per side, as of a Write: the rest is in the file. */
+  const DIFF_LINES = 60;
   function diffHtml(a: unknown, b: unknown) {
-    const minus = String(a || '').split('\n').map((l) => `<div class="dl del">- ${esc(l)}</div>`).join('');
-    const plus = String(b || '').split('\n').map((l) => `<div class="dl add">+ ${esc(l)}</div>`).join('');
-    return `<div class="diff">${minus}${plus}</div>`;
+    const side = (text: unknown, cls: string, mark: string) => {
+      const lines = String(text || '').split('\n');
+      const shown = lines.slice(0, DIFF_LINES).map((l) => `<div class="dl ${cls}">${mark} ${esc(l)}</div>`).join('');
+      return lines.length > DIFF_LINES ? `${shown}<div class="dl muted">… ${lines.length - DIFF_LINES} more lines</div>` : shown;
+    };
+    return `<div class="diff">${side(a, 'del', '-')}${side(b, 'add', '+')}</div>`;
   }
 
   function toolHtml(item: Extract<TranscriptItem, { type: 'tool_use' }>, result: ToolResult | undefined) {
@@ -815,10 +821,14 @@ interface Views {
     return items.map((i) => itemHtml(i, ctx)).join('');
   }
 
+  /** Items the live transcript keeps on screen, as a loaded one: the oldest go, the file keeps them. */
+  const MAX_ITEMS = 1500;
   let liveTimer: ReturnType<typeof setTimeout> | null = null;
   function appendItem(item: TranscriptItem) {
     const el = $('#transcript');
     if (!el) return;
+    // Written before the transcript was read (on its way while it loaded): it is on screen already.
+    if (item.type !== 'text_delta' && item.type !== 'thinking' && item.t !== undefined && item.t < T.loadedUntil) return;
     const empty = $('.t-empty', el);
     if (empty) empty.remove();
     const near = el.scrollHeight - el.scrollTop - el.clientHeight < 120 || isPageBottom();
@@ -830,12 +840,16 @@ interface Views {
         live = $('.bubble.live', el);
       }
       if (!liveTimer) {
-        liveTimer = setTimeout(() => {
-          liveTimer = null;
-          const l = $('.bubble.live .markdown', el);
-          if (l) l.innerHTML = T.liveText ? md(T.liveText) : '<span class="muted">thinking…</span>';
-          if (near) scrollTranscript();
-        }, 80);
+        // The whole message renders each time, so a long one renders less often: as much work per second at any length.
+        liveTimer = setTimeout(
+          () => {
+            liveTimer = null;
+            const l = $('.bubble.live .markdown', el);
+            if (l) l.innerHTML = T.liveText ? md(T.liveText) : '<span class="muted">thinking…</span>';
+            if (near) scrollTranscript();
+          },
+          Math.min(1000, Math.max(80, T.liveText.length / 20))
+        );
       }
       return;
     }
@@ -844,7 +858,6 @@ interface Views {
       if (live) live.remove();
       T.liveText = '';
     }
-    T.items.push(item);
     if (item.type === 'tool_result') {
       const row = el.querySelector(`[data-tool="${CSS.escape(item.id)}"]`);
       if (row) {
@@ -856,6 +869,7 @@ interface Views {
       }
     }
     el.insertAdjacentHTML('beforeend', itemHtml(item, null));
+    while (el.childElementCount > MAX_ITEMS) el.firstElementChild!.remove();
     if (near) scrollTranscript();
   }
 
