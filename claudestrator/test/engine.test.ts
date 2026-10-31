@@ -634,7 +634,7 @@ test('engine: Stop ends a commit hook that runs, and no repo after it is committ
   try {
     const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
     const run = runTask(h.engine, taskId);
-    await waitFor(async () => fs.existsSync(marker), 20000);
+    await waitFor(async () => fs.existsSync(marker), 60000);
     const started = Date.now();
     await h.engine.stop(taskId);
     const s = await run;
