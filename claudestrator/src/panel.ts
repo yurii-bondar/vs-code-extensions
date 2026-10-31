@@ -7,6 +7,7 @@ import * as crypto from 'crypto';
 import * as os from 'os';
 import * as view from './core/view';
 import type { OutputPush } from './core/view';
+import { exists } from './core/files';
 import * as cfg from './core/config';
 import * as backups from './core/backup';
 import * as libraries from './core/library';
@@ -34,12 +35,6 @@ interface PickedRepo {
 }
 
 type Handler = (params: unknown) => Promise<unknown>;
-
-/** Whether a path exists, without blocking the extension host. */
-const exists = (p: string): Promise<boolean> => fs.promises.access(p).then(
-  () => true,
-  () => false
-);
 
 /** How often streamed agent output goes to the page. */
 const OUTPUT_MS = 50;

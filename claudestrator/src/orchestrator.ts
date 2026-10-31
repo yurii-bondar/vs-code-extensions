@@ -1,9 +1,9 @@
 // The extension's service: one engine per workspace root, the environment it runs in, and change events
 // for the tree, the status bar and the dashboard.
 import * as vscode from 'vscode';
-import * as fs from 'fs';
 import * as path from 'path';
 import { Engine } from './core/engine';
+import { exists } from './core/files';
 import { ClaudeRunner } from './core/runner';
 import { HookServer } from './core/hookserver';
 import { setChildEnv, getChildEnv } from './core/git';
@@ -72,11 +72,7 @@ async function workspaceRoot(): Promise<string | null> {
   }
   // Prefer a folder that already has a Claudestrator config.
   for (const f of folders) {
-    const has = await fs.promises.access(projectConfigFile(f)).then(
-      () => true,
-      () => false
-    );
-    if (has) return f;
+    if (await exists(projectConfigFile(f))) return f;
   }
   return folders[0] || null;
 }
@@ -597,10 +593,7 @@ class Orchestrator {
 
   async hasProjectConfig(): Promise<boolean> {
     if (!this.root) return false;
-    return fs.promises.access(projectConfigFile(this.root)).then(
-      () => true,
-      () => false
-    );
+    return exists(projectConfigFile(this.root));
   }
 
   /** Every task as a list entry, guarded against a task folder vanishing mid-read. */

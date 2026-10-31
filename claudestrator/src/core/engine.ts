@@ -6,6 +6,7 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import { EventEmitter } from 'events';
 import { loadConfig, configPaths } from './config';
+import { exists } from './files';
 import { EFFORTS, SCENARIOS } from './protocol';
 import { buildPipeline, scenarioKind, taskPipeline, fitsScenario, onRepos } from './pipeline';
 import { nextAction, runOf, artifactPath, branchName, sameStep, editableFrom, stepRepos, unknownRepos, TASK_FILES, type NextAction, type RunAction } from './machine';
@@ -1017,7 +1018,7 @@ class Engine extends EventEmitter {
     if (tool === 'Bash') {
       const d = await guardBash(String(input.command || ''), {
         policy: config.policy,
-        cwd: call.cwd && (await fs.promises.access(call.cwd).then(() => true, () => false)) ? call.cwd : cwd,
+        cwd: call.cwd && (await exists(call.cwd)) ? call.cwd : cwd,
         workspace: this.workspace,
         repoDirs: Object.values(config.repos).map((r) => path.resolve(this.workspace, r.path)),
         ...(this.home && { home: this.home }),
@@ -1026,10 +1027,7 @@ class Engine extends EventEmitter {
         writeRoots,
         protect,
         branchOf: branchAt,
-        isRepoRoot: (dir) => fs.promises.access(path.join(dir, '.git')).then(
-          () => true,
-          () => false
-        ),
+        isRepoRoot: (dir) => exists(path.join(dir, '.git')),
         readFile: (f) => fs.promises.readFile(f, 'utf8').catch(() => null),
       });
       if (!d.allow) return blocked(d.reason);
@@ -1443,10 +1441,7 @@ class Engine extends EventEmitter {
       out.push({
         name: repo.name,
         dir,
-        exists: await fs.promises.access(dir).then(
-          () => true,
-          () => false
-        ),
+        exists: await exists(dir),
         isRepo,
         ...(isRepo && { branch: await git.branch(), dirty: (await git.dirty()).length, last: await git.lastCommit(), sync: await git.aheadBehind(repo.baseBranch) }),
       });

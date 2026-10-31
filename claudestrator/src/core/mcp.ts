@@ -3,6 +3,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { exists } from './files';
 import { exec } from './git';
 import { readJsonFresh } from './env';
 import type { McpServer } from './wire';
@@ -158,7 +159,7 @@ async function writeUserMcpConfig(file: string, configDir?: string | null): Prom
   const source = configDir ? path.join(configDir, '.claude.json') : path.join(os.homedir(), '.claude.json');
   const sig = await fs.promises.stat(source).then((st) => `${source}:${st.size}:${st.mtimeMs}`, () => `${source}:none`);
   const hit = mcpConfigs.get(file);
-  if (hit && hit.sig === sig && (hit.result === null || (await fs.promises.access(file).then(() => true, () => false)))) return hit.result;
+  if (hit && hit.sig === sig && (hit.result === null || (await exists(file)))) return hit.result;
   let servers: Record<string, unknown> = {};
   try {
     const global = JSON.parse(await fs.promises.readFile(source, 'utf8')) as ClaudeJson;

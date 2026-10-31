@@ -7,6 +7,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as YAML from 'yaml';
 import { CONFIG_DIR, LIBRARY_FILE, PROMPTS_DIR, editProjectConfig, editYamlFile, libraryFile, libraryLabel, projectConfigFile, readProjectLayer, userConfigFile, withConfigRollback } from './config';
+import { exists } from './files';
 import { validateConfigLayer, validateLibraryLayer } from './protocol';
 import type { AgentLayer, ConfigLayer } from './config';
 import type { LibraryView as LibraryInfo } from './wire';
@@ -32,12 +33,6 @@ async function readYaml(file: string): Promise<unknown> {
   });
   return YAML.parse(text) ?? {};
 }
-
-const exists = (file: string): Promise<boolean> =>
-  fs.promises.access(file).then(
-    () => true,
-    () => false
-  );
 
 /** The `libraries:` entries a config lists; none when it does not exist or does not parse (loadConfig reports that). */
 async function entriesOf(file: string): Promise<string[]> {
