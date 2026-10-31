@@ -298,8 +298,13 @@ async function prepareRepos(workspace: string, state: TaskState, config: RepoLoo
       blocked.push({ repo: name, dir: checkout, problem: 'not a git repository' });
       continue;
     }
-    if (worktree) continue;
-    if ((await git.branch()) === branch) continue;
+    if ((await git.isRepo()) && (await git.branch()) === branch) continue;
+    // A folder there already is someone's: a worktree a deleted task kept for its unsaved work, say. It is never
+    // removed to make room.
+    if (worktree) {
+      if (await exists(dir)) blocked.push({ repo: name, dir, problem: `${dir} is there already (a worktree an earlier task with this id kept?); remove it, or commit or save its work first` });
+      continue;
+    }
     const dirty = await git.dirty();
     if (dirty.length) blocked.push({ repo: name, dir, problem: 'uncommitted changes', files: dirty.slice(0, 20) });
   }
@@ -322,8 +327,14 @@ async function prepareRepos(workspace: string, state: TaskState, config: RepoLoo
     let r: ExecResult;
     if (worktree) {
       await fs.promises.mkdir(path.dirname(dir), { recursive: true });
+      // Checked above; one that appeared since is not this call's to remove either.
+      if (await exists(dir)) {
+        results.push({ repo: name, dir, status: 'failed', error: `${dir} is there already` });
+        break;
+      }
       r = had ? await main.git('worktree', 'add', dir, branch) : await main.git('worktree', 'add', '-b', branch, dir, from);
-      // A worktree half made (a timeout on a big repo) would make the next try fail with "already exists".
+      // A worktree half made (a timeout on a big repo) would make the next try fail with "already exists". The folder
+      // was not there before this call, so what is in it now is that half-made worktree and nothing of yours.
       const removeWorktree = async (): Promise<void> => {
         await main.git('worktree', 'remove', '--force', dir);
         await fs.promises.rm(dir, { recursive: true, force: true });

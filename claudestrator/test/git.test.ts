@@ -132,3 +132,22 @@ test('git: when one repo cannot be put on the task branch, the ones before it ar
     assert.doesNotMatch(git(api, 'worktree', 'list'), /worktrees/, `${mode}: none registered either`);
   }
 });
+
+test('git: a worktree an earlier task with the same id kept is never removed to make room', async () => {
+  const ws = workspace(['api'], '');
+  const first = task(['api'], 'worktree');
+  assert.ok((await prepareRepos(ws, first, config)).ok);
+  const [repo] = taskRepos(ws, first, config, ['api']);
+  // Deleting that task kept its worktree for the work it had not committed.
+  fs.writeFileSync(path.join(repo!.dir, 'precious.txt'), 'unsaved work');
+  assert.equal((await removeWorktrees(ws, first, config))[0]!.status, 'kept');
+
+  // The same Jira key again: the same folder, another branch.
+  const again = { ...first, plan: { ...first.plan!, slug: 'cap-bets-again' } } as TaskState;
+  const p = await prepareRepos(ws, again, config);
+  assert.ok(!p.ok && p.code === 'repos_not_ready', JSON.stringify(p));
+  assert.match(p.blocked![0]!.problem, /is there already/);
+  assert.equal(fs.readFileSync(path.join(repo!.dir, 'precious.txt'), 'utf8'), 'unsaved work', 'the work is still there');
+  assert.equal(git(repo!.dir, 'rev-parse', '--abbrev-ref', 'HEAD'), 'feat/cap-bets', 'and on its own branch');
+  assert.ok((await prepareRepos(ws, first, config)).ok, 'the task it belongs to finds it ready');
+});
