@@ -1558,3 +1558,10 @@ test('config: a base branch is a branch name, never something git would read as 
     assert.ok(validateConfigLayer({ repos: { api: { baseBranch: base } } }).length > 0, `repos.api.baseBranch ${base}`);
   }
 });
+
+test('config: the safety policy\'s lists are a few entries, as sandbox-runtime gets them', () => {
+  assert.deepEqual(validateConfigLayer({ policy: { network: Array.from({ length: 100 }, (_, i) => `h${i}.acme.corp`) } }), []);
+  assert.match(validateConfigLayer({ policy: { network: Array.from({ length: 101 }, (_, i) => `h${i}.acme.corp`) } })[0]!, /policy\.network: at most 100 items, got 101/);
+  assert.match(validateConfigLayer({ policy: { writable: Array.from({ length: 5000 }, () => '~/.cache') } })[0]!, /at most 100 items/, 'one issue, not one per entry');
+  assert.equal(validateConfigLayer({ policy: { writable: Array.from({ length: 5000 }, () => 'bad') } }).length, 1);
+});

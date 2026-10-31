@@ -381,6 +381,9 @@
     "@anthropic-ai/sandbox-runtime": "^0.0.81",
     "yaml": "^2.5.0"
   },
+  "overrides": {
+    "zod": "^4.6.7"
+  },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
     "@types/node": "^22.20.5",

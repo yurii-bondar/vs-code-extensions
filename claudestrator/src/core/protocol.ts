@@ -84,9 +84,10 @@ const T = {
   pos: (): Check => (v, p) => (typeof v === 'number' && v > 0 ? [] : [`${at(p)}: expected a positive number`]),
   oneOf: (list: readonly unknown[]): Check => (v, p) => (list.includes(v) ? [] : [`${at(p)}: expected one of ${list.join(', ')}, got ${JSON.stringify(v)}`]),
   re: (re: RegExp, msg: string): Check => (v, p) => (typeof v === 'string' && re.test(v) ? [] : [`${at(p)}: ${msg}`]),
-  arr: (item: Check, min = 0): Check => (v, p) => {
+  arr: (item: Check, min = 0, max = Infinity): Check => (v, p) => {
     if (!Array.isArray(v)) return [`${at(p)}: expected a list, got ${kind(v)}`];
     if (v.length < min) return [`${at(p)}: needs at least ${min} item${min === 1 ? '' : 's'}`];
+    if (v.length > max) return [`${at(p)}: at most ${max} items, got ${v.length}`];
     return v.flatMap((x, i) => item(x, `${p}[${i}]`));
   },
   rec: (keyCheck: Check, item: Check): Check => (v, p) => {
@@ -192,6 +193,9 @@ const GROUP = T.obj({ type: T.oneOf(GROUP_TYPES), label: T.str(1, 80), 'jira?': 
 const INSTRUCTION = T.obj({ label: T.str(1, 80), text: T.str(1) });
 
 const GATE = T.obj({ name: T.str(1), cmd: T.str(1), 'dir?': T.str(1), 'when?': T.str(1) });
+/** The most entries a list of the safety policy holds. */
+const SANDBOX_LIST = 100;
+
 /** A branch name git takes as one (`main`, `release/2.x`): no leading `-`, which git would read as an option, and no `..`. */
 const BRANCH = T.re(/^(?!-)(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9][A-Za-z0-9._/-]*$/, 'a branch name, e.g. main or release/2.x');
 
@@ -205,7 +209,8 @@ const CONFIG_LAYER = T.obj({
   'baseBranch?': BRANCH,
   'repos?': T.rec(T.str(1), T.obj({ 'role?': T.str(1), 'path?': T.str(1), 'baseBranch?': BRANCH, 'gates?': T.arr(GATE) })),
   'jira?': T.obj({ 'allowedProjects?': T.arr(T.str(1)) }),
-  'policy?': T.obj({ 'protectedBranches?': T.arr(T.str(1)), 'draftPrsOnly?': T.bool(), 'forbidAiAttribution?': T.bool(), 'allowNoVerify?': T.bool(), 'sandbox?': T.bool(), 'network?': T.arr(T.re(/^[A-Za-z0-9*.:[\]-]+$/, 'a host name, e.g. npm.acme.corp or *.acme.corp')), 'writable?': T.arr(T.re(/^(~|\/|[A-Za-z]:[\\/])/, 'a folder from ~ or the filesystem root, e.g. ~/.cache/go-build')), 'checkEnv?': T.arr(T.re(/^[A-Za-z_][A-Za-z0-9_]*$/, 'a variable name, e.g. DATABASE_URL')) }),
+  // The sandbox's lists go to sandbox-runtime as its settings: a few entries each, never an unbounded list to validate.
+  'policy?': T.obj({ 'protectedBranches?': T.arr(T.str(1), 0, SANDBOX_LIST), 'draftPrsOnly?': T.bool(), 'forbidAiAttribution?': T.bool(), 'allowNoVerify?': T.bool(), 'sandbox?': T.bool(), 'network?': T.arr(T.re(/^[A-Za-z0-9*.:[\]-]+$/, 'a host name, e.g. npm.acme.corp or *.acme.corp'), 0, SANDBOX_LIST), 'writable?': T.arr(T.re(/^(~|\/|[A-Za-z]:[\\/])/, 'a folder from ~ or the filesystem root, e.g. ~/.cache/go-build'), 0, SANDBOX_LIST), 'checkEnv?': T.arr(T.re(/^[A-Za-z_][A-Za-z0-9_]*$/, 'a variable name, e.g. DATABASE_URL'), 0, SANDBOX_LIST) }),
   'git?': T.obj({ 'mode?': T.oneOf(['branch', 'worktree']) }),
   'editor?': T.str(1),
   'context?': T.arr(T.str(1)),
