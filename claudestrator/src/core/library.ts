@@ -24,14 +24,25 @@ function configOf(scope: Scope, { workspace, home }: Where): string {
   return scope === 'user' ? userConfigFile(homeOf(home)) : projectConfigFile(workspace);
 }
 
-function readYaml(file: string): unknown {
-  return fs.existsSync(file) ? YAML.parse(fs.readFileSync(file, 'utf8')) ?? {} : {};
+/** A YAML file's data; {} when it is not there. Throws when it does not parse. */
+async function readYaml(file: string): Promise<unknown> {
+  const text = await fs.promises.readFile(file, 'utf8').catch((e: NodeJS.ErrnoException) => {
+    if (e.code === 'ENOENT') return '';
+    throw e;
+  });
+  return YAML.parse(text) ?? {};
 }
 
+const exists = (file: string): Promise<boolean> =>
+  fs.promises.access(file).then(
+    () => true,
+    () => false
+  );
+
 /** The `libraries:` entries a config lists; none when it does not exist or does not parse (loadConfig reports that). */
-function entriesOf(file: string): string[] {
+async function entriesOf(file: string): Promise<string[]> {
   try {
-    const raw = readYaml(file) as ConfigLayer;
+    const raw = (await readYaml(file)) as ConfigLayer;
     return Array.isArray(raw.libraries) ? raw.libraries.filter((e) => typeof e === 'string') : [];
   } catch {
     return [];
@@ -39,17 +50,17 @@ function entriesOf(file: string): string[] {
 }
 
 /** Every library the user config and the project config list, in the order they load, with what each holds. */
-function listLibraries(where: Where): LibraryInfo[] {
+async function listLibraries(where: Where): Promise<LibraryInfo[]> {
   const out: LibraryInfo[] = [];
   for (const scope of ['user', 'project'] as const) {
     const config = configOf(scope, where);
-    for (const entry of entriesOf(config)) {
+    for (const entry of await entriesOf(config)) {
       const file = libraryFile(entry, path.dirname(config), homeOf(where.home));
       if (out.some((l) => l.file === file)) continue;
-      const info: LibraryInfo = { file, label: libraryLabel(file), scope, entry, exists: fs.existsSync(file), agents: [], scenarios: [] };
+      const info: LibraryInfo = { file, label: libraryLabel(file), scope, entry, exists: await exists(file), agents: [], scenarios: [] };
       if (info.exists) {
         try {
-          const raw = readYaml(file) as ConfigLayer;
+          const raw = (await readYaml(file)) as ConfigLayer;
           info.agents = Object.keys(raw.agents ?? {});
           info.scenarios = Object.keys(raw.scenarios ?? {});
         } catch (e) {
@@ -91,29 +102,30 @@ scenarios: {}
  */
 async function addLibrary({ dir, scope, create = false, ...where }: Where & { dir: string; scope: Scope; create?: boolean }): Promise<LibraryInfo> {
   const file = libraryFile(dir, process.cwd(), homeOf(where.home));
-  if (listLibraries(where).some((l) => l.file === file)) throw new Error(`${libraryLabel(file)} is already one of this project's libraries`);
-  if (!fs.existsSync(file) && !create) throw new Error(`There is no ${LIBRARY_FILE} in ${path.dirname(file)}`);
+  if ((await listLibraries(where)).some((l) => l.file === file)) throw new Error(`${libraryLabel(file)} is already one of this project's libraries`);
+  if (!(await exists(file)) && !create) throw new Error(`There is no ${LIBRARY_FILE} in ${path.dirname(file)}`);
   const config = configOf(scope, where);
   const entry = entryFor(path.dirname(file), scope, where);
-  await withConfigRollback(where, (remember) => {
-    remember(config);
-    if (!fs.existsSync(file)) {
-      remember(file);
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, LIBRARY_TEMPLATE);
+  await withConfigRollback(where, async (remember) => {
+    await remember(config);
+    if (!(await exists(file))) {
+      await remember(file);
+      await fs.promises.mkdir(path.dirname(file), { recursive: true });
+      await fs.promises.writeFile(file, LIBRARY_TEMPLATE);
     }
-    editYamlFile(config, (doc) => doc.setIn(['libraries'], doc.createNode([...entriesOf(config), entry])), { validate: validateConfigLayer, what: config });
+    const entries = await entriesOf(config);
+    await editYamlFile(config, (doc) => doc.setIn(['libraries'], doc.createNode([...entries, entry])), { validate: validateConfigLayer, what: config });
   });
-  return listLibraries(where).find((l) => l.file === file)!;
+  return (await listLibraries(where)).find((l) => l.file === file)!;
 }
 
 /** Stops listing a library. Undone, with the reason, when the project needs it (a scenario names its agents). */
 async function removeLibrary({ file, scope, ...where }: Where & { file: string; scope: Scope }): Promise<void> {
   const config = configOf(scope, where);
-  const rest = entriesOf(config).filter((e) => libraryFile(e, path.dirname(config), homeOf(where.home)) !== file);
-  await withConfigRollback(where, (remember) => {
-    remember(config);
-    editYamlFile(config, (doc) => (rest.length ? doc.setIn(['libraries'], doc.createNode(rest)) : doc.deleteIn(['libraries'])), { validate: validateConfigLayer, what: config });
+  const rest = (await entriesOf(config)).filter((e) => libraryFile(e, path.dirname(config), homeOf(where.home)) !== file);
+  await withConfigRollback(where, async (remember) => {
+    await remember(config);
+    await editYamlFile(config, (doc) => (rest.length ? doc.setIn(['libraries'], doc.createNode(rest)) : doc.deleteIn(['libraries'])), { validate: validateConfigLayer, what: config });
   });
 }
 
@@ -125,10 +137,10 @@ const defined = <T extends object>(obj: T): Partial<T> => Object.fromEntries(Obj
  * the project's copy is removed). The same names in the library are replaced. Undone if the config no longer resolves.
  */
 async function moveToLibrary({ library, agents = [], scenarios = [], ...where }: Where & { library: string; agents?: string[]; scenarios?: string[] }): Promise<{ agents: string[]; scenarios: string[] }> {
-  const target = listLibraries(where).find((l) => l.file === library);
+  const target = (await listLibraries(where)).find((l) => l.file === library);
   if (!target) throw new Error('That is not one of this project\'s libraries');
   if (!target.exists) throw new Error(`Library ${target.label} is not at ${target.file}`);
-  const project = readProjectLayer(where.workspace);
+  const project = await readProjectLayer(where.workspace);
   const own = project.agents ?? {};
   const names = new Set(agents);
   for (const id of scenarios) {
@@ -143,8 +155,8 @@ async function moveToLibrary({ library, agents = [], scenarios = [], ...where }:
 
   const projectDir = path.join(where.workspace, CONFIG_DIR);
   const libraryDir = path.dirname(target.file);
-  return withConfigRollback(where, (remember) => {
-    remember(target.file);
+  return withConfigRollback(where, async (remember) => {
+    await remember(target.file);
     const moved: Record<string, AgentLayer> = {};
     const leftBehind: string[] = [];
     for (const name of names) {
@@ -152,14 +164,15 @@ async function moveToLibrary({ library, agents = [], scenarios = [], ...where }:
       const ins = def.instructions;
       if (ins && typeof ins === 'object' && ins.file !== undefined) {
         const source = path.resolve(projectDir, ins.file);
-        if (fs.existsSync(source)) {
+        const content = await fs.promises.readFile(source, 'utf8').catch(() => null);
+        if (content !== null) {
           const rel = `${PROMPTS_DIR}/${path.basename(source)}`;
           const dest = path.join(libraryDir, rel);
-          const content = fs.readFileSync(source, 'utf8');
-          if (fs.existsSync(dest) && path.resolve(dest) !== source && fs.readFileSync(dest, 'utf8') !== content) throw new Error(`Library ${target.label} already has a different ${rel}`);
-          remember(dest);
-          fs.mkdirSync(path.dirname(dest), { recursive: true });
-          fs.writeFileSync(dest, content);
+          const there = await fs.promises.readFile(dest, 'utf8').catch(() => null);
+          if (there !== null && path.resolve(dest) !== source && there !== content) throw new Error(`Library ${target.label} already has a different ${rel}`);
+          await remember(dest);
+          await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+          await fs.promises.writeFile(dest, content);
           def = { ...def, instructions: { ...ins, file: `./${rel}` } };
           // The project's copy goes, unless it lives outside its prompts/ (a file the user keeps elsewhere).
           if (source.startsWith(path.join(projectDir, PROMPTS_DIR) + path.sep) && path.resolve(dest) !== source) leftBehind.push(source);
@@ -167,7 +180,7 @@ async function moveToLibrary({ library, agents = [], scenarios = [], ...where }:
       }
       moved[name] = def;
     }
-    editYamlFile(
+    await editYamlFile(
       target.file,
       (doc) => {
         // `agents: {}` (as a new library has it) would keep everything added to it on one line.
@@ -180,15 +193,15 @@ async function moveToLibrary({ library, agents = [], scenarios = [], ...where }:
       },
       { validate: validateLibraryLayer, what: `library ${target.label}` }
     );
-    editProjectConfig(where.workspace, (doc) => {
+    await editProjectConfig(where.workspace, (doc) => {
       for (const name of names) doc.deleteIn(['agents', name]);
       for (const id of scenarios) doc.deleteIn(['scenarios', id]);
       const left = doc.getIn(['scenarios']) as YAML.YAMLMap | undefined;
       if (left && YAML.isMap(left) && left.items.length === 0) doc.deleteIn(['scenarios']);
     });
     for (const file of leftBehind) {
-      remember(file);
-      fs.rmSync(file, { force: true });
+      await remember(file);
+      await fs.promises.rm(file, { force: true });
     }
     return { agents: [...names], scenarios };
   });

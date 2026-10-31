@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as YAML from 'yaml';
+import { AsyncLocalStorage } from 'async_hooks';
 import { validateConfigLayer, validateAgentPatch, validateLibraryLayer, SCENARIO_OUTPUT, JIRA_KEY } from './protocol';
 import { ORCH_DIR } from './store';
 import type { Agent, Config, CustomScenario, Diagnostic, Effort, Gate, GitMode, GroupType, Output, Policy, RepoConfig, Runs, ScenarioStep, TaskGroup, TaskInstruction } from './types';
@@ -855,12 +856,40 @@ function configPaths(workspace: string, config: Pick<Config, 'sources'>): string
 
 // ---------- editing the project layer ----------
 
-/** The project layer as plain data ({} when the file does not exist or does not parse). */
-function readProjectLayer(workspace: string): ConfigLayer {
-  const file = projectConfigFile(workspace);
-  if (!fs.existsSync(file)) return {};
+/** A file's text, or null when it is not there. */
+async function readIfThere(file: string): Promise<string | null> {
   try {
-    return YAML.parse(fs.readFileSync(file, 'utf8')) ?? {};
+    return await fs.promises.readFile(file, 'utf8');
+  } catch (e) {
+    if (missing(e)) return null;
+    throw e;
+  }
+}
+
+async function writeMaking(file: string, text: string): Promise<void> {
+  await fs.promises.mkdir(path.dirname(file), { recursive: true });
+  await fs.promises.writeFile(file, text);
+}
+
+/** Whether the edit running now was started inside another one (an agent added with its scenario set). */
+const inEdit = new AsyncLocalStorage<true>();
+let edits: Promise<unknown> = Promise.resolve();
+
+/**
+ * Config edits run one at a time, each reading the files as the one before left them: two quick clicks never write
+ * over each other, and a rollback never undoes another edit. An edit inside one that runs runs at once.
+ */
+function serialized<T>(fn: () => Promise<T>): Promise<T> {
+  if (inEdit.getStore()) return fn();
+  const run = edits.then(() => inEdit.run(true, fn));
+  edits = run.catch(() => undefined);
+  return run;
+}
+
+/** The project layer as plain data ({} when the file does not exist or does not parse). */
+async function readProjectLayer(workspace: string): Promise<ConfigLayer> {
+  try {
+    return YAML.parse((await readIfThere(projectConfigFile(workspace))) ?? '') ?? {};
   } catch {
     return {};
   }
@@ -870,7 +899,7 @@ function readProjectLayer(workspace: string): ConfigLayer {
  * Edits the project layer in place, keeping comments and formatting, and refuses a result
  * that no longer validates. Returns the file path.
  */
-function editProjectConfig(workspace: string, mutate: (doc: YAML.Document) => unknown): string {
+function editProjectConfig(workspace: string, mutate: (doc: YAML.Document) => unknown): Promise<string> {
   return editYamlFile(projectConfigFile(workspace), mutate, { validate: validateConfigLayer, what: `${CONFIG_DIR}/${CONFIG_FILE}` });
 }
 
@@ -878,18 +907,19 @@ function editProjectConfig(workspace: string, mutate: (doc: YAML.Document) => un
  * Edits a YAML file in place, keeping comments and formatting, and refuses a result `validate` finds problems in.
  * The project config, the user config and library files are all edited this way. Returns the file.
  */
-function editYamlFile(file: string, mutate: (doc: YAML.Document) => unknown, { validate, what }: { validate: (raw: unknown) => string[]; what: string }): string {
-  const doc = YAML.parseDocument(fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '');
-  if (doc.errors.length) throw new Error(`${file}: ${doc.errors[0]!.message}`);
-  if (doc.contents === null) doc.contents = doc.createNode({}) as unknown as typeof doc.contents;
-  mutate(doc);
-  // An agent left with no fields changes nothing; a repo with none is still a repo (`api: {}`: at ./api, base main).
-  pruneEmpty(doc, ['agents']);
-  const issues = validate(doc.toJS() ?? {});
-  if (issues.length) throw new Error(`the change would make ${what} invalid: ${issues.join('; ')}`);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, doc.toString());
-  return file;
+function editYamlFile(file: string, mutate: (doc: YAML.Document) => unknown, { validate, what }: { validate: (raw: unknown) => string[]; what: string }): Promise<string> {
+  return serialized(async () => {
+    const doc = YAML.parseDocument((await readIfThere(file)) ?? '');
+    if (doc.errors.length) throw new Error(`${file}: ${doc.errors[0]!.message}`);
+    if (doc.contents === null) doc.contents = doc.createNode({}) as unknown as typeof doc.contents;
+    mutate(doc);
+    // An agent left with no fields changes nothing; a repo with none is still a repo (`api: {}`: at ./api, base main).
+    pruneEmpty(doc, ['agents']);
+    const issues = validate(doc.toJS() ?? {});
+    if (issues.length) throw new Error(`the change would make ${what} invalid: ${issues.join('; ')}`);
+    await writeMaking(file, doc.toString());
+    return file;
+  });
 }
 
 /** A YAML collection node as far as the pruning looks at it. */
@@ -907,7 +937,7 @@ function pruneEmpty(doc: YAML.Document, at: string[]): void {
 }
 
 /** Sets (or, with `undefined`/null, removes) fields of one agent in the project config. */
-function updateAgentConfig(workspace: string, agent: string, patch: Record<string, unknown>): string {
+async function updateAgentConfig(workspace: string, agent: string, patch: Record<string, unknown>): Promise<string> {
   const set = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined && v !== null));
   const issues = validateAgentPatch(set);
   if (issues.length) throw new Error(`invalid agent change: ${issues.join('; ')}`);
@@ -920,16 +950,16 @@ function updateAgentConfig(workspace: string, agent: string, patch: Record<strin
 }
 
 /** Replaces everything the project layer says about an agent with `layer` (a backup restores agents this way). */
-function setAgentLayer(workspace: string, agent: string, layer: AgentLayer): string {
+async function setAgentLayer(workspace: string, agent: string, layer: AgentLayer): Promise<string> {
   return editProjectConfig(workspace, (doc) => doc.setIn(['agents', agent], doc.createNode(defined(layer))));
 }
 
 /** Removes everything the project layer says about an agent: back to the user/built-in definition. */
-function resetAgentConfig(workspace: string, agent: string): string {
+async function resetAgentConfig(workspace: string, agent: string): Promise<string> {
   return editProjectConfig(workspace, (doc) => doc.deleteIn(['agents', agent]));
 }
 
-function setScenario(workspace: string, scenario: string, agents: string[]): string {
+async function setScenario(workspace: string, scenario: string, agents: string[]): Promise<string> {
   return editProjectConfig(workspace, (doc) => {
     const node = doc.createNode(agents);
     node.flow = true;
@@ -941,7 +971,7 @@ function setScenario(workspace: string, scenario: string, agents: string[]): str
  * Writes a custom scenario: `{ label, description?, agents: [{ name, model?, effort? }] }`. A step without its own model
  * or effort is written as the bare agent name. `oldId` renames it.
  */
-function setCustomScenario(workspace: string, id: string, def: { label: string; description?: string | undefined; agents: ScenarioStep[] }, oldId?: string): string {
+async function setCustomScenario(workspace: string, id: string, def: { label: string; description?: string | undefined; agents: ScenarioStep[] }, oldId?: string): Promise<string> {
   const agents = def.agents.map((st) => (st.model || st.effort ? { agent: st.name, ...(st.model && { model: st.model }), ...(st.effort && { effort: st.effort }) } : st.name));
   return editProjectConfig(workspace, (doc) => {
     if (oldId && oldId !== id) doc.deleteIn(['scenarios', oldId]);
@@ -950,7 +980,7 @@ function setCustomScenario(workspace: string, id: string, def: { label: string; 
 }
 
 /** A custom scenario is deleted; a built-in report scenario is switched off with `false` so a lower layer cannot bring it back. */
-function removeScenario(workspace: string, id: string): string {
+async function removeScenario(workspace: string, id: string): Promise<string> {
   return editProjectConfig(workspace, (doc) => {
     if (SCENARIO_OUTPUT[id]) doc.setIn(['scenarios', id], false);
     else doc.deleteIn(['scenarios', id]);
@@ -960,11 +990,11 @@ function removeScenario(workspace: string, id: string): string {
 }
 
 /** Brings a removed built-in report scenario back with its built-in agents. */
-function restoreScenario(workspace: string, id: string): string {
+async function restoreScenario(workspace: string, id: string): Promise<string> {
   return setScenario(workspace, id, BUILTIN.scenarios[id] || []);
 }
 
-function setPipeline(workspace: string, pipeline: string[]): string {
+async function setPipeline(workspace: string, pipeline: string[]): Promise<string> {
   return editProjectConfig(workspace, (doc) => {
     const node = doc.createNode(pipeline);
     node.flow = true;
@@ -973,7 +1003,7 @@ function setPipeline(workspace: string, pipeline: string[]): string {
 }
 
 /** Sets any top-level path (e.g. ['limits', 'reviewRounds']); `undefined` removes it. */
-function setProjectValue(workspace: string, keyPath: string[], value: unknown): string {
+async function setProjectValue(workspace: string, keyPath: string[], value: unknown): Promise<string> {
   return editProjectConfig(workspace, (doc) => {
     if (value === undefined || value === null || (Array.isArray(value) && value.length === 0 && keyPath[0] !== 'pipeline')) doc.deleteIn(keyPath);
     else doc.setIn(keyPath, doc.createNode(value));
@@ -985,7 +1015,7 @@ function setProjectValue(workspace: string, keyPath: string[], value: unknown): 
   });
 }
 
-function setRepo(workspace: string, name: string, layer: RepoLayer | undefined, oldName?: string): string {
+async function setRepo(workspace: string, name: string, layer: RepoLayer | undefined, oldName?: string): Promise<string> {
   return editProjectConfig(workspace, (doc) => {
     if (oldName && oldName !== name) doc.deleteIn(['repos', oldName]);
     if (layer === undefined) doc.deleteIn(['repos', name]);
@@ -994,44 +1024,44 @@ function setRepo(workspace: string, name: string, layer: RepoLayer | undefined, 
 }
 
 /** Writes a fresh project config (setup wizard). Refuses to overwrite an existing one. */
-function createProjectConfig(workspace: string, layer: ConfigLayer, header?: string): string {
-  const file = projectConfigFile(workspace);
-  if (fs.existsSync(file)) throw new Error(`${CONFIG_DIR}/${CONFIG_FILE} already exists`);
-  const issues = validateConfigLayer(layer);
-  if (issues.length) throw new Error(issues.join('; '));
-  const doc = new YAML.Document(layer);
-  if (header) doc.commentBefore = header;
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, doc.toString());
-  return file;
+function createProjectConfig(workspace: string, layer: ConfigLayer, header?: string): Promise<string> {
+  return serialized(async () => {
+    const file = projectConfigFile(workspace);
+    if ((await readIfThere(file)) !== null) throw new Error(`${CONFIG_DIR}/${CONFIG_FILE} already exists`);
+    const issues = validateConfigLayer(layer);
+    if (issues.length) throw new Error(issues.join('; '));
+    const doc = new YAML.Document(layer);
+    if (header) doc.commentBefore = header;
+    await writeMaking(file, doc.toString());
+    return file;
+  });
 }
 
 /**
  * Points an agent at its own instructions file (`.claudestrator/prompts/<name>.md`), seeding it with what
  * the agent resolves to today, so editing that file changes the agent. Returns the file.
  */
-function ensureInstructionsFile(workspace: string, agentName: string, resolved?: { instructions?: string } | null): string {
-  const rel = `./${PROMPTS_DIR}/${agentName}.md`;
-  const file = path.join(workspace, CONFIG_DIR, PROMPTS_DIR, `${agentName}.md`);
-  const current = readProjectLayer(workspace);
-  const own = current.agents && current.agents[agentName] && current.agents[agentName].instructions;
-  if (own && typeof own === 'object' && own.file) {
-    const existing = path.resolve(path.join(workspace, CONFIG_DIR), own.file);
-    if (!fs.existsSync(existing)) {
-      // A missing file is created only in the config folder: a path in a config someone else wrote may lead anywhere.
-      const dir = path.join(workspace, CONFIG_DIR);
-      if (!existing.startsWith(dir + path.sep)) throw new Error(`${own.file} does not exist, and it is outside ${CONFIG_DIR}/; create it yourself, or point "${agentName}" at a file in ${CONFIG_DIR}/`);
-      fs.mkdirSync(path.dirname(existing), { recursive: true });
-      fs.writeFileSync(existing, `${(resolved && resolved.instructions) || ''}\n`);
+function ensureInstructionsFile(workspace: string, agentName: string, resolved?: { instructions?: string } | null): Promise<string> {
+  return serialized(async () => {
+    const rel = `./${PROMPTS_DIR}/${agentName}.md`;
+    const file = path.join(workspace, CONFIG_DIR, PROMPTS_DIR, `${agentName}.md`);
+    const current = await readProjectLayer(workspace);
+    const own = current.agents && current.agents[agentName] && current.agents[agentName].instructions;
+    const seed = `${(resolved && resolved.instructions) || ''}\n`;
+    if (own && typeof own === 'object' && own.file) {
+      const existing = path.resolve(path.join(workspace, CONFIG_DIR), own.file);
+      if ((await readIfThere(existing)) === null) {
+        // A missing file is created only in the config folder: a path in a config someone else wrote may lead anywhere.
+        const dir = path.join(workspace, CONFIG_DIR);
+        if (!existing.startsWith(dir + path.sep)) throw new Error(`${own.file} does not exist, and it is outside ${CONFIG_DIR}/; create it yourself, or point "${agentName}" at a file in ${CONFIG_DIR}/`);
+        await writeMaking(existing, seed);
+      }
+      return existing;
     }
-    return existing;
-  }
-  if (!fs.existsSync(file)) {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, `${(resolved && resolved.instructions) || ''}\n`);
-  }
-  updateAgentConfig(workspace, agentName, { instructions: { mode: 'replace', file: rel } });
-  return file;
+    if ((await readIfThere(file)) === null) await writeMaking(file, seed);
+    await updateAgentConfig(workspace, agentName, { instructions: { mode: 'replace', file: rel } });
+    return file;
+  });
 }
 
 // ---------- changes that must leave a working config ----------
@@ -1046,28 +1076,29 @@ function configRelative(workspace: string, file: string): string {
  * `change` named through `remember` before writing it, go back to what they were, and the problems are thrown: a config
  * that does not resolve would stop every task. `explain` picks the problems worth showing (all of them by default).
  */
-async function withConfigRollback<T>({ workspace, home, explain }: { workspace: string; home?: string | undefined; explain?: (errors: Diagnostic[]) => Diagnostic[] }, change: (remember: (file: string) => void) => T | Promise<T>): Promise<T> {
-  const configFile = projectConfigFile(workspace);
-  const saved = new Map<string, string | null>();
-  const remember = (file: string): void => {
-    if (!saved.has(file)) saved.set(file, fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null);
-  };
-  remember(configFile);
-  try {
-    const result = await change(remember);
-    const after = await loadConfig({ workspace, home });
-    if (!after.ok) {
-      const shown = explain ? explain(after.errors) : after.errors;
-      throw new Error((shown.length ? shown : after.errors).map((e) => e.message).join('; '));
+function withConfigRollback<T>({ workspace, home, explain }: { workspace: string; home?: string | undefined; explain?: (errors: Diagnostic[]) => Diagnostic[] }, change: (remember: (file: string) => Promise<void>) => T | Promise<T>): Promise<T> {
+  return serialized(async () => {
+    const saved = new Map<string, string | null>();
+    const remember = async (file: string): Promise<void> => {
+      if (!saved.has(file)) saved.set(file, await readIfThere(file));
+    };
+    await remember(projectConfigFile(workspace));
+    try {
+      const result = await change(remember);
+      const after = await loadConfig({ workspace, home });
+      if (!after.ok) {
+        const shown = explain ? explain(after.errors) : after.errors;
+        throw new Error((shown.length ? shown : after.errors).map((e) => e.message).join('; '));
+      }
+      return result;
+    } catch (e) {
+      for (const [file, content] of saved) {
+        if (content === null) await fs.promises.rm(file, { force: true });
+        else await fs.promises.writeFile(file, content);
+      }
+      throw e;
     }
-    return result;
-  } catch (e) {
-    for (const [file, content] of saved) {
-      if (content === null) fs.rmSync(file, { force: true });
-      else fs.writeFileSync(file, content);
-    }
-    throw e;
-  }
+  });
 }
 
 /** A new entry's id, made from its name: `Quick fix` → `quick-fix`, `-2` for a taken one, `fallback` for a name without Latin letters. */
@@ -1107,13 +1138,13 @@ type EntrySection = keyof typeof ENTRY_NAMES;
  * Writes a group or an instruction to the project config. Without `id` a new one gets an id from its name; names are
  * unique within the section, ignoring case. Returns the id.
  */
-function saveEntry(workspace: string, section: EntrySection, existing: Record<string, { id: string; label: string }>, id: string | undefined, value: GroupLayer | InstructionLayer): string {
+async function saveEntry(workspace: string, section: EntrySection, existing: Record<string, { id: string; label: string }>, id: string | undefined, value: GroupLayer | InstructionLayer): Promise<string> {
   const what = ENTRY_NAMES[section];
   if (!value.label) throw new Error(`Give the ${what} a name`);
   if (id && !existing[id]) throw new Error(`There is no ${what} "${id}"`);
   if (Object.values(existing).some((x) => x.id !== id && x.label.toLowerCase() === value.label.toLowerCase())) throw new Error(`A ${what} called "${value.label}" already exists`);
   const finalId = id || idFromLabel(value.label, new Set(Object.keys(existing)), what);
-  editProjectConfig(workspace, (doc) => doc.setIn([section, finalId], doc.createNode(defined(value))));
+  await editProjectConfig(workspace, (doc) => doc.setIn([section, finalId], doc.createNode(defined(value))));
   return finalId;
 }
 
@@ -1155,8 +1186,8 @@ async function saveInstruction({ workspace, home, id, label, text }: { workspace
  * Deletes a group or an instruction from the project config; a deleted instruction is no longer ticked by the project's
  * groups. One only your user config has is not this project's to delete.
  */
-function removeEntry(workspace: string, section: EntrySection, id: string): string {
-  const layer = readProjectLayer(workspace);
+async function removeEntry(workspace: string, section: EntrySection, id: string): Promise<string> {
+  const layer = await readProjectLayer(workspace);
   if (!(layer[section] || {})[id]) throw new Error(`The ${ENTRY_NAMES[section]} "${id}" is not in this project's config.yaml; it comes from ~/${CONFIG_DIR}/${CONFIG_FILE}`);
   return editProjectConfig(workspace, (doc) => {
     doc.deleteIn([section, id]);
@@ -1184,12 +1215,11 @@ async function addAgent({ workspace, home, name, base, description, output, mode
   if (before.ok && before.config.agents[name]) throw new Error(`An agent called "${name}" already exists`);
   const file = path.join(workspace, CONFIG_DIR, PROMPTS_DIR, `${name}.md`);
   return withConfigRollback({ workspace, home }, async (remember) => {
-    remember(file);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    if (!fs.existsSync(file)) {
-      fs.writeFileSync(file, base ? `<!-- Added to the instructions of "${base}". Write what this agent should do differently or check in addition. -->\n\n` : `You are the ${name} stage.\n\nDescribe what this agent does, what it reads first and what its report must contain.\n`);
+    await remember(file);
+    if ((await readIfThere(file)) === null) {
+      await writeMaking(file, base ? `<!-- Added to the instructions of "${base}". Write what this agent should do differently or check in addition. -->\n\n` : `You are the ${name} stage.\n\nDescribe what this agent does, what it reads first and what its report must contain.\n`);
     }
-    updateAgentConfig(workspace, name, {
+    await updateAgentConfig(workspace, name, {
       ...(base && { extends: base }),
       ...(description && { description }),
       ...(!base && { output: output || 'verdict' }),
@@ -1200,12 +1230,12 @@ async function addAgent({ workspace, home, name, base, description, output, mode
     const now = await loadConfig({ workspace, home });
     if (!now.ok) return file; // the rollback reports it
     const scenario = base ? Object.keys(now.config.scenarios).find((sc) => now.config.scenarios[sc]!.includes(base)) : Object.keys(SCENARIO_OUTPUT).find((sc) => SCENARIO_OUTPUT[sc] === output);
-    if (scenario) setScenario(workspace, scenario, [...now.config.scenarios[scenario]!, name]);
+    if (scenario) await setScenario(workspace, scenario, [...now.config.scenarios[scenario]!, name]);
     else {
       const pipeline = [...now.config.pipeline];
       const at = base ? pipeline.indexOf(base) : -1;
       pipeline.splice(at === -1 ? pipeline.length : at + 1, 0, name);
-      setPipeline(workspace, pipeline);
+      await setPipeline(workspace, pipeline);
     }
     return file;
   });

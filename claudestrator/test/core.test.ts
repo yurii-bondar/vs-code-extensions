@@ -323,23 +323,36 @@ repos:
   const flagged = await loadCfg({ workspace: ws, home, flags: { no: ['nope'] } });
   assert.equal(flagged.ok, false);
 
-  config.updateAgentConfig(ws, 'planner', { model: 'sonnet' });
-  config.setProjectValue(ws, ['limits', 'reviewRounds'], 3);
-  config.setPipeline(ws, ['planner', 'developer', 'reviewer']);
+  await config.updateAgentConfig(ws, 'planner', { model: 'sonnet' });
+  await config.setProjectValue(ws, ['limits', 'reviewRounds'], 3);
+  await config.setPipeline(ws, ['planner', 'developer', 'reviewer']);
   const text = fs.readFileSync(config.projectConfigFile(ws), 'utf8');
   assert.match(text, /# team config/);
   assert.match(text, /pipeline: \[ planner, developer, reviewer \]/);
   const again = passed(await loadCfg({ workspace: ws, home }));
   assert.equal(again.config.agents.planner!.model, 'sonnet');
   assert.equal(again.config.limits.reviewRounds, 3);
-  assert.throws(() => config.setProjectValue(ws, ['limits', 'reviewRounds'], 99), /invalid/);
-  config.setProjectValue(ws, ['limits', 'reviewRounds'], undefined);
+  await assert.rejects(() => config.setProjectValue(ws, ['limits', 'reviewRounds'], 99), /invalid/);
+  await config.setProjectValue(ws, ['limits', 'reviewRounds'], undefined);
   assert.doesNotMatch(fs.readFileSync(config.projectConfigFile(ws), 'utf8'), /limits/);
 
-  const file = config.ensureInstructionsFile(ws, 'developer', again.config.agents.developer);
+  // Edits from the dashboard can overlap; each one reads the file the one before it wrote, so none is lost, and a
+  // refused edit does not hold up the next one.
+  await Promise.all([
+    config.updateAgentConfig(ws, 'developer', { model: 'opus' }),
+    config.setProjectValue(ws, ['limits', 'budgetUsd'], 7),
+    assert.rejects(() => config.setProjectValue(ws, ['limits', 'reviewRounds'], 99), /invalid/),
+    config.setScenario(ws, 'audit', ['auditor']),
+    config.setRepo(ws, 'web', { path: './web' }),
+  ]);
+  const overlapped = await config.readProjectLayer(ws);
+  assert.deepEqual([overlapped.agents!.planner!.model, overlapped.agents!.developer!.model, overlapped.limits, overlapped.scenarios!.audit, overlapped.repos!.web], ['sonnet', 'opus', { budgetUsd: 7 }, ['auditor'], { path: './web' }]);
+  await config.setProjectValue(ws, ['limits'], undefined);
+
+  const file = await config.ensureInstructionsFile(ws, 'developer', again.config.agents.developer);
   assert.equal(file, path.join(ws, '.claudestrator', 'prompts', 'developer.md'));
   assert.match(fs.readFileSync(file, 'utf8'), /You implement one repository/);
-  assert.deepEqual(config.readProjectLayer(ws).agents!.developer!.instructions, { mode: 'replace', file: './prompts/developer.md' });
+  assert.deepEqual((await config.readProjectLayer(ws)).agents!.developer!.instructions, { mode: 'replace', file: './prompts/developer.md' });
 
   fs.writeFileSync(config.projectConfigFile(ws), 'agents:\n  planner: { modle: opus }\n');
   const bad = failed(await loadCfg({ workspace: ws, home }));
@@ -617,14 +630,14 @@ test('config: effort is validated and inherited along extends', async () => {
   assert.equal(r.config.agents.verifier!.effort, undefined);
   assert.deepEqual(['planner', 'developer', 'tester', 'reviewer'].map((n) => r.config.agents[n]!.mcp), [undefined, false, false, false], 'only agents that work on the repo run without MCP');
   assert.equal(r.config.agents.security!.mcp, false, 'an agent that extends the reviewer inherits it');
-  config.updateAgentConfig(ws, 'developer', { mcp: true });
+  await config.updateAgentConfig(ws, 'developer', { mcp: true });
   assert.equal(passed(await loadCfg({ workspace: ws })).config.agents.developer!.mcp, true, 'a project can give an agent its MCP servers back');
-  assert.throws(() => config.updateAgentConfig(ws, 'developer', { mcp: 'no' }), /mcp/);
-  config.updateAgentConfig(ws, 'planner', { effort: 'xhigh' });
+  await assert.rejects(() => config.updateAgentConfig(ws, 'developer', { mcp: 'no' }), /mcp/);
+  await config.updateAgentConfig(ws, 'planner', { effort: 'xhigh' });
   assert.equal(passed(await loadCfg({ workspace: ws })).config.agents.planner!.effort, 'xhigh');
-  config.updateAgentConfig(ws, 'planner', { effort: null });
+  await config.updateAgentConfig(ws, 'planner', { effort: null });
   assert.equal(passed(await loadCfg({ workspace: ws })).config.agents.planner!.effort, 'high', 'clearing the setting falls back to the built-in effort');
-  assert.throws(() => config.updateAgentConfig(ws, 'planner', { effort: 'huge' }), /effort: expected one of low, medium, high, xhigh, max/);
+  await assert.rejects(() => config.updateAgentConfig(ws, 'planner', { effort: 'huge' }), /effort: expected one of low, medium, high, xhigh, max/);
   const args = buildArgs({ agent: { model: 'opus', effort: 'low', instructions: 'x' } as Agent, settings: {} }, { flags: () => new Set(['--effort']), settingSources: () => null } as Partial<RunnerOptions> as RunnerOptions);
   assert.equal(args[args.indexOf('--effort') + 1], 'low');
   assert.ok(!buildArgs({ agent: { effort: 'low' } as Agent, settings: {} }, { flags: () => new Set(), settingSources: () => null } as Partial<RunnerOptions> as RunnerOptions).includes('--effort'), 'old CLIs without --effort still run');
@@ -925,7 +938,7 @@ test('pipeline: runs switches a code or tests agent between once per repo and on
   r = await load('agents:\n  reviewer: { runs: per-repo }\n');
   assert.ok(r.warnings.some((w) => w.code === 'runs_ignored'));
   assert.equal(bp(r.config).stages.find((st) => st.agent === 'reviewer')!.scope, 'task');
-  assert.throws(() => config.updateAgentConfig(ws, 'tester', { runs: 'sometimes' }), /runs: expected one of per-repo, all-repos/);
+  await assert.rejects(() => config.updateAgentConfig(ws, 'tester', { runs: 'sometimes' }), /runs: expected one of per-repo, all-repos/);
 });
 
 test('scenarios: custom scenarios with their own agents, models and effort; built-in ones can be removed', async () => {
@@ -947,8 +960,8 @@ test('scenarios: custom scenarios with their own agents, models and effort; buil
 
   // Written to the project file and run by the engine with the scenario's model and effort.
   const ws = tmp('cs-custom-');
-  config.setCustomScenario(ws, 'hotfix', { label: 'Hotfix', agents: [{ name: 'developer' }, { name: 'reviewer', model: 'sonnet', effort: 'low' }] });
-  config.removeScenario(ws, 'audit');
+  await config.setCustomScenario(ws, 'hotfix', { label: 'Hotfix', agents: [{ name: 'developer' }, { name: 'reviewer', model: 'sonnet', effort: 'low' }] });
+  await config.removeScenario(ws, 'audit');
   const yaml = fs.readFileSync(config.projectConfigFile(ws), 'utf8');
   assert.match(yaml, /hotfix:\n\s+label: Hotfix\n\s+agents:\n\s+- developer\n\s+- agent: reviewer\n\s+model: sonnet\n\s+effort: low/);
   assert.match(yaml, /audit: false/);
@@ -965,12 +978,12 @@ test('scenarios: custom scenarios with their own agents, models and effort; buil
   assert.deepEqual(s.model, { reviewer: 'sonnet' });
   assert.deepEqual(s.effort, { reviewer: 'low', developer: 'high' }, 'the composer adds to the scenario effort');
 
-  config.setCustomScenario(ws, 'quick-fix', { label: 'Quick fix', agents: [{ name: 'developer' }] }, 'hotfix');
-  config.restoreScenario(ws, 'audit');
+  await config.setCustomScenario(ws, 'quick-fix', { label: 'Quick fix', agents: [{ name: 'developer' }] }, 'hotfix');
+  await config.restoreScenario(ws, 'audit');
   const after = passed(await loadCfg({ workspace: ws, home: tmp('cs-h-') }));
   assert.deepEqual(Object.keys(after.config.custom), ['quick-fix'], 'renamed');
   assert.deepEqual(after.config.removedScenarios, []);
-  config.removeScenario(ws, 'quick-fix');
+  await config.removeScenario(ws, 'quick-fix');
   assert.deepEqual(Object.keys(passed(await loadCfg({ workspace: ws, home: tmp('cs-h-') })).config.custom), []);
 });
 
@@ -1041,11 +1054,11 @@ test('groups and instructions: written in the composer, frozen into a task, and 
   fs.mkdirSync(path.join(home, config.CONFIG_DIR), { recursive: true });
   fs.writeFileSync(config.userConfigFile(home), 'instructions:\n  mine: { label: Mine, text: Keep it short }\n');
   assert.equal((await resolved()).instructions.mine!.label, 'Mine');
-  assert.throws(() => config.removeEntry(ws, 'instructions', 'mine'), /not in this project's config\.yaml/);
-  config.removeEntry(ws, 'groups', 'checkout-revamp-2');
+  await assert.rejects(() => config.removeEntry(ws, 'instructions', 'mine'), /not in this project's config\.yaml/);
+  await config.removeEntry(ws, 'groups', 'checkout-revamp-2');
   assert.deepEqual(Object.keys((await resolved()).groups), ['checkout-revamp']);
   assert.match(fs.readFileSync(config.projectConfigFile(ws), 'utf8'), /^groups:/m);
-  config.removeEntry(ws, 'groups', 'checkout-revamp');
+  await config.removeEntry(ws, 'groups', 'checkout-revamp');
   assert.doesNotMatch(fs.readFileSync(config.projectConfigFile(ws), 'utf8'), /^groups:/m, 'no empty section is left');
 
   // A task keeps them as they were when it started.
@@ -1070,10 +1083,10 @@ test('groups and instructions: written in the composer, frozen into a task, and 
   await assert.rejects(() => config.saveGroup({ workspace: ws, home, id: 'payments', type: 'epic', label: 'Payments', defaultInstructions: ['nope'] }), /no instruction "nope"/);
   await config.saveGroup({ workspace: ws, home, id: 'payments', type: 'epic', label: 'Payments', instructions: 'x', defaultInstructions: ['no-new-deps', 'mine', 'no-new-deps'] });
   assert.deepEqual((await resolved()).groups.payments!.defaultInstructions, ['no-new-deps', 'mine']);
-  config.removeEntry(ws, 'instructions', 'no-new-deps');
+  await config.removeEntry(ws, 'instructions', 'no-new-deps');
   assert.deepEqual((await resolved()).groups.payments!.defaultInstructions, ['mine']);
   // One named in a hand-written config that does not exist is left out with a warning, not an error.
-  config.setProjectValue(ws, ['groups', 'payments', 'defaultInstructions'], ['mine', 'ghost']);
+  await config.setProjectValue(ws, ['groups', 'payments', 'defaultInstructions'], ['mine', 'ghost']);
   const loaded = passed(await loadCfg({ workspace: ws, home }));
   assert.deepEqual(loaded.config.groups.payments!.defaultInstructions, ['mine']);
   assert.ok(loaded.warnings.some((w) => w.code === 'unknown_instruction' && w.message.includes('"ghost"')));
@@ -1142,7 +1155,7 @@ test('libraries: agents and scenarios from a folder of their own merge in, a pro
 
   // The project changes the library's agent; the library file stays as it was.
   const before = fs.readFileSync(path.join(lib, 'library.yaml'), 'utf8');
-  config.updateAgentConfig(ws, 'security-reviewer', { model: 'opus' });
+  await config.updateAgentConfig(ws, 'security-reviewer', { model: 'opus' });
   const changed = passed(await loadCfg({ workspace: ws, home })).config.agents['security-reviewer']!;
   assert.equal(changed.model, 'opus');
   assert.deepEqual(changed.layers.filter((l) => l !== 'builtin'), [`library:${label}`, 'project']);
@@ -1178,7 +1191,7 @@ test('libraries: added for you or for the project, removed only when nothing nee
   fs.mkdirSync(mine);
   securityLibrary(mine);
   assert.equal((await libraries.addLibrary({ ...where, dir: mine, scope: 'user' })).entry, '~/my-agents');
-  assert.deepEqual(libraries.listLibraries(where).map((l) => [l.label, l.scope, l.agents.join(), l.scenarios.join()]), [['my-agents', 'user', 'security-reviewer', 'secure-delivery'], ['shared-agents', 'project', '', '']]);
+  assert.deepEqual((await libraries.listLibraries(where)).map((l) => [l.label, l.scope, l.agents.join(), l.scenarios.join()]), [['my-agents', 'user', 'security-reviewer', 'secure-delivery'], ['shared-agents', 'project', '', '']]);
 
   // While the project runs a library's agent, the library cannot go.
   await config.saveCustomScenario({ ...where, label: 'Careful', agents: [{ name: 'developer' }, { name: 'security-reviewer' }] });
@@ -1186,9 +1199,9 @@ test('libraries: added for you or for the project, removed only when nothing nee
   const before = fs.readFileSync(userFile, 'utf8');
   await assert.rejects(() => libraries.removeLibrary({ ...where, file: path.join(mine, 'library.yaml'), scope: 'user' }), /security-reviewer/);
   assert.equal(fs.readFileSync(userFile, 'utf8'), before, 'the user config is as it was');
-  config.removeScenario(ws, 'careful');
+  await config.removeScenario(ws, 'careful');
   await libraries.removeLibrary({ ...where, file: path.join(mine, 'library.yaml'), scope: 'user' });
-  assert.deepEqual(libraries.listLibraries(where).map((l) => l.label), ['shared-agents']);
+  assert.deepEqual((await libraries.listLibraries(where)).map((l) => l.label), ['shared-agents']);
 
   // The project's own scenario moves into the shared library, with the agent it needs and that agent's instructions.
   await config.addAgent({ ...where, name: 'perf-auditor', output: 'audit', description: 'Finds slow code' });
@@ -1199,7 +1212,7 @@ test('libraries: added for you or for the project, removed only when nothing nee
   assert.equal(fs.readFileSync(path.join(shared, 'prompts', 'perf-auditor.md'), 'utf8'), 'Measure before you judge.\n');
   assert.match(fs.readFileSync(path.join(shared, 'library.yaml'), 'utf8'), /^agents:\n {2}perf-auditor:\n {4}/m, 'written as a person would, not on one line');
   assert.equal(fs.existsSync(path.join(ws, config.CONFIG_DIR, config.PROMPTS_DIR, 'perf-auditor.md')), false, 'the project copy is gone');
-  const projectNow = config.readProjectLayer(ws);
+  const projectNow = await config.readProjectLayer(ws);
   assert.ok(!(projectNow.agents && projectNow.agents['perf-auditor']) && !(projectNow.scenarios && projectNow.scenarios['perf-audit']));
   const after = passed(await loadCfg({ workspace: ws, home })).config;
   assert.equal(after.custom['perf-audit']!.source, 'library:shared-agents');
@@ -1209,12 +1222,12 @@ test('libraries: added for you or for the project, removed only when nothing nee
 });
 
 /** A project with an agent of its own (its instructions in a file), a changed built-in agent, a pipeline and scenarios. */
-function projectWithAgents(): string {
+async function projectWithAgents(): Promise<string> {
   const ws = tmp('cs-backup-');
   const dir = path.join(ws, config.CONFIG_DIR);
   fs.mkdirSync(path.join(dir, config.PROMPTS_DIR), { recursive: true });
   fs.writeFileSync(path.join(dir, config.PROMPTS_DIR, 'security-reviewer.md'), 'Look for injection first.\n');
-  config.createProjectConfig(ws, {
+  await config.createProjectConfig(ws, {
     agents: {
       'security-reviewer': { extends: 'reviewer', description: 'Reviews for security', instructions: { mode: 'append', file: './prompts/security-reviewer.md' } },
       developer: { model: 'opus', maxTurns: 40 },
@@ -1228,7 +1241,7 @@ function projectWithAgents(): string {
 const noBackup = { savedAt: undefined, agents: {}, files: {}, pipeline: undefined, scenarios: {} };
 
 test('backup: agents, pipeline and scenarios are saved as YAML with the instruction files, read back (JSON too), anything else is refused', async () => {
-  const made = backups.createBackup({ workspace: projectWithAgents(), now: new Date('2026-10-28T12:00:00Z') });
+  const made = await backups.createBackup({ workspace: await projectWithAgents(), now: new Date('2026-10-28T12:00:00Z') });
   assert.deepEqual([made.agents, made.scenarios, made.pipeline], [2, 2, true]);
   assert.match(made.text, /^# Claudestrator backup/);
   assert.match(made.text, /claudestrator-backup: 1/);
@@ -1265,19 +1278,19 @@ test('backup: agents, pipeline and scenarios are saved as YAML with the instruct
   assert.match(error(`${backups.MARKER}: 1\nagents:\n  qa: {}\nfiles:\n  ./config.yaml: 'repos: {}'\n`), /outside \.claudestrator\/prompts/, 'a backup may not overwrite config.yaml');
   assert.match(error(`${backups.MARKER}: 1\nagents:\n  qa: {}\nfiles:\n  ./prompts/qa.md: 5\n`), /"files" section/);
 
-  assert.throws(() => backups.createBackup({ workspace: tmp('cs-backup-'), now: new Date() }), /nothing to back up/);
+  await assert.rejects(() => backups.createBackup({ workspace: tmp('cs-backup-'), now: new Date() }), /nothing to back up/);
   const broken = tmp('cs-backup-');
   fs.mkdirSync(path.join(broken, config.CONFIG_DIR));
   fs.writeFileSync(config.projectConfigFile(broken), 'agents: [unclosed\n');
-  assert.throws(() => backups.createBackup({ workspace: broken, now: new Date() }), /does not parse/);
+  await assert.rejects(() => backups.createBackup({ workspace: broken, now: new Date() }), /does not parse/);
 });
 
 test('backup: restore into another project writes the agents with their instruction files, the pipeline and the scenarios', async () => {
-  const parsed = backups.parseBackup(backups.createBackup({ workspace: projectWithAgents(), now: new Date() }).text);
+  const parsed = backups.parseBackup((await backups.createBackup({ workspace: await projectWithAgents(), now: new Date() })).text);
   assert.ok(parsed.ok);
   const to = tmp('cs-backup-');
   const home = tmp('cs-backup-h-');
-  config.setCustomScenario(to, 'mine', { label: 'Mine', agents: [{ name: 'developer' }] });
+  await config.setCustomScenario(to, 'mine', { label: 'Mine', agents: [{ name: 'developer' }] });
 
   const plan = await backups.previewRestore({ workspace: to, backup: parsed.backup, home });
   assert.deepEqual(plan.agents, { add: ['security-reviewer', 'developer'], replace: [] });
@@ -1291,12 +1304,12 @@ test('backup: restore into another project writes the agents with their instruct
   assert.equal(after.config.agents['security-reviewer']!.description, 'Reviews for security');
   assert.match(after.config.agents['security-reviewer']!.instructions, /Look for injection first\./);
   assert.equal(after.config.agents.developer!.model, 'opus');
-  assert.deepEqual(config.readProjectLayer(to).pipeline, ['planner', 'developer', 'tester', 'security-reviewer']);
+  assert.deepEqual((await config.readProjectLayer(to)).pipeline, ['planner', 'developer', 'tester', 'security-reviewer']);
   assert.deepEqual(Object.keys(after.config.custom).sort(), ['hotfix', 'mine'], 'a scenario that is not in the backup is not touched');
   assert.deepEqual(after.config.removedScenarios, ['audit']);
 
   // The same backup again replaces what is there, an agent entirely, instruction file included.
-  config.updateAgentConfig(to, 'security-reviewer', { description: 'Edited by hand' });
+  await config.updateAgentConfig(to, 'security-reviewer', { description: 'Edited by hand' });
   fs.writeFileSync(path.join(to, config.CONFIG_DIR, config.PROMPTS_DIR, 'security-reviewer.md'), 'Edited too.\n');
   assert.deepEqual((await backups.previewRestore({ workspace: to, backup: parsed.backup, home })).agents.replace, ['security-reviewer', 'developer']);
   await backups.restoreBackup({ workspace: to, backup: parsed.backup, home });
@@ -1333,7 +1346,7 @@ test('backup: what the project cannot run is left out and said so, a file outsid
   await backups.restoreBackup({ workspace: ws, backup, home });
   const after = passed(await loadCfg({ workspace: ws, home }));
   assert.ok(after.config.agents.a && !after.config.agents.b);
-  assert.equal(config.readProjectLayer(ws).pipeline, undefined, 'a pipeline naming an unknown agent is not written');
+  assert.equal((await config.readProjectLayer(ws)).pipeline, undefined, 'a pipeline naming an unknown agent is not written');
   assert.equal(fs.existsSync(path.join(ws, 'escape.md')), false);
   // A backup of which nothing can be restored writes nothing and says why.
   const none = await backups.restoreBackup({ workspace: ws, backup: { ...noBackup, agents: { x: { extends: 'nope' } } }, home });
@@ -1366,13 +1379,13 @@ test('backup: file paths mean the same on Windows and on macOS/Linux', async () 
   assert.deepEqual((await backups.previewRestore({ workspace: ws, backup: parsed.backup, home })).agents.add, ['a']);
   await backups.restoreBackup({ workspace: ws, backup: parsed.backup, home });
   assert.equal(fs.readFileSync(path.join(ws, config.CONFIG_DIR, 'prompts', 'a.md'), 'utf8'), 'A');
-  assert.deepEqual(config.readProjectLayer(ws).agents!.a!.instructions, { mode: 'append', file: './prompts/a.md' }, 'the config names the file with `/`');
+  assert.deepEqual((await config.readProjectLayer(ws)).agents!.a!.instructions, { mode: 'append', file: './prompts/a.md' }, 'the config names the file with `/`');
   assert.match(passed(await loadCfg({ workspace: ws, home })).config.agents.a!.instructions, /A/);
 });
 
 test('backup: a restore that would break the config is undone, instruction files included', async () => {
   const home = tmp('cs-backup-h-');
-  const ws = projectWithAgents();
+  const ws = await projectWithAgents();
   const file = config.projectConfigFile(ws);
   const promptsDir = path.join(ws, config.CONFIG_DIR, config.PROMPTS_DIR);
   const before = fs.readFileSync(file, 'utf8');
@@ -1515,10 +1528,10 @@ test('store: an append keeps the cached state and events current, and a write by
 
 test('config: a repo with nothing but its name stays configured when the config is edited', async () => {
   const ws = tmp('cs-repo-');
-  config.createProjectConfig(ws, { repos: { api: {}, web: { gates: [{ name: 'lint', cmd: 'npm run lint' }] } } });
-  config.setProjectValue(ws, ['language'], 'German');
-  config.setRepo(ws, 'web', {});
-  config.updateAgentConfig(ws, 'planner', { effort: 'max' });
+  await config.createProjectConfig(ws, { repos: { api: {}, web: { gates: [{ name: 'lint', cmd: 'npm run lint' }] } } });
+  await config.setProjectValue(ws, ['language'], 'German');
+  await config.setRepo(ws, 'web', {});
+  await config.updateAgentConfig(ws, 'planner', { effort: 'max' });
   const r = passed(await config.loadConfig({ workspace: ws, home: tmp('cs-home-') }));
   assert.deepEqual(Object.keys(r.config.repos).sort(), ['api', 'web']);
   assert.deepEqual(r.config.repos.web!.gates, [], 'its gates removed, the repo kept');
@@ -1540,7 +1553,7 @@ test("config: a library agent nothing runs does not break the config with a miss
   assert.ok(!used.ok && used.errors.some((e) => e.agent === 'perf'), 'an agent the pipeline runs needs its instructions');
 
   fs.writeFileSync(path.join(ws, '.claudestrator', 'config.yaml'), 'agents:\n  developer: { instructions: { file: ../../outside-prompt.md } }\n');
-  assert.throws(() => config.ensureInstructionsFile(ws, 'developer', { instructions: 'x' }), /outside \.claudestrator\/; create it yourself/);
+  await assert.rejects(() => config.ensureInstructionsFile(ws, 'developer', { instructions: 'x' }), /outside \.claudestrator\/; create it yourself/);
   assert.ok(!fs.existsSync(path.resolve(ws, '.claudestrator', '../../outside-prompt.md')), 'nothing was created out there');
 });
 

@@ -510,8 +510,8 @@ class DashboardPanel implements RpcHandlers {
 
   async $config(): Promise<ConfigData> {
     const r = await this.orch.config();
-    const layer = this.root ? cfg.readProjectLayer(this.root) : {};
-    const base = { root: this.root, hasConfig: await this.orch.hasProjectConfig(), files: { project: this.root && cfg.projectConfigFile(this.root), user: cfg.userConfigFile() }, layer, colors: AGENT_COLORS, outputs: OUTPUTS, efforts: EFFORTS, builtins: cfg.builtinAgentNames(), languages: LANGUAGES, libraries: this.root ? libraries.listLibraries({ workspace: this.root }) : [] };
+    const layer: ConfigLayer = this.root ? await cfg.readProjectLayer(this.root) : {};
+    const base = { root: this.root, hasConfig: await this.orch.hasProjectConfig(), files: { project: this.root && cfg.projectConfigFile(this.root), user: cfg.userConfigFile() }, layer, colors: AGENT_COLORS, outputs: OUTPUTS, efforts: EFFORTS, builtins: cfg.builtinAgentNames(), languages: LANGUAGES, libraries: this.root ? await libraries.listLibraries({ workspace: this.root }) : [] };
     if (!r.ok) return { ...base, ok: false, errors: r.errors.map((e) => e.message), warnings: (r.warnings || []).map((w) => w.message) };
     const pipeline = buildPipeline(r.config);
     const agents = Object.values(r.config.agents).map((a) => ({
@@ -528,20 +528,20 @@ class DashboardPanel implements RpcHandlers {
   }
 
   async $updateAgent({ name, patch }: { name: string; patch: Record<string, unknown> }) {
-    cfg.updateAgentConfig(this.root, name, patch);
+    await cfg.updateAgentConfig(this.root, name, patch);
   }
 
   async $resetAgent({ name }: { name: string }) {
     const ok = await vscode.window.showWarningMessage(`Reset "${name}" to its default definition?`, { modal: true, detail: 'Removes what this workspace\'s config.yaml says about the agent (model, tools, instructions…). Its instructions file, if any, stays on disk.' }, 'Reset');
-    if (ok) cfg.resetAgentConfig(this.root, name);
+    if (ok) await cfg.resetAgentConfig(this.root, name);
   }
 
   async $setPipeline({ pipeline }: { pipeline: string[] }) {
-    cfg.setPipeline(this.root, pipeline);
+    await cfg.setPipeline(this.root, pipeline);
   }
 
   async $setScenario({ scenario, agents }: { scenario: string; agents: string[] }) {
-    cfg.setScenario(this.root, scenario, agents);
+    await cfg.setScenario(this.root, scenario, agents);
   }
 
   /**
@@ -558,12 +558,12 @@ class DashboardPanel implements RpcHandlers {
     const builtin = id === 'readiness' || id === 'audit';
     const ok = await vscode.window.showWarningMessage(`Delete the scenario "${label}"?`, { modal: true, detail: builtin ? 'It disappears from the menu. You can bring it back from the same menu.' : 'Its agents stay; only this scenario (their order, models and effort) is removed from config.yaml. Tasks already started keep running.' }, 'Delete');
     if (!ok) return { deleted: false };
-    cfg.removeScenario(this.root, id);
+    await cfg.removeScenario(this.root, id);
     return { deleted: true };
   }
 
   async $restoreScenario({ id }: { id: string }) {
-    cfg.restoreScenario(this.root, id);
+    await cfg.restoreScenario(this.root, id);
   }
 
   // ---------- task groups and instructions ----------
@@ -589,14 +589,14 @@ class DashboardPanel implements RpcHandlers {
     const label = (r.ok && r.config[section][id] && r.config[section][id]!.label) || id;
     const ok = await vscode.window.showWarningMessage(`Delete the ${section === 'groups' ? 'group' : 'instruction'} "${label}"?`, { modal: true, detail: `It is removed from config.yaml. ${detail}` }, 'Delete');
     if (!ok) return false;
-    cfg.removeEntry(this.root, section, id);
+    await cfg.removeEntry(this.root, section, id);
     return true;
   }
 
   /** Saves the project's agents, pipeline and scenarios (with the agents' instruction files) to a file you pick. */
   async $backupConfig() {
     const now = new Date();
-    const backup = backups.createBackup({ workspace: this.root, now });
+    const backup = await backups.createBackup({ workspace: this.root, now });
     const uri = await vscode.window.showSaveDialog({
       defaultUri: vscode.Uri.file(path.join(this.root, `claudestrator-backup-${now.toISOString().slice(0, 10)}.yaml`)),
       filters: { 'Claudestrator backup': ['yaml', 'yml'] },
@@ -677,14 +677,14 @@ class DashboardPanel implements RpcHandlers {
   async $editInstructions({ name }: { name: string }) {
     const r = await this.orch.config();
     if (!r.ok) throw new Error(r.errors[0]!.message);
-    const file = cfg.ensureInstructionsFile(this.root, name, r.config.agents[name]);
+    const file = await cfg.ensureInstructionsFile(this.root, name, r.config.agents[name]);
     await vscode.window.showTextDocument(vscode.Uri.file(file), { viewColumn: vscode.ViewColumn.Beside });
   }
 
   async $setValue({ keyPath, value }: { keyPath: string[]; value: unknown }) {
     // The value itself is checked by the config validator when it is written.
     if (!Array.isArray(keyPath) || !keyPath.length || !keyPath.every((k) => typeof k === 'string' && k.length > 0)) throw new Error('invalid config path');
-    cfg.setProjectValue(this.root, keyPath, value);
+    await cfg.setProjectValue(this.root, keyPath, value);
   }
 
   async $openConfig({ which }: { which: string }) {
@@ -724,12 +724,12 @@ class DashboardPanel implements RpcHandlers {
       gates: (layer.gates || []).filter((g) => g.name && g.cmd).map((g) => ({ name: g.name, cmd: g.cmd, ...(g.dir && { dir: g.dir }), ...(g.when && { when: g.when }) })),
     };
     if (!clean.gates!.length) delete clean.gates;
-    cfg.setRepo(this.root, name, clean, oldName);
+    await cfg.setRepo(this.root, name, clean, oldName);
   }
 
   async $removeRepo({ name }: { name: string }) {
     const ok = await vscode.window.showWarningMessage(`Remove "${name}" from Claudestrator?`, { modal: true, detail: 'Only the config entry is removed; the folder and its git history stay as they are.' }, 'Remove');
-    if (ok) cfg.setRepo(this.root, name, undefined);
+    if (ok) await cfg.setRepo(this.root, name, undefined);
   }
 
   /** Folder picker anywhere on disk: picked repos, or the repos inside picked folders, ready to confirm. */
@@ -757,7 +757,7 @@ class DashboardPanel implements RpcHandlers {
   }
 
   async $addDetected({ repos }: { repos: PickedRepo[] }) {
-    for (const d of repos) cfg.setRepo(this.root, safeName(d.name), repoLayerOf(d));
+    for (const d of repos) await cfg.setRepo(this.root, safeName(d.name), repoLayerOf(d));
   }
 
   async $runGates({ name, force }: { name: string; force?: boolean }) {
@@ -770,13 +770,13 @@ class DashboardPanel implements RpcHandlers {
     const r = await this.orch.config();
     const current = r.ok ? r.config.context : [];
     const all = [...new Set([...current, ...picked.map((u) => u.fsPath)])].map((f) => cfg.configRelative(this.root, f));
-    cfg.setProjectValue(this.root, ['context'], all);
+    await cfg.setProjectValue(this.root, ['context'], all);
   }
 
   async $removeContext({ file }: { file: string }) {
     const r = await this.orch.config();
     const rest = (r.ok ? r.config.context : []).filter((f) => f !== file).map((f) => cfg.configRelative(this.root, f));
-    cfg.setProjectValue(this.root, ['context'], rest.length ? rest : undefined);
+    await cfg.setProjectValue(this.root, ['context'], rest.length ? rest : undefined);
   }
 
   async $createWorkspaceMap() {
@@ -789,7 +789,7 @@ class DashboardPanel implements RpcHandlers {
     }
     const current = r.ok ? r.config.context : [];
     if (!current.includes(file)) {
-      cfg.setProjectValue(this.root, ['context'], [...current, file].map((f) => cfg.configRelative(this.root, f)));
+      await cfg.setProjectValue(this.root, ['context'], [...current, file].map((f) => cfg.configRelative(this.root, f)));
     }
     await vscode.window.showTextDocument(vscode.Uri.file(file));
   }
@@ -810,7 +810,7 @@ class DashboardPanel implements RpcHandlers {
       ...(map && { context: ['./workspace.md'] }),
     };
     if (!Object.keys(layer.repos!).length) delete layer.repos;
-    const file = cfg.createProjectConfig(this.root, layer, ' Claudestrator workspace config. Edit it here or in the Claudestrator dashboard.\n Layers: built-in defaults → ~/.claudestrator/config.yaml → this file.');
+    const file = await cfg.createProjectConfig(this.root, layer, ' Claudestrator workspace config. Edit it here or in the Claudestrator dashboard.\n Layers: built-in defaults → ~/.claudestrator/config.yaml → this file.');
     if (map) {
       const mapFile = path.join(this.root, cfg.CONFIG_DIR, 'workspace.md');
       if (!(await exists(mapFile))) await fs.promises.writeFile(mapFile, WORKSPACE_MAP(repos || []));
