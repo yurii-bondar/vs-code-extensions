@@ -34,10 +34,21 @@
     return restore(s);
   }
 
-  const isTableSep = (l: string) => /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/.test(l);
+  // Each test reads the line trimmed: `\s*` on both sides of an optional `|` took seconds on a line of spaces.
+  const isTableSep = (l: string) => /^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?$/.test(l.trim());
+  /** How deep blockquotes nest before the rest reads as plain text: a line of a thousand `>` is not a thousand frames. */
+  const MAX_QUOTE_DEPTH = 8;
+  /** A heading's text without its closing `#`s, read without a regex that backtracks over a long run of spaces. */
+  const headingText = (t: string) => {
+    let end = t.trimEnd();
+    let hashes = end.length;
+    while (hashes > 0 && end[hashes - 1] === '#') hashes--;
+    if (hashes < end.length && (hashes === 0 || /\s/.test(end[hashes - 1]!))) end = end.slice(0, hashes).trimEnd();
+    return end;
+  };
   const cells = (l: string) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
 
-  function render(src: string): string {
+  function render(src: string, depth = 0): string {
     const lines = String(src || '').replace(/\r\n?/g, '\n').split('\n');
     const out: string[] = [];
     let i = 0;
@@ -71,12 +82,12 @@
         i++;
         continue;
       }
-      const h = line!.match(/^(#{1,6})\s+(.*?)\s*#*\s*$/);
+      const h = line!.match(/^(#{1,6})\s+(.*)$/);
       if (h) {
         flush();
         closeLists();
         const level = Math.min(6, h[1]!.length + 1);
-        out.push(`<h${level}>${inline(h[2]!)}</h${level}>`);
+        out.push(`<h${level}>${inline(headingText(h[2]!))}</h${level}>`);
         i++;
         continue;
       }
@@ -92,7 +103,7 @@
         closeLists();
         const body: string[] = [];
         while (i < lines.length && /^\s*>/.test(lines[i]!)) body.push(lines[i++]!.replace(/^\s*>\s?/, ''));
-        out.push(`<blockquote>${render(body.join('\n'))}</blockquote>`);
+        out.push(`<blockquote>${depth < MAX_QUOTE_DEPTH ? render(body.join('\n'), depth + 1) : `<p>${inline(body.join(' '))}</p>`}</blockquote>`);
         continue;
       }
       if (line!.includes('|') && lines[i + 1] && isTableSep(lines[i + 1]!)) {

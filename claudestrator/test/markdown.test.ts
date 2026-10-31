@@ -30,3 +30,19 @@ test('markdown: text cannot give the links it makes attributes of its own', () =
   assert.match(render('see https://x.example/a_b_c.'), /<a href="https:\/\/x\.example\/a_b_c" data-href="https:\/\/x\.example\/a_b_c">https:\/\/x\.example\/a_b_c<\/a>\./);
   assert.equal(render('`a` and `<b>`'), '<p><code>a</code> and <code>&lt;b&gt;</code></p>');
 });
+
+test('markdown: a long line of spaces, hashes or quote marks renders at once, and nothing throws', () => {
+  const quick = (src: string, what: string): string => {
+    const started = Date.now();
+    const html = render(src);
+    assert.ok(Date.now() - started < 300, `${what}: ${Date.now() - started} ms`);
+    return html;
+  };
+  quick(`a | b\n${' '.repeat(100000)}`, 'a table head over a line of spaces');
+  quick(`# ${' '.repeat(100000)}x`, 'a heading of spaces');
+  quick(`# ${'#'.repeat(100000)}x`, 'a heading of hashes');
+  assert.match(quick(`${'>'.repeat(12000)} deep`, 'a quote nested twelve thousand times'), /deep/);
+  assert.equal(render('# C# and F# #'), '<h2>C# and F#</h2>', 'closing hashes go, the ones of the text stay');
+  assert.equal(render('> > nested'), '<blockquote><blockquote><p>nested</p></blockquote></blockquote>');
+  assert.match(render('| a | b |\n|---|:---:|\n| 1 | 2 |'), /<th>a<\/th><th>b<\/th>.*<td>1<\/td><td>2<\/td>/s);
+});
