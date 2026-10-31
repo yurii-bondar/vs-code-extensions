@@ -30,6 +30,12 @@ interface GuardContext {
   readFile(file: string): Promise<string | null>;
 }
 
+/**
+ * Whether a path is in git metadata: a `.git` folder in any case (macOS and Windows file systems ignore it) and with
+ * the trailing dots or spaces Windows drops.
+ */
+const inGitMetadata = (p: string): boolean => p.split(/[\\/]/).some((s) => s.replace(/[. ]+$/, '').toLowerCase() === '.git');
+
 const allow: Verdict = { allow: true };
 const deny = (reason: string): Verdict => ({ allow: false, reason });
 
@@ -625,4 +631,4 @@ async function checkRm(args: string[], dir: string, ctx: GuardContext): Promise<
 }
 
 export type { GuardContext, Verdict as GuardVerdict };
-export { guardBash, simpleCommands, AI_CREDIT };
+export { guardBash, inGitMetadata, simpleCommands, AI_CREDIT };

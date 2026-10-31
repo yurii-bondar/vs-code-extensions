@@ -4,6 +4,7 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { execFileSync } from 'child_process';
 
 import { Engine } from '../src/core/engine';
 import { buildArgs } from '../src/core/runner';
@@ -113,4 +114,37 @@ test('policy: a write through a symlink in the repo to a folder outside it is ou
   assert.equal(await write(path.join(ws, 'api', 'src', 'new', 'a.ts')), true, 'a file in folders that do not exist yet');
   assert.equal(await write(path.join(ws, 'api', 'link', 'a.ts')), false, 'through the link');
   assert.equal(await write(path.join(ws, 'api', 'link', 'deep', 'b.ts')), false, 'and below it, not there yet');
+});
+
+test('policy: a link in the repo does not lead a write into git metadata or Claudestrator\'s config', async () => {
+  const ws = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cs-policy-')));
+  const api = path.join(ws, 'api');
+  fs.mkdirSync(api);
+  execFileSync('git', ['init', '-q'], { cwd: api });
+  fs.mkdirSync(path.join(ws, '.claudestrator'));
+  fs.writeFileSync(path.join(ws, '.claudestrator', 'config.yaml'), 'repos:\n  api: {}\n');
+  fs.writeFileSync(path.join(api, 'README.md'), '# api\n');
+  // What `ln -s .git/config cfg` (or a script) leaves in the repo, and the hard links a sandboxless shell could make.
+  fs.symlinkSync('.git/config', path.join(api, 'cfg'));
+  fs.symlinkSync('.git', path.join(api, 'g'));
+  fs.symlinkSync('README.md', path.join(api, 'readme-link'));
+  fs.linkSync(path.join(api, '.git', 'config'), path.join(api, 'hard'));
+  fs.linkSync(path.join(ws, '.claudestrator', 'config.yaml'), path.join(api, 'settings.yaml'));
+  const engine = new Engine({ workspace: ws, home: ws, runner: {} as EngineOptions['runner'], hooks: {} as EngineOptions['hooks'] });
+  const config = await engine.config();
+  const write = async (tool: string, file: string): Promise<string | null> => {
+    const d = await engine.decide({ taskId: 'T-1', step: { stage: 1, agent: 'developer', repo: 'api' }, writeRoots: [api], config, call: { tool, input: { file_path: path.join(api, file) }, cwd: api }, emitItem: () => {} });
+    return d.allow ? null : (d.reason ?? 'refused');
+  };
+  for (const tool of ['Write', 'Edit']) {
+    assert.match((await write(tool, 'cfg')) ?? 'allowed', /git metadata/, `${tool} cfg → .git/config`);
+    assert.match((await write(tool, 'g/hooks/pre-commit')) ?? 'allowed', /git metadata/, `${tool} through a link to .git`);
+    assert.match((await write(tool, '.GIT/config')) ?? 'allowed', /git metadata/, `${tool} .GIT/config: macOS and Windows ignore the case`);
+    assert.match((await write(tool, 'hard')) ?? 'allowed', /hard links/, `${tool} of a hard link to .git/config`);
+    assert.match((await write(tool, 'settings.yaml')) ?? 'allowed', /hard links/, `${tool} of a hard link to the config`);
+  }
+  assert.equal(await write('Write', 'readme-link'), null, 'a link to a file of the repo is the repo');
+  assert.equal(await write('Edit', 'README.md'), null);
+  assert.equal(await write('Write', 'src/new.ts'), null);
+  assert.equal(fs.readFileSync(path.join(api, '.git', 'config'), 'utf8').includes('fsmonitor'), false);
 });

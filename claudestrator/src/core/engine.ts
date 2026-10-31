@@ -14,7 +14,7 @@ import { parseInvocation, classifyInput, detectScenario, runIntake, renderTicket
 import { TaskService, type DispatchResult } from './store';
 import { exec, getChildEnv, GitRepo, branchAt, taskRepos, prepareRepos, taskDiff, removeWorktrees } from './git';
 import { runGates, runShell, withoutCredentials } from './gates';
-import { guardBash } from './guard';
+import { guardBash, inGitMetadata } from './guard';
 import { buildAgentPrompt, parseStageReport, lastJsonBlock, type StageReport } from './prompt';
 import { commitSubject, prTitle, prBody } from './pr';
 import { renderReport, jiraText } from './report';
@@ -172,25 +172,27 @@ function usedUpWindow(limits: EngineLimits | null, now: number): string | null {
 const transcriptKey = (seq: number, step: { agent: string; repo?: string | undefined }): string => `${String(seq).padStart(4, '0')}-${step.agent}${step.repo ? `-${step.repo.replace(/[^A-Za-z0-9._-]/g, '_')}` : ''}`;
 
 /**
- * Whether `target` is `root` or inside it once symlinks are followed (a link in the repo to `~/.ssh` is outside it). A
- * path that does not exist yet is taken from its nearest existing folder. Asked on every tool call that writes, so it
- * never blocks the extension host.
+ * A path with its symlinks followed and, where the file system ignores case, the case it has on disk. A path that does
+ * not exist yet is taken from its nearest existing folder. Asked on every tool call that writes, so it never blocks
+ * the extension host.
  */
-async function realInside(root: string, target: string): Promise<boolean> {
-  const real = async (p: string): Promise<string> => {
-    const rest: string[] = [];
-    for (let cur = path.resolve(p); ; ) {
-      try {
-        return path.join(await fs.promises.realpath(cur), ...rest);
-      } catch {
-        const parent = path.dirname(cur);
-        if (parent === cur) return path.resolve(p);
-        rest.unshift(path.basename(cur));
-        cur = parent;
-      }
+async function realPath(p: string): Promise<string> {
+  const rest: string[] = [];
+  for (let cur = path.resolve(p); ; ) {
+    try {
+      return path.join(await fs.promises.realpath(cur), ...rest);
+    } catch {
+      const parent = path.dirname(cur);
+      if (parent === cur) return path.resolve(p);
+      rest.unshift(path.basename(cur));
+      cur = parent;
     }
-  };
-  const [r, t] = await Promise.all([real(root), real(target)]);
+  }
+}
+
+/** Whether `target` is `root` or inside it once symlinks are followed (a link in the repo to `~/.ssh` is outside it). */
+async function realInside(root: string, target: string): Promise<boolean> {
+  const [r, t] = await Promise.all([realPath(root), realPath(target)]);
   return t === r || t.startsWith(r + path.sep);
 }
 
@@ -1035,9 +1037,15 @@ class Engine extends EventEmitter {
     if (WRITE_TOOLS.has(tool)) {
       const target = String(input.file_path || input.notebook_path || input.path || '');
       if (!writeRoots.length) return blocked(`the ${step.agent} stage does not change files`);
-      if (path.resolve(cwd, target).split(path.sep).includes('.git')) return blocked(`${tool} into git metadata (.git) is not allowed; Claudestrator owns git`);
-      if (!target || !(await someAsync(writeRoots, (root) => realInside(root, path.resolve(cwd, target))))) return blocked(`${tool} outside ${writeRoots.join(', ')} is not allowed: this stage works only in ${step.repo || 'the task\'s repos'}`);
-      if (await someAsync(protect, (p) => realInside(p, path.resolve(cwd, target)))) return blocked(`${tool} of ${target}: Claudestrator's config and task state are not an agent's to change`);
+      const abs = path.resolve(cwd, target);
+      // A link in the repo (`ln -s .git/config cfg`) or a case the file system ignores (`.GIT`) leads there too.
+      const real = await realPath(abs);
+      if (inGitMetadata(abs) || inGitMetadata(real)) return blocked(`${tool} into git metadata (.git) is not allowed; Claudestrator owns git${inGitMetadata(abs) ? '' : ` (${target} leads to ${real})`}`);
+      if (!target || !(await someAsync(writeRoots, (root) => realInside(root, abs)))) return blocked(`${tool} outside ${writeRoots.join(', ')} is not allowed: this stage works only in ${step.repo || 'the task\'s repos'}`);
+      if (await someAsync(protect, (p) => realInside(p, abs))) return blocked(`${tool} of ${target}: Claudestrator's config and task state are not an agent's to change`);
+      // A hard link is the same file under another name, which no path above shows: .git/config, or another project's file.
+      const st = await fs.promises.stat(abs).catch(() => null);
+      if (st && st.isFile() && st.nlink > 1) return blocked(`${tool} of ${target}: the file has ${st.nlink} hard links, and writing it changes it under the other names too (git metadata or another project's files, say)`);
     }
     // Claude Code is started with the agent's tools; anything else reaching the hook is refused.
     const agent = config.agents[step.agent];
