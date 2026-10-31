@@ -82,7 +82,7 @@ const calls: Record<string, (params: CallParams) => Promise<unknown>> = {
   },
   async refresh() {
     const o = orch!;
-    o.rebuild();
+    await o.rebuild();
     await o.refreshHealth();
     void pushState();
   },
