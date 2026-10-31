@@ -752,7 +752,7 @@ class DashboardPanel implements RpcHandlers {
     const [uri] = (await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, defaultUri: vscode.Uri.file(this.root || os.homedir()), openLabel: 'Use as Claudestrator workspace', title: 'The folder that holds your repos and .claudestrator/config.yaml' })) || [];
     if (!uri) return null;
     await settings().update('workspaceFolder', uri.fsPath, vscode.ConfigurationTarget.Global);
-    this.orch.rebuild();
+    await this.orch.rebuild();
     return uri.fsPath;
   }
 

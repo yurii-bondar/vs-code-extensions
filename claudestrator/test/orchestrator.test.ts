@@ -44,3 +44,21 @@ test('orchestrator: a question of a replaced engine\'s agent is listed and answe
   await orch.engineOf('OLD-1')!.stop('OLD-1');
   assert.deepEqual(old.stopped, ['OLD-1']);
 });
+
+test('orchestrator: rebuilds of the engine run one after another, and a failed one does not stop the next', async () => {
+  const log: string[] = [];
+  let n = 0;
+  const orch = Object.assign(Object.create(Orchestrator.prototype) as InstanceType<typeof Orchestrator>, { rebuilding: Promise.resolve() });
+  // What each rebuild does is its own business here; only their order is.
+  (orch as unknown as { rebuildNow: () => Promise<void> }).rebuildNow = async () => {
+    const i = ++n;
+    log.push(`start ${i}`);
+    await new Promise((r) => setTimeout(r, 20 - i * 5));
+    log.push(`end ${i}`);
+    if (i === 2) throw new Error('the folder went away');
+  };
+  const runs = [orch.rebuild(), orch.rebuild(), orch.rebuild()];
+  const results = await Promise.allSettled(runs);
+  assert.deepEqual(log, ['start 1', 'end 1', 'start 2', 'end 2', 'start 3', 'end 3'], 'never two at once, even when a later one would finish first');
+  assert.deepEqual(results.map((r) => r.status), ['fulfilled', 'rejected', 'fulfilled']);
+});

@@ -200,13 +200,13 @@ function activate(context: vscode.ExtensionContext) {
       vscode.window.showInformationMessage(h.claude.ok && h.git.ok ? 'Claudestrator is ready.' : 'Claudestrator needs attention.', { modal: true, detail });
     }),
     reg('claudestrator.refresh', async () => {
-      orch.rebuild();
+      await orch.rebuild();
       await orch.refreshHealth();
       await refresh();
     }),
-    vscode.workspace.onDidChangeWorkspaceFolders(() => orch.rebuild()),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => void orch.rebuild()),
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration('claudestrator.workspaceFolder')) orch.rebuild();
+      if (e.affectsConfiguration('claudestrator.workspaceFolder')) void orch.rebuild();
       if (e.affectsConfiguration('claudestrator.claudePath')) orch.refreshHealth();
       else if (e.affectsConfiguration('claudestrator.settingSources')) orch.refreshDefaults(true);
 

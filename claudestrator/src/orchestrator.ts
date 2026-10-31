@@ -60,7 +60,7 @@ const DEFAULT_FLAGS = ['--include-partial-messages', '--tools', '--setting-sourc
 
 const settings = (): vscode.WorkspaceConfiguration => vscode.workspace.getConfiguration('claudestrator');
 
-function workspaceRoot(): string | null {
+async function workspaceRoot(): Promise<string | null> {
   const folders = (vscode.workspace.workspaceFolders || []).map((f) => f.uri.fsPath);
   const configured = settings().get<string>('workspaceFolder');
   if (configured) {
@@ -68,7 +68,14 @@ function workspaceRoot(): string | null {
     return path.isAbsolute(configured) || configured.startsWith('~') ? p : folders.length ? path.resolve(folders[0]!, configured) : p;
   }
   // Prefer a folder that already has a Claudestrator config.
-  return folders.find((f) => fs.existsSync(projectConfigFile(f))) || folders[0] || null;
+  for (const f of folders) {
+    const has = await fs.promises.access(projectConfigFile(f)).then(
+      () => true,
+      () => false
+    );
+    if (has) return f;
+  }
+  return folders[0] || null;
 }
 
 class Orchestrator {
@@ -137,7 +144,7 @@ class Orchestrator {
     this.token = await this.context.secrets.get(SECRET_KEY);
     // No processes at activation: the health checks (and the model, sign-in and MCP checks after them) start the
     // first time something needs them, see ensureReady.
-    this.rebuild();
+    await this.rebuild();
   }
 
   /** Runs the health checks again; ensureReady waits for this same run. */
@@ -176,8 +183,17 @@ class Orchestrator {
   }
 
   /** (Re)creates the engine for the current workspace root. Running tasks of the old one keep going. */
-  rebuild(): void {
-    const root = workspaceRoot();
+  /** Rebuilds run one after another, each with the workspace as it is when its turn comes. */
+  rebuilding: Promise<void> = Promise.resolve();
+
+  rebuild(): Promise<void> {
+    const run = this.rebuilding.then(() => this.rebuildNow());
+    this.rebuilding = run.catch(() => undefined);
+    return run;
+  }
+
+  private async rebuildNow(): Promise<void> {
+    const root = await workspaceRoot();
     if (this.engine && root === this.root) return;
     this.root = root;
     this.disposeWatchers();
