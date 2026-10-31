@@ -1565,3 +1565,12 @@ test('config: the safety policy\'s lists are a few entries, as sandbox-runtime g
   assert.match(validateConfigLayer({ policy: { writable: Array.from({ length: 5000 }, () => '~/.cache') } })[0]!, /at most 100 items/, 'one issue, not one per entry');
   assert.equal(validateConfigLayer({ policy: { writable: Array.from({ length: 5000 }, () => 'bad') } }).length, 1);
 });
+
+test('view: a task without its ticket yet is titled by what was typed, without the flags', async () => {
+  const ws = tmp('cs-title-');
+  const { pipeline, config: cfg } = defaultPipeline();
+  const svc = new TaskService({ workspace: ws });
+  const { taskId } = await svc.start({ input: 'Add the feature everywhere --auto --scenario deliver', source: { kind: 'text', text: 'Add the feature everywhere' }, auto: true, pipeline, config: cfg });
+  const engine = { isRunning: () => false, lastError: () => null, pendingPermissions: () => [], live: () => null, liveCost: new Map(), svc } as unknown as ViewEngine;
+  assert.equal(summary(engine, { taskId, state: svc.state(taskId) }).title, 'Add the feature everywhere');
+});

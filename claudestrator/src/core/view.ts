@@ -4,6 +4,7 @@ import { onRepos } from './pipeline';
 import { describeEvent, CHECKPOINT_TITLE } from './describe';
 import { transcriptKey } from './engine';
 import { resultOf } from './report';
+import { parseInvocation } from './intake';
 import type { OrchEvent, Source, StepRef, TaskState } from './types';
 
 import type { Card, FeedEvent, Live, PermissionRequest, Status, StepItem, TaskDetail, TaskError, TaskPush, TaskSource, UsageItem } from './wire';
@@ -47,7 +48,18 @@ const CHECKPOINT_HINT: Record<string, string> = {
 
 const EMPTY_DIFF_HINT = 'The last review rounds saw an empty diff: the agents changed nothing, so more fix rounds would not help. Add guidance and retry, ship as it is, or stop.';
 
-const titleOf = (s: TaskState | null | undefined, taskId: string): string => (s && s.spec && s.spec.title) || (s && s.input ? s.input.split('\n')[0]!.slice(0, 100) : taskId);
+/** The ticket's title, or before there is one the first line of what was typed, without its flags (`--auto`). */
+function titleOf(s: TaskState | null | undefined, taskId: string): string {
+  if (s && s.spec && s.spec.title) return s.spec.title;
+  if (!s || !s.input) return taskId;
+  let text = s.input;
+  try {
+    text = parseInvocation(s.input).input || s.input;
+  } catch {
+    // flags it cannot read: shown as typed
+  }
+  return text.split('\n')[0]!.slice(0, 100);
+}
 
 function sourceOf(s: TaskState | null | undefined): TaskSource | null {
   if (!s) return null;
