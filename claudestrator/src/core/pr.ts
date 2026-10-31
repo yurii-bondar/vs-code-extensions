@@ -19,12 +19,12 @@ const UK: PrLabels = { what: 'Що', why: 'Навіщо', repos: 'Порядок
 const EN: PrLabels = { what: 'What', why: 'Why', repos: 'Merge order', related: 'Related PRs', gates: 'Gates', findings: 'Review notes', none: 'none', failed: "red, shipped by a human's decision" };
 
 /** The first section of the plan's Markdown (its summary, every line of it), for the PR body. */
-function planSummary(taskDir: string, state: TaskState): string {
+async function planSummary(taskDir: string, state: TaskState): Promise<string> {
   const plans = state.artifacts.filter((a) => a.output === 'plan');
   const plan = plans[plans.length - 1];
   if (!plan) return '';
   try {
-    const text = fs.readFileSync(path.join(taskDir, plan.path), 'utf8');
+    const text = await fs.promises.readFile(path.join(taskDir, plan.path), 'utf8');
     const m = text.match(/(?:^|\n)##\s+[^\n]+\n+([\s\S]*?)(?=\n##\s|\n```json|$)/);
     return ((m && m[1]) || '').trim();
   } catch {
@@ -62,7 +62,7 @@ interface PrBodyArgs {
   forbidAttribution?: boolean;
 }
 
-function prBody({ state, repo, taskDir, language, prs = {}, forbidAttribution = false }: PrBodyArgs): string {
+async function prBody({ state, repo, taskDir, language, prs = {}, forbidAttribution = false }: PrBodyArgs): Promise<string> {
   const t = /ukrain|україн/i.test(language) ? UK : EN;
   const link = state.spec && state.spec.links[0];
   const order = state.repos.map((r, i) => `${i + 1}. ${r.name === repo ? `**${r.name}** ←` : r.name}`).join('\n');
@@ -72,7 +72,7 @@ function prBody({ state, repo, taskDir, language, prs = {}, forbidAttribution = 
   const findings = state.review.openFindings.filter((f) => !f.repo || f.repo === repo);
   const body = [
     `## ${t.what}`,
-    planSummary(taskDir, state) || (state.spec && state.spec.title) || '',
+    (await planSummary(taskDir, state)) || (state.spec && state.spec.title) || '',
     `## ${t.why}`,
     link ? `[${link.title}](${link.url})` : (state.spec && state.spec.title) || state.input,
     `## ${t.gates}`,

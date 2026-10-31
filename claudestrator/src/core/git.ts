@@ -3,6 +3,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { execFile } from 'child_process';
+import { exists } from './files';
 import { ORCH_DIR } from './store';
 import { branchName } from './machine';
 import type { Config, TaskState } from './types';
@@ -75,12 +76,12 @@ class GitRepo {
     this.dir = dir;
   }
 
-  git(...args: string[]): Promise<ExecResult> {
-    return exec('git', ['-C', this.dir, ...args], { cwd: fs.existsSync(this.dir) ? this.dir : undefined, timeoutMs: 120000 });
+  async git(...args: string[]): Promise<ExecResult> {
+    return exec('git', ['-C', this.dir, ...args], { cwd: (await exists(this.dir)) ? this.dir : undefined, timeoutMs: 120000 });
   }
 
   async isRepo(): Promise<boolean> {
-    if (!fs.existsSync(this.dir)) return false;
+    if (!(await exists(this.dir))) return false;
     return (await this.git('rev-parse', '--is-inside-work-tree')).stdout.trim() === 'true';
   }
 
@@ -255,7 +256,7 @@ async function prepareRepos(workspace: string, state: TaskState, config: RepoLoo
 
   const results: PrepareResult[] = [];
   for (const { name, checkout, dir, base, git } of repos) {
-    if (fs.existsSync(dir) && (await git.isRepo()) && (await git.branch()) === branch) {
+    if ((await git.isRepo()) && (await git.branch()) === branch) {
       results.push({ repo: name, dir, status: 'ready' });
       continue;
     }
@@ -265,7 +266,7 @@ async function prepareRepos(workspace: string, state: TaskState, config: RepoLoo
     const note = fetched ? {} : { note: 'fetch failed; branched from the local ref' };
     let r: ExecResult;
     if (worktree) {
-      fs.mkdirSync(path.dirname(dir), { recursive: true });
+      await fs.promises.mkdir(path.dirname(dir), { recursive: true });
       r = (await main.hasBranch(branch)) ? await main.git('worktree', 'add', dir, branch) : await main.git('worktree', 'add', '-b', branch, dir, from);
     } else if (await main.hasBranch(branch)) {
       r = await main.git('switch', branch);
@@ -305,7 +306,7 @@ async function removeWorktrees(workspace: string, state: TaskState, config: Repo
   if (state.gitMode !== 'worktree') return [];
   const out: { repo: string; status: string; error?: string }[] = [];
   for (const { name, checkout, dir } of taskRepos(workspace, state, config, state.repos.map((r) => r.name))) {
-    if (!fs.existsSync(dir)) {
+    if (!(await exists(dir))) {
       out.push({ repo: name, status: 'absent' });
       continue;
     }

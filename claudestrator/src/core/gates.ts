@@ -162,7 +162,7 @@ async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = fal
   const changed = await git.changedFiles(repo.baseBranch);
   if (changed.length === 0 && !force) return { repo: repo.name, status: 'skipped', results: [], summary: `SKIP ${repo.name}: no changes` };
 
-  fs.mkdirSync(logDir, { recursive: true });
+  await fs.promises.mkdir(logDir, { recursive: true });
   const results: GateResult[] = [];
   const lines: string[] = [];
   for (const gate of repo.gates) {
@@ -184,7 +184,7 @@ async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = fal
     const log = path.join(logDir, `${slug(repo.name)}.${slug(gate.name)}.log`);
     const hint = launch && r.code !== 0 && SANDBOX_REFUSAL.test(r.output) ? `\n${SANDBOX_HINT}` : '';
     const output = plain(r.output) + hint;
-    fs.writeFileSync(log, `$ (cd ${path.relative(dir, cwd) || '.'} && ${gate.cmd})\n${output}\nexit ${r.code}\n`);
+    await fs.promises.writeFile(log, `$ (cd ${path.relative(dir, cwd) || '.'} && ${gate.cmd})\n${output}\nexit ${r.code}\n`);
     if (r.code === 0) {
       results.push({ repo: repo.name, gate: gate.name, status: 'pass', log, ms });
       lines.push(`PASS ${repo.name} ${gate.name}`);

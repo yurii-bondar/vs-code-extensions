@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { spawn } from 'child_process';
+import { exists } from './files';
 
 /** What a sandboxed command may do. */
 interface SandboxPolicy {
@@ -31,13 +32,17 @@ interface Launch {
 /** How a shell command starts: in the sandbox, or plainly. */
 type Launcher = (cmd: string, env: NodeJS.ProcessEnv) => Promise<Launch>;
 
-function shellCommand(cmd: string): [string, string[]] {
+/** bash where there is one, else sh; looked for once. */
+let unixShell: Promise<string> | undefined;
+
+async function shellCommand(cmd: string): Promise<[string, string[]]> {
   if (process.platform === 'win32') return ['cmd.exe', ['/d', '/s', '/c', cmd]];
-  return [fs.existsSync('/bin/bash') ? '/bin/bash' : '/bin/sh', ['-c', cmd]];
+  unixShell ??= exists('/bin/bash').then((bash) => (bash ? '/bin/bash' : '/bin/sh'));
+  return [await unixShell, ['-c', cmd]];
 }
 
 const plainLauncher: Launcher = async (cmd, env) => {
-  const [file, args] = shellCommand(cmd);
+  const [file, args] = await shellCommand(cmd);
   return { file, args, env, cleanup: async () => {} };
 };
 

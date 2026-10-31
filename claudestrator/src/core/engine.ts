@@ -1160,7 +1160,7 @@ class Engine extends EventEmitter {
     const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cs-pr-'));
     const bodyFile = async (repo: string): Promise<string> => {
       const f = path.join(tmp, `${repo}.md`);
-      await fs.promises.writeFile(f, prBody({ state: await this.svc.state(s.taskId), repo, taskDir, language: config.language, prs, forbidAttribution: config.policy.forbidAiAttribution }));
+      await fs.promises.writeFile(f, await prBody({ state: await this.svc.state(s.taskId), repo, taskDir, language: config.language, prs, forbidAttribution: config.policy.forbidAiAttribution }));
       return f;
     };
     try {

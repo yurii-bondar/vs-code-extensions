@@ -28,8 +28,8 @@ function task(title: string, summary: string): { state: TaskState; dir: string }
 
 test('pr: the PR body carries the whole summary of the plan, not its first line', async () => {
   const { state, dir } = task('Cap bets', 'Bets above the cap are rejected.\n\n- per operator\n- with a test');
-  assert.equal(planSummary(dir, state), 'Bets above the cap are rejected.\n\n- per operator\n- with a test');
-  assert.match(prBody({ state, repo: 'api', taskDir: dir, language: 'English' }), /## What\n\nBets above the cap are rejected\.\n\n- per operator\n- with a test\n\n## Why/);
+  assert.equal(await planSummary(dir, state), 'Bets above the cap are rejected.\n\n- per operator\n- with a test');
+  assert.match(await prBody({ state, repo: 'api', taskDir: dir, language: 'English' }), /## What\n\nBets above the cap are rejected\.\n\n- per operator\n- with a test\n\n## Why/);
 });
 
 test("pr: the plan's title is one line in the commit and the PR, and AI credit stays out when the policy says so", async () => {
@@ -38,8 +38,8 @@ test("pr: the plan's title is one line in the commit and the PR, and AI credit s
   assert.ok(!prTitle(state).includes('\n'));
   assert.equal(commitSubject(state, true), 'feat: Cap bets', 'and the policy keeps the credit out of it');
   assert.equal(prTitle(state, true), 'feat: Cap bets (PROJ-1)');
-  const strict = prBody({ state, repo: 'api', taskDir: dir, language: 'English', forbidAttribution: true });
+  const strict = await prBody({ state, repo: 'api', taskDir: dir, language: 'English', forbidAttribution: true });
   assert.doesNotMatch(strict, /Generated with Claude|🤖/);
   assert.match(strict, /- \[minor\] `a\.ts:3` naming/, 'the rest of what the agents wrote stays');
-  assert.match(prBody({ state, repo: 'api', taskDir: dir, language: 'English' }), /Generated with Claude Code/, 'without the policy it is left as written');
+  assert.match(await prBody({ state, repo: 'api', taskDir: dir, language: 'English' }), /Generated with Claude Code/, 'without the policy it is left as written');
 });
