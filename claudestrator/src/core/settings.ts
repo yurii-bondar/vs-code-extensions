@@ -34,6 +34,9 @@ const SECRET_FILES = [
   '//**/.env.production',
 ];
 
+/** A dotenv file by its name: `.env`, `.env.local`, `.env.staging`, direnv's `.envrc`. Its values are credentials. */
+const ENV_FILE = /^\.env(rc)?($|\.)/i;
+
 /** The same for the sandbox, which writes paths plainly (`~` is the home folder). */
 const SECRET_PATHS = [
   '~/.ssh',
@@ -161,4 +164,4 @@ function sessionSettings({ hooks, guard, writeRoots, protect, secrets, envVars, 
 }
 
 export type { SessionSettingsArgs };
-export { sessionSettings, credentialVars, REGISTRIES, SECRET_PATHS, GITHUB_TOKENS };
+export { sessionSettings, credentialVars, ENV_FILE, REGISTRIES, SECRET_PATHS, GITHUB_TOKENS };

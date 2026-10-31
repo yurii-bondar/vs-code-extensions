@@ -1558,6 +1558,14 @@ test("config: a project's or a library's instruction files stay inside it, and n
   assert.match(await refused('', `agents:\n  developer: { instructions: { file: ${path.join(home, '.aws', 'credentials')} } }\n`), /holds credentials/, 'your own config names no credential either');
   assert.ok((await load('', `agents:\n  developer: { instructions: { mode: append, file: ${path.join(home, 'notes.md')} } }\n`)).ok, 'your own config names any other file');
   if (fs.existsSync('/proc/self/environ')) assert.match(await refused('agents:\n  developer: { instructions: { file: /proc/self/environ } }\n'), /system file/);
+  // A repo's dotenv file is inside the workspace, and holds its keys all the same.
+  fs.mkdirSync(path.join(ws, 'api'));
+  for (const name of ['.env', '.env.staging', '.envrc', '.ENV.local']) {
+    fs.writeFileSync(path.join(ws, 'api', name), 'STRIPE_KEY=sk_live_x\n');
+    assert.match(await refused(`agents:\n  planner: { instructions: { mode: append, file: ../api/${name} } }\n`), /dotenv file/, name);
+  }
+  fs.symlinkSync(path.join(ws, 'api', '.env'), path.join(ws, '.claudestrator', 'prompts', 'env.md'));
+  assert.match(await refused('agents:\n  planner: { instructions: { mode: append, file: ./prompts/env.md } }\n'), /dotenv file/, 'through a link too');
 });
 
 test('config: policy.writable opens no home folder, nothing above it and not the whole disk', async () => {

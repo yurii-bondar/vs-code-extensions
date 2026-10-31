@@ -7,7 +7,7 @@ import * as YAML from 'yaml';
 import { AsyncLocalStorage } from 'async_hooks';
 import { validateConfigLayer, validateAgentPatch, validateLibraryLayer, SCENARIO_OUTPUT, JIRA_KEY } from './protocol';
 import { ORCH_DIR } from './store';
-import { SECRET_PATHS, GITHUB_TOKENS } from './settings';
+import { ENV_FILE, SECRET_PATHS, GITHUB_TOKENS } from './settings';
 import { signature, writeAtomic } from './files';
 import type { Agent, Config, CustomScenario, Diagnostic, Effort, Gate, GitMode, GroupType, Output, Policy, RepoConfig, Runs, ScenarioStep, TaskGroup, TaskInstruction } from './types';
 
@@ -847,6 +847,8 @@ async function instructionFileProblem(op: InstructionOp, workspace: string, home
   const real = await realOrSame(file);
   if (SYSTEM_DIRS.some((d) => within(real, d))) return `${file} is a system file, not instructions`;
   if (secretPath(real, await realOrSame(home)) || secretPath(path.resolve(file), home)) return `${file} holds credentials, not instructions`;
+  // A dotenv file anywhere: the agents may not read it (Claude Code's deny rules), so no config puts it into their prompt.
+  if (ENV_FILE.test(path.basename(real)) || ENV_FILE.test(path.basename(file))) return `${file} is a dotenv file, which holds credentials, not instructions`;
   const root = op.layer === 'project' ? workspace : isLibraryLayer(op.layer) ? op.dir : null;
   if (root && !within(real, await realOrSame(root))) return `${file} is outside ${op.layer === 'project' ? 'the workspace' : `the library (${op.dir})`}: ${op.layer === 'project' ? "a project's config names instruction files in the workspace" : 'a library names instruction files in its own folder'}`;
   return null;
