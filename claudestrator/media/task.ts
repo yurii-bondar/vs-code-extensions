@@ -283,8 +283,11 @@ interface Views {
         return;
       }
       if (e.target.id === 'cp-feedback') {
-        const primary = $('.checkpoint [data-kind="primary"]');
-        if (primary) primary.click();
+        const cp = T.d && T.d.checkpointFull;
+        const ui = cp ? CP_UI[cp.id] : undefined;
+        const option = cp && ui ? submitOption(cp, ui) : undefined;
+        const btn = option !== undefined ? $(`.checkpoint [data-option="${option}"]`) : null;
+        if (btn) btn.click();
       }
     },
     actions: {
@@ -392,9 +395,25 @@ interface Views {
     inputs: {
       'cp-feedback': (el) => {
         T.feedback = el.value;
+        const hint = $('#cp-kbd');
+        const cp = T.d && T.d.checkpointFull;
+        const ui = cp ? CP_UI[cp.id] : undefined;
+        const option = cp && ui ? submitOption(cp, ui) : undefined;
+        if (hint && ui) hint.textContent = (option !== undefined && ui.options[option]?.label) || '';
       },
     },
   };
+
+  /**
+   * What ⌘↵ in the feedback box answers: the primary option, but with words in the box the option that takes them
+   * (Request changes, not Approve plan, which would start development and drop them).
+   */
+  function submitOption(cp: { options: string[] }, ui: CpUi): string | undefined {
+    const primary = cp.options.find((o) => ui.options[o]?.kind === 'primary');
+    if (!T.feedback.trim()) return primary;
+    const takes = (o: string): boolean => Boolean(ui.options[o]?.feedback);
+    return primary !== undefined && takes(primary) ? primary : cp.options.find(takes);
+  }
 
   // ---------- header, alerts, aside ----------
 
@@ -534,7 +553,7 @@ interface Views {
         return `<button class="btn ${spec.kind === 'primary' ? 'primary' : spec.kind === 'warn' ? 'warn' : spec.kind === 'ghost' ? 'ghost' : ''}" data-action="answer" data-option="${o}" data-kind="${spec.kind}" title="${esc(spec.hint || '')}">${icon(spec.icon || 'chevron')}${esc(spec.label)}</button>`;
       })
       .join('');
-    const primary = cp.options.find((o) => ui.options[o]?.kind === 'primary');
+    const keyed = submitOption(cp, ui);
     return `<section class="checkpoint card cp-${cp.id}">
       <div class="cp-head">
         <div class="cp-icon">${icon(cp.id === 'confirm-push' ? 'pr' : cp.id === 'approve-plan' ? 'eye' : 'alert')}</div>
@@ -543,7 +562,7 @@ interface Views {
       ${cp.step ? `<div class="muted small cp-step">At ${esc(stepName(cp.step))}</div>` : ''}
       <div class="cp-body">${body}</div>
       ${needsFeedback ? `<textarea id="cp-feedback" class="input autosize" rows="2" data-input="cp-feedback" placeholder="${esc(ui.placeholder || 'Feedback (optional)')}">${esc(T.feedback)}</textarea>` : ''}
-      <div class="cp-actions">${buttons}<span class="muted small kbd-hint"><kbd>⌘↵</kbd> ${esc((primary !== undefined && ui.options[primary]?.label) || '')}</span></div>
+      <div class="cp-actions">${buttons}<span class="muted small kbd-hint"><kbd>⌘↵</kbd> <span id="cp-kbd">${esc((keyed !== undefined && ui.options[keyed]?.label) || '')}</span></span></div>
     </section>`;
   }
 
