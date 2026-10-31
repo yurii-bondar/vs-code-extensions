@@ -31,8 +31,9 @@ async function pushState(): Promise<void> {
   } catch {
     return; // a task deleted while it was read; the next push lists the rest
   }
+  const limits = await o.limits();
   if (n !== pushes) return;
-  send({ type: 'state', root: o.root, cards, limits: o.limits(), health: o.health });
+  send({ type: 'state', root: o.root, cards, limits, health: o.health });
 }
 
 /** The panel, created on first use as `extension.ts` does: `show` reveals it, or opens it on the given route. */
