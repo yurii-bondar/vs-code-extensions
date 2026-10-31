@@ -5,8 +5,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import { GitRepo, prepareRepos, removeWorktrees, taskDiff, taskRepos } from '../src/core/git';
+import { runGates } from '../src/core/gates';
 import { git, workspace } from './helpers/e2e';
-import type { Config, TaskState } from '../src/core/types';
+import type { Config, RepoConfig, TaskState } from '../src/core/types';
 
 const config = { repos: {}, baseBranch: 'main' } as unknown as Pick<Config, 'repos' | 'baseBranch'>;
 
@@ -80,4 +81,22 @@ test("git: Claudestrator's own git runs no hook, also not one husky keeps in the
     git(api, 'switch', '-q', mode === 'branch' ? 'main' : '-c', ...(mode === 'branch' ? [] : ['other']));
     assert.equal(fs.existsSync(marker), true, 'git run by you still runs it');
   }
+});
+
+test('git: a file named outside ASCII is a change like any other, for the checks and in the review diff', async () => {
+  const ws = workspace(['api'], '');
+  const api = path.join(ws, 'api');
+  fs.mkdirSync(path.join(api, 'src'));
+  fs.writeFileSync(path.join(api, 'src', 'компонент.tsx'), 'export const a = 1;\n');
+  const repo = new GitRepo(api);
+  assert.deepEqual(await repo.changedFiles('main'), ['src/компонент.tsx'], 'not "src/\\320\\272…"');
+  assert.deepEqual(await repo.dirty(), ['?? src/']);
+  const gates = await runGates({ repo: { name: 'api', baseBranch: 'main', gates: [{ name: 'lint', cmd: 'true', when: 'src/' }] } as unknown as RepoConfig, dir: api, logDir: path.join(ws, 'logs') });
+  assert.equal(gates.status, 'pass', 'a check for src/ runs');
+  const diff = await taskDiff(taskRepos(ws, task(['api'], 'branch'), config, ['api']));
+  assert.match(diff.text, /\+export const a = 1;/, 'the new file is in the diff');
+  git(api, 'add', '.');
+  git(api, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'add');
+  git(api, 'mv', 'src/компонент.tsx', 'src/віджет.tsx');
+  assert.deepEqual(await repo.dirty(), ['R  src/віджет.tsx'], 'a rename is one entry');
 });

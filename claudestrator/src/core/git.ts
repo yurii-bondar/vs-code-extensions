@@ -70,7 +70,13 @@ function exec(cmd: string, args: readonly string[], { cwd, timeoutMs = 60000, en
  * write, and `git switch` would run a post-checkout left there. The repo's hooks run in the sandbox instead: the
  * commit's through `git commit` there, pre-push on its own (`Engine.prePush`).
  */
-const HOST_GIT = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false'];
+const HOST_GIT = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false'];
+
+/**
+ * The paths of a `-z` listing. Without `-z` git quotes a path with characters outside ASCII (`"src/\320\272…"`), and a
+ * check's `when: src/` or the diff of a new file would miss it.
+ */
+const paths = (stdout: string): string[] => stdout.split('\0').filter(Boolean);
 
 // Machine state and config of the orchestrator never count as the user's changes.
 const OWN = [`${ORCH_DIR}/`, '.claudestrator/'];
@@ -105,10 +111,17 @@ class GitRepo {
     return r.code === 0 ? r.stdout.trim() : null;
   }
 
-  /** `git status --porcelain` lines: uncommitted and untracked work. */
+  /** `git status --porcelain` lines (`XY path`): uncommitted and untracked work. */
   async dirty(): Promise<string[]> {
-    const r = await this.git('status', '--porcelain');
-    return r.stdout.split('\n').filter(Boolean).filter((l) => !isOwn(l.slice(3).replace(/^"|"$/g, '')));
+    const entries = paths((await this.git('status', '--porcelain', '-z')).stdout);
+    const out: string[] = [];
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i]!;
+      // A rename or copy is followed by the path it came from.
+      if (/^[RC]/.test(e)) i++;
+      if (!isOwn(e.slice(3))) out.push(e);
+    }
+    return out;
   }
 
   async hasBranch(name: string): Promise<boolean> {
@@ -125,12 +138,12 @@ class GitRepo {
   }
 
   async untracked(): Promise<string[]> {
-    return (await this.git('ls-files', '--others', '--exclude-standard')).stdout.split('\n').filter(Boolean).filter((f) => !isOwn(f));
+    return paths((await this.git('ls-files', '-z', '--others', '--exclude-standard')).stdout).filter((f) => !isOwn(f));
   }
 
   /** Files changed since the base, committed or not, plus untracked ones. */
   async changedFiles(base: string): Promise<string[]> {
-    const tracked = (await this.git('diff', '--name-only', await this.baseRef(base))).stdout.split('\n').filter(Boolean).filter((f) => !isOwn(f));
+    const tracked = paths((await this.git('diff', '--name-only', '-z', await this.baseRef(base))).stdout).filter((f) => !isOwn(f));
     return [...new Set([...tracked, ...(await this.untracked())])].sort();
   }
 
@@ -140,8 +153,8 @@ class GitRepo {
    */
   async branchChanges(base: string, branch: string): Promise<string[]> {
     for (const ref of [`origin/${base}`, base]) {
-      const r = await this.git('diff', '--name-only', `${ref}...${branch}`);
-      if (r.code === 0) return r.stdout.split('\n').filter(Boolean).filter((f) => !isOwn(f));
+      const r = await this.git('diff', '--name-only', '-z', `${ref}...${branch}`);
+      if (r.code === 0) return paths(r.stdout).filter((f) => !isOwn(f));
     }
     return [];
   }
