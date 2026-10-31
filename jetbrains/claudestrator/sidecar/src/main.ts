@@ -61,7 +61,7 @@ const calls: Record<string, (params: CallParams) => Promise<unknown>> = {
   async runTask(params) {
     const o = orch!;
     await o.ensureReady();
-    o.engine!.resume(taskId(params));
+    await o.engine!.resume(taskId(params));
   },
   async stopTask(params) {
     await orch!.engine!.stop(taskId(params));
