@@ -641,13 +641,14 @@ class DashboardPanel implements RpcHandlers {
     const [uri] = (await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: false, defaultUri: vscode.Uri.file(this.root), openLabel: 'Use as a library', title: 'A folder of agents and scenarios (library.yaml)' })) || [];
     if (!uri) return none;
     const name = path.basename(uri.fsPath);
-    if (!(await exists(path.join(uri.fsPath, cfg.LIBRARY_FILE)))) {
-      const create = await vscode.window.showInformationMessage(`${name} has no ${cfg.LIBRARY_FILE}. Start a library there?`, { modal: true, detail: `An empty ${cfg.LIBRARY_FILE} is written; move agents and scenarios into it from the Agents page, or write them as in config.yaml.` }, 'Start a library');
-      if (!create) return none;
+    const create = !(await exists(path.join(uri.fsPath, cfg.LIBRARY_FILE)));
+    if (create) {
+      const start = await vscode.window.showInformationMessage(`${name} has no ${cfg.LIBRARY_FILE}. Start a library there?`, { modal: true, detail: `An empty ${cfg.LIBRARY_FILE} is written; move agents and scenarios into it from the Agents page, or write them as in config.yaml.` }, 'Start a library');
+      if (!start) return none;
     }
     const scope = await vscode.window.showInformationMessage(`Use ${name} in…`, { modal: true, detail: 'All my projects: listed in ~/.claudestrator/config.yaml.\n\nThis project: listed in its .claudestrator/config.yaml, so teammates get it too (a folder inside the project is listed by a relative path).' }, 'All my projects', 'This project');
     if (!scope) return none;
-    const info = await libraries.addLibrary({ workspace: this.root, dir: uri.fsPath, scope: scope === 'This project' ? 'project' : 'user', create: !exists });
+    const info = await libraries.addLibrary({ workspace: this.root, dir: uri.fsPath, scope: scope === 'This project' ? 'project' : 'user', create });
     return { added: info.label };
   }
 

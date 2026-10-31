@@ -2,15 +2,19 @@
 import test from 'node:test';
 import * as assert from 'node:assert/strict';
 import Module from 'module';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 
 import type { HostMessage } from '../src/core/wire';
 
-// panel.ts loads `vscode`; the methods tested here never reach it.
+// panel.ts loads `vscode`: the dialogs a test answers, nothing else.
 /* eslint-disable @typescript-eslint/no-require-imports */
+const vscodeStub = { window: {} as Record<string, unknown>, Uri: { file: (fsPath: string) => ({ fsPath }) } };
 const loader = Module as unknown as { _load: (request: string, ...rest: unknown[]) => unknown };
 const load = loader._load;
 loader._load = function (this: unknown, request: string, ...rest: unknown[]) {
-  return request === 'vscode' ? {} : load.call(this, request, ...rest);
+  return request === 'vscode' ? vscodeStub : load.call(this, request, ...rest);
 };
 const { DashboardPanel } = require('../src/panel') as typeof import('../src/panel');
 loader._load = load;
@@ -52,4 +56,20 @@ test('panel: a hidden panel gets no text pieces, and none of that message after 
   p.queueOutput(delta('a', 'Next '));
   await flushed();
   assert.deepEqual(posted.map((m) => (m.type === 'output' && 'text' in m.item ? [m.key, m.item.type, m.item.text] : null)), [['b', 'text_delta', 'Another step'], ['a', 'text', 'Half a sentence.'], ['a', 'text_delta', 'Next ']]);
+});
+
+test('panel: a folder without library.yaml becomes a library once you say so', async () => {
+  const ws = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cs-lib-ws-')));
+  fs.mkdirSync(path.join(ws, '.claudestrator'));
+  fs.writeFileSync(path.join(ws, '.claudestrator', 'config.yaml'), 'language: English\n');
+  const lib = path.join(ws, 'agents-lib');
+  fs.mkdirSync(lib);
+  // The folder picked, "Start a library", then "This project".
+  vscodeStub.window.showOpenDialog = async () => [{ fsPath: lib }];
+  vscodeStub.window.showInformationMessage = async (_m: string, _o: unknown, ...items: string[]) => items[items.length - 1];
+  const p = Object.assign(Object.create(DashboardPanel.prototype) as InstanceType<typeof DashboardPanel>, { orch: { root: ws } });
+  const r = await p.$addLibrary();
+  assert.ok(r.added, JSON.stringify(r));
+  assert.ok(fs.existsSync(path.join(lib, 'library.yaml')), 'library.yaml is written');
+  assert.match(fs.readFileSync(path.join(ws, '.claudestrator', 'config.yaml'), 'utf8'), /libraries:\n\s+- \.\.\/agents-lib/);
 });
