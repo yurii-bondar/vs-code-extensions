@@ -367,6 +367,24 @@ class ClaudeSession {
     this.escalate(STOP_GRACE_MS);
   }
 
+  /**
+   * Stops the agent and waits for it, up to `graceMs`, then kills its process group at once. For a host that is about
+   * to exit (VS Code closing the window), where the timers of `interrupt` would never fire and a CLI stuck on a hung
+   * tool would be left running with everything it started.
+   */
+  async terminate(graceMs: number): Promise<void> {
+    await this.interrupt();
+    if (this.ended) return;
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, graceMs);
+      this.proc.once('exit', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+    if (!this.ended) this.signal('SIGKILL');
+  }
+
   /** SIGTERM after `afterMs` if the CLI has not ended, SIGKILL STOP_GRACE_MS later: to its whole process group. */
   escalate(afterMs: number): void {
     setTimeout(() => {

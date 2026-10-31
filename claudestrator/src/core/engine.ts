@@ -1587,8 +1587,14 @@ class Engine extends EventEmitter {
     if (session) await session.interrupt();
   }
 
-  async stopAll(): Promise<void> {
-    for (const id of [...this.running]) await this.stop(id, 'VS Code closed the workspace').catch(() => {});
+  /**
+   * Stops every task this window runs, for a window that closes. VS Code ends the extension host soon after, so an agent
+   * that has not ended within a few seconds is killed with its process group then, not by a timer that never fires.
+   */
+  async stopAll(graceMs = 2500): Promise<void> {
+    const sessions = [...this.running].map((id) => this.sessions.get(id)).filter((x): x is ClaudeSession => x !== undefined);
+    await Promise.all([...this.running].map((id) => this.stop(id, 'VS Code closed the workspace').catch(() => {})));
+    await Promise.all(sessions.map((x) => x.terminate(graceMs)));
   }
 
   /** What a human needs to decide a checkpoint: `{ format: 'markdown'|'log', text, files? }`. */

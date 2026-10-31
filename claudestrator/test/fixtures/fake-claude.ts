@@ -277,6 +277,8 @@ function main(): void {
       buf = buf.slice(i + 1);
       if (!line.trim()) continue;
       const m: ClientMessage = JSON.parse(line);
+      // FAKE_STUBBORN: a CLI stuck on a hung tool, which neither an interrupt nor SIGTERM ends.
+      if (m.type === 'control_request' && m.request.subtype === 'interrupt' && process.env.FAKE_STUBBORN) continue;
       if (m.type === 'control_request' && m.request.subtype === 'interrupt') {
         out({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: {} } });
         // Claude Code ends the turn it is in with an error result.
@@ -305,7 +307,8 @@ function main(): void {
       else reply(`Follow-up handled: ${text.split('\n')[0]!.slice(0, 60)}`, m.uuid);
     }
   });
-  process.stdin.on('end', () => process.exit(0));
+  process.stdin.on('end', () => !process.env.FAKE_STUBBORN && process.exit(0));
+  if (process.env.FAKE_STUBBORN) process.on('SIGTERM', () => undefined);
 }
 
 main();

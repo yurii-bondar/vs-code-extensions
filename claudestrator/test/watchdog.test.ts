@@ -3,7 +3,7 @@ import test from 'node:test';
 import * as assert from 'node:assert/strict';
 
 import { setChildEnv, getChildEnv } from '../src/core/git';
-import { workspace, harness, runTask } from './helpers/e2e';
+import { workspace, harness, runTask, waitFor } from './helpers/e2e';
 import type { PermissionRequest } from '../src/core/engine';
 
 test('watchdog: a hung agent is interrupted and the step fails with the reason', async () => {
@@ -33,6 +33,31 @@ test('watchdog: a question waiting for you does not count as a hung agent', asyn
     const s = await runTask(h.engine, taskId);
     assert.equal(s.checkpoint!.id, 'confirm-push', JSON.stringify(s.checkpoint));
   } finally {
+    h.hooks.dispose();
+  }
+});
+
+test('watchdog: a closing window kills an agent that ignores the stop, with its process group, before it returns', { skip: process.platform === 'win32' }, async () => {
+  const ws = workspace(['api'], 'repos:\n  api: {}\npipeline: [planner, developer]\n');
+  const h = await harness(ws, { FAKE_REPOS: 'api' });
+  try {
+    setChildEnv({ ...getChildEnv(), FAKE_HANG: 'planner', FAKE_STUBBORN: '1' });
+    const { taskId } = await h.engine.start({ text: 'Do a thing', auto: true });
+    h.engine.launch(taskId);
+    const session = await waitFor(async () => h.engine.sessions.get(taskId), 30000);
+    const pid = session.proc.pid!;
+    await h.engine.stopAll(300);
+    const alive = (): boolean => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    await waitFor(async () => !alive(), 2000);
+  } finally {
+    setChildEnv({ ...getChildEnv(), FAKE_HANG: '', FAKE_STUBBORN: '' });
     h.hooks.dispose();
   }
 });
