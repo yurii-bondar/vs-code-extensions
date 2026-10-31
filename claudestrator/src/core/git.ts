@@ -167,22 +167,23 @@ class GitRepo {
 }
 
 /**
- * The branch checked out where `dir` is, for the Bash guard, which decides synchronously inside a tool call: read from
- * git's HEAD file (a worktree's `.git` file points to its own), so no git process blocks the extension host.
+ * The branch checked out where `dir` is, for the Bash guard, which decides inside a tool call: read from git's HEAD
+ * file (a worktree's `.git` file points to its own), so no git process runs for it.
  * `HEAD` when detached, as `git rev-parse --abbrev-ref HEAD` says; null outside a repository.
  */
-function branchAt(dir: string): string | null {
+async function branchAt(dir: string): Promise<string | null> {
   for (let cur = path.resolve(dir); ; cur = path.dirname(cur)) {
     const dotGit = path.join(cur, '.git');
     let gitDir: string | null = null;
     try {
-      gitDir = fs.statSync(dotGit).isFile() ? path.resolve(cur, (fs.readFileSync(dotGit, 'utf8').match(/^gitdir:\s*(.+)$/m) || [])[1]?.trim() ?? '') : dotGit;
+      const st = await fs.promises.stat(dotGit);
+      gitDir = st.isFile() ? path.resolve(cur, ((await fs.promises.readFile(dotGit, 'utf8')).match(/^gitdir:\s*(.+)$/m) || [])[1]?.trim() ?? '') : dotGit;
     } catch {
       // not here
     }
     if (gitDir) {
       try {
-        const head = fs.readFileSync(path.join(gitDir, 'HEAD'), 'utf8').trim();
+        const head = (await fs.promises.readFile(path.join(gitDir, 'HEAD'), 'utf8')).trim();
         return (head.match(/^ref:\s*refs\/heads\/(.+)$/) || [])[1] ?? 'HEAD';
       } catch {
         return null;

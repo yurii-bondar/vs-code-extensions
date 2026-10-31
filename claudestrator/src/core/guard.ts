@@ -25,9 +25,9 @@ interface GuardContext {
   writeRoots?: string[] | undefined;
   /** What a command never writes, inside the write roots too: Claudestrator's config and task state. */
   protect?: string[] | undefined;
-  branchOf(dir: string): string | null;
-  isRepoRoot(dir: string): boolean;
-  readFile(file: string): string | null;
+  branchOf(dir: string): Promise<string | null>;
+  isRepoRoot(dir: string): Promise<boolean>;
+  readFile(file: string): Promise<string | null>;
 }
 
 const allow: Verdict = { allow: true };
@@ -39,7 +39,7 @@ const AI_CREDIT = /co-authored-by:[^\n]*(claude|anthropic|copilot|cursor|openai|
  * ctx: { policy, cwd, workspace, home?, task?: { taskId, canPush }, agent?: boolean,
  *        branchOf(dir) → string|null, isRepoRoot(dir) → boolean, readFile(file) → string|null }
  */
-function guardBash(command: string, ctx: GuardContext): Verdict {
+async function guardBash(command: string, ctx: GuardContext): Promise<Verdict> {
   let dir = ctx.cwd;
   for (const segment of simpleCommands(command)) {
     let argv: string[];
@@ -60,7 +60,7 @@ function guardBash(command: string, ctx: GuardContext): Verdict {
     }
     const writes = checkWrites([...redirectTargets(segment), ...writeTargets(cmd, args)], cmd, dir, ctx);
     if (!writes.allow) return writes;
-    const verdict = checkCommand(cmd, args, dir, ctx);
+    const verdict = await checkCommand(cmd, args, dir, ctx);
     if (!verdict.allow) return verdict;
   }
   return allow;
@@ -154,8 +154,8 @@ function checkWrites(targets: string[], cmd: string, dir: string, ctx: GuardCont
   return allow;
 }
 
-function checkCommand(cmd: string, args: string[], dir: string, ctx: GuardContext): Verdict {
-  const inner = (script: string): Verdict => guardBash(script, { ...ctx, cwd: dir });
+async function checkCommand(cmd: string, args: string[], dir: string, ctx: GuardContext): Promise<Verdict> {
+  const inner = (script: string): Promise<Verdict> => guardBash(script, { ...ctx, cwd: dir });
   if (SHELLS.has(cmd)) {
     // `-c`, also combined with other flags: `-lc`, `-ec`, `-xc`.
     const c = args.findIndex((a) => /^-[A-Za-z]*c[A-Za-z]*$/.test(a));
@@ -202,14 +202,14 @@ function publishes(cmd: string, args: string[]): boolean {
 const FIND_TESTS = new Set(['-name', '-iname', '-path', '-ipath', '-wholename', '-regex', '-iregex', '-type', '-newer', '-mtime', '-mmin', '-atime', '-ctime', '-size', '-empty', '-user', '-perm']);
 
 /** `find … -exec cmd {} ;` runs cmd; `find … -delete` is a recursive delete of what it searches. */
-function checkFind(args: string[], dir: string, ctx: GuardContext): Verdict {
+async function checkFind(args: string[], dir: string, ctx: GuardContext): Promise<Verdict> {
   for (let i = 0; i < args.length; i++) {
     if (!['-exec', '-execdir', '-ok', '-okdir'].includes(args[i]!)) continue;
     const end = args.findIndex((a, j) => j > i && (a === ';' || a === '+' || a === '\\;'));
     const argv = args.slice(i + 1, end === -1 ? undefined : end).filter((a) => a !== '{}' && a !== '\\');
     const [first, ...rest] = stripPrefixes(argv);
     if (!first) continue;
-    const verdict = checkCommand(path.basename(first), rest, dir, ctx);
+    const verdict = await checkCommand(path.basename(first), rest, dir, ctx);
     if (!verdict.allow) return verdict;
   }
   if (args.includes('-delete')) {
@@ -221,7 +221,7 @@ function checkFind(args: string[], dir: string, ctx: GuardContext): Verdict {
     const filtered = args.some((a) => FIND_TESTS.has(a));
     if (!filtered) return checkRm(['-r', ...roots], dir, ctx);
     for (const root of roots) {
-      const verdict = checkRm(['-r', path.join(resolveIn(dir, root, ctx), 'x')], dir, ctx);
+      const verdict = await checkRm(['-r', path.join(resolveIn(dir, root, ctx), 'x')], dir, ctx);
       if (!verdict.allow) return deny(`find ${root} … -delete: ${verdict.reason}`);
     }
   }
@@ -441,12 +441,12 @@ function optionValues(args: string[], names: string[]): string[] {
   return out;
 }
 
-function attributionIn(texts: string[], files: string[], dir: string, ctx: GuardContext): Verdict {
+async function attributionIn(texts: string[], files: string[], dir: string, ctx: GuardContext): Promise<Verdict> {
   if (!ctx.policy.forbidAiAttribution) return allow;
   if (texts.some((t) => AI_CREDIT.test(t))) return deny('no AI attribution in commits or PRs (policy.forbidAiAttribution); remove the Co-Authored-By / Generated-with lines');
   for (const f of files) {
     if (f === '-') continue;
-    const content = ctx.readFile(path.resolve(dir, f));
+    const content = await ctx.readFile(path.resolve(dir, f));
     if (content && AI_CREDIT.test(content)) return deny(`no AI attribution in ${f} (policy.forbidAiAttribution)`);
   }
   return allow;
@@ -489,7 +489,7 @@ const AGENT_GIT_READ_ONLY: Record<string, string[]> = { stash: ['list', 'show'],
 /** Options that run a program or write a file: `--upload-pack=cmd`, `grep -O<cmd>`, `--output=<file>`. */
 const AGENT_GIT_OPTIONS = /^(--upload-pack|--receive-pack|--exec|--output|--open-files-in-pager|-O)(=|$)|^-O./;
 
-function checkGit(all: string[], cwd: string, ctx: GuardContext): Verdict {
+async function checkGit(all: string[], cwd: string, ctx: GuardContext): Promise<Verdict> {
   let dir = cwd;
   let i = 0;
   while (i < all.length && all[i]!.startsWith('-')) {
@@ -536,17 +536,15 @@ function checkGit(all: string[], cwd: string, ctx: GuardContext): Verdict {
       if (refspecs.some((r) => r.startsWith('+'))) return deny('forced refspecs (+branch) are not allowed');
       if (refspecs.some((r) => r.startsWith(':'))) return deny('deleting remote branches is not allowed');
       const targets = refspecs.map((r) => r.split(':').pop()!.replace(/^refs\/heads\//, ''));
-      if (refspecs.length === 0) {
-        const b = ctx.branchOf(dir);
-        if (b) targets.push(b);
-      }
-      const hit = targets.find((t) => protectedBranches.includes(t) || (t === 'HEAD' && protectedBranches.includes(ctx.branchOf(dir) ?? '')));
-      if (hit) return deny(`pushing to ${hit === 'HEAD' ? ctx.branchOf(dir) : hit} is not allowed; push the feature branch`);
+      const current = await ctx.branchOf(dir);
+      if (refspecs.length === 0 && current) targets.push(current);
+      const hit = targets.find((t) => protectedBranches.includes(t) || (t === 'HEAD' && protectedBranches.includes(current ?? '')));
+      if (hit) return deny(`pushing to ${hit === 'HEAD' ? current : hit} is not allowed; push the feature branch`);
       if (ctx.task && !ctx.task.canPush) return deny(`task ${ctx.task.taskId} has not reached publish: push only after the user confirms it`);
       return allow;
     }
     case 'commit': {
-      const b = ctx.branchOf(dir);
+      const b = await ctx.branchOf(dir);
       if (b && protectedBranches.includes(b)) return deny(`refusing to commit on ${b} in ${dir}; create the task branch first`);
       return attributionIn(optionValues(args, ['-m', '--message']), optionValues(args, ['-F', '--file']), dir, ctx);
     }
@@ -567,7 +565,7 @@ function checkGit(all: string[], cwd: string, ctx: GuardContext): Verdict {
 /** gh actions an agent may use, for reading only. */
 const AGENT_GH_READ = new Set<string>(['view', 'list', 'diff', 'checks', 'status']);
 
-function checkGh(all: string[], dir: string, ctx: GuardContext): Verdict {
+async function checkGh(all: string[], dir: string, ctx: GuardContext): Promise<Verdict> {
   const [group, action, ...args] = all;
   if (ctx.agent && group !== 'api' && !AGENT_GH_READ.has(action ?? '')) return deny(`agents only read with gh (view, list, diff, checks, status); gh ${group} ${action ?? ''} is the orchestrator's`);
   if (ctx.agent && group === 'api' && ghApiWrites(all)) return deny('agents only read with gh api (GET)');
@@ -598,7 +596,7 @@ function ghApiWrites(all: string[]): boolean {
   return all.some((a) => /^(-f|-F|--field|--raw-field|--input)(=|$)/.test(a) || /^-[fF].+/.test(a));
 }
 
-function checkRm(args: string[], dir: string, ctx: GuardContext): Verdict {
+async function checkRm(args: string[], dir: string, ctx: GuardContext): Promise<Verdict> {
   const flags = flagSet(args);
   const recursive = flags.has('-r') || flags.has('-R') || flags.has('--recursive');
   if (!recursive) return allow;
@@ -619,7 +617,7 @@ function checkRm(args: string[], dir: string, ctx: GuardContext): Verdict {
     const contains = (root: string): boolean => root === abs || root.startsWith(abs + path.sep);
     if (abs === '/' || abs === home || roots.some(contains)) return deny(`rm -r ${t} would delete ${abs}, which contains the workspace, a repository or your home`);
     const ground = roots.some(inside);
-    if (ground && ctx.isRepoRoot(abs)) return deny(`rm -r ${t} would delete the repository ${abs}`);
+    if (ground && (await ctx.isRepoRoot(abs))) return deny(`rm -r ${t} would delete the repository ${abs}`);
     if (ground && abs.split(path.sep).includes('.git')) return deny(`rm -r ${t} would delete git metadata`);
     if (!ground && !inside(tmp) && !inside('/tmp') && !inside('/private/tmp')) return deny(`rm -r outside the workspace and its repos (${abs}) is not allowed; ask the user`);
   }

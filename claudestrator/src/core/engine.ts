@@ -1015,7 +1015,7 @@ class Engine extends EventEmitter {
     const cwd = writeRoots.length === 1 ? writeRoots[0]! : this.workspace;
     const protect = configPaths(this.workspace, config);
     if (tool === 'Bash') {
-      const d = guardBash(String(input.command || ''), {
+      const d = await guardBash(String(input.command || ''), {
         policy: config.policy,
         cwd: call.cwd && (await fs.promises.access(call.cwd).then(() => true, () => false)) ? call.cwd : cwd,
         workspace: this.workspace,
@@ -1026,8 +1026,11 @@ class Engine extends EventEmitter {
         writeRoots,
         protect,
         branchOf: branchAt,
-        isRepoRoot: (dir) => fs.existsSync(path.join(dir, '.git')),
-        readFile: (f) => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null),
+        isRepoRoot: (dir) => fs.promises.access(path.join(dir, '.git')).then(
+          () => true,
+          () => false
+        ),
+        readFile: (f) => fs.promises.readFile(f, 'utf8').catch(() => null),
       });
       if (!d.allow) return blocked(d.reason);
     }

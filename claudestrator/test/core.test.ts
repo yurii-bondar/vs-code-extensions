@@ -358,7 +358,7 @@ test('reports: plan and verdict blocks are validated, nulls tolerated', async ()
 
 test('guard: a command is recognised behind paths, shell keywords, wrappers, eval, sh -lc and find -exec', async () => {
   const policy = { protectedBranches: ['main'], draftPrsOnly: true, forbidAiAttribution: false, allowNoVerify: false, sandbox: true, network: [], writable: [], checkEnv: [] };
-  const ctx: GuardContext = { policy, cwd: '/ws/api', workspace: '/ws', home: '/home/u', agent: true, task: { taskId: 'T', canPush: false }, branchOf: () => 'feat/x', isRepoRoot: (d) => d === '/ws/api', readFile: () => null };
+  const ctx: GuardContext = { policy, cwd: '/ws/api', workspace: '/ws', home: '/home/u', agent: true, task: { taskId: 'T', canPush: false }, branchOf: async () => 'feat/x', isRepoRoot: async (d) => d === '/ws/api', readFile: async () => null };
   const refused = [
     '/usr/bin/git push --force origin main',
     'if true; then git push --force; fi',
@@ -404,7 +404,7 @@ test('guard: a command is recognised behind paths, shell keywords, wrappers, eva
     'echo "`git push -f`"',
     'X=$(git push -f)',
   ];
-  for (const command of refused) assert.equal(guard(command, ctx).allow, false, `should be refused: ${command}`);
+  for (const command of refused) assert.equal((await guard(command, ctx)).allow, false, `should be refused: ${command}`);
 
   // What agents do all day keeps working.
   const allowed = [
@@ -434,18 +434,18 @@ test('guard: a command is recognised behind paths, shell keywords, wrappers, eva
     'echo "git push --force"',
     'cat <<EOF\ngit push -f\nEOF',
   ];
-  for (const command of allowed) assert.equal(guard(command, ctx).allow, true, `should be allowed: ${command}`);
+  for (const command of allowed) assert.equal((await guard(command, ctx)).allow, true, `should be allowed: ${command}`);
 });
 
 test('guard: an agent writes files only where its stage works or in a temp folder, never into .git', async () => {
   const policy = { protectedBranches: ['main'], draftPrsOnly: true, forbidAiAttribution: false, allowNoVerify: false, sandbox: true, network: [], writable: [], checkEnv: [] };
-  const base: GuardContext = { policy, cwd: '/ws/api', workspace: '/ws', home: '/home/u', agent: true, task: { taskId: 'T', canPush: false }, branchOf: () => 'feat/x', isRepoRoot: (d) => d === '/ws/api' || d === '/ws/web', readFile: () => null };
+  const base: GuardContext = { policy, cwd: '/ws/api', workspace: '/ws', home: '/home/u', agent: true, task: { taskId: 'T', canPush: false }, branchOf: async () => 'feat/x', isRepoRoot: async (d) => d === '/ws/api' || d === '/ws/web', readFile: async () => null };
   const developer = { ...base, writeRoots: ['/ws/api'] };
   const reviewer = { ...base, writeRoots: [] };
-  const check = (ctx: GuardContext, list: string[], allowed: boolean): void => {
-    for (const command of list) assert.equal(guard(command, ctx).allow, allowed, `${allowed ? 'should be allowed' : 'should be refused'} (${ctx.writeRoots!.length ? 'developer' : 'reviewer'}): ${command}`);
+  const check = async (ctx: GuardContext, list: string[], allowed: boolean): Promise<void> => {
+    for (const command of list) assert.equal((await guard(command, ctx)).allow, allowed, `${allowed ? 'should be allowed' : 'should be refused'} (${ctx.writeRoots!.length ? 'developer' : 'reviewer'}): ${command}`);
   };
-  check(developer, [
+  await check(developer, [
     'echo x >> /home/u/.zshrc',
     'echo x>/ws/web/a.ts',
     'sed -i "s/a/b/" /ws/web/x.ts',
@@ -462,7 +462,7 @@ test('guard: an agent writes files only where its stage works or in a temp folde
     'echo x > /ws/api/.git/config',
     'bash -c "echo x >> ~/.profile"',
   ], false);
-  check(developer, [
+  await check(developer, [
     'echo x > out.txt',
     'echo x > /ws/api/src/new.ts',
     'npm test > /tmp/log.txt 2>&1',
@@ -476,8 +476,8 @@ test('guard: an agent writes files only where its stage works or in a temp folde
     'echo "a > b"',
     'git diff > /tmp/patch.diff',
   ], true);
-  check(reviewer, ['sed -i "s/a/b/" src/x.ts', 'echo x > notes.md', 'cp a.ts b.ts', 'rm src/x.ts'], false);
-  check(reviewer, ['npm test', 'cat src/x.ts | grep foo', 'echo x > /tmp/notes.md', 'git log > /tmp/log'], true);
+  await check(reviewer, ['sed -i "s/a/b/" src/x.ts', 'echo x > notes.md', 'cp a.ts b.ts', 'rm src/x.ts'], false);
+  await check(reviewer, ['npm test', 'cat src/x.ts | grep foo', 'echo x > /tmp/notes.md', 'git log > /tmp/log'], true);
 });
 
 test('hook: a tool call that is not in the expected shape is refused, never passed as an unknown tool', async () => {
@@ -490,31 +490,31 @@ test('hook: a tool call that is not in the expected shape is refused, never pass
 
 test('guard: agents never touch git history, destructive commands are refused', async () => {
   const policy = { protectedBranches: ['main'], draftPrsOnly: true, forbidAiAttribution: true, allowNoVerify: false, sandbox: true, network: [], writable: [], checkEnv: [] };
-  const ctx = (extra: Partial<GuardContext> = {}): GuardContext => ({ policy, cwd: '/ws/api', workspace: '/ws', home: '/home/u', agent: true, task: { taskId: 'T', canPush: false }, branchOf: () => 'feat/x', isRepoRoot: (d) => d === '/ws/api', readFile: () => null, ...extra });
-  const refusal = (command: string, c: GuardContext) => denied(guard(command, c)).reason;
-  assert.equal(guard('npm test && git status', ctx()).allow, true);
-  assert.match(refusal('git commit -m "x"', ctx()), /agents do not run git commit/);
-  assert.match(refusal('echo hi; bash -c "git push origin feat/x"', ctx()), /git push/);
-  assert.equal(guard('echo "git push --force"', ctx()).allow, true, 'quoted text is not a command');
-  assert.match(refusal('rm -rf ../api', ctx()), /repository/);
-  assert.match(refusal('rm -rf ~', ctx()), /not allowed/);
-  assert.equal(guard('rm -rf node_modules', ctx()).allow, true);
-  assert.match(refusal('gh pr create --title x', ctx()), /only read with gh/);
+  const ctx = (extra: Partial<GuardContext> = {}): GuardContext => ({ policy, cwd: '/ws/api', workspace: '/ws', home: '/home/u', agent: true, task: { taskId: 'T', canPush: false }, branchOf: async () => 'feat/x', isRepoRoot: async (d) => d === '/ws/api', readFile: async () => null, ...extra });
+  const refusal = async (command: string, c: GuardContext) => denied(await guard(command, c)).reason;
+  assert.equal((await guard('npm test && git status', ctx())).allow, true);
+  assert.match(await refusal('git commit -m "x"', ctx()), /agents do not run git commit/);
+  assert.match(await refusal('echo hi; bash -c "git push origin feat/x"', ctx()), /git push/);
+  assert.equal((await guard('echo "git push --force"', ctx())).allow, true, 'quoted text is not a command');
+  assert.match(await refusal('rm -rf ../api', ctx()), /repository/);
+  assert.match(await refusal('rm -rf ~', ctx()), /not allowed/);
+  assert.equal((await guard('rm -rf node_modules', ctx())).allow, true);
+  assert.match(await refusal('gh pr create --title x', ctx()), /only read with gh/);
   const orchestrator = ctx({ agent: false, task: { taskId: 'T', canPush: true } });
-  assert.match(refusal('git push --force', orchestrator), /force-push/);
-  assert.match(refusal('gh pr create --title x --body y', orchestrator), /drafts only/);
-  assert.match(refusal('git commit -m "x" -m "Co-Authored-By: Claude <noreply@anthropic.com>"', ctx({ agent: false, branchOf: () => 'feat/x' })), /AI attribution/);
-  assert.match(refusal('git commit --no-verify -m x', ctx({ agent: false })), /hooks/);
+  assert.match(await refusal('git push --force', orchestrator), /force-push/);
+  assert.match(await refusal('gh pr create --title x --body y', orchestrator), /drafts only/);
+  assert.match(await refusal('git commit -m "x" -m "Co-Authored-By: Claude <noreply@anthropic.com>"', ctx({ agent: false, branchOf: async () => 'feat/x' })), /AI attribution/);
+  assert.match(await refusal('git commit --no-verify -m x', ctx({ agent: false })), /hooks/);
   // Redirections are not arguments: what an agent appends to a read-only command does not turn it into a write.
   for (const read of ['git branch -a 2>/dev/null', 'git branch 2>&1 | head', 'git branch --list > /tmp/branches.txt', 'git log --oneline 2> /dev/null']) {
-    assert.equal(guard(read, ctx()).allow, true, read);
+    assert.equal((await guard(read, ctx())).allow, true, read);
   }
-  assert.match(refusal('git branch feature-x 2>/dev/null', ctx()), /do not create, rename or delete branches/);
-  assert.match(refusal('git push origin main 2>&1', ctx()), /git push/);
-  assert.match(refusal('git branch --list > ../other/branches.txt', ctx({ writeRoots: ['/ws/api'] })), /outside \/ws\/api/, 'the file it writes is still checked');
+  assert.match(await refusal('git branch feature-x 2>/dev/null', ctx()), /do not create, rename or delete branches/);
+  assert.match(await refusal('git push origin main 2>&1', ctx()), /git push/);
+  assert.match(await refusal('git branch --list > ../other/branches.txt', ctx({ writeRoots: ['/ws/api'] })), /outside \/ws\/api/, 'the file it writes is still checked');
   // Git that reads, stages or applies a patch is the agents'; what moves HEAD, hides changes or runs a program is not.
   for (const read of ['git log --oneline', 'git stash list', 'git stash show -p stash@{0}', 'git worktree list', 'git reflog', 'git reflog show HEAD', 'git lfs ls-files', 'git add -N new.ts', 'git apply fix.patch', 'git fetch origin main', 'GIT_PAGER=cat git log', 'GIT_TERMINAL_PROMPT=0 git ls-remote origin', 'git grep -n foo']) {
-    assert.equal(guard(read, ctx()).allow, true, read);
+    assert.equal((await guard(read, ctx())).allow, true, read);
   }
   for (const [command, reason] of [
     ['git symbolic-ref HEAD refs/heads/main', /do not run git symbolic-ref/],
@@ -534,15 +534,15 @@ test('guard: agents never touch git history, destructive commands are refused', 
     ['export GIT_DIR=/tmp/other.git && git status', /git's environment \(GIT_DIR\)/],
     ['PAGER="sh -c evil" git log', /git's environment \(PAGER\)/],
   ] as [string, RegExp][]) {
-    assert.match(refusal(command, ctx()), reason, command);
+    assert.match(await refusal(command, ctx()), reason, command);
   }
-  assert.equal(guard('export NODE_ENV=test && npm test', ctx()).allow, true, 'other variables are the agent\'s to set');
+  assert.equal((await guard('export NODE_ENV=test && npm test', ctx())).allow, true, 'other variables are the agent\'s to set');
   for (const publish of ['npm publish', 'npm publish --access public', 'cd pkg && pnpm publish', 'yarn npm publish', 'npx twine upload dist/*', 'cargo publish', 'gem push x.gem', 'poetry publish --build']) {
-    assert.match(refusal(publish.replace('npx ', ''), ctx()), /publishes a package/, publish);
+    assert.match(await refusal(publish.replace('npx ', ''), ctx()), /publishes a package/, publish);
   }
-  assert.equal(guard('npm run publish-docs && npm pack', ctx()).allow, true, 'a script named after publishing is not npm publish');
-  assert.match(refusal('security find-generic-password -s gh:github.com -w', ctx()), /keychain/);
-  assert.equal(guard('npm publish', orchestrator).allow, true, 'only agents are held to it');
+  assert.equal((await guard('npm run publish-docs && npm pack', ctx())).allow, true, 'a script named after publishing is not npm publish');
+  assert.match(await refusal('security find-generic-password -s gh:github.com -w', ctx()), /keychain/);
+  assert.equal((await guard('npm publish', orchestrator)).allow, true, 'only agents are held to it');
 });
 
 test('intake: invocations, sources and acceptance criteria', async () => {
@@ -748,11 +748,11 @@ test('repos outside the workspace: picked folders, paths and the guard', async (
   assert.equal(reposFromFolders(ws, [outer], { names: [], dirs: [path.join(outer, 'billing'), path.join(outer, 'group', 'auth')] }).repos.length, 0, 'already configured repos are skipped');
 
   const policy = { protectedBranches: ['main'], draftPrsOnly: true, forbidAiAttribution: false, allowNoVerify: false, sandbox: true, network: [], writable: [], checkEnv: [] };
-  const ctx = { policy, cwd: path.join(outer, 'billing'), workspace: ws, repoDirs: [path.join(outer, 'billing')], agent: true, branchOf: () => 'feat/x', isRepoRoot: (d: string) => d === path.join(outer, 'billing'), readFile: () => null };
-  assert.equal(guard('rm -rf dist', ctx).allow, true, 'cleaning inside an outside repo is fine');
-  assert.match(denied(guard(`rm -rf ${path.join(outer, 'billing')}`, ctx)).reason, /contains the workspace, a repository/);
-  assert.match(denied(guard('rm -rf .git', ctx)).reason, /git metadata/);
-  assert.match(denied(guard('rm -rf /opt/elsewhere/plain', ctx)).reason, /outside the workspace and its repos/);
+  const ctx = { policy, cwd: path.join(outer, 'billing'), workspace: ws, repoDirs: [path.join(outer, 'billing')], agent: true, branchOf: async () => 'feat/x', isRepoRoot: async (d: string) => d === path.join(outer, 'billing'), readFile: async () => null };
+  assert.equal((await guard('rm -rf dist', ctx)).allow, true, 'cleaning inside an outside repo is fine');
+  assert.match(denied(await guard(`rm -rf ${path.join(outer, 'billing')}`, ctx)).reason, /contains the workspace, a repository/);
+  assert.match(denied(await guard('rm -rf .git', ctx)).reason, /git metadata/);
+  assert.match(denied(await guard('rm -rf /opt/elsewhere/plain', ctx)).reason, /outside the workspace and its repos/);
 });
 
 test('scenarios: built-in readiness and audit agents, validated config, read-only pipelines', async () => {
