@@ -421,8 +421,12 @@ class DashboardPanel implements RpcHandlers {
       'Delete'
     );
     if (choice !== 'Delete') return { deleted: false };
-    // Stopped first: a worktree is never removed under an agent that still works in it.
-    if (this.engine.isRunning(taskId)) await this.engine.stop(taskId);
+    if ((await this.engine.svc.runsElsewhere(taskId)) !== null) throw new Error(`${taskId} runs in another VS Code window; stop it there first`);
+    // Stopped first, and its run ended: a worktree is never removed under an agent that still works in it.
+    if (this.engine.isRunning(taskId)) {
+      await this.engine.stop(taskId);
+      await this.engine.settled(taskId);
+    }
     if (worktrees) await this.engine.cleanup(taskId, false);
     await this.engine.remove(taskId);
     return { deleted: true };

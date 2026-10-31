@@ -139,3 +139,16 @@ test('store: a task another live process runs is not run here, and a lease nobod
   assert.ok(after.ok, 'the lease of a process that is gone is taken over');
   await after.release();
 });
+
+test('store: an event recorded after its task was deleted does not bring the task back', async () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-gone-'));
+  const svc = new TaskService({ workspace: ws });
+  const pipeline = { mode: 'full', stages: [{ agent: 'planner', output: 'plan', scope: 'task', approval: true }], reviewLoop: null };
+  const config = { limits: { reviewRounds: 2, gateAttempts: 2 }, repos: {}, context: [], git: { mode: 'branch' } };
+  const { taskId } = await svc.start({ input: 'hi', source: { kind: 'text', text: 'hi' }, auto: false, pipeline, config } as unknown as Parameters<TaskService['start']>[0]);
+  await svc.remove(taskId);
+  // What a run that ends after the delete records.
+  await assert.rejects(() => svc.record(taskId, { type: 'agent_stopped', agent: 'planner', payload: { costUsd: 1 } } as unknown as Parameters<TaskService['record']>[1]), /is gone/);
+  assert.ok(!fs.existsSync(svc.dir(taskId)));
+  assert.deepEqual(await svc.list(), []);
+});

@@ -646,3 +646,20 @@ test('engine: Stop ends a commit hook that runs, and no repo after it is committ
     h.hooks.dispose();
   }
 });
+
+test('engine: deleting a running task stops it, waits for its run to end, and leaves nothing behind', async () => {
+  const ws = workspace(['api'], 'pipeline: [planner, developer]\nrepos:\n  api: {}\n');
+  const h = await harness(ws, { FAKE_REPOS: 'api', FAKE_DELAY: '400' });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
+    h.engine.launch(taskId);
+    await waitFor(async () => only(await h.engine.svc.events(taskId), 'stage_started').length > 0, 10000);
+    await h.engine.remove(taskId);
+    assert.equal(h.engine.isRunning(taskId), false, 'its run has ended');
+    await new Promise((r) => setTimeout(r, 300));
+    assert.ok(!fs.existsSync(h.engine.svc.dir(taskId)), 'the folder stays gone');
+    assert.deepEqual((await h.engine.svc.list()).map((e) => e.taskId), []);
+  } finally {
+    h.hooks.dispose();
+  }
+});

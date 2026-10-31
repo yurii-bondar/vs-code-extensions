@@ -267,6 +267,8 @@ class Engine extends EventEmitter {
   sessions: Map<string, ClaudeSession>;
   /** What Stop ends besides the agent: the checks of a step, a commit hook, a pre-push hook. */
   gateRuns = new Map<string, AbortController>();
+  /** Each running task's run, which settles once it has recorded its last event. */
+  runEnds = new Map<string, Promise<void>>();
   running: Set<string>;
   prepared: Set<string>;
   /** The confirm-push question's context per task, with the checkpoint it was made for (`at`). */
@@ -591,6 +593,8 @@ class Engine extends EventEmitter {
       await lease.release();
       throw e;
     }
+    let ended!: () => void;
+    this.runEnds.set(taskId, new Promise<void>((resolve) => (ended = resolve)));
     this.emit('changed', taskId);
     try {
       for (;;) {
@@ -623,6 +627,8 @@ class Engine extends EventEmitter {
     } finally {
       await lease.release();
       this.running.delete(taskId);
+      this.runEnds.delete(taskId);
+      ended();
       this.prepared.delete(taskId);
       this.setLive(taskId, null);
       this.emit('changed', taskId);
@@ -1629,9 +1635,23 @@ class Engine extends EventEmitter {
     return removeWorktrees(this.workspace, s, r.ok ? r.config : null, force);
   }
 
+  /** Once the task's run here has ended (after a Stop: its agent and checks are gone), or after `timeoutMs`. */
+  async settled(taskId: string, timeoutMs = 15000): Promise<void> {
+    const end = this.runEnds.get(taskId);
+    if (!end) return;
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([end, new Promise<void>((resolve) => (timer = setTimeout(resolve, timeoutMs)))]);
+    clearTimeout(timer);
+  }
+
   async remove(taskId: string): Promise<void> {
     this.pushContext.delete(taskId);
-    if (this.running.has(taskId)) await this.stop(taskId);
+    const elsewhere = await this.svc.runsElsewhere(taskId);
+    if (elsewhere !== null) throw new EngineError('running_elsewhere', `${taskId} runs in another VS Code window (process ${elsewhere}); stop it there first`);
+    if (this.running.has(taskId)) {
+      await this.stop(taskId);
+      await this.settled(taskId);
+    }
     await this.svc.remove(taskId);
     this.errors.delete(taskId);
     this.emit('changed', taskId);

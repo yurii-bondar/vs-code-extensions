@@ -62,9 +62,9 @@ async function otherHolder(file: string): Promise<number | null> {
  * Cross-process mutex on a lock file (O_EXCL create), held for a read-transition-append. Only the claudestrator CLI or
  * plugin can hold it besides this process; waiting for them is a timer, so the extension host keeps running meanwhile.
  * A lock left by a crashed process is taken over at once, one older than `staleMs` (a holder that hangs) as well.
+ * The folder must be there: a task deleted while its run still ends does not come back as a folder with one event.
  */
 async function withLock<T>(file: string, fn: () => Promise<T>, { timeoutMs = 10000, staleMs = 10000 }: { timeoutMs?: number; staleMs?: number } = {}): Promise<T> {
-  await fs.promises.mkdir(path.dirname(file), { recursive: true });
   const started = Date.now();
   for (;;) {
     try {
@@ -73,6 +73,7 @@ async function withLock<T>(file: string, fn: () => Promise<T>, { timeoutMs = 100
       await handle.close();
       break;
     } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') throw new Error(`${path.dirname(file)} is gone (the task was deleted)`);
       if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
       const age = await fs.promises.stat(file).then(
         (st) => Date.now() - st.mtimeMs,
@@ -345,6 +346,7 @@ class TaskService {
     const r = transition(null, event);
     if (!r.ok) throw new Error(r.error.message);
     await this.ensureOrchDir();
+    await fs.promises.mkdir(this.dir(taskId), { recursive: true });
     const id = taskId;
     return this.locked(id, async () => {
       const there = await this.current(id);
