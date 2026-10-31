@@ -1,6 +1,7 @@
 // Git for the orchestrator: async everywhere (gates and fetches take seconds, the extension host must stay
 // responsive), with every read degrading to a safe answer when git fails.
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { execFile } from 'child_process';
 import { exists } from './files';
@@ -91,7 +92,12 @@ class GitRepo {
   }
 
   async git(...args: string[]): Promise<ExecResult> {
-    return exec('git', [...HOST_GIT, '-C', this.dir, ...args], { cwd: (await exists(this.dir)) ? this.dir : undefined, timeoutMs: 120000 });
+    return this.gitWith({}, ...args);
+  }
+
+  /** `git(...)` with more in its environment, or text on its stdin. */
+  async gitWith({ env, input }: { env?: NodeJS.ProcessEnv; input?: string }, ...args: string[]): Promise<ExecResult> {
+    return exec('git', [...HOST_GIT, '-C', this.dir, ...args], { cwd: (await exists(this.dir)) ? this.dir : undefined, timeoutMs: 120000, ...(env && { env: { ...childEnv, ...env } }), ...(input !== undefined && { input }) });
   }
 
   /** The folder git runs this checkout's hooks from (`core.hooksPath`, else `.git/hooks`), absolute; null outside a repo. */
@@ -159,14 +165,31 @@ class GitRepo {
     return [];
   }
 
-  /** Stat and full diff against the base, untracked files included as additions. */
-  /** The checkout's changes against the base, as a patch. One cut for size says so, so a reviewer never takes it for whole. */
+  /**
+   * The checkout's changes against the base, as a stat and a patch, untracked files included as additions. One cut for
+   * size says so, so a reviewer never takes it for whole.
+   */
   async diff(base: string): Promise<string> {
     const ref = await this.baseRef(base);
-    const runs = [await this.git('--no-pager', 'diff', '--stat', ref, '--', '.', ...EXCLUDE), await this.git('--no-pager', 'diff', ref, '--', '.', ...EXCLUDE)];
-    for (const f of await this.untracked()) runs.push(await this.git('--no-pager', 'diff', '--no-index', '--', '/dev/null', f));
-    const cut = runs.some((r) => r.code === 125);
-    return [...runs.map((r) => r.stdout), cut ? `[this diff is larger than ${MAX_OUTPUT / 1024 / 1024} MB and was cut: review the rest with git diff in the repo, file by file]` : ''].filter((p) => p.trim()).join('\n');
+    const untracked = await this.untracked();
+    // Untracked files are marked intent-to-add in a copy of the index, which the checkout's own never sees: one
+    // `git diff` then shows them as new files, where a `git diff --no-index` per file took a process each.
+    const tmp = untracked.length ? await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cs-index-')) : null;
+    try {
+      let env: NodeJS.ProcessEnv = {};
+      if (tmp) {
+        const index = path.join(tmp, 'index');
+        const own = (await this.git('rev-parse', '--path-format=absolute', '--git-path', 'index')).stdout.trim();
+        await fs.promises.copyFile(own, index).catch(() => undefined); // no index yet: git starts an empty one
+        env = { GIT_INDEX_FILE: index };
+        await this.gitWith({ env, input: untracked.join('\0') }, 'add', '--intent-to-add', '--pathspec-from-file=-', '--pathspec-file-nul');
+      }
+      const runs = [await this.gitWith({ env }, '--no-pager', 'diff', '--stat', ref, '--', '.', ...EXCLUDE), await this.gitWith({ env }, '--no-pager', 'diff', ref, '--', '.', ...EXCLUDE)];
+      const cut = runs.some((r) => r.code === 125);
+      return [...runs.map((r) => r.stdout), cut ? `[this diff is larger than ${MAX_OUTPUT / 1024 / 1024} MB and was cut: review the rest with git diff in the repo, file by file]` : ''].filter((p) => p.trim()).join('\n');
+    } finally {
+      if (tmp) await fs.promises.rm(tmp, { recursive: true, force: true });
+    }
   }
 
   /** Where git keeps this checkout's metadata: its own folder and, for a worktree, the repository's shared one. */

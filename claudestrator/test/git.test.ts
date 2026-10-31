@@ -100,3 +100,20 @@ test('git: a file named outside ASCII is a change like any other, for the checks
   git(api, 'mv', 'src/компонент.tsx', 'src/віджет.tsx');
   assert.deepEqual(await repo.dirty(), ['R  src/віджет.tsx'], 'a rename is one entry');
 });
+
+test("git: the review diff takes in many new files at once and leaves the checkout's index as it was", async () => {
+  const ws = workspace(['api'], '');
+  const api = path.join(ws, 'api');
+  fs.mkdirSync(path.join(api, 'gen'));
+  for (let i = 0; i < 300; i++) fs.writeFileSync(path.join(api, 'gen', `f${i}.txt`), `line ${i}\n`);
+  fs.appendFileSync(path.join(api, 'README.md'), 'more\n');
+  const started = Date.now();
+  const diff = await taskDiff(taskRepos(ws, task(['api'], 'branch'), config, ['api']));
+  const ms = Date.now() - started;
+  assert.equal((diff.text.match(/^new file mode/gm) || []).length, 300, 'every new file, as a new file');
+  assert.match(diff.text, /\+line 299/);
+  assert.match(diff.text, /\+more/);
+  assert.ok(ms < 5000, `${ms} ms: not a process per file`);
+  assert.equal(git(api, 'status', '--porcelain', '--', 'gen').split('\n').filter(Boolean).length, 1, 'still untracked: ?? gen/');
+  assert.equal(git(api, 'diff', '--cached', '--name-only'), '', 'nothing staged in your index');
+});
