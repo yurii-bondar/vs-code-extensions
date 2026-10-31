@@ -426,7 +426,7 @@ interface Views {
       .map((x) => `<button data-action="set-account" data-dir="${esc(x.dir)}" class="${x.current ? 'current' : ''}">${x.current ? icon('check') : '<span class="ic"></span>'}<span class="acc-row"><b>${esc(x.email || x.label)}${x.loggedIn === false ? ' <span class="badge tone-error">signed out</span>' : ''}</b><span class="muted small">${esc(x.label)} · ${esc(x.dir.replace(/^\/Users\/[^/]+/, '~'))}</span></span></button>`)
       .join('');
     return `<span class="menu-wrap acc-wrap">
-      <button class="acc-btn ${a.loggedIn === false ? 'signed-out' : ''}" data-action="eff-menu" title="${a.loggedIn === false ? 'Signed out — ' : ''}"${esc(`Claude account for agents, MCP and limits: ${who} (${a.shownDir}) — ${a.sourceText}`)}">${icon('user')}<span>${esc(who)}</span>▾</button>
+      <button class="acc-btn ${a.loggedIn === false ? 'signed-out' : ''}" data-action="eff-menu" title="${esc(`${a.loggedIn === false ? 'Signed out — ' : ''}Claude account for agents, MCP and limits: ${who} (${a.shownDir}) — ${a.sourceText}`)}">${icon('user')}<span>${esc(who)}</span>▾</button>
       <div class="menu acc-menu">
         <div class="menu-title">Claude account for agents, MCP servers and limits</div>
         ${rows}
