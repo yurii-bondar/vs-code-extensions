@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { spawn } from 'child_process';
 import { getChildEnv, GitRepo } from './git';
+import { writeReplacing } from './files';
 import { plainLauncher, type Launcher } from './sandbox';
 import { credentialVars, GITHUB_TOKENS } from './settings';
 import type { RepoConfig } from './types';
@@ -163,6 +164,10 @@ async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = fal
   if (changed.length === 0 && !force) return { repo: repo.name, status: 'skipped', results: [], summary: `SKIP ${repo.name}: no changes` };
 
   await fs.promises.mkdir(logDir, { recursive: true });
+  // Logs are written by this process, outside the sandbox: a folder an agent turned into a link would lead them elsewhere.
+  for (const d of [logDir, path.dirname(logDir)]) {
+    if ((await fs.promises.lstat(d)).isSymbolicLink()) throw new Error(`${d} is a link; the checks' logs are not written through it`);
+  }
   const results: GateResult[] = [];
   const lines: string[] = [];
   for (const gate of repo.gates) {
@@ -184,7 +189,7 @@ async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = fal
     const log = path.join(logDir, `${slug(repo.name)}.${slug(gate.name)}.log`);
     const hint = launch && r.code !== 0 && SANDBOX_REFUSAL.test(r.output) ? `\n${SANDBOX_HINT}` : '';
     const output = plain(r.output) + hint;
-    await fs.promises.writeFile(log, `$ (cd ${path.relative(dir, cwd) || '.'} && ${gate.cmd})\n${output}\nexit ${r.code}\n`);
+    await writeReplacing(log, `$ (cd ${path.relative(dir, cwd) || '.'} && ${gate.cmd})\n${output}\nexit ${r.code}\n`);
     if (r.code === 0) {
       results.push({ repo: repo.name, gate: gate.name, status: 'pass', log, ms });
       lines.push(`PASS ${repo.name} ${gate.name}`);

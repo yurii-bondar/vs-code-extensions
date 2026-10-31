@@ -32,6 +32,22 @@ async function writeAtomic(file: string, text: string): Promise<void> {
   }
 }
 
+/**
+ * Writes a file in a folder others may write too (an agent's sandbox reaches the workspace): into a new temporary
+ * file, then renamed onto the name. A link planted under that name is replaced, never followed, so the text cannot
+ * land in the file it points to (`~/.zshrc`).
+ */
+async function writeReplacing(file: string, text: string): Promise<void> {
+  const tmp = path.join(path.dirname(file), `.${path.basename(file)}.${crypto.randomBytes(4).toString('hex')}.tmp`);
+  try {
+    await fs.promises.writeFile(tmp, text, { flag: 'wx' });
+    await fs.promises.rename(tmp, file);
+  } catch (e) {
+    await fs.promises.rm(tmp, { force: true });
+    throw e;
+  }
+}
+
 /** A file's size and change time, '' when it is not there: whether it changed since it was read. */
 const signature = (file: string): Promise<string> =>
   fs.promises.stat(file).then(
@@ -39,4 +55,4 @@ const signature = (file: string): Promise<string> =>
     () => ''
   );
 
-export { exists, signature, writeAtomic };
+export { exists, signature, writeAtomic, writeReplacing };

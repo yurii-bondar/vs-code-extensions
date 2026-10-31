@@ -944,7 +944,9 @@ function loosened(layers: Layer[]): Diagnostic[] {
  * sandbox off or add a gate the next stage runs, and that change never shows in a diff.
  */
 function configPaths(workspace: string, config: Pick<Config, 'sources'>): string[] {
-  return [...new Set([path.join(workspace, CONFIG_DIR), path.join(workspace, ORCH_DIR, 'tasks'), path.join(workspace, ORCH_DIR, 'current'), ...config.sources.map((f) => path.resolve(f))])];
+  const orch = (p: string): string => path.join(workspace, ORCH_DIR, p);
+  // All of .orch but the worktrees, where agents work: what Claudestrator itself writes there (the checks' logs too).
+  return [...new Set([path.join(workspace, CONFIG_DIR), orch('tasks'), orch('current'), orch('gates'), orch('.gitignore'), ...config.sources.map((f) => path.resolve(f))])];
 }
 
 // ---------- editing the project layer ----------
