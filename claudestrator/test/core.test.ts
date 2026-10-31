@@ -1689,6 +1689,13 @@ test('config: a base branch is a branch name, never something git would read as 
   }
 });
 
+test('config: a task has a budget unless you say it has none', () => {
+  assert.equal(passed(resolve([config.builtinLayer()])).config.limits.budgetUsd, 25, 'built in');
+  assert.equal(passed(resolve([config.builtinLayer(), layer({ limits: { budgetUsd: 60 } })])).config.limits.budgetUsd, 60);
+  assert.equal(passed(resolve([config.builtinLayer(), layer({ limits: { budgetUsd: 0 } })])).config.limits.budgetUsd, undefined, '0: no limit');
+  assert.ok(validateConfigLayer({ limits: { budgetUsd: -1 } }).length > 0);
+});
+
 test('config: a repo name is a folder name of its own, never a path out of the worktrees folder', () => {
   for (const name of ['api', 'web-app', 'svc_2', 'api.v2']) assert.deepEqual(validateConfigLayer({ repos: { [name]: {} } }), [], name);
   for (const name of ['..', '../../..', 'a/b', 'a\\b', '.hidden', '-rf', 'x..y', '/abs', 'two words']) {

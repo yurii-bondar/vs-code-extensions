@@ -314,7 +314,8 @@ const BUILTIN: BuiltinConfig = {
   },
   pipeline: ['planner', 'developer', 'tester', 'reviewer'],
   scenarios: { readiness: ['verifier'], audit: ['auditor'] },
-  limits: { reviewRounds: 2, gateAttempts: 3 },
+  // A task that spends this much has gone wrong somewhere: it stops, and you raise the limit or resume it. 0: no limit.
+  limits: { reviewRounds: 2, gateAttempts: 3, budgetUsd: 25 },
   language: 'English',
   baseBranch: 'main',
 };
@@ -603,7 +604,7 @@ function resolveConfig(layers: Layer[], opts: { flags?: Flags | undefined; readF
       limits: {
         reviewRounds: merged.limits.reviewRounds ?? 2,
         gateAttempts: merged.limits.gateAttempts ?? 3,
-        ...(merged.limits.budgetUsd !== undefined && { budgetUsd: merged.limits.budgetUsd }),
+        ...(merged.limits.budgetUsd !== undefined && merged.limits.budgetUsd > 0 && { budgetUsd: merged.limits.budgetUsd }),
         ...(merged.limits.parallelTasks !== undefined && { parallelTasks: merged.limits.parallelTasks }),
       },
       language: merged.language ?? 'English',

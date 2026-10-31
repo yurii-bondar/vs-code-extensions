@@ -87,6 +87,7 @@ const T = {
     !Number.isInteger(v) ? [`${at(p)}: expected a whole number, got ${kind(v)}`]
       : (v as number) < min || (v as number) > max ? [`${at(p)}: must be between ${min} and ${max}`] : [],
   pos: (): Check => (v, p) => (typeof v === 'number' && v > 0 ? [] : [`${at(p)}: expected a positive number`]),
+  nonNegative: (): Check => (v, p) => (typeof v === 'number' && v >= 0 ? [] : [`${at(p)}: expected 0 or a positive number`]),
   oneOf: (list: readonly unknown[]): Check => (v, p) => (list.includes(v) ? [] : [`${at(p)}: expected one of ${list.join(', ')}, got ${JSON.stringify(v)}`]),
   re: (re: RegExp, msg: string): Check => (v, p) => (typeof v === 'string' && re.test(v) ? [] : [`${at(p)}: ${msg}`]),
   arr: (item: Check, min = 0, max = Infinity): Check => (v, p) => {
@@ -209,7 +210,7 @@ const CONFIG_LAYER = T.obj({
   'pipeline?': T.arr(agentName),
   'scenarios?': scenariosLayer,
   'libraries?': T.arr(T.str(1)),
-  'limits?': T.obj({ 'reviewRounds?': T.int(0, 20), 'gateAttempts?': T.int(1, 20), 'budgetUsd?': T.pos(), 'parallelTasks?': T.int(1, 20) }),
+  'limits?': T.obj({ 'reviewRounds?': T.int(0, 20), 'gateAttempts?': T.int(1, 20), 'budgetUsd?': T.nonNegative(), 'parallelTasks?': T.int(1, 20) }),
   'language?': T.str(1),
   'baseBranch?': BRANCH,
   'repos?': T.rec(T.re(REPO_NAME, 'a repo name is letters, digits, ".", "_" and "-", e.g. api or web-app'), T.obj({ 'role?': T.str(1), 'path?': T.str(1), 'baseBranch?': BRANCH, 'gates?': T.arr(GATE) })),
