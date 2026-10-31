@@ -268,10 +268,10 @@ class DashboardPanel implements RpcHandlers {
       root: this.root,
       rootName: this.root ? path.basename(this.root) : null,
       languages: LANGUAGES,
-      hasConfig: this.orch.hasProjectConfig(),
+      hasConfig: await this.orch.hasProjectConfig(),
       config: this.root ? await this.configSummary() : null,
       health: this.healthSummary(),
-      tasks: engine ? this.orch.list().map((entry) => view.summary(engine, entry)) : [],
+      tasks: engine ? await Promise.all((await this.orch.list()).map((entry) => view.summary(engine, entry))) : [],
       limits: this.orch.limits(),
       account: this.orch.account(),
       accounts: this.orch.accounts(),
@@ -312,11 +312,11 @@ class DashboardPanel implements RpcHandlers {
 
   async $task({ taskId }: { taskId: string }): Promise<TaskScreen> {
     const engine = this.engine;
-    const state = engine.svc.state(taskId);
+    const state = await engine.svc.state(taskId);
     return {
-      ...view.detail(engine, taskId),
+      ...(await view.detail(engine, taskId)),
       ...(state.checkpoint && { checkpointContext: await engine.checkpointContext(state, state.checkpoint), checkpointFull: state.checkpoint }),
-      ticket: engine.svc.readArtifact(taskId, 'ticket.md'),
+      ticket: await engine.svc.readArtifact(taskId, 'ticket.md'),
       pipelineEdit: await this.pipelineEdit(state),
     };
   }
@@ -340,7 +340,7 @@ class DashboardPanel implements RpcHandlers {
   }
 
   async $transcript({ taskId, key }: { taskId: string; key: string }) {
-    return this.engine.svc.readTranscript(taskId, key);
+    return await this.engine.svc.readTranscript(taskId, key);
   }
 
   async $run({ taskId }: { taskId: string }) {
@@ -398,16 +398,16 @@ class DashboardPanel implements RpcHandlers {
   /** The task's current combined diff, freshly computed, in a diff-highlighted editor. */
   async $openDiff({ taskId }: { taskId: string }) {
     const engine = this.engine;
-    const state = engine.svc.state(taskId);
+    const state = await engine.svc.state(taskId);
     if (!state.repos.length) throw new Error('No repos have changes yet');
     const r = await this.orch.config();
     const diff = await taskDiff(taskRepos(this.root, state, r.ok ? r.config : null, state.repos.map((x) => x.name)));
-    engine.svc.writeArtifact(taskId, 'diff.patch', diff.text);
+    await engine.svc.writeArtifact(taskId, 'diff.patch', diff.text);
     await this.$openFile({ taskId, file: 'diff.patch' });
   }
 
   async $openRepo({ taskId, repo }: { taskId: string; repo: string }) {
-    const state = this.engine.svc.state(taskId);
+    const state = await this.engine.svc.state(taskId);
     const r = await this.orch.config();
     const [tr] = taskRepos(this.root, state, r.ok ? r.config : null, [repo]);
     await vscode.commands.executeCommand('revealInExplorer', vscode.Uri.file(tr!.dir));
@@ -418,7 +418,7 @@ class DashboardPanel implements RpcHandlers {
   }
 
   async $deleteTask({ taskId }: { taskId: string }) {
-    const state = this.engine.svc.state(taskId);
+    const state = await this.engine.svc.state(taskId);
     const worktrees = state.gitMode === 'worktree' && state.repos.length;
     const choice = await vscode.window.showWarningMessage(
       `Delete task ${taskId}?`,
@@ -442,7 +442,7 @@ class DashboardPanel implements RpcHandlers {
   }
 
   async $resumeTerminal({ taskId, key }: { taskId: string; key: string }) {
-    const d = view.detail(this.engine, taskId);
+    const d = await view.detail(this.engine, taskId);
     const step = d.steps.find((s) => s.key === key);
     if (!step || !step.sessionId) throw new Error('This step has no Claude session to continue');
     // It comes from the task log, and goes on a shell's command line.
@@ -511,7 +511,7 @@ class DashboardPanel implements RpcHandlers {
   async $config(): Promise<ConfigData> {
     const r = await this.orch.config();
     const layer = this.root ? cfg.readProjectLayer(this.root) : {};
-    const base = { root: this.root, hasConfig: this.orch.hasProjectConfig(), files: { project: this.root && cfg.projectConfigFile(this.root), user: cfg.userConfigFile() }, layer, colors: AGENT_COLORS, outputs: OUTPUTS, efforts: EFFORTS, builtins: cfg.builtinAgentNames(), languages: LANGUAGES, libraries: this.root ? libraries.listLibraries({ workspace: this.root }) : [] };
+    const base = { root: this.root, hasConfig: await this.orch.hasProjectConfig(), files: { project: this.root && cfg.projectConfigFile(this.root), user: cfg.userConfigFile() }, layer, colors: AGENT_COLORS, outputs: OUTPUTS, efforts: EFFORTS, builtins: cfg.builtinAgentNames(), languages: LANGUAGES, libraries: this.root ? libraries.listLibraries({ workspace: this.root }) : [] };
     if (!r.ok) return { ...base, ok: false, errors: r.errors.map((e) => e.message), warnings: (r.warnings || []).map((w) => w.message) };
     const pipeline = buildPipeline(r.config);
     const agents = Object.values(r.config.agents).map((a) => ({

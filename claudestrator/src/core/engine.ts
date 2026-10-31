@@ -343,7 +343,7 @@ class Engine extends EventEmitter {
     }
     const source = sc.source;
     const pipeline = buildPipeline(r.config, { auto: auto || inv.auto, scenario: sc.name });
-    const { taskId, exists } = this.svc.idFor({ taskId: key || inv.key, source, scenario: sc.scenario });
+    const { taskId, exists } = await this.svc.idFor({ taskId: key || inv.key, source, scenario: sc.scenario });
     let problem: string | undefined;
     if (source.kind === 'jira') {
       const allowed = r.config.jira.allowedProjects;
@@ -454,14 +454,14 @@ class Engine extends EventEmitter {
   }
 
   /** Branch mode switches your checkouts, so two tasks with repo stages cannot run at once. */
-  checkExclusive(taskId: string): void {
-    const s = this.svc.state(taskId);
+  async checkExclusive(taskId: string): Promise<void> {
+    const s = await this.svc.state(taskId);
     const touchesRepos = (st: TaskState): boolean => st.gitMode === 'branch' && st.pipeline.stages.some(onRepos);
     if (!touchesRepos(s)) return;
     for (const other of this.running) {
       if (other === taskId) continue;
       try {
-        if (touchesRepos(this.svc.state(other))) throw new EngineError('busy', `${other} is running and branch mode shares your checkouts. Wait for it, or switch Git mode to worktrees in Settings.`);
+        if (touchesRepos(await this.svc.state(other))) throw new EngineError('busy', `${other} is running and branch mode shares your checkouts. Wait for it, or switch Git mode to worktrees in Settings.`);
       } catch (e) {
         if (e instanceof EngineError) throw e;
       }
@@ -483,7 +483,7 @@ class Engine extends EventEmitter {
     // Taken before the first await: two launches of one task never both pass the check.
     this.running.add(taskId);
     try {
-      this.checkExclusive(taskId);
+      await this.checkExclusive(taskId);
       await this.checkCapacity(taskId);
     } catch (e) {
       this.running.delete(taskId);
@@ -492,7 +492,7 @@ class Engine extends EventEmitter {
     this.emit('changed', taskId);
     try {
       for (;;) {
-        const s = this.svc.state(taskId);
+        const s = await this.svc.state(taskId);
         const next = nextAction(s);
         switch (next.kind) {
           case 'done':
@@ -539,8 +539,8 @@ class Engine extends EventEmitter {
     }
     // What the user wrote next to the issue key ("check it is ready") travels with the ticket.
     if (s.source.note && !spec.request) spec = { ...spec, request: s.source.note };
-    this.svc.writeArtifact(s.taskId, TASK_FILES.ticketJson, `${JSON.stringify(spec, null, 2)}\n`);
-    this.svc.writeArtifact(s.taskId, TASK_FILES.ticket, renderTicket(spec));
+    await this.svc.writeArtifact(s.taskId, TASK_FILES.ticketJson, `${JSON.stringify(spec, null, 2)}\n`);
+    await this.svc.writeArtifact(s.taskId, TASK_FILES.ticket, renderTicket(spec));
     await this.dispatch(s.taskId, { type: 'intake_completed', spec });
   }
 
@@ -620,14 +620,14 @@ class Engine extends EventEmitter {
     this.sessions.set(s.taskId, session);
     let t: TurnResult = { ok: false, report: '' };
     try {
-      if (this.svc.state(s.taskId).status === 'stopped') {
+      if ((await this.svc.state(s.taskId)).status === 'stopped') {
         await session.interrupt();
         throw new EngineError('stopped', 'stopped');
       }
       t = await this.turnOf(s.taskId, session);
       let parsed: RawTicket | null = null;
       for (let i = 0; ; i++) {
-        if (this.svc.state(s.taskId).status === 'stopped') throw new EngineError('stopped', 'stopped');
+        if ((await this.svc.state(s.taskId)).status === 'stopped') throw new EngineError('stopped', 'stopped');
         if (!t.ok && CLAUDE_AUTH.test(t.error || '')) throw new EngineError('claude_login', `Claude Code is signed out for this account (${t.error}). Sign in again, or switch the account.`);
         if (!t.ok) throw new EngineError('fetch_failed', `reading ${src.kind === 'jira' ? src.key : 'the page'} via ${via.server} failed: ${t.error || 'the agent failed'}`);
         const block = lastJsonBlock(t.report);
@@ -726,9 +726,9 @@ class Engine extends EventEmitter {
     return { ...hookEnv, ...(!config.policy.sandbox && { CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1' }) };
   }
 
-  spentUsd(taskId: string): number {
+  async spentUsd(taskId: string): Promise<number> {
     let total = 0;
-    for (const e of this.svc.events(taskId)) if (e.type === 'agent_stopped') total += Number((e.payload && e.payload.costUsd) || 0);
+    for (const e of await this.svc.events(taskId)) if (e.type === 'agent_stopped') total += Number((e.payload && e.payload.costUsd) || 0);
     return total;
   }
 
@@ -746,7 +746,7 @@ class Engine extends EventEmitter {
     const label = stepLabel(step);
 
     const budget = config.limits.budgetUsd;
-    const spent = budget !== undefined ? this.spentUsd(taskId) : 0;
+    const spent = budget !== undefined ? await this.spentUsd(taskId) : 0;
     if (budget !== undefined && spent >= budget) {
       this.log('warn', `Budget of $${budget} spent ($${spent.toFixed(2)}); the task stopped`, taskId);
       await this.dispatch(taskId, { type: 'stopped', reason: `budget of $${budget} spent` });
@@ -774,14 +774,14 @@ class Engine extends EventEmitter {
     if (stage.output === 'verdict' && s.repos.length) {
       this.setLive(taskId, { phase: 'preparing', step, text: 'Collecting the diff for review' });
       const diff = await taskDiff(taskRepos(this.workspace, s, config, s.repos.map((r) => r.name)));
-      diffPath = this.svc.writeArtifact(taskId, `reviews/r${s.review.round}/diff.patch`, diff.text);
+      diffPath = await this.svc.writeArtifact(taskId, `reviews/r${s.review.round}/diff.patch`, diff.text);
       emptyDiff = diff.empty;
     }
 
     let seq: number;
     if (next.kind === 'run') seq = (await this.dispatch(taskId, { type: 'stage_started', agent: step.agent, ...(step.repo && { repo: step.repo }) })).event.seq!;
     else {
-      const started = this.svc.events(taskId).filter((e): e is EventOf<'stage_started'> => e.type === 'stage_started' && sameStep(e, step));
+      const started = (await this.svc.events(taskId)).filter((e): e is EventOf<'stage_started'> => e.type === 'stage_started' && sameStep(e, step));
       seq = started.length ? started[started.length - 1]!.seq! : 0;
     }
     const key = transcriptKey(seq, step);
@@ -795,7 +795,7 @@ class Engine extends EventEmitter {
       return;
     }
 
-    const state = this.svc.state(taskId);
+    const state = await this.svc.state(taskId);
     const run = next.kind === 'run' ? next : runOf(state, step);
     // A planner names the repos its plan works in, and readiness and audit agents read them: each gets every configured
     // repo, where it is (also outside the workspace folder), by the name the plan must use.
@@ -848,12 +848,12 @@ class Engine extends EventEmitter {
     this.setLive(taskId, { phase: 'agent', step, key, text: `${label} is working` });
 
     let t: TurnResult = { ok: false, report: '' };
-    const stopped = (): boolean => this.svc.state(taskId).status === 'stopped';
+    const stopped = async (): Promise<boolean> => (await this.svc.state(taskId)).status === 'stopped';
     try {
       // Stopped while it started: Stop found no session to interrupt then.
-      if (stopped()) return void (await session.interrupt());
+      if (await stopped()) return void (await session.interrupt());
       t = await this.turnOf(taskId, session);
-      if (stopped()) return;
+      if (await stopped()) return;
       if (!t.ok) return void (await fail(t.error || 'the agent failed'));
 
       let gates: 'none' | 'pass' | 'fail' = 'none';
@@ -879,7 +879,7 @@ class Engine extends EventEmitter {
                   keepEnv: config.policy.checkEnv,
                 })
               );
-              if (stopped()) return;
+              if (await stopped()) return;
             }
           } finally {
             this.gateRuns.delete(taskId);
@@ -903,7 +903,7 @@ class Engine extends EventEmitter {
           session.send(`Gates failed in ${red} (attempt ${attempt} of ${config.limits.gateAttempts}). Fix the causes below. Do not weaken, skip or delete tests or lint rules. Then reply with your full report again.\n\n${g.summary}`, { from: 'orchestrator' });
           this.setLive(taskId, { phase: 'agent', step, key, text: `${label} is fixing red gates in ${where.includes(',') ? red : where}` });
           t = await this.turnOf(taskId, session);
-          if (stopped()) return;
+          if (await stopped()) return;
           if (!t.ok) return void (await fail(t.error || 'the agent failed while fixing gates'));
         }
       }
@@ -922,7 +922,7 @@ class Engine extends EventEmitter {
         this.setLive(taskId, { phase: 'agent', step, key, text: `${label} is correcting its report` });
         session.send(`Your report could not be read: ${parsed.error}. Reply again with the complete, corrected report.`, { from: 'orchestrator' });
         t = await this.turnOf(taskId, session);
-        if (stopped()) return;
+        if (await stopped()) return;
         if (!t.ok) return void (await fail(t.error || 'the agent failed while correcting its report'));
         parsed = check();
       }
@@ -931,7 +931,7 @@ class Engine extends EventEmitter {
       const artifact = artifactPath(stage.output, step.agent, state.review.round, step.repo);
       // The artifact reads as before: the report, then its data as a json block (structured output comes apart).
       const text = t.structured !== undefined ? `${t.report}\n\n\`\`\`json\n${JSON.stringify(t.structured, null, 2)}\n\`\`\`` : t.report;
-      this.svc.writeArtifact(taskId, artifact, text.endsWith('\n') ? text : `${text}\n`);
+      await this.svc.writeArtifact(taskId, artifact, text.endsWith('\n') ? text : `${text}\n`);
       await this.dispatch(taskId, {
         type: 'stage_completed',
         agent: step.agent,
@@ -944,7 +944,7 @@ class Engine extends EventEmitter {
         ...(emptyDiff && { emptyDiff: true }),
         gates,
       });
-      if (REPORT_OUTPUTS.has(stage.output)) this.writeReport(taskId, config.language);
+      if (REPORT_OUTPUTS.has(stage.output)) await this.writeReport(taskId, config.language);
     } finally {
       session.close();
       this.sessions.delete(taskId);
@@ -998,7 +998,7 @@ class Engine extends EventEmitter {
       })
     );
     const text = `# Pull requests on GitHub that mention ${key}\n\nListed by Claudestrator with \`gh pr list --search ${key} --state all\` in each repository.\n\n${sections.join('\n\n')}\n`;
-    return this.svc.writeArtifact(taskId, 'github/prs.md', text);
+    return await this.svc.writeArtifact(taskId, 'github/prs.md', text);
   }
 
   /** The permission policy of an agent session: the Bash guard, writes only inside the stage's repo, then (optionally) you. */
@@ -1009,7 +1009,7 @@ class Engine extends EventEmitter {
       return { allow: false, reason: `Claudestrator: ${reason}` };
     };
     // A stopped task's agent is being interrupted: what it still asks for does not run.
-    if (this.svc.exists(taskId) && this.svc.state(taskId).status === 'stopped') return blocked('the task was stopped');
+    if ((await this.svc.exists(taskId)) && (await this.svc.state(taskId)).status === 'stopped') return blocked('the task was stopped');
     // StructuredOutput is how an agent hands over its report's data (--json-schema): nothing it reaches.
     if (READ_TOOLS.has(tool) || tool === 'StructuredOutput') return { allow: true };
     const cwd = writeRoots.length === 1 ? writeRoots[0]! : this.workspace;
@@ -1154,10 +1154,10 @@ class Engine extends EventEmitter {
     for (const r of all) if ((await r.git.branchChanges(r.base, branch)).length) repos.push(r);
     const prs = { ...s.prs };
     await this.ensureSandbox(config);
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-pr-'));
-    const bodyFile = (repo: string): string => {
+    const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cs-pr-'));
+    const bodyFile = async (repo: string): Promise<string> => {
       const f = path.join(tmp, `${repo}.md`);
-      fs.writeFileSync(f, prBody({ state: this.svc.state(s.taskId), repo, taskDir, language: config.language, prs, forbidAttribution: config.policy.forbidAiAttribution }));
+      await fs.promises.writeFile(f, prBody({ state: await this.svc.state(s.taskId), repo, taskDir, language: config.language, prs, forbidAttribution: config.policy.forbidAiAttribution }));
       return f;
     };
     try {
@@ -1177,19 +1177,19 @@ class Engine extends EventEmitter {
           continue;
         }
         this.setLive(s.taskId, { phase: 'publishing', text: `Opening a draft PR in ${r.name}` });
-        const pr = await exec('gh', ['pr', 'create', '--draft', '--base', r.base, '--head', branch, '--title', prTitle(s, config.policy.forbidAiAttribution), '--body-file', bodyFile(r.name)], { cwd: r.dir, timeoutMs: 120000 });
+        const pr = await exec('gh', ['pr', 'create', '--draft', '--base', r.base, '--head', branch, '--title', prTitle(s, config.policy.forbidAiAttribution), '--body-file', await bodyFile(r.name)], { cwd: r.dir, timeoutMs: 120000 });
         if (pr.code !== 0) throw new EngineError('pr_failed', `${r.name}: ${pr.stderr.trim() || pr.stdout.trim()}`);
         prs[r.name] = pr.stdout.trim().split('\n').reverse().find((l) => /^https?:\/\//.test(l.trim()))?.trim() || pr.stdout.trim();
       }
       // Every body lists the others, so link them once all exist.
       if (Object.keys(prs).length > 1) {
         for (const r of repos) {
-          const edit = await exec('gh', ['pr', 'edit', prs[r.name]!, '--body-file', bodyFile(r.name)], { cwd: r.dir, timeoutMs: 120000 });
+          const edit = await exec('gh', ['pr', 'edit', prs[r.name]!, '--body-file', await bodyFile(r.name)], { cwd: r.dir, timeoutMs: 120000 });
           if (edit.code !== 0) this.log('warn', `${prs[r.name]} was opened, but its description could not list the other PRs: ${(edit.stderr || edit.stdout).trim().split('\n').pop() || `gh exited with ${edit.code}`}`, s.taskId);
         }
       }
     } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
+      await fs.promises.rm(tmp, { recursive: true, force: true });
     }
     await this.dispatch(s.taskId, { type: 'published', prs });
     if (s.answers.some((a) => a.id === 'confirm-push' && a.option === 'push-comment')) {
@@ -1199,9 +1199,9 @@ class Engine extends EventEmitter {
   }
 
   /** `report.md`: every readiness or audit agent's result in one document. */
-  writeReport(taskId: string, language?: string): void {
-    const text = renderReport(this.svc.state(taskId), language);
-    if (text) this.svc.writeArtifact(taskId, TASK_FILES.report, text);
+  async writeReport(taskId: string, language?: string): Promise<void> {
+    const text = renderReport(await this.svc.state(taskId), language);
+    if (text) await this.svc.writeArtifact(taskId, TASK_FILES.report, text);
   }
 
   /**
@@ -1238,7 +1238,7 @@ class Engine extends EventEmitter {
     const jira = s.source as Extract<Source, { kind: 'jira' }>;
     const key = jira.key;
     const site = jira.site || via.site;
-    const n = this.svc.events(s.taskId).filter((e) => e.type === 'jira_comment').length + 1;
+    const n = (await this.svc.events(s.taskId)).filter((e) => e.type === 'jira_comment').length + 1;
     const transcript = `comment-${n}`;
     const append = (item: TranscriptItem): void => {
       if (item.type !== 'text_delta' && item.type !== 'thinking' && item.type !== 'usage') this.svc.appendTranscript(s.taskId, transcript, { ...item, t: Date.now() });
@@ -1285,7 +1285,7 @@ class Engine extends EventEmitter {
 
   /** Posts a finished readiness check or audit on the task's Jira issue. */
   async postReport(taskId: string): Promise<CommentResult> {
-    const s = this.svc.state(taskId);
+    const s = await this.svc.state(taskId);
     if (!(s.reports || []).length) throw new EngineError('no_report', 'There is no report to post yet');
     if (s.source.kind !== 'jira') throw new EngineError('not_jira', 'This task did not come from a Jira issue');
     return this.comment(s, jiraText(s, (await this.config()).language), 'report');
@@ -1293,9 +1293,9 @@ class Engine extends EventEmitter {
 
   /** Posts a comment that failed again, with the same text. */
   async retryComment(taskId: string, seq: number): Promise<CommentResult> {
-    const e = this.svc.events(taskId).find((x): x is EventOf<'jira_comment'> => x.type === 'jira_comment' && x.seq === seq);
+    const e = (await this.svc.events(taskId)).find((x): x is EventOf<'jira_comment'> => x.type === 'jira_comment' && x.seq === seq);
     if (!e) throw new EngineError('no_comment', 'That comment is not in the task log');
-    return this.comment(this.svc.state(taskId), e.text!, e.what);
+    return this.comment(await this.svc.state(taskId), e.text!, e.what);
   }
 
   // ---------- commands from the UI ----------
@@ -1305,7 +1305,7 @@ class Engine extends EventEmitter {
    * an agent the task already has keeps its role, a new one comes from the config. A running task carries on with it.
    */
   async editPipeline(taskId: string, names: string[]): Promise<{ warnings: string[] }> {
-    const s = this.svc.state(taskId);
+    const s = await this.svc.state(taskId);
     if (editableFrom(s) === -1) throw new EngineError('pipeline_locked', 'The stages of this task are through; its pipeline can no longer change');
     const config = await this.config();
     const agents: StageSource[] = names.map((name) => {
@@ -1324,13 +1324,13 @@ class Engine extends EventEmitter {
   }
 
   async resume(taskId: string): Promise<void> {
-    const s = this.svc.state(taskId);
+    const s = await this.svc.state(taskId);
     if (s.status === 'stopped') await this.dispatch(taskId, { type: 'resumed' });
     this.launch(taskId);
   }
 
   async answer(taskId: string, checkpointId: string, option: string, feedback?: string): Promise<void> {
-    let s = this.svc.state(taskId);
+    let s = await this.svc.state(taskId);
     if (s.status === 'stopped' && s.checkpoint) s = (await this.dispatch(taskId, { type: 'resumed' })).state;
     const r = await this.dispatch(taskId, { type: 'checkpoint_answered', id: checkpointId, option, ...(feedback && { feedback }) });
     if (option === 'approve-post') {
@@ -1348,7 +1348,7 @@ class Engine extends EventEmitter {
 
   /** Stops the running agent (if any) and the task; resuming later re-runs the same step. */
   async stop(taskId: string, reason = 'stopped by you'): Promise<void> {
-    const s = this.svc.state(taskId);
+    const s = await this.svc.state(taskId);
     if (s.status !== 'stopped' && s.status !== 'done') await this.dispatch(taskId, { type: 'stopped', reason });
     this.denyPermissions(taskId, 'the task was stopped');
     const gates = this.gateRuns.get(taskId);
@@ -1364,20 +1364,20 @@ class Engine extends EventEmitter {
   /** What a human needs to decide a checkpoint: `{ format: 'markdown'|'log', text, files? }`. */
   async checkpointContext(s: TaskState, cp: Checkpoint | null): Promise<CheckpointContext> {
     if (!cp) return { format: 'markdown', text: '' };
-    const read = (rel?: string): string => (rel ? this.svc.readArtifact(s.taskId, rel) : '');
+    const read = async (rel?: string): Promise<string> => (rel ? this.svc.readArtifact(s.taskId, rel) : '');
     switch (cp.id) {
       case 'approve-plan': {
         const plans = s.artifacts.filter((a) => a.output === 'plan');
         const last = plans[plans.length - 1];
-        return { format: 'markdown', text: read(last && last.path), file: last && last.path };
+        return { format: 'markdown', text: await read(last && last.path), file: last && last.path };
       }
       case 'review-limit':
         return {
           format: 'markdown',
-          text: s.artifacts.filter((a) => a.output === 'verdict' && a.round === s.review.round).map((a) => read(a.path)).join('\n\n---\n\n'),
+          text: (await Promise.all(s.artifacts.filter((a) => a.output === 'verdict' && a.round === s.review.round).map((a) => read(a.path)))).join('\n\n---\n\n'),
         };
       case 'gate-failure': {
-        const gates = this.svc.events(s.taskId).filter((e): e is EventOf<'gates_ran'> => e.type === 'gates_ran');
+        const gates = (await this.svc.events(s.taskId)).filter((e): e is EventOf<'gates_ran'> => e.type === 'gates_ran');
         const g = gates[gates.length - 1];
         return { format: 'log', text: g ? g.summary : cp.reason || '' };
       }
@@ -1407,7 +1407,7 @@ class Engine extends EventEmitter {
   }
 
   async cleanup(taskId: string, force?: boolean) {
-    const s = this.svc.state(taskId);
+    const s = await this.svc.state(taskId);
     const r = await loadConfig({ workspace: this.workspace, ...(this.home && { home: this.home }) });
     return removeWorktrees(this.workspace, s, r.ok ? r.config : null, force);
   }
@@ -1440,7 +1440,10 @@ class Engine extends EventEmitter {
       out.push({
         name: repo.name,
         dir,
-        exists: fs.existsSync(dir),
+        exists: await fs.promises.access(dir).then(
+          () => true,
+          () => false
+        ),
         isRepo,
         ...(isRepo && { branch: await git.branch(), dirty: (await git.dirty()).length, last: await git.lastCommit(), sync: await git.aheadBehind(repo.baseBranch) }),
       });

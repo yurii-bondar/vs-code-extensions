@@ -577,11 +577,11 @@ test('store: tasks persist, rejections are logged, torn tails are ignored', asyn
   const second = await svc.start({ input: 'y', source: { kind: 'text', text: 'y' }, auto: false, pipeline, config: cfg });
   assert.notEqual(second.taskId, started.taskId);
   failed(await svc.dispatch(started.taskId, { type: 'stage_started', agent: 'planner' }));
-  assert.equal(svc.events(started.taskId).at(-1)!.type, 'transition_rejected');
+  assert.equal((await svc.events(started.taskId)).at(-1)!.type, 'transition_rejected');
   fs.appendFileSync(path.join(svc.dir(started.taskId), 'events.ndjson'), '{"seq": 3, "type": "no');
-  assert.equal(svc.state(started.taskId).phase, 'intake');
+  assert.equal((await svc.state(started.taskId)).phase, 'intake');
   assert.ok((await svc.dispatch(started.taskId, { type: 'intake_completed', spec })).ok);
-  assert.equal(svc.list().length, 2);
+  assert.equal((await svc.list()).length, 2);
 });
 
 test('view: the step timeline continues after the step a checkpoint stopped at', async () => {
@@ -640,9 +640,9 @@ test('task effort: --effort in the text, per-agent choices, and the override rea
   const ws = tmp('cs-teff-');
   const engine = new Engine({ workspace: ws, home: tmp('cs-h-'), runner: {} as EngineOptions['runner'], hooks: {} as EngineOptions['hooks'] });
   const r = await engine.start({ text: 'Do it --effort medium --no tester', effort: { developer: 'max' } });
-  const s = engine.svc.state(r.taskId);
+  const s = await engine.svc.state(r.taskId);
   assert.deepEqual(s.effort, { planner: 'medium', developer: 'max', reviewer: 'medium' }, 'all enabled agents, a named one wins, skipped ones get nothing');
-  assert.equal((engine.svc.events(r.taskId)[0] as EventOf<'task_created'>).effort!.developer, 'max', 'frozen in the task log');
+  assert.equal(((await engine.svc.events(r.taskId))[0] as EventOf<'task_created'>).effort!.developer, 'max', 'frozen in the task log');
   await assert.rejects(() => engine.start({ text: 'x --effort huge' }), /not one of low/);
   await assert.rejects(() => engine.start({ text: 'x', effort: { nobody: 'high' } }), /unknown agent "nobody"/);
   assert.match((await previewOf(engine, { text: 'x --effort huge' })).problem!, /not one of/);
@@ -829,11 +829,11 @@ test('scenarios: the state machine finishes a report scenario without git; intak
   const ws = tmp('cs-ids-');
   const svc = new TaskService({ workspace: ws });
   const jira: Source = { kind: 'jira', key: 'PROJ-9' };
-  assert.deepEqual(svc.idFor({ source: jira, scenario: 'readiness' }), { taskId: 'PROJ-9-check', exists: false });
+  assert.deepEqual(await svc.idFor({ source: jira, scenario: 'readiness' }), { taskId: 'PROJ-9-check', exists: false });
   await svc.start({ input: 'PROJ-9', source: jira, scenario: 'readiness', auto: false, pipeline: bp(c, { scenario: 'readiness' }), config: c });
-  assert.deepEqual(svc.idFor({ source: jira, scenario: 'readiness' }), { taskId: 'PROJ-9-check', exists: true }, 'an unfinished check continues');
-  assert.deepEqual(svc.idFor({ source: jira }), { taskId: 'PROJ-9', exists: false }, 'the delivery task has its own id');
-  assert.equal(svc.state('PROJ-9-check').scenario, 'readiness');
+  assert.deepEqual(await svc.idFor({ source: jira, scenario: 'readiness' }), { taskId: 'PROJ-9-check', exists: true }, 'an unfinished check continues');
+  assert.deepEqual(await svc.idFor({ source: jira }), { taskId: 'PROJ-9', exists: false }, 'the delivery task has its own id');
+  assert.equal((await svc.state('PROJ-9-check')).scenario, 'readiness');
 });
 
 test('machine: the pipeline of a task changes only after the steps that ran, run now or wait for you', async () => {
@@ -959,7 +959,7 @@ test('scenarios: custom scenarios with their own agents, models and effort; buil
   assert.equal((await previewOf(engine, { text: 'Зроби аудит проекту' })).scenarioName, 'deliver', 'words cannot pick a removed scenario');
   await assert.rejects(() => engine.start({ text: 'x', scenario: 'audit' }), /no scenario "audit"/);
   const { taskId } = await engine.start({ text: 'Fix the login', scenario: 'hotfix', effort: { developer: 'high' } });
-  const s = engine.svc.state(taskId);
+  const s = await engine.svc.state(taskId);
   assert.equal(s.scenario, 'deliver');
   assert.equal(s.scenarioLabel, 'Hotfix');
   assert.deepEqual(s.model, { reviewer: 'sonnet' });
@@ -1055,14 +1055,14 @@ test('groups and instructions: written in the composer, frozen into a task, and 
   await assert.rejects(() => engine.start({ text: 'x', instructions: ['no-new-deps', 'gone'] }), /no instruction "gone"/);
   const r = await engine.start({ text: 'Add refunds', group: 'payments', instructions: ['no-new-deps', 'mine'] });
   await config.saveInstruction({ workspace: ws, home, id: 'no-new-deps', label: 'No new deps', text: 'Changed later' });
-  let s = engine.svc.state(r.taskId);
+  let s = await engine.svc.state(r.taskId);
   assert.deepEqual(s.group, { id: 'payments', type: 'epic', label: 'Payments', jira: 'CP-7', instructions: 'Refunds live under /v2/refunds.' });
   assert.deepEqual(s.instructions.map((x) => x.text), ['Use what the repo has.', 'Keep it short']);
-  assert.deepEqual(engine.svc.state((await engine.start({ text: 'Plain' })).taskId).instructions, [], 'none picked: none given');
+  assert.deepEqual((await engine.svc.state((await engine.start({ text: 'Plain' })).taskId)).instructions, [], 'none picked: none given');
 
   // Every agent's prompt names the group and carries the instructions verbatim.
   await engine.dispatch(r.taskId, { type: 'intake_completed', spec: { ...spec, id: r.taskId } });
-  s = engine.svc.state(r.taskId);
+  s = await engine.svc.state(r.taskId);
   const prompt = buildAgentPrompt({ state: s, next: runOf(nx(s)), taskDir: ws, language: 'English' });
   assert.match(prompt, /Part of the epic "Payments" \(Jira CP-7\)\./);
   assert.match(prompt, /instructions for this task, verbatim[^\n]*\n\n### For every task in "Payments"\nRefunds live under \/v2\/refunds\.\n\n### No new deps\nUse what the repo has\.\n\n### Mine\nKeep it short/, "the group's first, then the task's own");
@@ -1403,10 +1403,10 @@ test('view: a task whose log does not replay gets a whole card, so the list and 
   const bad = path.join(ws, '.orch', 'tasks', 'T-BROKEN');
   fs.mkdirSync(bad, { recursive: true });
   fs.writeFileSync(path.join(bad, 'events.ndjson'), '{"seq":1,"type":"stage_started","agent":"x","at":"2026-01-01T00:00:00.000Z"}\n');
-  const entries = svc.list();
+  const entries = await svc.list();
   assert.deepEqual(entries.map((e) => e.taskId).sort(), [ok.taskId, 'T-BROKEN'].sort());
   const corrupt = entries.find((e) => e.corrupt)!;
-  const card = summary({} as ViewEngine, corrupt);
+  const card = await summary({} as ViewEngine, corrupt);
   assert.equal(card.status.key, 'corrupt');
   assert.equal(card.status.resumable, false, 'there is nothing to resume');
   assert.match(card.error!.message!, /log cannot be read: event #1 \(stage_started\) does not replay/);
@@ -1494,18 +1494,18 @@ test('store: an append keeps the cached state and events current, and a write by
   const svc = new TaskService({ workspace: ws });
   const { taskId } = await svc.start({ input: 'x', source: { kind: 'text', text: 'x' }, auto: false, pipeline, config: cfg });
   const file = path.join(ws, '.orch', 'tasks', taskId, 'events.ndjson');
-  const before = svc.state(taskId);
+  const before = await svc.state(taskId);
   await svc.record(taskId, { type: 'note', message: 'one' });
-  const after = svc.state(taskId);
+  const after = await svc.state(taskId);
   assert.notEqual(after, before, 'a new log is a new state object: what the dashboard derives from it is cached by it');
   assert.deepEqual(after, before);
-  assert.deepEqual(svc.events(taskId).map((e) => e.seq), [1, 2]);
+  assert.deepEqual((await svc.events(taskId)).map((e) => e.seq), [1, 2]);
   const r = await svc.dispatch(taskId, { type: 'intake_completed', spec: { id: taskId, source: { kind: 'text', text: 'x' }, title: 'x', description: '', acceptanceCriteria: [], links: [] } });
   assert.ok(r.ok);
-  assert.equal(svc.state(taskId), r.state, 'the state the transition made, without a replay');
+  assert.equal(await svc.state(taskId), r.state, 'the state the transition made, without a replay');
   // The claudestrator CLI appends to the same log: the signature changes, and it is read again.
   fs.appendFileSync(file, `${JSON.stringify({ seq: 4, type: 'note', message: 'from the CLI', at: new Date().toISOString() })}\n`);
-  assert.equal(svc.events(taskId).at(-1)!.type, 'note');
+  assert.equal((await svc.events(taskId)).at(-1)!.type, 'note');
   assert.equal((await svc.record(taskId, { type: 'note', message: 'two' })).seq, 5, 'numbered after it');
   // A torn line left by a crash is cut and the next event numbered from what is whole.
   fs.appendFileSync(file, '{"seq":6,"type":"no');
@@ -1572,5 +1572,5 @@ test('view: a task without its ticket yet is titled by what was typed, without t
   const svc = new TaskService({ workspace: ws });
   const { taskId } = await svc.start({ input: 'Add the feature everywhere --auto --scenario deliver', source: { kind: 'text', text: 'Add the feature everywhere' }, auto: true, pipeline, config: cfg });
   const engine = { isRunning: () => false, lastError: () => null, pendingPermissions: () => [], live: () => null, liveCost: new Map(), svc } as unknown as ViewEngine;
-  assert.equal(summary(engine, { taskId, state: svc.state(taskId) }).title, 'Add the feature everywhere');
+  assert.equal((await summary(engine, { taskId, state: await svc.state(taskId) })).title, 'Add the feature everywhere');
 });

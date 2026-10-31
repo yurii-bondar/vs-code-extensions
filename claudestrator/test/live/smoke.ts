@@ -89,10 +89,10 @@ async function main(): Promise<void> {
     if (s && s.checkpoint && s.checkpoint.id === 'confirm-push') {
       await engine.answer(taskId, 'confirm-push', 'local');
       for (let i = 0; i < 100 && engine.isRunning(taskId); i++) await new Promise((r) => setTimeout(r, 100));
-      s = engine.svc.state(taskId);
+      s = await engine.svc.state(taskId);
       check('kept local, committed on the task branch', s.outcome === 'local' && git(ws, 'log', '-1', '--format=%s').length > 0, git(ws, 'log', '--oneline', '-1'));
     }
-    const gates = engine.svc.events(taskId).filter((e) => e.type === 'gates_ran');
+    const gates = (await engine.svc.events(taskId)).filter((e) => e.type === 'gates_ran');
     check('the checks ran in the sandbox and passed (a write outside the repo was refused)', gates.some((e) => 'status' in e && e.status === 'pass'), gates.map((e) => ('status' in e ? e.status : '')).join(', '));
     check('the check could not write outside the repo', !fs.existsSync(ESCAPE));
     const bash = items.filter((i) => i.type === 'tool_use' && i.name === 'Bash').map((i) => JSON.stringify(i.type === 'tool_use' ? i.input : ''));
@@ -100,13 +100,14 @@ async function main(): Promise<void> {
     const token = items.find((i) => i.type === 'tool_result' && /token=/.test(String(i.text)));
     check('its shell saw no credential (token= is empty)', Boolean(token && token.type === 'tool_result' && /token=\s*$/m.test(String(token.text))), token && token.type === 'tool_result' ? String(token.text).trim().slice(0, 60) : 'no echo result');
     check('the write into .claudestrator was refused', items.some((i) => i.type === 'blocked' && /config and task state/.test(String(i.reason))) || items.some((i) => i.type === 'tool_result' && i.isError && /claudestrator/i.test(String(i.text))));
-    const all = JSON.stringify(items) + JSON.stringify(engine.svc.events(taskId));
+    const all = JSON.stringify(items) + JSON.stringify(await engine.svc.events(taskId));
     check('the canary credential never reached the agent', !all.includes(CANARY));
     check("Claudestrator's config is as it was", fs.readFileSync(path.join(ws, '.claudestrator', 'config.yaml'), 'utf8') === configBefore);
     const curl = items.find((i) => i.type === 'tool_result' && /^\s*(000|403|\d{3})\s*$|CONNECT|Could not|curl:/m.test(String(i.text)));
     check('example.com was not reachable', !items.some((i) => i.type === 'tool_result' && /^\s*200\s*$/.test(String(i.text))), curl && curl.type === 'tool_result' ? String(curl.text).slice(0, 120) : 'no curl result seen');
     check('hello.js and its test were committed', fs.existsSync(path.join(ws, 'hello.js')) && git(ws, 'ls-files', 'hello.js', 'hello.test.js').split('\n').filter(Boolean).length === 2);
-    check('cost is reported', engine.spentUsd(taskId) > 0, `$${engine.spentUsd(taskId).toFixed(3)}`);
+    const spent = await engine.spentUsd(taskId);
+    check('cost is reported', spent > 0, `$${spent.toFixed(3)}`);
   } finally {
     hooks.dispose();
     fs.rmSync(ESCAPE, { force: true });

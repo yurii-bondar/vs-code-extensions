@@ -45,17 +45,30 @@ class TaskTree implements vscode.TreeDataProvider<TreeNode> {
   _onDidChangeTreeData: vscode.EventEmitter<TreeNode | undefined | void>;
   onDidChangeTreeData: vscode.Event<TreeNode | undefined | void>;
   cards: view.Card[];
+  /** Refreshes started: the newest one's cards are the ones shown. */
+  refreshes: number;
 
   constructor(orch: Orchestrator) {
     this.orch = orch;
     this._onDidChangeTreeData = new vscode.EventEmitter();
     this.onDidChangeTreeData = this._onDidChangeTreeData.event;
     this.cards = [];
+    this.refreshes = 0;
   }
 
-  refresh(): void {
+  /** Reads the tasks again. A refresh that finishes after a later one started leaves the later one's cards. */
+  async refresh(): Promise<void> {
+    const n = ++this.refreshes;
     const engine = this.orch.engine;
-    this.cards = engine ? this.orch.list().map((entry) => view.summary(engine, entry)) : [];
+    let cards: view.Card[] = [];
+    try {
+      cards = engine ? await Promise.all((await this.orch.list()).map((entry) => view.summary(engine, entry))) : [];
+    } catch {
+      // a task deleted while it was read; the next refresh lists the rest
+      return;
+    }
+    if (n !== this.refreshes) return;
+    this.cards = cards;
     this._onDidChangeTreeData.fire();
   }
 

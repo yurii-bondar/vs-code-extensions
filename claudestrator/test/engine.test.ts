@@ -42,8 +42,8 @@ repos:
     assert.match(ctx.text, /## Summary/);
 
     await h.engine.answer(taskId, 'approve-plan', 'approve');
-    s = await waitFor(() => {
-      const st = h.engine.svc.state(taskId);
+    s = await waitFor(async () => {
+      const st = await h.engine.svc.state(taskId);
       return !h.engine.isRunning(taskId) && st.checkpoint ? st : null;
     }, 60000);
     assert.equal(s.checkpoint!.id, 'confirm-push', JSON.stringify(h.engine.lastError(taskId)));
@@ -57,7 +57,7 @@ repos:
     }
     assert.ok(!fs.existsSync(path.join(ws, 'outside.txt')), 'a write outside the repo was denied');
 
-    const events = h.engine.svc.events(taskId);
+    const events = await h.engine.svc.events(taskId);
     const gates = only(events, 'gates_ran').filter((e) => e.repo === 'web').map((e) => e.status);
     assert.ok(gates.includes('fail') && gates.includes('pass'), `web gates went red then green: ${gates}`);
     assert.equal(only(events, 'stage_started').filter((e) => e.agent === 'reviewer').length, 2, 'one fix round');
@@ -67,7 +67,7 @@ repos:
     assert.deepEqual(testers.map((e) => e.repo), [undefined, undefined], 'one tester per round, across all repos');
     const order = only(events, 'stage_started').map((e) => `${e.agent}${e.repo ? `@${e.repo}` : ''}`);
     assert.deepEqual(order.slice(0, 5), ['planner', 'developer@api', 'developer@web', 'tester', 'reviewer']);
-    const testerPrompt = text(h.engine.svc.readTranscript(taskId, view.detail(h.engine, taskId).steps.find((st) => st.agent === 'tester')!.key!).find((i) => i.type === 'prompt')!.text);
+    const testerPrompt = text((await h.engine.svc.readTranscript(taskId, (await view.detail(h.engine, taskId)).steps.find((st) => st.agent === 'tester')!.key!)).find((i) => i.type === 'prompt')!.text);
     assert.match(testerPrompt, /Repositories of this task[^\n]*\n- api at .+\n- web at /);
 
     // The guard fed denials back into the transcript.
@@ -88,13 +88,13 @@ repos:
     assert.ok(sonnet.every((c) => c.args[c.args.indexOf('--effort') + 1] === 'medium'), 'developer and tester run at medium effort by default');
     assert.ok(sonnet.every((c) => c.args.includes('--strict-mcp-config')), 'agents that only work on the repo get no MCP servers');
     assert.ok(!planner!.args.includes('--strict-mcp-config'), 'the planner keeps them');
-    assert.equal(view.detail(h.engine, taskId).steps.find((st) => st.agent === 'reviewer')!.effort, 'low');
+    assert.equal((await view.detail(h.engine, taskId)).steps.find((st) => st.agent === 'reviewer')!.effort, 'low');
     assert.deepEqual(h.engine.limits!.fiveHour, { pct: 31, resetsAt: 1900000000, status: 'allowed' });
     assert.equal(h.engine.limits!.sevenDay!.pct, 26);
     assert.ok(h.outputs.some((o) => o.item.type === 'usage' && Number(o.item.ctxPct) > 0 && Number(o.item.tokens) > 0));
     assert.equal(planner!.args[planner!.args.indexOf('--tools') + 1], 'Read,Grep,Glob,Bash');
 
-    const d = view.detail(h.engine, taskId);
+    const d = await view.detail(h.engine, taskId);
     assert.equal(d.status.key, 'waiting');
     assert.ok(d.cost > 0);
     assert.ok(d.steps.some((st) => st.kind === 'agent' && st.agent === 'reviewer' && st.verdict && st.verdict.status === 'changes_requested'));
@@ -104,9 +104,9 @@ repos:
     const devStep = d.steps.find((st) => st.agent === 'developer');
     assert.equal(devStep!.effort, 'medium', 'an agent left at the default shows the effort it really ran with');
     assert.ok(plannerStep!.ctxPct! > 0 && plannerStep!.tokens! > 0);
-    const transcript = h.engine.svc.readTranscript(taskId, d.steps.find((st) => st.agent === 'developer')!.key!);
+    const transcript = await h.engine.svc.readTranscript(taskId, d.steps.find((st) => st.agent === 'developer')!.key!);
     assert.ok(transcript.some((i) => i.type === 'prompt'));
-    const web = h.engine.svc.readTranscript(taskId, d.steps.filter((st) => st.agent === 'developer' && st.repo === 'web')[0]!.key!);
+    const web = await h.engine.svc.readTranscript(taskId, d.steps.filter((st) => st.agent === 'developer' && st.repo === 'web')[0]!.key!);
     assert.ok(web.some((i) => i.type === 'gates' && i.status === 'fail'));
     assert.ok(web.some((i) => i.type === 'user' && i.from === 'orchestrator' && /Gates failed/.test(text(i.text))));
 
@@ -122,10 +122,10 @@ repos:
     assert.ok(!commit.denyWrite.includes(path.join(api, '.git')), 'git writes its objects and refs');
 
     await h.engine.answer(taskId, 'confirm-push', 'local');
-    s = await waitFor(() => (h.engine.isRunning(taskId) ? null : h.engine.svc.state(taskId)));
+    s = await waitFor(async () => (h.engine.isRunning(taskId) ? null : await h.engine.svc.state(taskId)));
     assert.equal(s.status, 'done');
     assert.equal(s.outcome, 'local');
-    assert.equal(view.summary(h.engine, { taskId, state: s }).status.label, 'Kept local');
+    assert.equal((await view.summary(h.engine, { taskId, state: s })).status.label, 'Kept local');
   } finally {
     h.hooks.dispose();
   }
@@ -138,30 +138,30 @@ test('engine: dirty checkouts block branch mode, stop interrupts a hanging agent
   try {
     const { taskId } = await h.engine.start({ text: 'Do a thing --auto' });
     h.engine.launch(taskId);
-    await waitFor(() => h.engine.lastError(taskId));
+    await waitFor(async () => h.engine.lastError(taskId));
     assert.equal(h.engine.lastError(taskId)!.code, 'repos_not_ready');
     assert.equal((h.engine.lastError(taskId)!.blocked as { problem: string }[])[0]!.problem, 'uncommitted changes');
-    assert.equal(view.summary(h.engine, { taskId, state: h.engine.svc.state(taskId) }).status.key, 'failed');
-    assert.equal(view.summary(h.engine, { taskId, state: h.engine.svc.state(taskId) }).status.resumable, true, 'a failed run is resumed from where it is');
+    assert.equal((await view.summary(h.engine, { taskId, state: await h.engine.svc.state(taskId) })).status.key, 'failed');
+    assert.equal((await view.summary(h.engine, { taskId, state: await h.engine.svc.state(taskId) })).status.resumable, true, 'a failed run is resumed from where it is');
 
     fs.rmSync(path.join(ws, 'api', 'wip.txt'));
     setChildEnv({ ...getChildEnv(), FAKE_HANG: 'developer' });
     h.engine.launch(taskId);
-    await waitFor(() => h.engine.sessions.has(taskId) && h.engine.live(taskId) && h.engine.live(taskId)!.phase === 'agent' && h.engine.live(taskId)!.step!.agent === 'developer');
+    await waitFor(async () => h.engine.sessions.has(taskId) && h.engine.live(taskId) && h.engine.live(taskId)!.phase === 'agent' && h.engine.live(taskId)!.step!.agent === 'developer');
     await h.engine.stop(taskId);
-    await waitFor(() => !h.engine.isRunning(taskId));
-    let s = h.engine.svc.state(taskId);
+    await waitFor(async () => !h.engine.isRunning(taskId));
+    let s = await h.engine.svc.state(taskId);
     assert.equal(s.status, 'stopped');
     assert.equal(s.running!.agent, 'developer', 'the interrupted step stays the running one');
-    assert.equal(view.summary(h.engine, { taskId, state: s }).mini.find((m) => m.agent === 'developer')!.status, 'paused');
+    assert.equal((await view.summary(h.engine, { taskId, state: s })).mini.find((m) => m.agent === 'developer')!.status, 'paused');
 
     setChildEnv({ ...getChildEnv(), FAKE_HANG: '' });
     await h.engine.resume(taskId);
-    s = await waitFor(() => (!h.engine.isRunning(taskId) && h.engine.svc.state(taskId).checkpoint ? h.engine.svc.state(taskId) : null), 30000);
+    s = await waitFor(async () => (!h.engine.isRunning(taskId) && (await h.engine.svc.state(taskId)).checkpoint ? await h.engine.svc.state(taskId) : null), 30000);
     assert.equal(s.checkpoint!.id, 'confirm-push');
-    assert.equal(only(h.engine.svc.events(taskId), 'stage_started').filter((e) => e.agent === 'developer').length, 1, 'resume continued the same step');
-    const devKey = view.detail(h.engine, taskId).steps.find((st) => st.agent === 'developer')!.key!;
-    const prompts = h.engine.svc.readTranscript(taskId, devKey).filter((i) => i.type === 'prompt').map((i) => text(i.text));
+    assert.equal(only(await h.engine.svc.events(taskId), 'stage_started').filter((e) => e.agent === 'developer').length, 1, 'resume continued the same step');
+    const devKey = (await view.detail(h.engine, taskId)).steps.find((st) => st.agent === 'developer')!.key!;
+    const prompts = (await h.engine.svc.readTranscript(taskId, devKey)).filter((i) => i.type === 'prompt').map((i) => text(i.text));
     assert.equal(prompts.length, 2, 'the rerun shows in the transcript');
     assert.doesNotMatch(prompts[0]!, /was interrupted/);
     assert.match(prompts[1]!, /An earlier run of this step was interrupted[^\n]*git status and git diff first/, 'and tells the agent its repo may hold part of the work');
@@ -206,7 +206,7 @@ test('engine: a repo outside the workspace folder (absolute path) is branched, c
     assert.equal(s.checkpoint && s.checkpoint.id, 'confirm-push', JSON.stringify(h.engine.lastError(taskId)));
     assert.equal(git(dir, 'rev-parse', '--abbrev-ref', 'HEAD'), 'feat/add-feature');
     assert.equal(git(dir, 'log', '-1', '--format=%s'), 'feat: add the feature');
-    assert.equal(only(h.engine.svc.events(taskId), 'gates_ran')[0]!.status, 'pass');
+    assert.equal(only(await h.engine.svc.events(taskId), 'gates_ran')[0]!.status, 'pass');
     assert.ok(!fs.existsSync(path.join(ws, 'billing')), 'nothing was created inside the workspace for it');
   } finally {
     h.hooks.dispose();
@@ -221,16 +221,16 @@ test('engine: a Jira task is read through an Atlassian MCP server when there is 
     const { taskId } = await h.engine.start({ text: 'PROJ-805' });
     assert.equal(taskId, 'PROJ-805');
     await h.engine.run(taskId);
-    const s = h.engine.svc.state(taskId);
+    const s = await h.engine.svc.state(taskId);
     assert.equal(s.phase, 'done', JSON.stringify(h.engine.lastError(taskId)));
     assert.equal(s.spec!.title, 'PROJ-805 Cap the max bet');
     assert.deepEqual(s.spec!.acceptanceCriteria, ['bets above the cap are rejected'], 'criteria fall back to the description');
     assert.equal(s.spec!.links[0]!.url, 'https://acme.atlassian.net/browse/PROJ-805');
-    assert.match(h.engine.svc.readArtifact(taskId, 'ticket.md'), /per operator, not global/);
-    const intake = h.engine.svc.readTranscript(taskId, '0000-intake');
+    assert.match(await h.engine.svc.readArtifact(taskId, 'ticket.md'), /per operator, not global/);
+    const intake = await h.engine.svc.readTranscript(taskId, '0000-intake');
     assert.ok(intake.some((i) => i.type === 'tool_use' && i.name === 'mcp__Atlassian__getJiraIssue'));
     assert.ok(intake.some((i) => i.type === 'blocked' && i.tool === 'mcp__Atlassian__addCommentToJiraIssue'), 'writes to Jira are blocked');
-    const step = view.detail(h.engine, taskId).steps[0];
+    const step = (await view.detail(h.engine, taskId)).steps[0];
     assert.equal(step!.kind, 'intake');
     assert.equal(step!.key, '0000-intake');
     assert.equal(step!.model, 'claude-haiku-5-5');
@@ -248,7 +248,7 @@ test('engine: a signed-out Claude Code is reported as such, and agents get the a
   try {
     const { taskId } = await h.engine.start({ text: 'PROJ-9' });
     h.engine.launch(taskId);
-    await waitFor(() => h.engine.lastError(taskId));
+    await waitFor(async () => h.engine.lastError(taskId));
     assert.equal(h.engine.lastError(taskId)!.code, 'claude_login');
     assert.match(h.engine.lastError(taskId)!.message!, /signed out/);
   } finally {
@@ -300,20 +300,20 @@ test('engine: "PROJ-805 перевір готовність…" runs a read-only
     assert.equal(s.status, 'done', JSON.stringify(h.engine.lastError(taskId)));
     assert.equal(s.scenario, 'readiness');
     assert.equal((s.reports[0]!.value as Readiness).verdict, 'not_ready', 'a criterion is not met and a gap is high');
-    assert.match(h.engine.svc.readArtifact(taskId, 'ticket.md'), /## What the user asked\n\nперевір готовність/);
+    assert.match(await h.engine.svc.readArtifact(taskId, 'ticket.md'), /## What the user asked\n\nперевір готовність/);
 
     const prompt = fs.readFileSync(path.join(h.state, 'prompt-verifier.txt'), 'utf8');
     assert.match(prompt, new RegExp(`- api at ${path.join(ws, 'api').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\(base branch main\\): Betting API`));
     assert.match(prompt, /Jira issue: PROJ-805\. Search branches and commits for this key; the pull requests GitHub has for it are listed in .*github\/prs\.md/);
-    assert.match(h.engine.svc.readArtifact(taskId, 'github/prs.md'), /## api\n\n- #42 \[merged, merged 2026-10-01\] PROJ-805 cap bets: feat\/PROJ-805-cap → main, https:\/\/github\.com\/acme\/api\/pull\/42/);
+    assert.match(await h.engine.svc.readArtifact(taskId, 'github/prs.md'), /## api\n\n- #42 \[merged, merged 2026-10-01\] PROJ-805 cap bets: feat\/PROJ-805-cap → main, https:\/\/github\.com\/acme\/api\/pull\/42/);
     assert.ok(!fs.existsSync(path.join(ws, 'api', 'audit-notes.txt')), 'the verifier cannot write');
     assert.ok(h.outputs.some((o) => o.item.type === 'blocked' && /does not change files/.test(text(o.item.reason))));
     assert.equal(git(path.join(ws, 'api'), 'rev-parse', '--abbrev-ref', 'HEAD'), 'main', 'no branch was made');
 
-    const report = h.engine.svc.readArtifact(taskId, 'report.md');
+    const report = await h.engine.svc.readArtifact(taskId, 'report.md');
     assert.match(report, /Not ready/);
     assert.match(report, /\| ❌ \| the cap is per operator \| not met \|/);
-    const d = view.detail(h.engine, taskId);
+    const d = await view.detail(h.engine, taskId);
     assert.equal(d.status.label, 'Not ready');
     assert.equal(d.result!.kind, 'readiness');
     assert.equal((d.result as ReadinessResult).met, 1);
@@ -325,9 +325,9 @@ test('engine: "PROJ-805 перевір готовність…" runs a read-only
     const posted = fs.readFileSync(path.join(h.state, 'comment-PROJ-805.txt'), 'utf8');
     assert.match(posted, /^Readiness check: ❌ Not ready \(1\/2 met\)/);
     assert.match(posted, /\[high\] no test for the cap/);
-    const comments = view.detail(h.engine, taskId).comments;
+    const comments = (await view.detail(h.engine, taskId)).comments;
     assert.deepEqual(comments.map((c) => [c.what, c.ok, c.via]), [['report', true, 'mcp:Atlassian']]);
-    const commentLog = h.engine.svc.readTranscript(taskId, 'comment-1');
+    const commentLog = await h.engine.svc.readTranscript(taskId, 'comment-1');
     assert.ok(commentLog.some((i) => i.type === 'blocked' && i.tool === 'mcp__Atlassian__editJiraIssue'), 'nothing but the comment is written');
     assert.equal(commentLog.filter((i) => i.type === 'blocked' && i.tool === 'mcp__Atlassian__addCommentToJiraIssue').length, 1, 'and only once');
 
@@ -350,13 +350,13 @@ test('engine: an audit finds bugs and bottlenecks, rates them and reports; a Jir
     assert.match(taskId, /^AUDIT-\d{8}-\d{4}$/);
     const s = await runTask(h.engine, taskId);
     assert.equal(s.status, 'done', JSON.stringify(h.engine.lastError(taskId)));
-    const d = view.detail(h.engine, taskId);
+    const d = await view.detail(h.engine, taskId);
     const result = d.result as AuditResult;
     assert.deepEqual(result.findings.map((f) => f.severity), ['critical', 'medium'], 'worst first');
     assert.deepEqual(result.counts, { critical: 1, high: 0, medium: 1, low: 0 });
     assert.equal(d.status.label, '2 findings · 1 serious');
     assert.equal(d.status.tone, 'error');
-    const report = h.engine.svc.readArtifact(taskId, 'report.md');
+    const report = await h.engine.svc.readArtifact(taskId, 'report.md');
     assert.match(report, /\*\*Critical: 1\*\* · \*\*High: 0\*\* · \*\*Medium: 1\*\* · \*\*Low: 0\*\*/);
     assert.match(report, /### 1\. Payout can be negative/);
     assert.ok(d.files.some((f) => f.path === 'audit/auditor.md'));
@@ -365,7 +365,7 @@ test('engine: an audit finds bugs and bottlenecks, rates them and reports; a Jir
     const r = await h.engine.comment({ ...s, source: { kind: 'jira', key: 'PROJ-1' } }, 'hello', 'report');
     assert.equal(r.ok, false);
     assert.match(r.error!, /Jira is not connected/);
-    assert.equal(view.detail(h.engine, taskId).comments[0]!.ok, false, 'a failure is visible on the task, not only in a log');
+    assert.equal((await view.detail(h.engine, taskId)).comments[0]!.ok, false, 'a failure is visible on the task, not only in a log');
   } finally {
     h.hooks.dispose();
   }
@@ -397,11 +397,11 @@ test('engine: checks and git hooks get no credential of yours, and the pre-push 
     const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
     let s = await runTask(h.engine, taskId);
     assert.equal(s.checkpoint && s.checkpoint.id, 'confirm-push', JSON.stringify(h.engine.lastError(taskId)));
-    const gates = only(h.engine.svc.events(taskId), 'gates_ran');
+    const gates = only(await h.engine.svc.events(taskId), 'gates_ran');
     assert.ok(gates.length > 0 && gates.every((e) => e.status === 'pass'), `the gate saw no token, and the variable policy.checkEnv keeps: ${JSON.stringify(gates)}`);
 
     await h.engine.answer(taskId, 'confirm-push', 'push');
-    s = await waitFor(() => (h.engine.isRunning(taskId) ? null : h.engine.svc.state(taskId)));
+    s = await waitFor(async () => (h.engine.isRunning(taskId) ? null : await h.engine.svc.state(taskId)));
     assert.equal(s.outcome, 'published', JSON.stringify(h.engine.lastError(taskId)));
     assert.deepEqual(s.prs, { api: 'https://github.com/acme/api/pull/7' });
     const branch = 'feat/add-feature';
@@ -422,7 +422,7 @@ test('engine: a failing pre-push hook stops the push and says why', async () => 
     const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
     await runTask(h.engine, taskId);
     await h.engine.answer(taskId, 'confirm-push', 'push');
-    await waitFor(() => !h.engine.isRunning(taskId));
+    await waitFor(async () => !h.engine.isRunning(taskId));
     const err = h.engine.lastError(taskId);
     assert.equal(err && err.code, 'push_failed');
     assert.match(err!.message, /pre-push hook failed:\nlint: 3 problems/);
@@ -453,11 +453,11 @@ test('engine: an agent that cannot start is a failed step to retry, and one stop
     await h.engine.answer(taskId, 'agent-failure', 'retry');
     await started;
     await h.engine.stop(taskId);
-    await waitFor(() => !h.engine.isRunning(taskId));
-    s = h.engine.svc.state(taskId);
+    await waitFor(async () => !h.engine.isRunning(taskId));
+    s = await h.engine.svc.state(taskId);
     assert.equal(s.status, 'stopped');
     assert.equal(h.engine.lastError(taskId), null, 'a stop is not reported as a failure');
-    assert.ok(!only(h.engine.svc.events(taskId), 'stage_completed').some((e) => e.agent === 'developer'), 'the agent did not get to work');
+    assert.ok(!only(await h.engine.svc.events(taskId), 'stage_completed').some((e) => e.agent === 'developer'), 'the agent did not get to work');
     assert.ok(!fs.existsSync(path.join(ws, 'api', 'feature.txt')), 'and changed nothing');
   } finally {
     h.engine.runner = real;
@@ -475,7 +475,7 @@ test('engine: when a PR description cannot list the other PRs, the PRs stay open
     const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
     await runTask(h.engine, taskId);
     await h.engine.answer(taskId, 'confirm-push', 'push');
-    const s = await waitFor(() => (h.engine.isRunning(taskId) ? null : h.engine.svc.state(taskId)));
+    const s = await waitFor(async () => (h.engine.isRunning(taskId) ? null : await h.engine.svc.state(taskId)));
     assert.equal(s.outcome, 'published', JSON.stringify(h.engine.lastError(taskId)));
     assert.deepEqual(Object.keys(s.prs).sort(), ['api', 'web']);
     assert.ok(warnings.some((w) => /pull\/7 was opened, but its description could not list the other PRs: HTTP 502/.test(w)), warnings.join('\n'));
@@ -492,7 +492,7 @@ test('engine: a plan for a repo the workspace does not have goes back to the pla
     const s = await runTask(h.engine, taskId);
     assert.equal(s.checkpoint && s.checkpoint.id, 'confirm-push', JSON.stringify(h.engine.lastError(taskId)));
     assert.deepEqual(s.repos.map((r) => r.name), ['api']);
-    const planner = h.engine.svc.readTranscript(taskId, view.detail(h.engine, taskId).steps.find((st) => st.agent === 'planner')!.key!);
+    const planner = await h.engine.svc.readTranscript(taskId, (await view.detail(h.engine, taskId)).steps.find((st) => st.agent === 'planner')!.key!);
     const prompt = text(planner.find((i) => i.type === 'prompt')!.text);
     assert.match(prompt, /- api at .+ \(base branch main\): Betting API\nName the repos of your plan exactly as listed here\./);
     assert.ok(planner.some((i) => i.type === 'user' && i.from === 'orchestrator' && /repos this workspace does not have \(betting-service\); name them as configured: api/.test(text(i.text))));

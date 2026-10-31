@@ -80,10 +80,10 @@ async function previewOf(engine: Engine, args: ComposerArgs) {
 /** A transcript field the test reads as text. */
 const text = (v: unknown): string => String(v);
 
-const waitFor = async <T>(fn: () => T | null | undefined | false, ms = 20000): Promise<T> => {
+const waitFor = async <T>(fn: () => T | null | undefined | false | Promise<T | null | undefined | false>, ms = 20000): Promise<T> => {
   const start = Date.now();
   for (;;) {
-    const v = fn();
+    const v = await fn();
     if (v) return v;
     if (Date.now() - start > ms) throw new Error('timed out');
     await new Promise((r) => setTimeout(r, 30));

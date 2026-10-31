@@ -22,7 +22,7 @@ function open(context: vscode.ExtensionContext, route?: Route): DashboardPanel {
 async function pickTask(placeHolder: string, filter: (card: view.Card) => boolean = () => true): Promise<string | undefined> {
   const engine = orch.engine;
   if (!engine) return undefined;
-  const cards = orch.list().map((e) => view.summary(engine, e)).filter(filter);
+  const cards = (await Promise.all((await orch.list()).map((e) => view.summary(engine, e)))).filter(filter);
   if (!cards.length) {
     vscode.window.showInformationMessage('No matching tasks.');
     return undefined;
@@ -99,15 +99,15 @@ function activate(context: vscode.ExtensionContext) {
   limitsItem.command = 'claudestrator.open';
   limitsItem.name = 'Claudestrator: Claude limits';
 
-  const refresh = (): void => {
-    tree.refresh();
+  const refresh = async (): Promise<void> => {
+    await tree.refresh();
     const c = tree.counts();
     treeView.badge = c.attention ? { value: c.attention, tooltip: `${c.attention} task${c.attention === 1 ? '' : 's'} need${c.attention === 1 ? 's' : ''} you` } : undefined;
     updateStatus(status, tree);
     updateLimits(limitsItem, orch);
   };
 
-  orch.init().then(refresh, (e: Error) => vscode.window.showErrorMessage(`Claudestrator could not start: ${e.message}`));
+  orch.init().then(refresh, (e: Error) => void vscode.window.showErrorMessage(`Claudestrator could not start: ${e.message}`));
 
   // Notifications: a checkpoint, a finished task, a failure, a permission prompt.
   orch.onEngine(async (e) => {
@@ -143,7 +143,7 @@ function activate(context: vscode.ExtensionContext) {
     treeView,
     status,
     limitsItem,
-    orch.onDidChange(refresh),
+    orch.onDidChange(() => void refresh()),
     reg('claudestrator.open', () => open(context, { name: 'home' })),
     reg('claudestrator.newTask', (text) => open(context, { name: 'home', compose: typeof text === 'string' ? text : '' })),
     reg('claudestrator.checkReadiness', (text) => open(context, { name: 'home', scenario: 'readiness', compose: typeof text === 'string' ? text : '' })),
@@ -202,7 +202,7 @@ function activate(context: vscode.ExtensionContext) {
     reg('claudestrator.refresh', async () => {
       orch.rebuild();
       await orch.refreshHealth();
-      refresh();
+      await refresh();
     }),
     vscode.workspace.onDidChangeWorkspaceFolders(() => orch.rebuild()),
     vscode.workspace.onDidChangeConfiguration((e) => {
@@ -214,7 +214,7 @@ function activate(context: vscode.ExtensionContext) {
   );
 
   // Ages in the tree ("5m ago") drift; refresh them now and then.
-  const tick = setInterval(() => tree.cards.length && refresh(), 60000);
+  const tick = setInterval(() => tree.cards.length && void refresh(), 60000);
   context.subscriptions.push({ dispose: () => clearInterval(tick) });
 
   // For integration tests and other extensions.

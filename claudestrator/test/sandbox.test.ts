@@ -80,7 +80,7 @@ test('sandbox: a commit hook that writes the repo works; one that changes git co
 
     fs.writeFileSync(path.join(api, '.git', 'hooks', 'pre-commit'), `#!/bin/sh\necho hooked > hooked.txt\necho x > ${outside}/escaped.txt || true\n`, { mode: 0o755 });
     await engine.answer(taskId, 'hook-failure', 'retry');
-    s = await waitFor(() => (engine.isRunning(taskId) ? null : engine.svc.state(taskId)), 60000);
+    s = await waitFor(async () => (engine.isRunning(taskId) ? null : await engine.svc.state(taskId)), 60000);
     assert.equal(s.checkpoint && s.checkpoint.id, 'confirm-push', JSON.stringify(engine.lastError(taskId)));
     assert.equal(git(api, 'log', '-1', '--format=%s'), 'feat: add the feature', 'git wrote its objects and refs in the sandbox');
     assert.ok(fs.existsSync(path.join(api, 'hooked.txt')), 'the hook ran and wrote in the repo');

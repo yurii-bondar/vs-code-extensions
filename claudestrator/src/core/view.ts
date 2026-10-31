@@ -18,9 +18,9 @@ interface ViewEngine {
   liveUsage: Map<string, UsageItem & { key: string }>;
   sessions: Map<string, unknown>;
   svc: {
-    events(taskId: string): OrchEvent[];
-    state(taskId: string): TaskState;
-    files(taskId: string): { path: string; size: number; mtime: number }[];
+    events(taskId: string): Promise<OrchEvent[]>;
+    state(taskId: string): Promise<TaskState>;
+    files(taskId: string): Promise<{ path: string; size: number; mtime: number }[]>;
     dir(taskId: string): string;
   };
 }
@@ -206,13 +206,13 @@ interface Derived {
  */
 const derivedCache = new WeakMap<TaskState, Map<boolean, Derived>>();
 
-function derive(engine: ViewEngine, taskId: string, state: TaskState, running: boolean): Derived {
+async function derive(engine: ViewEngine, taskId: string, state: TaskState, running: boolean): Promise<Derived> {
   const byRunning = derivedCache.get(state) ?? new Map<boolean, Derived>();
   const hit = byRunning.get(running);
   if (hit) return hit;
   let events: OrchEvent[] = [];
   try {
-    events = engine.svc.events(taskId);
+    events = await engine.svc.events(taskId);
   } catch {
     // raced with a delete
   }
@@ -250,13 +250,13 @@ function corruptCard(taskId: string, error: string | undefined, at = new Date(0)
 }
 
 /** A compact card for lists and the tree. */
-function summary(engine: ViewEngine, entry: TaskEntry): Card {
+async function summary(engine: ViewEngine, entry: TaskEntry): Promise<Card> {
   const taskId = entry.taskId;
   if (entry.corrupt) return corruptCard(taskId, entry.error, entry.at);
   const state = entry.state!;
   const running = engine.isRunning(taskId);
   const error = engine.lastError(taskId);
-  const { steps, cost, lastStop } = derive(engine, taskId, state, running);
+  const { steps, cost, lastStop } = await derive(engine, taskId, state, running);
   const agentSteps = steps.filter((s) => s.kind !== 'human' || s.status !== 'pending');
   const result = resultOf(state);
   return {
@@ -288,11 +288,11 @@ function summary(engine: ViewEngine, entry: TaskEntry): Card {
 }
 
 /** Everything the task screen shows. */
-function detail(engine: ViewEngine, taskId: string): TaskDetail {
-  const state = engine.svc.state(taskId);
-  const events = engine.svc.events(taskId);
+async function detail(engine: ViewEngine, taskId: string): Promise<TaskDetail> {
+  const state = await engine.svc.state(taskId);
+  const events = await engine.svc.events(taskId);
   const running = engine.isRunning(taskId);
-  const card = summary(engine, { taskId, state });
+  const card = await summary(engine, { taskId, state });
   return {
     ...card,
     input: state.input,
@@ -308,12 +308,12 @@ function detail(engine: ViewEngine, taskId: string): TaskDetail {
     result: resultOf(state),
     comments: events.filter((e) => e.type === 'jira_comment').map((e) => ({ seq: e.seq, at: e.at, key: e.key, what: e.what, ok: e.ok, via: e.via, ...(e.error && { error: e.error }) })),
     answers: state.answers,
-    steps: derive(engine, taskId, state, running).steps,
+    steps: (await derive(engine, taskId, state, running)).steps,
     events: events.flatMap((e): FeedEvent[] => {
       const d = describeEvent(e);
       return d && d.text ? [{ seq: e.seq, at: e.at, type: e.type, ...d }] : [];
     }),
-    files: engine.svc.files(taskId),
+    files: await engine.svc.files(taskId),
     taskDir: engine.svc.dir(taskId),
     permissions: engine.pendingPermissions(taskId),
     canMessage: engine.sessions.has(taskId),

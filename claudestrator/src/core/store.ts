@@ -78,14 +78,6 @@ class EventStore {
     this.file = file;
   }
 
-  exists(): boolean {
-    return fs.existsSync(this.file);
-  }
-
-  readAll(): OrchEvent[] {
-    return this.exists() ? this.parse(fs.readFileSync(this.file, 'utf8')) : [];
-  }
-
   /** The events, read without blocking; none when there is no log yet. */
   async read(): Promise<OrchEvent[]> {
     try {
@@ -177,6 +169,8 @@ class TaskService {
   /** Transcript lines not written yet, per file, and the write in flight per file: one file's lines stay in order. */
   queued = new Map<string, string[]>();
   writes = new Map<string, Promise<void>>();
+  /** How many writes each transcript file has had queued: a read that saw the count change reads again. */
+  started = new Map<string, number>();
 
   constructor({ workspace, now, onAppend }: { workspace: string; now?: (() => Date) | undefined; onAppend?: ((taskId: string, event: OrchEvent) => void) | undefined }) {
     this.workspace = workspace;
@@ -197,10 +191,9 @@ class TaskService {
   }
 
   /** The task last started here (`.orch/current`), shared with the CLI. */
-  currentTask(): string | null {
-    if (!fs.existsSync(this.currentFile)) return null;
-    const id = fs.readFileSync(this.currentFile, 'utf8').trim();
-    return id && TASK_ID.test(id) && this.exists(id) ? id : null;
+  async currentTask(): Promise<string | null> {
+    const id = (await fs.promises.readFile(this.currentFile, 'utf8').catch(() => '')).trim();
+    return id && TASK_ID.test(id) && (await this.exists(id)) ? id : null;
   }
 
   async setCurrent(taskId: string): Promise<void> {
@@ -271,13 +264,13 @@ class TaskService {
    * Whether the events file is as this process last wrote it. A file watcher then reports a change that `onAppend`
    * has already announced, and refreshing again would only repeat the same work.
    */
-  isOwnWrite(taskId: string): boolean {
+  async isOwnWrite(taskId: string): Promise<boolean> {
     const mine = this.written.get(taskId);
-    return mine !== undefined && mine === signature(path.join(this.dir(taskId), TASK_FILES.events));
+    return mine !== undefined && mine === (await signatureAsync(path.join(this.dir(taskId), TASK_FILES.events)));
   }
 
-  exists(taskId: string): boolean {
-    return TASK_ID.test(taskId) && this.store(taskId).exists();
+  async exists(taskId: string): Promise<boolean> {
+    return TASK_ID.test(taskId) && (await signatureAsync(path.join(this.dir(taskId), TASK_FILES.events))) !== '';
   }
 
   /**
@@ -285,23 +278,23 @@ class TaskService {
    * Same Jira issue or Confluence page → the same task. A description always gets a fresh id.
    * A readiness check or audit that already finished is not continued: checking again is a new run (`CP-1-check-2`).
    */
-  idFor({ taskId: given, source, scenario = 'deliver' }: { taskId?: string | undefined; source: Source; scenario?: string }): { taskId: string; exists: boolean } {
-    if (given) return { taskId: given, exists: this.exists(given) };
+  async idFor({ taskId: given, source, scenario = 'deliver' }: { taskId?: string | undefined; source: Source; scenario?: string }): Promise<{ taskId: string; exists: boolean }> {
+    if (given) return { taskId: given, exists: await this.exists(given) };
     const base = deriveTaskId(source, this.now(), scenario);
     let taskId = base;
     if (source.kind === 'text') {
-      for (let n = 2; this.exists(taskId); n++) taskId = `${base}-${n}`;
+      for (let n = 2; await this.exists(taskId); n++) taskId = `${base}-${n}`;
       return { taskId, exists: false };
     }
-    if (scenario !== 'deliver') for (let n = 2; this.exists(taskId) && this.finished(taskId); n++) taskId = `${base}-${n}`;
-    return { taskId, exists: this.exists(taskId) };
+    if (scenario !== 'deliver') for (let n = 2; (await this.exists(taskId)) && (await this.finished(taskId)); n++) taskId = `${base}-${n}`;
+    return { taskId, exists: await this.exists(taskId) };
   }
 
   /** Creates a task, or returns the existing one `idFor` points at. */
   async start(req: StartRequest): Promise<{ taskId: string; created: boolean; state: TaskState }> {
     const scenario = req.scenario || 'deliver';
-    const { taskId, exists } = this.idFor({ taskId: req.taskId, source: req.source, scenario });
-    if (exists) return { taskId, created: false, state: this.state(taskId) };
+    const { taskId, exists } = await this.idFor({ taskId: req.taskId, source: req.source, scenario });
+    if (exists) return { taskId, created: false, state: await this.state(taskId) };
     this.dir(taskId);
     const event: EventOf<'task_created'> = {
       type: 'task_created',
@@ -335,34 +328,24 @@ class TaskService {
   }
 
   /** The task's events, read once per change of its log; callers do not change the array. */
-  events(taskId: string): OrchEvent[] {
-    this.state(taskId);
+  async events(taskId: string): Promise<OrchEvent[]> {
+    await this.state(taskId);
     return this.cache.get(taskId)!.events;
   }
 
-  finished(taskId: string): boolean {
+  async finished(taskId: string): Promise<boolean> {
     try {
-      return this.state(taskId).status === 'done';
+      return (await this.state(taskId)).status === 'done';
     } catch {
       return false;
     }
   }
 
-  /** Replays the log; cached by its size and mtime because the UI asks often. */
-  state(taskId: string): TaskState {
-    const file = path.join(this.dir(taskId), TASK_FILES.events);
-    const sig = signature(file);
-    if (!sig) throw new Error(`no task "${taskId}"`);
-    const hit = this.cache.get(taskId);
-    if (hit && hit.sig === sig) return hit.state;
-    const events = this.store(taskId).readAll();
-    const state = replay(events);
-    this.cache.set(taskId, { sig, state, events });
+  /** The task's state: its log replayed, kept until the log changes because the UI asks often. Throws for no task. */
+  async state(taskId: string): Promise<TaskState> {
+    const state = await this.current(taskId);
+    if (!state) throw new Error(`no task "${taskId}"`);
     return state;
-  }
-
-  next(taskId: string): NextAction {
-    return nextAction(this.state(taskId));
   }
 
   /** The single entry point for changing a task: validate, transition, then persist, or log the rejection. */
@@ -381,7 +364,7 @@ class TaskService {
     const r = transition(state, event as OrchEvent);
     if (!r.ok) return this.reject(taskId, state, body, r.error);
     const stored = await this.append(taskId, event, r.state);
-    if (r.state.status === 'done' && this.currentTask() === taskId) await this.clearCurrent();
+    if (r.state.status === 'done' && (await this.currentTask()) === taskId) await this.clearCurrent();
     return { ok: true, event: stored, state: r.state, next: nextAction(r.state) };
   }
 
@@ -397,25 +380,25 @@ class TaskService {
   }
 
   /** Every task folder, newest first. A log that does not replay shows up as `corrupt` instead of hiding. */
-  list(): TaskEntry[] {
-    if (!fs.existsSync(this.root)) return [];
-    return fs
-      .readdirSync(this.root, { withFileTypes: true })
-      .filter((d) => d.isDirectory() && this.exists(d.name))
-      .map((d) => {
+  async list(): Promise<TaskEntry[]> {
+    const dirs = await fs.promises.readdir(this.root, { withFileTypes: true }).catch(() => []);
+    const entries = await Promise.all(
+      dirs.map(async (d): Promise<TaskEntry | null> => {
+        if (!d.isDirectory() || !(await this.exists(d.name))) return null;
         try {
-          return { taskId: d.name, state: this.state(d.name) };
+          return { taskId: d.name, state: await this.state(d.name) };
         } catch (e) {
-          return { taskId: d.name, corrupt: true, error: (e as Error).message, at: signatureTime(path.join(this.dir(d.name), TASK_FILES.events)) };
+          return { taskId: d.name, corrupt: true, error: (e as Error).message, at: await changedAt(path.join(this.dir(d.name), TASK_FILES.events)) };
         }
       })
-      .sort((a, b) => ((b.state && b.state.updatedAt) || b.at || '').localeCompare((a.state && a.state.updatedAt) || a.at || ''));
+    );
+    return entries.filter((e): e is TaskEntry => e !== null).sort((a, b) => ((b.state && b.state.updatedAt) || b.at || '').localeCompare((a.state && a.state.updatedAt) || a.at || ''));
   }
 
   async remove(taskId: string): Promise<void> {
     await fs.promises.rm(this.dir(taskId), { recursive: true, force: true });
     this.cache.delete(taskId);
-    if (this.currentTask() === null) await this.clearCurrent();
+    if ((await this.currentTask()) === null) await this.clearCurrent();
   }
 
   /** Artifact paths are relative to the task folder and may not leave it. */
@@ -426,43 +409,38 @@ class TaskService {
     return abs;
   }
 
-  writeArtifact(taskId: string, rel: string, content: string): string {
+  async writeArtifact(taskId: string, rel: string, content: string): Promise<string> {
     const abs = this.artifactFile(taskId, rel);
-    fs.mkdirSync(path.dirname(abs), { recursive: true });
-    fs.writeFileSync(abs, content);
+    await fs.promises.mkdir(path.dirname(abs), { recursive: true });
+    await fs.promises.writeFile(abs, content);
     return abs;
   }
 
-  readArtifact(taskId: string, rel: string): string {
+  async readArtifact(taskId: string, rel: string): Promise<string> {
     try {
-      return fs.readFileSync(this.artifactFile(taskId, rel), 'utf8');
+      return await fs.promises.readFile(this.artifactFile(taskId, rel), 'utf8');
     } catch {
       return '';
     }
   }
 
   /** Every file in the task folder except the log and lock, relative paths. */
-  files(taskId: string): { path: string; size: number; mtime: number }[] {
+  async files(taskId: string): Promise<{ path: string; size: number; mtime: number }[]> {
     const dir = this.dir(taskId);
     const out: { path: string; size: number; mtime: number }[] = [];
-    const walk = (d: string): void => {
-      let entries: fs.Dirent[] = [];
-      try {
-        entries = fs.readdirSync(d, { withFileTypes: true });
-      } catch {
-        return;
-      }
+    const walk = async (d: string): Promise<void> => {
+      const entries = await fs.promises.readdir(d, { withFileTypes: true }).catch(() => []);
       for (const e of entries) {
         const abs = path.join(d, e.name);
         if (e.isDirectory()) {
-          if (e.name !== 'transcripts') walk(abs);
+          if (e.name !== 'transcripts') await walk(abs);
         } else if (!['.lock', TASK_FILES.events].includes(e.name)) {
-          const st = fs.statSync(abs);
-          out.push({ path: path.relative(dir, abs).split(path.sep).join('/'), size: st.size, mtime: st.mtimeMs });
+          const st = await fs.promises.stat(abs).catch(() => null);
+          if (st) out.push({ path: path.relative(dir, abs).split(path.sep).join('/'), size: st.size, mtime: st.mtimeMs });
         }
       }
     };
-    walk(dir);
+    await walk(dir);
     return out.sort((a, b) => a.path.localeCompare(b.path));
   }
 
@@ -484,6 +462,7 @@ class TaskService {
       return;
     }
     this.queued.set(file, [`${JSON.stringify(item)}\n`]);
+    this.started.set(file, (this.started.get(file) ?? 0) + 1);
     const write = (this.writes.get(file) ?? Promise.resolve()).then(() => this.writeQueued(file));
     this.writes.set(file, write);
     void write.then(() => {
@@ -510,15 +489,22 @@ class TaskService {
     while (this.writes.size) await Promise.all([...this.writes.values()]);
   }
 
-  readTranscript(taskId: string, key: string, limit = 1500): TranscriptItem[] {
+  /**
+   * The transcript: what is on disk and what is queued for it. A write that starts while the file is read would move
+   * lines from the queue into the file behind the read, so the read is done again until none did.
+   */
+  async readTranscript(taskId: string, key: string, limit = 1500): Promise<TranscriptItem[]> {
     const file = this.transcriptFile(taskId, key);
     let text = '';
-    try {
-      text = fs.readFileSync(file, 'utf8');
-    } catch {
-      // nothing written yet
+    for (;;) {
+      const writes = this.started.get(file) ?? 0;
+      const pending = this.writes.get(file);
+      if (pending) await pending;
+      const read = await fs.promises.readFile(file, 'utf8').catch(() => ''); // nothing written yet
+      if ((this.started.get(file) ?? 0) !== writes || this.writes.get(file) !== undefined) continue;
+      text = read + (this.queued.get(file) || []).join('');
+      break;
     }
-    text += (this.queued.get(file) || []).join('');
     const items: TranscriptItem[] = [];
     for (const line of text.split('\n')) {
       if (!line) continue;
@@ -534,29 +520,17 @@ class TaskService {
 
 export type { DispatchResult, StartRequest, TranscriptItem };
 /** When a file last changed, as an ISO time; the epoch when it is gone. */
-function signatureTime(file: string): string {
-  try {
-    return fs.statSync(file).mtime.toISOString();
-  } catch {
-    return new Date(0).toISOString();
-  }
-}
+const changedAt = (file: string): Promise<string> =>
+  fs.promises.stat(file).then(
+    (st) => st.mtime.toISOString(),
+    () => new Date(0).toISOString()
+  );
 
-/** The same, read without blocking. */
+/** Size and mtime of a file, or '' when it is gone: enough to tell whether it changed since. */
 const signatureAsync = (file: string): Promise<string> =>
   fs.promises.stat(file).then(
     (st) => `${st.size}:${st.mtimeMs}`,
     () => ''
   );
-
-/** Size and mtime of a file, or '' when it is gone: enough to tell whether it changed since. */
-function signature(file: string): string {
-  try {
-    const st = fs.statSync(file);
-    return `${st.size}:${st.mtimeMs}`;
-  } catch {
-    return '';
-  }
-}
 
 export { ORCH_DIR, withLock, EventStore, TaskService };

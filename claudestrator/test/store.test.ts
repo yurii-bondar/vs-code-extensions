@@ -13,7 +13,7 @@ test('store: transcript lines are written asynchronously, in order, and readable
   const svc = new TaskService({ workspace: ws });
   fs.mkdirSync(svc.dir('T-1'), { recursive: true });
   for (let i = 0; i < 500; i++) svc.appendTranscript('T-1', '0001-dev', { type: 'text', text: `line ${i}` });
-  assert.equal(svc.readTranscript('T-1', '0001-dev').length, 500, 'queued lines are part of what a reader sees');
+  assert.equal((await svc.readTranscript('T-1', '0001-dev')).length, 500, 'queued lines are part of what a reader sees');
   await svc.flushTranscripts();
   const lines = fs.readFileSync(svc.transcriptFile('T-1', '0001-dev'), 'utf8').trim().split('\n');
   assert.deepEqual(lines.map((l) => JSON.parse(l).text), Array.from({ length: 500 }, (_, i) => `line ${i}`));
@@ -57,5 +57,33 @@ test('store: waiting for a lock another process holds leaves the event loop free
   const { taskId } = await svc.start({ input: 'x', source: { kind: 'text', text: 'x' }, auto: false, pipeline: { mode: 'auto', stages: [], reviewLoop: null }, config: { limits: { reviewRounds: 1, gateAttempts: 1 }, repos: {}, context: [], git: { mode: 'branch' } } });
   const notes = await Promise.all(Array.from({ length: 20 }, (_, i) => svc.record(taskId, { type: 'note', message: `n${i}` })));
   assert.deepEqual(notes.map((e) => e.seq), Array.from({ length: 20 }, (_, i) => i + 2), 'no two got the same number');
-  assert.deepEqual(svc.events(taskId).map((e) => e.seq), Array.from({ length: 21 }, (_, i) => i + 1));
+  assert.deepEqual((await svc.events(taskId)).map((e) => e.seq), Array.from({ length: 21 }, (_, i) => i + 1));
+});
+
+test('store: a transcript read while lines are being written has each line once, in order', async () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-tr-race-'));
+  const svc = new TaskService({ workspace: ws });
+  fs.mkdirSync(svc.dir('T-1'), { recursive: true });
+  let written = 0;
+  const reads: number[][] = [];
+  // An agent streams while the task screen reads its transcript again and again.
+  const writer = (async () => {
+    for (let i = 0; i < 400; i++) {
+      svc.appendTranscript('T-1', '0001-dev', { type: 'text', text: `${i}` });
+      written++;
+      if (i % 20 === 0) await new Promise((r) => setImmediate(r));
+    }
+  })();
+  for (let k = 0; k < 30; k++) {
+    const seen = written;
+    const items = (await svc.readTranscript('T-1', '0001-dev', 10000)).map((i) => Number('text' in i ? i.text : -1));
+    assert.ok(items.length >= seen, `a read misses nothing written before it (${items.length} < ${seen})`);
+    reads.push(items);
+    await new Promise((r) => setImmediate(r));
+  }
+  await writer;
+  await svc.flushTranscripts();
+  reads.push((await svc.readTranscript('T-1', '0001-dev', 10000)).map((i) => Number('text' in i ? i.text : -1)));
+  for (const items of reads) assert.deepEqual(items, Array.from({ length: items.length }, (_, i) => i), 'each line once, in order');
+  assert.equal(reads.at(-1)!.length, 400);
 });

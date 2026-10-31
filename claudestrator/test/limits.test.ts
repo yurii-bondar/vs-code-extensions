@@ -14,7 +14,7 @@ test('limits: no agent starts while Claude Code reports the account limit as use
     h.engine.limits = { fiveHour: { pct: 100, resetsAt, status: 'rejected' }, sevenDay: { pct: 40, resetsAt: resetsAt + 86400, status: 'allowed' }, at: Date.now() };
     const { taskId } = await h.engine.start({ text: 'Do a thing' });
     h.engine.launch(taskId);
-    const err = await waitFor(() => h.engine.lastError(taskId));
+    const err = await waitFor(async () => h.engine.lastError(taskId));
     assert.equal(err.code, 'limit_reached');
     assert.match(err.message, /5-hour limit is used up until .*; resume the task then/);
     assert.ok(!fs.existsSync(path.join(h.state, 'calls.ndjson')), 'no Claude Code session was started');

@@ -98,11 +98,11 @@ test('schemas: report stages hand their data over as structured output, and the 
     assert.deepEqual(JSON.parse(schemaOf('reviewer')!).required, ['status', 'summary', 'findings']);
     assert.equal(schemaOf('developer'), undefined, 'a code stage hands over no data');
     assert.equal(s.plan!.slug, 'add-feature');
-    const plan = h.engine.svc.readArtifact(taskId, 'plan/planner.md');
+    const plan = await h.engine.svc.readArtifact(taskId, 'plan/planner.md');
     assert.match(plan, /^## Summary[\s\S]*\n```json\n\{\n {2}"type": "feat",/, 'the report, then its data as a json block');
     assert.equal((plan.match(/```json/g) || []).length, 1);
-    const key = view.detail(h.engine, taskId).steps.find((st) => st.agent === 'reviewer')!.key!;
-    assert.ok(!h.engine.svc.readTranscript(taskId, key).some((i) => i.type === 'tool_use' && i.name === 'StructuredOutput'), 'the hand-over is not shown as a step');
+    const key = (await view.detail(h.engine, taskId)).steps.find((st) => st.agent === 'reviewer')!.key!;
+    assert.ok(!(await h.engine.svc.readTranscript(taskId, key)).some((i) => i.type === 'tool_use' && i.name === 'StructuredOutput'), 'the hand-over is not shown as a step');
   } finally {
     h.hooks.dispose();
   }

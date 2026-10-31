@@ -36,7 +36,7 @@ test('gates: a gate that runs out of time is killed with everything it started',
   assert.equal(r.code, 124);
   assert.match(r.output, /killed after 0s/);
   const pid = Number(fs.readFileSync(pidFile, 'utf8'));
-  await waitFor(() => !alive(pid), 5000);
+  await waitFor(async () => !alive(pid), 5000);
 });
 
 test('gates: stdout and stderr both kept, non-ASCII intact, and a stopped run skips the gates after it', { skip: process.platform === 'win32' }, async () => {
@@ -62,12 +62,12 @@ test('gates: Stop during the gates ends them and leaves the step to resume', { s
   try {
     const { taskId } = await h.engine.start({ text: 'Do a thing', auto: true });
     h.engine.launch(taskId);
-    await waitFor(() => h.engine.live(taskId) && h.engine.live(taskId)!.phase === 'gates' && h.engine.gateRuns.has(taskId));
+    await waitFor(async () => h.engine.live(taskId) && h.engine.live(taskId)!.phase === 'gates' && h.engine.gateRuns.has(taskId));
     const started = Date.now();
     await h.engine.stop(taskId);
-    await waitFor(() => !h.engine.isRunning(taskId), 10000);
+    await waitFor(async () => !h.engine.isRunning(taskId), 10000);
     assert.ok(Date.now() - started < 8000, 'the task stopped without waiting for the gate');
-    assert.equal(h.engine.svc.state(taskId).status, 'stopped');
+    assert.equal((await h.engine.svc.state(taskId)).status, 'stopped');
   } finally {
     h.hooks.dispose();
   }

@@ -230,7 +230,9 @@ class Orchestrator {
     };
     // The engine announces its own appends right away; the watcher is for the others (another window, the CLI).
     const elsewhere = (uri: vscode.Uri): void => {
-      if (!(this.engine && this.engine.svc.isOwnWrite(path.basename(path.dirname(uri.fsPath))))) changed();
+      const engine = this.engine;
+      if (!engine) return changed();
+      void engine.svc.isOwnWrite(path.basename(path.dirname(uri.fsPath))).then((own) => own || changed(), changed);
     };
     const tasks = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(base, '.orch/tasks/*/events.ndjson'));
     tasks.onDidChange(elsewhere);
@@ -564,8 +566,12 @@ class Orchestrator {
     return loadConfig({ workspace: this.root });
   }
 
-  hasProjectConfig(): boolean {
-    return Boolean(this.root && fs.existsSync(projectConfigFile(this.root)));
+  async hasProjectConfig(): Promise<boolean> {
+    if (!this.root) return false;
+    return fs.promises.access(projectConfigFile(this.root)).then(
+      () => true,
+      () => false
+    );
   }
 
   /** Every task as a list entry, guarded against a task folder vanishing mid-read. */
@@ -593,10 +599,10 @@ class Orchestrator {
     await Promise.all([...(this.engine ? [this.engine] : []), ...this.retired].map((e) => e.stopAll()));
   }
 
-  list(): TaskEntry[] {
+  async list(): Promise<TaskEntry[]> {
     if (!this.engine) return [];
     try {
-      return this.engine.svc.list();
+      return await this.engine.svc.list();
     } catch {
       return [];
     }
