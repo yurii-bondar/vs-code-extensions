@@ -539,6 +539,18 @@ interface Views {
         .join('')}</div>
         <div class="row"><button class="btn sm" data-action="open-diff">${icon('file')}Review the combined diff</button></div>
         <details class="log-details"><summary>Commits</summary><pre class="log">${esc(ctx.text || '')}</pre></details>`;
+      // Read from what the push would publish: you decide, with it in front of you.
+      const secrets = ctx.secrets || [];
+      if (secrets.length) {
+        body += `<div class="banner error">${icon('alert')}<div class="grow"><b>This looks like ${secrets.length === 1 ? 'a credential' : `${secrets.length} credentials`} in what the push would publish.</b> Look before you push: a pushed secret has to be revoked, not deleted.<ul>${secrets
+          .slice(0, 20)
+          .map((f) => `<li><code>${esc(f.repo)}/${esc(f.file)}${f.line ? `:${f.line}` : ''}</code> ${esc(f.what)}${f.excerpt ? ` <span class="muted">${esc(f.excerpt)}</span>` : ''}</li>`)
+          .join('')}${secrets.length > 20 ? `<li class="muted">and ${secrets.length - 20} more</li>` : ''}</ul></div></div>`;
+      }
+      const hooks = ctx.hooks || [];
+      if (hooks.length) {
+        body += `<div class="banner warn">${icon('alert')}<div class="grow"><b>The agents changed git hooks.</b> They run when you use git in ${hooks.length === 1 ? 'that repo' : 'those repos'}, outside the sandbox: read them first.<ul>${hooks.map((h) => `<li><code>${esc(h.repo)}/${esc(h.file)}</code></li>`).join('')}</ul></div></div>`;
+      }
     } else {
       body = ctx.text ? `<pre class="log ${cp.id === 'gate-failure' || cp.id === 'hook-failure' ? 'error' : ''}">${esc(ctx.text)}</pre>` : '';
       // An agent that failed because Claude Code is signed out needs a sign-in, not a retry.

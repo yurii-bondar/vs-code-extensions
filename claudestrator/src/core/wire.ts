@@ -1,6 +1,7 @@
 // What the extension host and the dashboard page say to each other. The page cannot load Node modules, so this file
 // holds only types and imports only other type-only modules: the host annotates what its handlers return with these
 // types, and the page (media/*.ts) reads replies through them, so the compiler catches a field renamed on one side.
+import type { SecretFinding } from './secrets';
 import type {
   Agent,
   Answer,
@@ -407,6 +408,10 @@ export interface CheckpointContext {
   text: string;
   file?: string | undefined;
   repos?: { name: string; branch: string | null; base: string; files: number; dir: string }[];
+  /** Before a push: what looks like a credential in what it would publish. */
+  secrets?: (SecretFinding & { repo: string })[];
+  /** Before a push: changed files git runs as hooks, here or on your machine later. */
+  hooks?: { repo: string; file: string }[];
 }
 
 /** What the task's pipeline editor shows: its stages, from which one they can change, and the agents to add. */

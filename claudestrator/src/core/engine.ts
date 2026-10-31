@@ -24,6 +24,7 @@ import { HOOK_TIMEOUT_S, TOKEN_ENV, type HookServer, type Decision, type ToolCal
 import { sessionSettings, credentialVars, REGISTRIES, SECRET_PATHS } from './settings';
 import { probeSandbox, sandboxLauncher, sandboxProblem, shq, type Launcher, type SandboxPolicy } from './sandbox';
 import { REPORT_SCHEMAS } from './schemas';
+import { scanDiff } from './secrets';
 import type { AtlassianClient, Invocation } from './intake';
 import type { StageSource } from './pipeline';
 import type { RepoGates } from './gates';
@@ -1490,15 +1491,24 @@ class Engine extends EventEmitter {
         const config = await this.config();
         const parts: string[] = [];
         const repos: { name: string; branch: string | null; base: string; files: number; dir: string }[] = [];
+        const secrets: NonNullable<CheckpointContext['secrets']> = [];
+        const hooks: NonNullable<CheckpointContext['hooks']> = [];
         const branch = branchName(s) as string;
         for (const r of taskRepos(this.workspace, s, config, s.repos.map((x) => x.name))) {
           // What will be pushed is the task branch, whatever is checked out now.
           const files = await r.git.branchChanges(r.base, branch);
-          const log = await r.git.git('--no-pager', 'log', '--stat', '--format=%h %s', `${await r.git.baseRef(r.base, branch)}..${branch}`);
+          const range = `${await r.git.baseRef(r.base, branch)}..${branch}`;
+          const log = await r.git.git('--no-pager', 'log', '--stat', '--format=%h %s', range);
           repos.push({ name: r.name, branch, base: r.base, files: files.length, dir: r.dir });
           parts.push(`${r.name} (${branch} → ${r.base})\n${log.stdout.trim() || 'no commits'}`);
+          // What the push would publish: a credential an agent wrote, or a hook that runs when you use git here.
+          const hooksAt = await r.git.hooksDir();
+          const relHooks = hooksAt && !inGitMetadata(hooksAt) ? path.relative(r.dir, hooksAt).split(path.sep).join('/') : undefined;
+          const scan = scanDiff((await r.git.git('--no-pager', 'diff', '--no-ext-diff', '--no-color', range)).stdout, { hooksDir: relHooks && !relHooks.startsWith('..') ? relHooks : undefined });
+          secrets.push(...scan.secrets.map((f) => ({ repo: r.name, ...f })));
+          hooks.push(...scan.hooks.map((file) => ({ repo: r.name, file })));
         }
-        const value: CheckpointContext = { format: 'log', text: parts.join('\n\n'), repos };
+        const value: CheckpointContext = { format: 'log', text: parts.join('\n\n'), repos, ...(secrets.length && { secrets }), ...(hooks.length && { hooks }) };
         this.pushContext.set(s.taskId, { at: cp.at, value });
         return value;
       }

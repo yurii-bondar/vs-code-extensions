@@ -227,6 +227,8 @@ function main(): void {
         tool('Bash', { command: 'git commit -am "sneaky"' });
         tool('Write', { file_path: path.join(repoDir!, '..', 'outside.txt'), content: 'nope' });
         tool('Write', { file_path: path.join(repoDir!, 'feature.txt'), content: 'feature\n' });
+        // FAKE_DEV_FILES: more files the developer writes, as {"path": "content"} (a credential it should not have).
+        for (const [file, content] of Object.entries(JSON.parse(process.env.FAKE_DEV_FILES || '{}') as Record<string, string>)) tool('Write', { file_path: path.join(repoDir!, file), content });
         return reply('Changed feature.txt.', uuid);
       }
       case 'tester': {
