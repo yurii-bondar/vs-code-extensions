@@ -103,3 +103,101 @@ test('config edits: what the edit means is what is written, even where the file 
   assert.equal(r.config.repos.api!.role, 'Backend');
   assert.match(projectText(ws), /\n {4}api:\n {8}role: Backend {3}# mine\n$/, 'the block the edit did not touch is as it was');
 });
+
+/** Lines of `after` that are not in `before`, and lines of `before` that are not in `after`, in order. */
+function changedLines(before: string, after: string): { added: string[]; removed: string[] } {
+  const a = before.split('\n');
+  const b = after.split('\n');
+  return { added: b.filter((l) => !a.includes(l)), removed: a.filter((l) => !b.includes(l)) };
+}
+
+const API_GATES = [
+  { name: 'lint', cmd: 'npm run lint' },
+  { name: 'test', cmd: 'npm run test:unit -- --runInBand --reporter=dot --coverage --coverageReporters=text-summary', when: 'src/' },
+  { name: 'e2e', cmd: 'npm run test:e2e -- --config jest.e2e.config.js --runInBand --detectOpenHandles --forceExit --silent' },
+];
+
+test('config edits: saving a repo changes only its fields that changed; comments in it and flow-style checks stay', async () => {
+  const ws = workspace(HANDWRITTEN);
+  // What the Repos page sends: the whole repo, its role changed.
+  await config.setRepo(ws, 'api', { role: 'Backend', gates: API_GATES });
+  assert.equal(projectText(ws), HANDWRITTEN.replace(/role: Public REST API.*tools/, 'role: Backend'));
+
+  // One check's command changed: that check stays where it is, with its comment.
+  await config.setRepo(ws, 'api', { role: 'Backend', gates: [{ name: 'lint', cmd: 'npm run lint -- --max-warnings 0' }, ...API_GATES.slice(1)] });
+  assert.deepEqual(changedLines(HANDWRITTEN.replace(/role: Public REST API.*tools/, 'role: Backend'), projectText(ws)), {
+    added: ['      - { name: lint, cmd: npm run lint -- --max-warnings 0 } # cached'],
+    removed: ['      - { name: lint, cmd: npm run lint }   # cached'],
+  });
+
+  // A check removed, another added: the ones that stay are untouched, the new one is written like its neighbours.
+  const before = projectText(ws);
+  await config.setRepo(ws, 'api', { role: 'Backend', gates: [{ name: 'lint', cmd: 'npm run lint -- --max-warnings 0' }, API_GATES[2]!, { name: 'types', cmd: 'npm run typecheck' }] });
+  const { added, removed } = changedLines(before, projectText(ws));
+  assert.deepEqual(removed, ['      - { name: test, cmd: "npm run test:unit -- --runInBand --reporter=dot --coverage --coverageReporters=text-summary", when: src/ }']);
+  assert.deepEqual(added, ['      - { name: types, cmd: npm run typecheck }']);
+  assert.match(projectText(ws), /# e2e needs the docker stack/);
+
+  // Renamed: it stays where it was, with the comments in it.
+  await config.setRepo(ws, 'backend', { role: 'Backend', path: './api', gates: [{ name: 'lint', cmd: 'npm run lint' }] }, 'api');
+  const text = projectText(ws);
+  assert.match(text, /repos:\n {2}backend:\n {4}role: Backend\n {4}# e2e needs the docker stack.*\n {4}gates:\n {6}- \{ name: lint, cmd: npm run lint \} # cached\n {4}path: \.\/api\n {2}web:\n/);
+  const r = passed(await config.loadConfig({ workspace: ws, home: tmp('cs-home-') }));
+  assert.deepEqual(Object.keys(r.config.repos), ['backend', 'web']);
+  assert.equal(r.config.repos.backend!.path, './api');
+});
+
+const TEAM = `agents:
+  developer: { model: sonnet, mcp: true }   # MCP for the Jira reads
+  reviewer:
+    model: opus     # the strongest one
+    effort: high
+pipeline: [planner, developer, tester, reviewer]   # tester stays
+scenarios:
+  hotfix:
+    label: Hotfix   # what the menu shows
+    agents:
+      - developer
+      - { agent: reviewer, model: sonnet, effort: low }   # a quick look
+context: [./workspace.md]
+groups:
+  checkout:
+    type: epic
+    label: Checkout revamp
+    jira: CP-123   # the epic in Jira
+    defaultInstructions: [no-new-deps]
+instructions:
+  no-new-deps:
+    label: No new dependencies   # short
+    text: Do not add packages.
+`;
+
+test('config edits: scenarios, groups, instructions, agents and lists keep their comments and layout when saved', async () => {
+  const ws = workspace(TEAM);
+  const home = tmp('cs-home-');
+  const edits: [string, () => Promise<unknown>, string, string][] = [
+    ['scenario label', () => config.setCustomScenario(ws, 'hotfix', { label: 'Hot fix', agents: [{ name: 'developer' }, { name: 'reviewer', model: 'sonnet', effort: 'low' }] }), '    label: Hotfix   # what the menu shows', '    label: Hot fix # what the menu shows'],
+    ['a step of it', () => config.setCustomScenario(ws, 'hotfix', { label: 'Hot fix', agents: [{ name: 'developer' }, { name: 'reviewer', model: 'opus', effort: 'low' }] }), '      - { agent: reviewer, model: sonnet, effort: low }   # a quick look', '      - { agent: reviewer, model: opus, effort: low } # a quick look'],
+    ['group label', () => config.saveGroup({ workspace: ws, home, id: 'checkout', type: 'epic', label: 'Checkout', jira: 'CP-123', defaultInstructions: ['no-new-deps'] }), '    label: Checkout revamp', '    label: Checkout'],
+    ['instruction text', () => config.saveInstruction({ workspace: ws, home, id: 'no-new-deps', label: 'No new dependencies', text: 'Do not add npm packages.' }), '    text: Do not add packages.', '    text: Do not add npm packages.'],
+    ['agent layer', () => config.setAgentLayer(ws, 'reviewer', { model: 'opus', effort: 'max' }), '    effort: high', '    effort: max'],
+    ['agent field', () => config.updateAgentConfig(ws, 'developer', { model: 'opus' }), '  developer: { model: sonnet, mcp: true }   # MCP for the Jira reads', '  developer: { model: opus, mcp: true } # MCP for the Jira reads'],
+    ['pipeline', () => config.setPipeline(ws, ['planner', 'developer', 'reviewer', 'tester']), 'pipeline: [planner, developer, tester, reviewer]   # tester stays', 'pipeline: [ planner, developer, reviewer, tester ] # tester stays'],
+    ['context', () => config.setProjectValue(ws, ['context'], ['./workspace.md', './api.md']), 'context: [./workspace.md]', 'context: [ ./workspace.md, ./api.md ]'],
+  ];
+  for (const [what, edit, was, now] of edits) {
+    const before = projectText(ws);
+    await edit();
+    assert.deepEqual(changedLines(before, projectText(ws)), { added: [now], removed: [was] }, what);
+  }
+
+  // A scenario renamed keeps its place and comments; an agent layer without a field drops only that field.
+  await config.setCustomScenario(ws, 'quick', { label: 'Hot fix', agents: [{ name: 'developer' }, { name: 'reviewer', model: 'opus', effort: 'low' }] }, 'hotfix');
+  await config.setAgentLayer(ws, 'reviewer', { model: 'opus' });
+  const text = projectText(ws);
+  assert.match(text, /scenarios:\n {2}quick:\n {4}label: Hot fix # what the menu shows\n/);
+  assert.match(text, / {2}reviewer:\n {4}model: opus {5}# the strongest one\npipeline:/);
+  const r = passed(await config.loadConfig({ workspace: ws, home }));
+  assert.deepEqual(Object.keys(r.config.custom), ['quick']);
+  assert.equal(r.config.agents.reviewer!.effort, 'high', 'back to the built-in effort');
+});

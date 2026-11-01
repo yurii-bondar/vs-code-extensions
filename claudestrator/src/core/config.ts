@@ -1139,6 +1139,95 @@ function pruneEmpty(doc: YAML.Document, at: string[]): void {
   }
 }
 
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const keyOf = (pair: YAML.Pair): string => String(YAML.isScalar(pair.key) ? pair.key.value : pair.key);
+
+/**
+ * `value` written into the node that holds the old one, changing only what differs, so the comments in it and its
+ * layout stay. A map keeps its keys' order and its flow or block style, and loses only the keys `value` lacks (or has
+ * as `undefined`). A list keeps the items still in it; an item that changed where it stands (one check's command) is
+ * edited in place, and a new map in it is written like most maps in it (`{ name: lint, cmd: … }`). A scalar keeps
+ * its quotes and comment. A node of another kind is replaced, keeping the comments on it. Returns the node to use.
+ */
+function mergeNode(doc: YAML.Document, node: unknown, value: unknown): unknown {
+  if (YAML.isMap(node) && isRecord(value)) {
+    const want = new Map(Object.entries(value).filter(([, v]) => v !== undefined));
+    node.items = node.items.filter((pair) => want.has(keyOf(pair)));
+    for (const [key, v] of want) {
+      const pair = node.items.find((p) => keyOf(p) === key);
+      if (pair) pair.value = mergeNode(doc, pair.value, v);
+      else node.set(key, doc.createNode(v));
+    }
+    return node;
+  }
+  if (YAML.isSeq(node) && Array.isArray(value)) {
+    const items = [...node.items];
+    const old: unknown[] = items.map((item) => (YAML.isNode(item) ? item.toJS(doc) : item));
+    if (isDeepStrictEqual(old, value)) return node;
+    const taken = new Set<number>();
+    const same = value.map((v) => {
+      const i = old.findIndex((o, k) => !taken.has(k) && isDeepStrictEqual(o, v));
+      if (i !== -1) taken.add(i);
+      return i;
+    });
+    const maps = items.filter((x) => YAML.isMap(x));
+    const flow = maps.filter((x) => x.flow === true).length * 2 > maps.length;
+    node.items = value.map((v, n) => {
+      const i = same[n] ?? -1;
+      if (i !== -1) return items[i];
+      const here = n < items.length && !taken.has(n) ? items[n] : undefined;
+      taken.add(n);
+      const item = mergeNode(doc, here, v);
+      if (YAML.isMap(item) && !items.includes(item)) item.flow = flow;
+      return item;
+    });
+    return node;
+  }
+  if (YAML.isScalar(node) && (value === null || typeof value !== 'object')) {
+    node.value = value;
+    return node;
+  }
+  const fresh = doc.createNode(value);
+  if (YAML.isNode(node)) {
+    if (node.commentBefore) fresh.commentBefore = node.commentBefore;
+    if (node.comment) fresh.comment = node.comment;
+  }
+  return fresh;
+}
+
+/** Writes `value` at `at` into what the file has there (`mergeNode`); `undefined` removes it. */
+function writeIn(doc: YAML.Document, at: readonly string[], value: unknown): void {
+  if (value === undefined) {
+    if (doc.hasIn(at)) doc.deleteIn(at);
+    return;
+  }
+  const node = doc.getIn(at, true);
+  const next = node === undefined ? doc.createNode(value) : mergeNode(doc, node, value);
+  if (next !== node) doc.setIn(at, next);
+}
+
+/** Writes a list of names at `at`: into the list there, or as a new one on one line (`[planner, developer]`). */
+function writeNames(doc: YAML.Document, at: readonly string[], names: string[]): void {
+  if (YAML.isSeq(doc.getIn(at, true))) return writeIn(doc, at, names);
+  const node = doc.createNode(names);
+  node.flow = true;
+  doc.setIn(at, node);
+}
+
+/**
+ * Renames the entry `from` of the map at `at` to `to` where it stands, with the comments on it. When `to` is taken,
+ * `from` goes and what is written next goes into `to`.
+ */
+function renameIn(doc: YAML.Document, at: readonly string[], from: string, to: string): void {
+  const map = doc.getIn(at, true);
+  if (!YAML.isMap(map)) return;
+  const pair = map.items.find((p) => keyOf(p) === from);
+  if (!pair) return;
+  if (map.items.some((p) => keyOf(p) === to)) map.items = map.items.filter((p) => p !== pair);
+  else if (YAML.isScalar(pair.key)) pair.key.value = to;
+  else pair.key = doc.createNode(to);
+}
+
 /** Sets (or, with `undefined`/null, removes) fields of one agent in the project config. */
 async function updateAgentConfig(workspace: string, agent: string, patch: Record<string, unknown>): Promise<string> {
   const set = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined && v !== null));
@@ -1147,14 +1236,14 @@ async function updateAgentConfig(workspace: string, agent: string, patch: Record
   return editProjectConfig(workspace, (doc) => {
     for (const [key, value] of Object.entries(patch)) {
       if (value === undefined || value === null) doc.deleteIn(['agents', agent, key]);
-      else doc.setIn(['agents', agent, key], doc.createNode(value));
+      else writeIn(doc, ['agents', agent, key], value);
     }
   });
 }
 
 /** Replaces everything the project layer says about an agent with `layer` (a backup restores agents this way). */
 async function setAgentLayer(workspace: string, agent: string, layer: AgentLayer): Promise<string> {
-  return editProjectConfig(workspace, (doc) => doc.setIn(['agents', agent], doc.createNode(defined(layer))));
+  return editProjectConfig(workspace, (doc) => writeIn(doc, ['agents', agent], defined(layer)));
 }
 
 /** Removes everything the project layer says about an agent: back to the user/built-in definition. */
@@ -1163,11 +1252,7 @@ async function resetAgentConfig(workspace: string, agent: string): Promise<strin
 }
 
 async function setScenario(workspace: string, scenario: string, agents: string[]): Promise<string> {
-  return editProjectConfig(workspace, (doc) => {
-    const node = doc.createNode(agents);
-    node.flow = true;
-    doc.setIn(['scenarios', scenario], node);
-  });
+  return editProjectConfig(workspace, (doc) => writeNames(doc, ['scenarios', scenario], agents));
 }
 
 /**
@@ -1177,8 +1262,8 @@ async function setScenario(workspace: string, scenario: string, agents: string[]
 async function setCustomScenario(workspace: string, id: string, def: { label: string; description?: string | undefined; agents: ScenarioStep[] }, oldId?: string): Promise<string> {
   const agents = def.agents.map((st) => (st.model || st.effort ? { agent: st.name, ...(st.model && { model: st.model }), ...(st.effort && { effort: st.effort }) } : st.name));
   return editProjectConfig(workspace, (doc) => {
-    if (oldId && oldId !== id) doc.deleteIn(['scenarios', oldId]);
-    doc.setIn(['scenarios', id], doc.createNode(defined({ label: def.label, description: def.description || undefined, agents })));
+    if (oldId && oldId !== id) renameIn(doc, ['scenarios'], oldId, id);
+    writeIn(doc, ['scenarios', id], { label: def.label, description: def.description || undefined, agents });
   });
 }
 
@@ -1198,18 +1283,14 @@ async function restoreScenario(workspace: string, id: string): Promise<string> {
 }
 
 async function setPipeline(workspace: string, pipeline: string[]): Promise<string> {
-  return editProjectConfig(workspace, (doc) => {
-    const node = doc.createNode(pipeline);
-    node.flow = true;
-    doc.setIn(['pipeline'], node);
-  });
+  return editProjectConfig(workspace, (doc) => writeNames(doc, ['pipeline'], pipeline));
 }
 
 /** Sets any top-level path (e.g. ['limits', 'reviewRounds']); `undefined` removes it. */
 async function setProjectValue(workspace: string, keyPath: string[], value: unknown): Promise<string> {
   return editProjectConfig(workspace, (doc) => {
     if (value === undefined || value === null || (Array.isArray(value) && value.length === 0 && keyPath[0] !== 'pipeline')) doc.deleteIn(keyPath);
-    else doc.setIn(keyPath, doc.createNode(value));
+    else writeIn(doc, keyPath, value);
     // Drop parents left empty, e.g. `limits: {}`.
     for (let i = keyPath.length - 1; i > 0; i--) {
       const parent = doc.getIn(keyPath.slice(0, i), true) as YamlCollection | undefined;
@@ -1220,9 +1301,8 @@ async function setProjectValue(workspace: string, keyPath: string[], value: unkn
 
 async function setRepo(workspace: string, name: string, layer: RepoLayer | undefined, oldName?: string): Promise<string> {
   return editProjectConfig(workspace, (doc) => {
-    if (oldName && oldName !== name) doc.deleteIn(['repos', oldName]);
-    if (layer === undefined) doc.deleteIn(['repos', name]);
-    else doc.setIn(['repos', name], doc.createNode(defined(layer)));
+    if (oldName && oldName !== name) renameIn(doc, ['repos'], oldName, name);
+    writeIn(doc, ['repos', name], layer);
   });
 }
 
@@ -1347,7 +1427,7 @@ async function saveEntry(workspace: string, section: EntrySection, existing: Rec
   if (id && !existing[id]) throw new Error(`There is no ${what} "${id}"`);
   if (Object.values(existing).some((x) => x.id !== id && x.label.toLowerCase() === value.label.toLowerCase())) throw new Error(`A ${what} called "${value.label}" already exists`);
   const finalId = id || idFromLabel(value.label, new Set(Object.keys(existing)), what);
-  await editProjectConfig(workspace, (doc) => doc.setIn([section, finalId], doc.createNode(defined(value))));
+  await editProjectConfig(workspace, (doc) => writeIn(doc, [section, finalId], value));
   return finalId;
 }
 
@@ -1398,8 +1478,7 @@ async function removeEntry(workspace: string, section: EntrySection, id: string)
       for (const [gid, g] of Object.entries(layer.groups ?? {})) {
         const rest = (g.defaultInstructions ?? []).filter((x) => x !== id);
         if (rest.length === (g.defaultInstructions ?? []).length) continue;
-        if (rest.length) doc.setIn(['groups', gid, 'defaultInstructions'], doc.createNode(rest));
-        else doc.deleteIn(['groups', gid, 'defaultInstructions']);
+        writeIn(doc, ['groups', gid, 'defaultInstructions'], rest.length ? rest : undefined);
       }
     }
     const node = doc.getIn([section], true) as YamlCollection | undefined;
