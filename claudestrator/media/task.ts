@@ -98,8 +98,13 @@ interface Views {
     tab: string;
     viewKey: string | null;
     follow: boolean;
-    /** When the last item of the transcript as loaded was written: a push of one from before is in it already. */
-    loadedUntil: number;
+    /** What the transcript as loaded holds of the items pushed around its read. */
+    edge: LoadedEdge | null;
+    /** Transcript loads started: only the latest one's reply is shown. */
+    loads: number;
+    /** Whether a transcript is on its way; pushed items wait for it in `held`. */
+    loading: boolean;
+    held: TranscriptItem[];
     liveText: string;
     cpKey: string | null;
     feedback: string;
@@ -111,7 +116,10 @@ interface Views {
     tab: 'output',
     viewKey: null,
     follow: true,
-    loadedUntil: 0,
+    edge: null,
+    loads: 0,
+    loading: false,
+    held: [],
     liveText: '',
     cpKey: null,
     feedback: '',
@@ -146,7 +154,7 @@ interface Views {
 
   views.task = {
     async enter(route) {
-      Object.assign(T, { taskId: route.taskId ?? '', d: null, viewKey: null, follow: true, loadedUntil: 0, liveText: '', cpKey: null, sev: 'all', tab: S.ui.taskTab || 'output' });
+      Object.assign(T, { taskId: route.taskId ?? '', d: null, viewKey: null, follow: true, edge: null, loading: false, held: [], liveText: '', cpKey: null, sev: 'all', tab: S.ui.taskTab || 'output' });
       $('#view')!.innerHTML = `
         <div class="page task-page">
           <button class="back" data-action="go-home">${icon('back')}All tasks</button>
@@ -221,17 +229,30 @@ interface Views {
     },
     async loadTranscript() {
       const key = T.viewKey;
+      const n = ++T.loads;
       T.liveText = '';
+      T.held = [];
       if (!key) {
-        T.loadedUntil = 0;
+        T.loading = false;
+        T.edge = null;
         $('#transcript')!.innerHTML = emptyTranscript(T.d!);
         return;
       }
-      const items = await call('transcript', { taskId: T.taskId, key });
-      if (key !== T.viewKey) return;
-      T.loadedUntil = items.reduce((t, i) => Math.max(t, i.t ?? 0), 0);
+      // What is pushed meanwhile waits: it may be in the transcript too, and would otherwise show twice, or be wiped.
+      T.loading = true;
+      let items: TranscriptItem[];
+      try {
+        items = await call('transcript', { taskId: T.taskId, key });
+      } finally {
+        if (n === T.loads) T.loading = false;
+      }
+      if (key !== T.viewKey || n !== T.loads) return;
+      T.edge = window.loadedEdge(items);
       const el = $('#transcript')!;
       el.innerHTML = items.length ? renderItems(items) : `<div class="t-empty">${icon('clock')}Waiting for the agent's first words…</div>`;
+      const held = T.held;
+      T.held = [];
+      for (const item of held) appendItem(item);
       scrollTranscript(true);
     },
     render() {
@@ -272,7 +293,7 @@ interface Views {
           }
           return;
         }
-        if (msg.key === T.viewKey) appendItem(msg.item);
+        if (msg.key === T.viewKey) showItem(msg.item);
         else if (T.follow && T.d && (!T.d.live || T.d.live.key !== msg.key)) this.load(false);
       } else if (msg.type === 'live') {
         if (T.d) {
@@ -833,11 +854,16 @@ interface Views {
   /** Items the live transcript keeps on screen, as a loaded one: the oldest go, the file keeps them. */
   const MAX_ITEMS = 1500;
   let liveTimer: ReturnType<typeof setTimeout> | null = null;
+  /** A pushed item of the step on screen: shown now, or once the transcript being loaded is. */
+  function showItem(item: TranscriptItem) {
+    if (T.loading) T.held.push(item);
+    else appendItem(item);
+  }
   function appendItem(item: TranscriptItem) {
     const el = $('#transcript');
     if (!el) return;
     // Written before the transcript was read (on its way while it loaded): it is on screen already.
-    if (item.type !== 'text_delta' && item.type !== 'thinking' && item.t !== undefined && item.t < T.loadedUntil) return;
+    if (T.edge && T.edge.has(item)) return;
     const empty = $('.t-empty', el);
     if (empty) empty.remove();
     const near = el.scrollHeight - el.scrollTop - el.clientHeight < 120 || isPageBottom();

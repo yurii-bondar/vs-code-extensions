@@ -891,6 +891,7 @@ class DashboardPanel implements RpcHandlers {
     const css = webview.asWebviewUri(vscode.Uri.joinPath(media, 'app.css'));
     const js = webview.asWebviewUri(vscode.Uri.joinPath(scripts, 'app.js'));
     const md = webview.asWebviewUri(vscode.Uri.joinPath(scripts, 'markdown.js'));
+    const stream = webview.asWebviewUri(vscode.Uri.joinPath(scripts, 'stream.js'));
     const task = webview.asWebviewUri(vscode.Uri.joinPath(scripts, 'task.js'));
     const conf = webview.asWebviewUri(vscode.Uri.joinPath(scripts, 'config.js'));
     return `<!DOCTYPE html>
@@ -907,6 +908,7 @@ class DashboardPanel implements RpcHandlers {
   <div id="toasts" aria-live="polite"></div>
   <div id="modal-root"></div>
   <script nonce="${nonce}" src="${md}"></script>
+  <script nonce="${nonce}" src="${stream}"></script>
   <script nonce="${nonce}" src="${js}"></script>
   <script nonce="${nonce}" src="${task}"></script>
   <script nonce="${nonce}" src="${conf}"></script>

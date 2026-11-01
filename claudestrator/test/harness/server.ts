@@ -212,7 +212,7 @@ const broadcast = (msg: unknown) => {
   const es = new EventSource('/events');
   es.onmessage = (e) => window.dispatchEvent(new MessageEvent('message', { data: JSON.parse(e.data) }));
 </script>
-<script src="/media/markdown.js"></script><script src="/media/app.js"></script><script src="/media/task.js"></script><script src="/media/config.js"></script>
+<script src="/media/markdown.js"></script><script src="/media/stream.js"></script><script src="/media/app.js"></script><script src="/media/task.js"></script><script src="/media/config.js"></script>
 </body></html>`;
 
   http
