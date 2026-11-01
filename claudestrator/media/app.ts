@@ -453,8 +453,22 @@ interface Views {
     patch('global-permissions', list.length ? `<div class="perm-strip">${list.map(permissionCard).join('')}</div>` : '');
   }
 
+  /** Characters of a tool's input (other than a command or a path) a permission card shows. */
+  const PERM_INPUT = 300;
+  /** What a card leaves out of a request, set apart from what it shows. */
+  const cutMark = (n: string | number) => `<span class="cut" title="Not shown here">…+${n} chars</span>`;
+
+  /**
+   * The request as the agent made it. A long one comes cut, ending in "…+N chars" (the engine keeps 2000 characters of a
+   * command; the card 300 of other input): the mark stands apart, so what you allow is plainly not all of it.
+   */
   function permissionCard(p: PermissionRequest) {
-    const what = p.tool === 'Bash' ? `<code class="cmd">$ ${esc(field(p.input, 'command') || '')}</code>${field(p.input, 'description') ? `<div class="muted small">${esc(field(p.input, 'description'))}</div>` : ''}` : field(p.input, 'file_path') ? `<code>${esc(field(p.input, 'file_path'))}</code>` : `<code>${esc(JSON.stringify(p.input || {}).slice(0, 300))}</code>`;
+    const command = String(field(p.input, 'command') || '');
+    const cut = command.match(/…\+(\d+) chars$/);
+    const json = JSON.stringify(p.input || {});
+    const what = p.tool === 'Bash'
+      ? `<code class="cmd">$ ${esc(cut ? command.slice(0, cut.index) : command)}${cut ? cutMark(cut[1]!) : ''}</code>${field(p.input, 'description') ? `<div class="muted small">${esc(field(p.input, 'description'))}</div>` : ''}`
+      : field(p.input, 'file_path') ? `<code>${esc(field(p.input, 'file_path'))}</code>` : `<code>${esc(json.slice(0, PERM_INPUT))}${json.length > PERM_INPUT ? cutMark(json.length - PERM_INPUT) : ''}</code>`;
     return `<div class="perm-card">
       <div class="perm-head">${icon('shield')}<strong>${esc(p.agent)}${p.repo ? ` @ ${esc(p.repo)}` : ''}</strong><span class="muted">wants to use <b>${esc(p.tool)}</b> · ${esc(p.taskId)}</span></div>
       <div class="perm-body">${what}</div>

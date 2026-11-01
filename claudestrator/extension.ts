@@ -138,9 +138,9 @@ function activate(context: vscode.ExtensionContext) {
     } else if (e.name === 'permission' && notify('needsYou') && !visible) {
       // A question for you, like a checkpoint: the dashboard, when it shows, asks it itself.
       const p = e.data;
-      const input = (typeof p.input === 'object' && p.input !== null ? p.input : {}) as { command?: unknown; file_path?: unknown };
-      const what = p.tool === 'Bash' ? `run \`${String(input.command || '').slice(0, 120)}\`` : typeof input.file_path === 'string' ? `${p.tool.toLowerCase()} ${path.basename(input.file_path)}` : `use ${p.tool}`;
-      const choice = await vscode.window.showWarningMessage(view.plainNotice(`${p.agent}${p.repo ? ` @ ${p.repo}` : ''} wants to ${what}`), { detail: `Task ${p.taskId}` }, 'Allow', 'Deny', 'Open');
+      // A command the notification cannot show whole is allowed on the dashboard, where you read all of it.
+      const { text, whole } = view.permissionNotice(p);
+      const choice = await vscode.window.showWarningMessage(text, { detail: `Task ${p.taskId}` }, ...(whole ? ['Allow'] : []), 'Deny', 'Open');
       if ((choice === 'Allow' || choice === 'Deny') && !orch.permissionReply(p.requestId, choice === 'Allow')) void vscode.window.showInformationMessage(view.plainNotice(`${p.agent}'s question was answered already: on the dashboard, or denied when nobody answered in time.`));
       else if (choice === 'Open') open(context, { name: 'task', taskId: p.taskId });
     }

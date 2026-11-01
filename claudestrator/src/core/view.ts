@@ -1,4 +1,5 @@
 // UI models built from a task's state and events: cards for lists, a step timeline, the activity feed.
+import * as path from 'path';
 import { transition, passSteps, sameStep, branchName, spentOf, MAX_EMPTY_ROUNDS } from './machine';
 import { onRepos } from './pipeline';
 import { describeEvent, CHECKPOINT_TITLE } from './describe';
@@ -374,4 +375,25 @@ function plainNotice(text: string): string {
   return text.replace(/\]\(/g, '] (').replace(/\b(command|vscode)(?=:)/gi, '$1​');
 }
 
-export { loadsRemote, plainNotice, summary, detail, stepsOf, statusOf, queueOutput, CHECKPOINT_HINT };
+/** The longest command a permission notification shows. */
+const NOTICE_COMMAND = 120;
+
+/**
+ * A permission request as a notification says it, and whether it says all of it. A notification has room for one
+ * short line (and shows no `detail`): a longer command, or one with line breaks or invisible characters, is shown cut,
+ * and the notification then offers no Allow, only the dashboard, which shows it whole.
+ */
+function permissionNotice(p: Pick<PermissionRequest, 'agent' | 'repo' | 'tool' | 'input'>): { text: string; whole: boolean } {
+  const input = typeof p.input === 'object' && p.input !== null ? (p.input as Record<string, unknown>) : {};
+  let what = `use ${p.tool}`;
+  let whole = true;
+  if (p.tool === 'Bash') {
+    const command = typeof input.command === 'string' ? input.command : '';
+    const flat = command.replace(/[\p{Cc}\p{Cf}]+/gu, ' ');
+    whole = flat === command && command.length <= NOTICE_COMMAND;
+    what = `run \`${whole ? command : `${flat.slice(0, NOTICE_COMMAND)}…`}\``;
+  } else if (typeof input.file_path === 'string') what = `${p.tool.toLowerCase()} ${path.basename(input.file_path)}`;
+  return { text: plainNotice(`${p.agent}${p.repo ? ` @ ${p.repo}` : ''} wants to ${what}`), whole };
+}
+
+export { loadsRemote, permissionNotice, plainNotice, summary, detail, stepsOf, statusOf, queueOutput, CHECKPOINT_HINT };
