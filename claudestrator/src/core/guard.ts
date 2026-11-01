@@ -1085,8 +1085,32 @@ const GIT_COMMANDS = new Set<string>([
   'verify-commit', 'verify-tag', 'version', 'whatchanged', 'worktree', 'write-tree', 'lfs',
 ]);
 
-/** `git config` options that only read. */
-const GIT_CONFIG_READS = new Set<string>(['--get', '--get-all', '--get-regexp', '--get-urlmatch', '--list', '-l', '--show-origin', '--show-scope', '--name-only', 'get', 'list']);
+/** `git config` actions that only read; `get` and `list` are the newer syntax's, as its first word. */
+const GIT_CONFIG_READS = new Set<string>(['--get', '--get-all', '--get-regexp', '--get-urlmatch', '--get-color', '--get-colorbool', '--list', '-l']);
+/** `git config` actions that write, in either syntax. */
+const GIT_CONFIG_WRITES = new Set<string>(['--add', '--replace-all', '--unset', '--unset-all', '--rename-section', '--remove-section', '--edit', '-e', 'set', 'unset', 'rename-section', 'remove-section', 'edit']);
+/** `git config` options that take a value: `--comment get` is a comment, not the `get` action. */
+const GIT_CONFIG_VALUED = ['-f', '--file', '--blob', '--type', '--default', '--comment', '--value', '--url'];
+
+/**
+ * Whether `git config` only reads: a read action and no write one, or the old syntax with a key alone (`git config
+ * user.name`). `--show-scope`, `--show-origin`, `--name-only`, `-z`, `--type`, `--global`, `--file` only say how or where.
+ */
+function gitConfigReads(args: string[]): boolean {
+  const flags = [...flagSet(args)];
+  const words = plainWords(args, GIT_CONFIG_VALUED);
+  if (flags.some((f) => GIT_CONFIG_WRITES.has(f)) || GIT_CONFIG_WRITES.has(words[0] ?? '')) return false;
+  if (words[0] === 'get' || words[0] === 'list' || flags.some((f) => GIT_CONFIG_READS.has(f))) return true;
+  return words.length === 1;
+}
+
+/** `git branch` options that make, move, delete a branch or set its upstream. */
+const GIT_BRANCH_WRITES = new Set<string>(['-d', '-D', '--delete', '-m', '-M', '--move', '-c', '-C', '--copy', '-f', '--force', '-u', '--set-upstream-to', '--unset-upstream', '--edit-description', '-t', '--track', '--no-track', '--create-reflog', '--recurse-submodules']);
+/** Options that make `git branch` list, its words then being patterns (`--list 'feat/*'`, `--merged main`). */
+const GIT_BRANCH_LISTS = ['-l', '--list', '-a', '--all', '-r', '--remotes', '--contains', '--no-contains', '--merged', '--no-merged', '--points-at'];
+
+/** `git fetch` options that take a value. */
+const GIT_FETCH_VALUED = ['--depth', '--deepen', '--shallow-since', '--shallow-exclude', '--negotiation-tip', '-o', '--server-option', '-j', '--jobs', '--filter', '--refmap', '--recurse-submodules-default'];
 
 /** Git subcommands that change refs, the index or discard work: never an agent's business. */
 const AGENT_GIT_WRITES = new Set<string>([
@@ -1136,13 +1160,21 @@ async function checkGit(all: string[], cwd: Dir, ctx: GuardContext): Promise<Ver
     if (readOnly && sub !== 'stash' && sub !== 'worktree' && args[0] !== undefined && !args[0].startsWith('-') && !readOnly.includes(args[0])) return deny(`agents only read with git ${sub} (${readOnly.join(', ')})`);
     const option = args.find((a) => AGENT_GIT_OPTIONS.test(a));
     if (option) return deny(`git ${sub} ${option.split('=')[0]} runs a program or writes a file; redirect the output instead`);
-    if (sub === 'config' && !args.some((a) => GIT_CONFIG_READS.has(a.split('=')[0]!))) return deny('agents only read git config (--get, --list); Claudestrator owns git');
-    if (sub === 'remote' && args[0] !== undefined && !['-v', '--verbose', 'show', 'get-url'].includes(args[0])) return deny('agents do not change git remotes');
+    if (sub === 'config' && !gitConfigReads(args)) return deny('agents only read git config (--get, --list, get, list, or a key alone); Claudestrator owns git');
+    const action = sub === 'remote' ? plainWords(args, [])[0] : undefined;
+    if (action !== undefined && action !== 'show' && action !== 'get-url') return deny('agents do not change git remotes');
+    if (sub === 'branch') {
+      const branchFlags = [...flags];
+      if (branchFlags.some((f) => GIT_BRANCH_WRITES.has(f)) || (plainWords(args, ['--sort', '--format', '--points-at']).length > 0 && !branchFlags.some((f) => GIT_BRANCH_LISTS.includes(f)))) {
+        return deny('agents do not create, rename or delete branches, or set their upstream; Claudestrator owns git');
+      }
+    }
+    // A refspec with a destination (`main:main`, `+sha:refs/heads/main`) writes that local ref; from stdin, any.
+    if (sub === 'fetch' && (flags.has('--stdin') || [...plainWords(args, GIT_FETCH_VALUED).slice(1), ...optionValues(args, ['--refmap'])].some((r) => r.includes(':')))) {
+      return deny('git fetch into a local branch (a refspec with :) is not allowed: fetch without one; Claudestrator owns git');
+    }
   }
   if (ctx.agent && sub && AGENT_GIT_WRITES.has(sub) && !(AGENT_GIT_READ_ONLY[sub] || []).includes(args[0] ?? '')) return deny(`agents do not run git ${sub}; Claudestrator owns git (commits, branches, pushes)`);
-  if (ctx.agent && sub === 'branch' && args.some((a) => !a.startsWith('-') || ['-d', '-D', '-m', '-M', '-c', '-C', '--delete', '--move', '--copy'].includes(a))) {
-    return deny('agents do not create, rename or delete branches; Claudestrator owns git');
-  }
 
   if (!ctx.policy.allowNoVerify && sub !== undefined && ['commit', 'push', 'merge', 'am'].includes(sub) && (flags.has('--no-verify') || (sub === 'commit' && flags.has('-n')))) {
     return deny('skipping git hooks is not allowed; the hooks are part of the gates (policy.allowNoVerify)');

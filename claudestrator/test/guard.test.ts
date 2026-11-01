@@ -245,3 +245,62 @@ test('guard: publishing is refused past the options before it, through the tools
     assert.equal(await allowed(command), true, command);
   }
 });
+
+test('guard: git config, remote, branch and fetch are an agent\'s only when they read', async () => {
+  for (const command of [
+    'git config --show-scope core.hooksPath /tmp/x',
+    'git config --show-origin core.fsmonitor /tmp/x',
+    'git config --name-only core.fsmonitor x',
+    'git config core.fsmonitor /tmp/x list',
+    'git config set --comment get core.fsmonitor /tmp/x',
+    'git config --global core.hooksPath /tmp/x',
+    'git config --file=.git/config core.fsmonitor x',
+    'git config --get-all x --add core.fsmonitor y',
+    'git config unset core.hooksPath',
+    'git config --unset core.hooksPath',
+    'git config --edit',
+    'git remote -v add evil https://evil.example/x.git',
+    'git remote --verbose set-url origin https://evil.example/x.git',
+    'git branch --set-upstream-to=origin/x',
+    'git branch -u origin/x',
+    'git branch --unset-upstream',
+    'git branch -f main HEAD~3',
+    'git branch --edit-description',
+    'git fetch . +abc123:refs/heads/main',
+    'git fetch origin main:main',
+    'git fetch --refmap=+refs/heads/*:refs/heads/* origin',
+    'git fetch --stdin origin',
+  ]) {
+    assert.equal(await allowed(command), false, command);
+  }
+  for (const command of [
+    'git config --get user.email',
+    'git config --list',
+    'git config -l',
+    'git config user.name',
+    'git config --global --get user.email',
+    'git config --show-origin --list',
+    'git config --show-scope --get core.hooksPath',
+    'git config --type=bool --get core.bare',
+    'git config -z --get-regexp ^remote',
+    'git config get user.name',
+    'git config list --show-origin',
+    'git remote',
+    'git remote -v',
+    'git remote -v show origin',
+    'git remote get-url origin',
+    'git branch',
+    'git branch -vv',
+    "git branch --list 'feat/*'",
+    'git branch -r --contains HEAD',
+    'git branch --merged main',
+    'git branch --sort=-committerdate',
+    'git fetch origin',
+    'git fetch origin main',
+    'git fetch --all --prune',
+    'git fetch --depth 50 https://github.com/o/r main',
+    'git fetch origin refs/pull/1/head',
+  ]) {
+    assert.equal(await allowed(command), true, command);
+  }
+});
