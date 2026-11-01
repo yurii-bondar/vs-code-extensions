@@ -175,3 +175,15 @@ test("git: a submodule at another commit than the branch says is the checkout's,
   assert.equal(git(api, 'ls-files', '-s', 'vendor/lib').split(' ')[1], y, 'the branch keeps the commit it had');
   assert.doesNotMatch((await taskDiff(taskRepos(ws, task(['api'], 'branch'), config, ['api']))).text, /Subproject commit/);
 });
+
+test('git: the diff shows a file as it is, whatever .gitattributes says of it', async () => {
+  const ws = workspace(['api'], 'repos:\n  api: {}\n');
+  const dir = path.join(ws, 'api');
+  fs.writeFileSync(path.join(dir, '.gitattributes'), 'config.js -diff\nkeys.txt binary\n');
+  fs.writeFileSync(path.join(dir, 'config.js'), 'module.exports = { token: "ghp_planted" };\n');
+  fs.writeFileSync(path.join(dir, 'keys.txt'), 'AKIA-planted\n');
+  const diff = await new GitRepo(dir).diff('main');
+  assert.match(diff, /\+module\.exports = \{ token: "ghp_planted" \};/);
+  assert.match(diff, /\+AKIA-planted/);
+  assert.doesNotMatch(diff, /Binary files/);
+});

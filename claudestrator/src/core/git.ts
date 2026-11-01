@@ -91,6 +91,12 @@ const paths = (stdout: string): string[] => stdout.split('\0').filter(Boolean);
  */
 const NO_SUBMODULES = '--ignore-submodules=all';
 
+/**
+ * A patch as the files really are: an attribute (`-diff`, `binary`, a textconv driver) a change set in `.gitattributes`
+ * would otherwise show a file as "Binary files differ", or as a driver's rendering, to the reviewer and the secret scan.
+ */
+const AS_TEXT = ['--text', '--no-textconv', '--no-ext-diff'];
+
 // Machine state and config of the orchestrator never count as the user's changes.
 const OWN = [`${ORCH_DIR}/`, '.claudestrator/'];
 const isOwn = (file: string): boolean => OWN.some((p) => file === p.slice(0, -1) || file.startsWith(p));
@@ -214,7 +220,7 @@ class GitRepo {
         env = { GIT_INDEX_FILE: index };
         await this.gitWith({ env, input: untracked.join('\0') }, 'add', '--intent-to-add', '--pathspec-from-file=-', '--pathspec-file-nul');
       }
-      const runs = [await this.gitWith({ env }, '--no-pager', 'diff', NO_SUBMODULES, '--stat', ref, '--', '.', ...EXCLUDE), await this.gitWith({ env }, '--no-pager', 'diff', NO_SUBMODULES, ref, '--', '.', ...EXCLUDE)];
+      const runs = [await this.gitWith({ env }, '--no-pager', 'diff', NO_SUBMODULES, '--stat', ref, '--', '.', ...EXCLUDE), await this.gitWith({ env }, '--no-pager', 'diff', NO_SUBMODULES, ...AS_TEXT, ref, '--', '.', ...EXCLUDE)];
       const cut = runs.some((r) => r.code === 125);
       return [...runs.map((r) => r.stdout), cut ? `[this diff is larger than ${MAX_OUTPUT / 1024 / 1024} MB and was cut: review the rest with git diff in the repo, file by file]` : ''].filter((p) => p.trim()).join('\n');
     } finally {
@@ -433,4 +439,4 @@ async function removeWorktrees(workspace: string, state: TaskState, config: Repo
 }
 
 export type { ExecResult, ExecOptions, TaskRepo, Prepared, PrepareResult };
-export { exec, launch, setShim, setChildEnv, getChildEnv, GitRepo, branchAt, worktreeDir, taskRepos, prepareRepos, taskDiff, removeWorktrees, isOwn, SLOW_GIT_MS };
+export { AS_TEXT, exec, launch, setShim, setChildEnv, getChildEnv, GitRepo, branchAt, worktreeDir, taskRepos, prepareRepos, taskDiff, removeWorktrees, isOwn, SLOW_GIT_MS };

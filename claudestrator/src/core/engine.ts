@@ -12,7 +12,7 @@ import { buildPipeline, scenarioKind, taskPipeline, fitsScenario, onRepos, repos
 import { nextAction, runOf, artifactPath, branchName, sameStep, editableFrom, stepRepos, unknownRepos, TASK_FILES, type NextAction, type RunAction } from './machine';
 import { parseInvocation, classifyInput, detectScenario, runIntake, renderTicket, IntakeError, extractAcceptanceCriteria, otherSite, planFromTicket, capSpec } from './intake';
 import { TaskService, type DispatchResult } from './store';
-import { exec, getChildEnv, GitRepo, branchAt, taskRepos, prepareRepos, taskDiff, removeWorktrees, SLOW_GIT_MS } from './git';
+import { AS_TEXT, exec, getChildEnv, GitRepo, branchAt, taskRepos, prepareRepos, taskDiff, removeWorktrees, SLOW_GIT_MS } from './git';
 import { runGates, runShell, withoutCredentials } from './gates';
 import { guardBash, inGitMetadata, inside, outsideLabel } from './guard';
 import { buildAgentPrompt, parseStageReport, lastJsonBlock, workReport, type StageReport } from './prompt';
@@ -1794,7 +1794,7 @@ class Engine extends EventEmitter {
           // What the push would publish: a credential an agent wrote, or a hook that runs when you use git here.
           const hooksAt = await r.git.hooksDir();
           const relHooks = hooksAt && !inGitMetadata(hooksAt) ? path.relative(r.dir, hooksAt).split(path.sep).join('/') : undefined;
-          const scan = scanDiff((await r.git.git('--no-pager', 'diff', '--no-ext-diff', '--no-color', range)).stdout, { hooksDir: relHooks && !relHooks.startsWith('..') ? relHooks : undefined });
+          const scan = scanDiff((await r.git.git('--no-pager', 'diff', ...AS_TEXT, '--no-color', range)).stdout, { hooksDir: relHooks && !relHooks.startsWith('..') ? relHooks : undefined });
           secrets.push(...scan.secrets.map((f) => ({ repo: r.name, ...f })));
           hooks.push(...scan.hooks.map((file) => ({ repo: r.name, file })));
         }
