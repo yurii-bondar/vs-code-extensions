@@ -20,7 +20,7 @@ import { TaskService } from '../src/core/store';
 import { stepsOf, summary, queueOutput } from '../src/core/view';
 import type { OutputPush } from '../src/core/view';
 import type { ViewEngine } from '../src/core/view';
-import { buildArgs, limitsOf } from '../src/core/runner';
+import { buildArgs, limitsOf, sameWindows } from '../src/core/runner';
 import { Engine } from '../src/core/engine';
 import { resolveDefaults, effectiveFor, modelName } from '../src/core/defaults';
 import * as mcp from '../src/core/mcp';
@@ -701,6 +701,12 @@ test('config: effort is validated and inherited along extends', async () => {
   assert.equal(turns[turns.indexOf('--max-turns') + 1], '40', "an agent's maxTurns reaches Claude Code");
   assert.ok(!buildArgs({ agent: {} as Agent, settings: {} }, { flags: () => new Set(['--max-turns']), settingSources: () => null } as Partial<RunnerOptions> as RunnerOptions).includes('--max-turns'), 'no cap unless the agent sets one');
   assert.deepEqual(limitsOf({ rateLimitType: 'seven_day', utilization: 0.5, resetsAt: 9 }), { fiveHour: undefined, sevenDay: { pct: 50, resetsAt: 9, status: undefined } });
+  // Each session reports the windows again: the same report is no change.
+  const w = { fiveHour: { pct: 31, resetsAt: 9, status: 'allowed' }, sevenDay: { pct: 26, resetsAt: 99 } };
+  assert.equal(sameWindows(w, { ...w, fiveHour: { ...w.fiveHour } }), true);
+  assert.equal(sameWindows(w, { ...w, fiveHour: { ...w.fiveHour, pct: 32 } }), false);
+  assert.equal(sameWindows(w, { ...w, fiveHour: { ...w.fiveHour, status: 'rejected' } }), false);
+  assert.equal(sameWindows(null, w), false);
 });
 
 test('task effort: --effort in the text, per-agent choices, and the override reaching the agent', async () => {

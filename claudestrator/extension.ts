@@ -113,6 +113,9 @@ function activate(context: vscode.ExtensionContext) {
 
   orch.init().then(refresh, (e: Error) => void vscode.window.showErrorMessage(`Claudestrator could not start: ${e.message}`));
 
+  // What an agent does now: the tree's line for its task, without reading every task again.
+  context.subscriptions.push(orch.onEngine((e) => e.name === 'live' && tree.setLive(e.data.taskId, e.data.live)));
+
   // Notifications: a checkpoint, a finished task, a failure, a permission prompt.
   orch.onEngine(async (e) => {
     const visible = DashboardPanel.current && DashboardPanel.current.panel.visible;

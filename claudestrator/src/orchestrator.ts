@@ -4,7 +4,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { Engine } from './core/engine';
 import { exists } from './core/files';
-import { ClaudeRunner } from './core/runner';
+import { ClaudeRunner, sameWindows } from './core/runner';
 import { HookServer } from './core/hookserver';
 import { setChildEnv, getChildEnv } from './core/git';
 import { resolveDefaults } from './core/defaults';
@@ -228,8 +228,16 @@ class Orchestrator {
         if (name === 'changed' && engine !== this.engine && !engine.running.size) this.retired = this.retired.filter((e) => e !== engine);
         // The engine is a plain EventEmitter; what it emits under each name is EngineEvent's.
         this._onEngine.fire({ name, data } as EngineEvent);
-        if (name === 'limits') this.context.globalState.update(this.limitsKey(), { ...data, source: 'agents' });
-        if (['changed', 'live', 'permission', 'permissionDone', 'limits'].includes(name)) this.fire();
+        // The same windows again (each agent session reports them) change nothing: no write, no reload of the page.
+        if (name === 'limits') {
+          const key = this.limitsKey();
+          const before = this.context.globalState.get<StoredLimits>(key);
+          if (before && before.source === 'agents' && sameWindows(before, data as StoredLimits)) return;
+          void this.context.globalState.update(key, { ...data, source: 'agents' });
+        }
+        // What an agent is doing now goes to the page and the tree as it is (`live`); reading every task again is for
+        // what changes them.
+        if (['changed', 'permission', 'permissionDone', 'limits'].includes(name)) this.fire();
       });
     }
     this.watch(root);

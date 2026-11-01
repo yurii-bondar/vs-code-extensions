@@ -69,6 +69,21 @@ function limitsOf(info: RateLimitInfo | null | undefined): Limits | null {
   }
   return out.fiveHour || out.sevenDay ? out : null;
 }
+/** Whether two reports of an account's limits say the same of both windows: each agent session reports them again. */
+interface Windows {
+  fiveHour?: Window | undefined;
+  sevenDay?: Window | undefined;
+}
+interface Window {
+  pct: number;
+  resetsAt?: number | undefined;
+  status?: string | undefined;
+}
+function sameWindows(a: Windows | null | undefined, b: Windows | null | undefined): boolean {
+  const key = (w?: Window): string => (w ? `${w.pct}:${w.resetsAt ?? ''}:${w.status ?? ''}` : '');
+  return Boolean(a && b) && key(a!.fiveHour) === key(b!.fiveHour) && key(a!.sevenDay) === key(b!.sevenDay);
+}
+
 const STDERR_KEEP = 8000;
 /** After an interrupt, how long the CLI gets to end the turn before SIGTERM, and SIGTERM before SIGKILL. */
 const STOP_GRACE_MS = 5000;
@@ -566,4 +581,4 @@ function parseFlags(helpText: string): Set<string> {
 }
 
 export type { CliMessage, Limit, Limits, RunnerOptions, SessionRequest, TurnResult };
-export { ClaudeRunner, ClaudeSession, buildArgs, parseFlags, limitsOf, versionProblem, withoutTrailingJson, MIN_CLAUDE_VERSION };
+export { ClaudeRunner, ClaudeSession, buildArgs, parseFlags, limitsOf, sameWindows, versionProblem, withoutTrailingJson, MIN_CLAUDE_VERSION };

@@ -756,6 +756,14 @@ interface Views {
       this.renderAgentsChips();
       this.renderExtras();
     },
+    // What an agent does now, on its card: the overview is not read again for it.
+    onPush(msg) {
+      if (msg.type !== 'live' || !S.overview) return;
+      const card = S.overview.tasks.find((t) => t.taskId === msg.taskId);
+      if (!card) return;
+      card.live = msg.live;
+      this.render();
+    },
     render() {
       const o = S.overview;
       if (!o!.root) {

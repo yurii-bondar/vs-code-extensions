@@ -73,6 +73,14 @@ class TaskTree implements vscode.TreeDataProvider<TreeNode> {
     this._onDidChangeTreeData.fire();
   }
 
+  /** What a running task's agent does now, on its line: the card as it is otherwise. */
+  setLive(taskId: string, live: view.Card['live']): void {
+    const card = this.cards.find((c) => c.taskId === taskId);
+    if (!card || JSON.stringify(card.live) === JSON.stringify(live)) return;
+    card.live = live;
+    this._onDidChangeTreeData.fire();
+  }
+
   counts(): { attention: number; running: number; stopped: number; done: number; total: number } {
     const by = (g: string): number => this.cards.filter((c) => c.status.group === g).length;
     return { attention: by('attention'), running: by('running'), stopped: by('stopped'), done: by('done'), total: this.cards.length };
