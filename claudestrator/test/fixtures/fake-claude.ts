@@ -189,9 +189,12 @@ function main(): void {
 
   const state = process.env.FAKE_STATE;
 
-  function plan(names: string, uuid: string, slug = 'add-feature') {
+  /** A plan with a section per repo; `text: false` hands over only its data, as a planner that ends on StructuredOutput. */
+  function plan(names: string, uuid: string, { slug = 'add-feature', text = true }: { slug?: string; text?: boolean } = {}) {
     const repos = names.split(',').map((name) => ({ name, mode: 'full' }));
-    return reply(`## Summary\n\nAdd the feature to every repo.\n\n## Steps\n- do it\n\n\`\`\`json\n${JSON.stringify({ type: 'feat', slug, title: 'add the feature', repos, openQuestions: [] })}\n\`\`\``, uuid);
+    const sections = repos.map((r) => `### ${r.name}\n- do it`).join('\n\n');
+    const data = `\`\`\`json\n${JSON.stringify({ type: 'feat', slug, title: 'add the feature', repos, openQuestions: [] })}\n\`\`\``;
+    return reply(text ? `## Summary\n\nAdd the feature to every repo.\n\n## Steps\n\n${sections}\n\n${data}` : `\n${data}`, uuid);
   }
 
   let firstPrompt = '';
@@ -229,7 +232,8 @@ function main(): void {
     switch (role) {
       case 'planner':
         // FAKE_PLAN_REPOS_FIRST: the first plan names repos by another name (the package's), as a small model may.
-        return plan(process.env.FAKE_PLAN_REPOS_FIRST || process.env.FAKE_REPOS || 'api', uuid);
+        // FAKE_PLAN_NO_TEXT: the first plan is only its data, the text never written.
+        return plan(process.env.FAKE_PLAN_REPOS_FIRST || process.env.FAKE_REPOS || 'api', uuid, { text: !process.env.FAKE_PLAN_NO_TEXT });
       case 'developer': {
         // FAKE_TODO_STATUS: a to-do status an agent steered by a ticket might write (the dashboard must not run it as markup).
         if (process.env.FAKE_TODO_STATUS) tool('TodoWrite', { todos: [{ content: 'Add the feature', status: process.env.FAKE_TODO_STATUS, activeForm: 'Adding it' }, { content: 'Write the test', status: 'pending', activeForm: 'Writing it' }] });
@@ -323,8 +327,8 @@ function main(): void {
       }
       // FAKE_BLOCKED_ON_GATES=<role>: asked to fix its red checks, it says it cannot.
       else if (/^Gates failed/.test(text) && process.env.FAKE_BLOCKED_ON_GATES === role) reply(`The check needs a database this machine does not have.\n\`\`\`json\n${JSON.stringify({ status: 'blocked', blockers: ['the check needs a database'] })}\n\`\`\``, m.uuid);
-      else if (role === 'planner' && /repos this workspace does not have|named more than once/.test(text)) plan(process.env.FAKE_REPOS || 'api', m.uuid);
-      else if (role === 'planner' && /choose another slug/.test(text)) plan(process.env.FAKE_REPOS || 'api', m.uuid, 'add-feature-again');
+      else if (role === 'planner' && /repos this workspace does not have|named more than once|the report has no text/.test(text)) plan(process.env.FAKE_REPOS || 'api', m.uuid);
+      else if (role === 'planner' && /choose another slug/.test(text)) plan(process.env.FAKE_REPOS || 'api', m.uuid, { slug: 'add-feature-again' });
       else reply(`Follow-up handled: ${text.split('\n')[0]!.slice(0, 60)}`, m.uuid);
     }
   });

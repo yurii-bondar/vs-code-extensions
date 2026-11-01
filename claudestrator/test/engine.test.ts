@@ -565,6 +565,22 @@ test('engine: a plan for a repo the workspace does not have goes back to the pla
   }
 });
 
+test('engine: a plan handed over as data alone goes back to the planner for its text, and never reaches you without it', async () => {
+  const ws = workspace(['api'], 'pipeline: [planner, developer]\nrepos:\n  api: {}\n');
+  const h = await harness(ws, { FAKE_REPOS: 'api', FAKE_PLAN_NO_TEXT: '1' });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Add the feature' });
+    const s = await runTask(h.engine, taskId);
+    assert.equal(s.checkpoint && s.checkpoint.id, 'approve-plan', JSON.stringify(h.engine.lastError(taskId)));
+    const planner = await h.engine.svc.readTranscript(taskId, (await view.detail(h.engine, taskId)).steps.find((st) => st.agent === 'planner')!.key!);
+    assert.ok(planner.some((i) => i.type === 'user' && i.from === 'orchestrator' && /the report has no text, only its data/.test(text(i.text))));
+    const artifact = fs.readFileSync(path.join(h.engine.svc.dir(taskId), s.artifacts.find((a) => a.output === 'plan')!.path), 'utf8');
+    assert.match(artifact, /^## Summary[\s\S]*### api\n/, 'the plan you approve is the text the planner wrote');
+  } finally {
+    h.hooks.dispose();
+  }
+});
+
 test('engine: a plan that names a repo twice goes back to the planner, and its repo runs once', async () => {
   const ws = workspace(['api'], 'pipeline: [planner, developer]\nrepos:\n  api: {}\n');
   const h = await harness(ws, { FAKE_REPOS: 'api', FAKE_PLAN_REPOS_FIRST: 'api,api' });

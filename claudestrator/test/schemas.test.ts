@@ -68,10 +68,13 @@ test('schemas: every report schema accepts what its checker accepts and rejects 
     const schema = REPORT_SCHEMAS[output as Output]!;
     assert.equal(schema.$schema, 'http://json-schema.org/draft-07/schema#', 'Claude Code validates draft-07');
     assert.ok(valid(schema, good), `${output}: the schema takes a good report`);
-    assert.ok(parseStageReport(output as Output, '', good).ok, `${output}: so does the checker`);
+    // The checker also wants the report's text (a plan's with a section per repo): the schema holds only the data.
+    const repos = output === 'plan' ? (good as { repos: { name: string }[] }).repos : [];
+    const prose = `The report.\n\n${repos.map((r) => `### ${r.name}\n- a step`).join('\n\n')}`;
+    assert.ok(parseStageReport(output as Output, prose, good).ok, `${output}: so does the checker`);
     for (const b of bad) {
       assert.ok(!valid(schema, b), `${output}: the schema refuses ${JSON.stringify(b)}`);
-      assert.ok(!parseStageReport(output as Output, '', b).ok, `${output}: so does the checker`);
+      assert.ok(!parseStageReport(output as Output, prose, b).ok, `${output}: so does the checker`);
     }
   }
 });

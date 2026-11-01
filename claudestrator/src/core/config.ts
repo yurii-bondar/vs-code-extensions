@@ -167,6 +167,7 @@ ${COMMON}
 5. Ask a question only when two readings lead to different code, and give the default you would pick.
 
 Start the plan with a "## Summary" section of two or three sentences: it becomes the PR description.
+Then give each repository of the plan a section of its own, headed with its name ("### <repo>"): what changes there, in which files and symbols, in what order. Its developer works from that section; a plan without one goes back to you.
 
 End with the json the orchestrator parses: as your structured output when you have the StructuredOutput tool, else as a fenced json block:
 {"type": "feat|fix|chore|refactor", "slug": "<kebab-case>", "title": "<short imperative English description, lowercase: the commit subject>", "repos": [{"name": "<repo>", "mode": "full|tests_only"}], "openQuestions": [{"question": "...", "default": "..."}]}`;

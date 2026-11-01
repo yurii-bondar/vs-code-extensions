@@ -423,10 +423,18 @@ repos:
 });
 
 test('reports: plan and verdict blocks are validated, nulls tolerated', async () => {
-  const plan = passed(report('plan', 'Plan...\n```json\n{"type":"feat","slug":"a-b","title":null,"repos":[{"name":"api"}],"openQuestions":[]}\n```'));
+  const plan = passed(report('plan', '## Summary\nPlan...\n### api\n- cap it\n```json\n{"type":"feat","slug":"a-b","title":null,"repos":[{"name":"api"}],"openQuestions":[]}\n```'));
   assert.deepEqual(plan.plan!.repos, [{ name: 'api', mode: 'full' }]);
+  // A plan is its text: one handed over as data alone, or with no section for a repo it plans for, goes back.
+  const data = { type: 'feat', slug: 'a-b', repos: [{ name: 'api' }, { name: 'game-client' }], openQuestions: [] };
+  assert.match(failed(parseStageReport('plan', '', data)).error, /the report has no text, only its data/);
+  assert.match(failed(parseStageReport('plan', '## Summary\nCap bets.\n\n### `api`\n- cap', data)).error, /no section for game-client: .*\(### game-client\)/);
+  assert.ok(parseStageReport('plan', '## Summary\nCap bets.\n\n### `api`\n- cap\n\n## game-client (UI)\n- show it', data).ok, 'any heading that names the repo');
+  assert.match(failed(parseStageReport('plan', '## Summary\nThe api and game-client change.\n### api.v2\n- x', data)).error, /no section for api, game-client/, 'a name in passing, or inside another, is no section');
+  assert.match(failed(report('code', '')).error, /no text/, 'a developer that wrote nothing');
+  assert.ok(parseStageReport('verdict', '', { status: 'approved', summary: 'fine', findings: [] }).ok, "a verdict's data is its report");
   assert.match(failed(report('plan', 'no block')).error, /no ```json block/);
-  assert.match(failed(report('plan', '```json\n{"type":"feat","slug":"Bad Slug","repos":[]}\n```')).error, /slug must be kebab-case[\s\S]*repos: needs at least 1/);
+  assert.match(failed(report('plan', '```json\n{"type":"feat","slug":"Bad Slug","repos":[]}\n```')).error, /^the report has no text[\s\S]*; also, the plan json block does not match the schema: .*slug must be kebab-case[\s\S]*repos: needs at least 1/, 'every problem in one message');
   const v = failed(report('verdict', '```json\n{"status":"approved","summary":"s","findings":[{"severity":"major","problem":"p","line":null}]}\n```'));
   assert.match(v.error, /changes_requested exactly when/);
   assert.ok(report('code', 'anything').ok);
