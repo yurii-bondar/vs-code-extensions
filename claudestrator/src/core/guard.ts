@@ -152,13 +152,22 @@ const TEMP_DIRS = (): string[] => [...new Set([path.resolve(os.tmpdir()), '/tmp'
 
 const within = (abs: string, root: string): boolean => abs === root || abs.startsWith(root + path.sep);
 
-/** What a path of `Engine.runsOutside` is: Claude Code's settings, or the hooks folder git runs. */
-const outsideLabel = (p: string): string => (/(^|[\\/])(\.claude|\.mcp\.json)$/.test(p) ? "Claude Code's settings and MCP servers of the repo" : 'the hooks folder git runs');
+/**
+ * Paths as the file system compares them: macOS and Windows ignore case by default, so `.CLAUDE/settings.json` is
+ * `.claude/settings.json` once written. Folding on a case-sensitive volume there only refuses a little more.
+ */
+const CASELESS = process.platform === 'darwin' || process.platform === 'win32';
+const fold = (p: string): string => (CASELESS ? p.toLowerCase() : p);
+const inside = (abs: string, root: string): boolean => within(fold(abs), fold(root));
+
+/** What a path of `Engine.runsOutside` is: Claude Code's or VS Code's settings, or the hooks folder git runs. */
+const outsideLabel = (p: string): string =>
+  /(^|[\\/])(\.claude|\.mcp\.json)$/i.test(p) ? "Claude Code's settings and MCP servers of the repo" : /(^|[\\/])\.vscode$/i.test(p) ? "VS Code's settings and tasks of the repo" : 'the hooks folder git runs';
 
 /** What a write there would change that is not an agent's: git metadata, or what runs outside the sandbox. Null: none. */
 function ownedBy(abs: string, ctx: GuardContext): string | null {
   if (inGitMetadata(abs)) return 'git metadata';
-  const root = (ctx.runsOutside || []).find((h) => within(abs, path.resolve(h)));
+  const root = (ctx.runsOutside || []).find((h) => inside(abs, path.resolve(h)));
   return root ? `${outsideLabel(root)}, which run outside the sandbox` : null;
 }
 
@@ -171,7 +180,7 @@ function checkWrites(targets: string[], cmd: string, dir: string, ctx: GuardCont
     const abs = resolveIn(dir, t, ctx);
     const owned = ownedBy(abs, ctx);
     if (owned) return deny(`${cmd} would write into ${owned} (${abs}); Claudestrator owns git`);
-    if ((ctx.protect || []).some((p) => within(abs, path.resolve(p)))) return deny(`${cmd} writes ${abs}: Claudestrator's config and task state are not an agent's to change`);
+    if ((ctx.protect || []).some((p) => inside(abs, path.resolve(p)))) return deny(`${cmd} writes ${abs}: Claudestrator's config and task state are not an agent's to change`);
     if (TEMP_DIRS().some((tmp) => within(abs, tmp))) continue;
     if (roots.some((root) => within(abs, root))) continue;
     return deny(roots.length ? `${cmd} writes ${abs}, outside ${roots.join(', ')}: this stage works only there` : `${cmd} writes ${abs}: this stage does not change files (a temp folder is fine)`);
@@ -203,7 +212,7 @@ function checkLinks(cmd: string, args: string[], dir: string, ctx: GuardContext)
     for (const abs of [resolveIn(dir, s, ctx), path.resolve(at, s), path.resolve(path.dirname(at), s)]) {
       const owned = ownedBy(abs, ctx);
       if (owned) return deny(`${cmd} would link to ${owned} (${s}): a write through the link would change it, and Claudestrator owns git`);
-      if ((ctx.protect || []).some((p) => within(abs, path.resolve(p)))) return deny(`${cmd} would link to ${abs}: Claudestrator's config and task state are not an agent's to change`);
+      if ((ctx.protect || []).some((p) => inside(abs, path.resolve(p)))) return deny(`${cmd} would link to ${abs}: Claudestrator's config and task state are not an agent's to change`);
     }
   }
   return allow;
@@ -680,4 +689,4 @@ async function checkRm(args: string[], dir: string, ctx: GuardContext): Promise<
 }
 
 export type { GuardContext, Verdict as GuardVerdict };
-export { guardBash, inGitMetadata, outsideLabel, simpleCommands, AI_CREDIT };
+export { guardBash, inGitMetadata, inside, outsideLabel, simpleCommands, AI_CREDIT };

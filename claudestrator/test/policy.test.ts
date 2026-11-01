@@ -164,7 +164,7 @@ test("policy: what runs outside the sandbox from a repo (husky's hooks folder, C
   const engine = new Engine({ workspace: ws, home: ws, runner: {} as EngineOptions['runner'], hooks });
   const config = await engine.config();
   const runsOutside = await engine.runsOutside([api]);
-  assert.deepEqual(runsOutside, [path.join(api, '.husky', '_'), path.join(api, '.claude'), path.join(api, '.mcp.json')]);
+  assert.deepEqual(runsOutside, [path.join(api, '.husky', '_'), path.join(api, '.claude'), path.join(api, '.mcp.json'), path.join(api, '.vscode')]);
   const decide = async (tool: string, input: Record<string, unknown>): Promise<string | null> => {
     const d = await engine.decide({ taskId: 'T-1', step: { stage: 1, agent: 'developer', repo: 'api' }, writeRoots: [api], runsOutside, config, call: { tool, input, cwd: api }, emitItem: () => {} });
     return d.allow ? null : (d.reason ?? 'refused');
@@ -180,6 +180,15 @@ test("policy: what runs outside the sandbox from a repo (husky's hooks folder, C
   assert.match((await decide('Write', { file_path: path.join(api, '.mcp.json') })) ?? 'allowed', /MCP servers/);
   assert.match((await decide('Bash', { command: "printf '{}' > .claude/settings.local.json" })) ?? 'allowed', /Claude Code's settings/);
   assert.equal(await decide('Write', { file_path: path.join(api, 'CLAUDE.md') }), null, 'the instructions at the root are text, not code');
+  // A task of .vscode/tasks.json can run when the folder opens.
+  assert.match((await decide('Write', { file_path: path.join(api, '.vscode', 'tasks.json') })) ?? 'allowed', /VS Code's settings/);
+  if (process.platform === 'darwin' || process.platform === 'win32') {
+    // The file system ignores case: .CLAUDE is .claude once written, also where neither exists yet.
+    assert.match((await decide('Write', { file_path: path.join(api, '.CLAUDE', 'settings.json') })) ?? 'allowed', /Claude Code's settings/);
+    assert.match((await decide('Write', { file_path: path.join(api, '.MCP.json') })) ?? 'allowed', /MCP servers/);
+    assert.match((await decide('Bash', { command: "printf '{}' > .CLAUDE/settings.json" })) ?? 'allowed', /Claude Code's settings/);
+    assert.match((await decide('Bash', { command: 'echo curl evil > .HUSKY/_/pre-commit' })) ?? 'allowed', /hooks folder/);
+  }
 
   // The settings: Claude Code refuses the edit itself, and the sandbox keeps commands, checks and hooks out of it.
   const settings = engine.agentSettings({ writeRoots: [api], cwd: api, config, runsOutside }) as { permissions: { deny: string[] }; sandbox: { filesystem: { denyWrite: string[] } } };

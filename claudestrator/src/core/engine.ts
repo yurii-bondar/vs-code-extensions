@@ -14,7 +14,7 @@ import { parseInvocation, classifyInput, detectScenario, runIntake, renderTicket
 import { TaskService, type DispatchResult } from './store';
 import { exec, getChildEnv, GitRepo, branchAt, taskRepos, prepareRepos, taskDiff, removeWorktrees } from './git';
 import { runGates, runShell, withoutCredentials } from './gates';
-import { guardBash, inGitMetadata, outsideLabel } from './guard';
+import { guardBash, inGitMetadata, inside, outsideLabel } from './guard';
 import { buildAgentPrompt, parseStageReport, lastJsonBlock, type StageReport } from './prompt';
 import { commitSubject, prTitle, prBody } from './pr';
 import { renderReport, jiraText } from './report';
@@ -234,10 +234,13 @@ async function realPath(p: string): Promise<string> {
   }
 }
 
-/** Whether `target` is `root` or inside it once symlinks are followed (a link in the repo to `~/.ssh` is outside it). */
+/**
+ * Whether `target` is `root` or inside it once symlinks are followed (a link in the repo to `~/.ssh` is outside it),
+ * in any case where the file system ignores it (`.CLAUDE` that does not exist yet becomes `.claude` when written).
+ */
 async function realInside(root: string, target: string): Promise<boolean> {
   const [r, t] = await Promise.all([realPath(root), realPath(target)]);
-  return t === r || t.startsWith(r + path.sep);
+  return inside(t, r);
 }
 
 /** Whether some element passes an async test, and the elements that pass one. */
@@ -870,7 +873,8 @@ class Engine extends EventEmitter {
    */
   async runsOutside(dirs: string[]): Promise<string[]> {
     const hooks = await Promise.all(dirs.map((d) => new GitRepo(d).hooksDir()));
-    const claude = dirs.flatMap((d) => [path.join(d, '.claude'), path.join(d, '.mcp.json')]);
+    // VS Code's too: a task of `.vscode/tasks.json` can run when the folder opens, and its settings name programs.
+    const claude = dirs.flatMap((d) => [path.join(d, '.claude'), path.join(d, '.mcp.json'), path.join(d, '.vscode')]);
     return [...new Set([...hooks.filter((h): h is string => h !== null && !inGitMetadata(h)), ...claude])];
   }
 
