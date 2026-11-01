@@ -194,8 +194,17 @@ function main(): void {
     return reply(`## Summary\n\nAdd the feature to every repo.\n\n## Steps\n- do it\n\n\`\`\`json\n${JSON.stringify({ type: 'feat', slug, title: 'add the feature', repos, openQuestions: [] })}\n\`\`\``, uuid);
   }
 
+  let firstPrompt = '';
   function first(prompt: string, uuid: string) {
     role = (prompt.match(/You are the `([^`]+)` stage/) || [])[1];
+    firstPrompt = prompt;
+    // FAKE_API_ERROR_ONCE=<role>: its first turn ends on an overloaded API, past Claude Code's own retries.
+    const apiMarker = state ? path.join(state, `api-error-${role}`) : '';
+    if (process.env.FAKE_API_ERROR_ONCE && process.env.FAKE_API_ERROR_ONCE === role && apiMarker && !fs.existsSync(apiMarker)) {
+      fs.writeFileSync(apiMarker, '1');
+      out({ type: 'result', subtype: 'success', is_error: true, result: 'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}', total_cost_usd: cost, num_turns: 1, user_message_uuids: [uuid] });
+      return;
+    }
     const issue = prompt.match(/^Read the Jira issue (\S+)/);
     if (issue) {
       tool('mcp__Atlassian__getJiraIssue', { issueIdOrKey: issue[1] });
@@ -306,7 +315,8 @@ function main(): void {
           continue;
         }
         first(text, m.uuid);
-      } else if (role === 'planner' && /repos this workspace does not have|named more than once/.test(text)) plan(process.env.FAKE_REPOS || 'api', m.uuid);
+      } else if (/Continue where you left off/.test(text)) first(firstPrompt, m.uuid);
+      else if (role === 'planner' && /repos this workspace does not have|named more than once/.test(text)) plan(process.env.FAKE_REPOS || 'api', m.uuid);
       else if (role === 'planner' && /choose another slug/.test(text)) plan(process.env.FAKE_REPOS || 'api', m.uuid, 'add-feature-again');
       else reply(`Follow-up handled: ${text.split('\n')[0]!.slice(0, 60)}`, m.uuid);
     }

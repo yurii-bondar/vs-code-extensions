@@ -96,6 +96,12 @@ const COMMENT_TIMEOUT_MS = 4 * 60000;
 const PERMISSION_TIMEOUT_MS = (HOOK_TIMEOUT_S - 30) * 1000;
 /** An agent that shows no sign of work this long is stopped. Longer than any one tool call (Bash allows 10 minutes). */
 const STALL_MS = 20 * 60000;
+/** How often a turn that failed on the API side (overloaded, a dropped connection) is tried again, and the first pause. */
+const TRANSIENT_RETRIES = 2;
+const RETRY_DELAY_MS = 20000;
+/** What an API error that passes looks like; not a sign-in, a used-up limit, the budget or the turns, which do not. */
+const TRANSIENT = /\b(529|overloaded|50[0234]|internal server error|bad gateway|service unavailable|gateway timeout|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ECONNREFUSED|socket hang up|connection error|request timed out|network error|fetch failed)\b/i;
+const transientError = (error: string | undefined): boolean => Boolean(error && TRANSIENT.test(error) && !CLAUDE_AUTH.test(error) && !/limit is used up|budget|maxTurns|schema/i.test(error));
 
 const COMMENT_INSTRUCTIONS = `You post exactly one comment on one Jira issue and do nothing else.
 Use the MCP tool that adds a comment to a Jira issue (e.g. addCommentToJiraIssue). If a tool needs a cloud id, look it up with the tool that lists accessible Atlassian resources.
@@ -301,6 +307,8 @@ class Engine extends EventEmitter {
   /** Whether the sandbox started here once: it is not probed again. */
   sandboxReady = false;
   sessions: Map<string, ClaudeSession>;
+  /** The first pause before a turn that failed on the API side is tried again; it doubles each time. */
+  retryDelayMs = RETRY_DELAY_MS;
   /** What Stop ends besides the agent: the checks of a step, a commit hook, a pre-push hook. */
   gateRuns = new Map<string, AbortController>();
   /**
@@ -1112,6 +1120,17 @@ class Engine extends EventEmitter {
       if (await stopped()) return void (await session.interrupt());
       t = await this.turnOf(taskId, session);
       if (await stopped()) return;
+      // An overloaded API or a dropped connection, past Claude Code's own retries: the same session goes on after a
+      // pause (its context kept, and cached), before you are asked to decide.
+      for (let n = 1; !t.ok && n <= TRANSIENT_RETRIES && transientError(t.error) && !session.ended; n++) {
+        const wait = this.retryDelayMs * 2 ** (n - 1);
+        this.log('warn', `${label}: ${t.error}; trying again in ${Math.round(wait / 1000)}s`, taskId);
+        this.setLive(taskId, { phase: 'agent', step, key, text: `${label} waits ${Math.round(wait / 1000)}s after an API error` });
+        if (await this.pause(taskId, wait)) return;
+        session.send('The last request failed on the API side. Continue where you left off; what you did before it is kept.', { from: 'orchestrator' });
+        t = await this.turnOf(taskId, session);
+        if (await stopped()) return;
+      }
       if (!t.ok) return void (await fail(t.error || 'the agent failed'));
 
       // A code or tests stage that says it cannot go on stops here, for you to decide, rather than run the checks,
@@ -1790,6 +1809,21 @@ class Engine extends EventEmitter {
     const s = await this.svc.state(taskId);
     const r = await loadConfig({ workspace: this.workspace, ...(this.home && { home: this.home }) });
     return removeWorktrees(this.workspace, s, r.ok ? r.config : null, force);
+  }
+
+  /** Waits `ms`, unless the task is stopped meanwhile: true when it was. */
+  async pause(taskId: string, ms: number): Promise<boolean> {
+    const abort = new AbortController();
+    this.gateRuns.set(taskId, abort);
+    try {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, ms);
+        abort.signal.addEventListener('abort', () => (clearTimeout(timer), resolve()), { once: true });
+      });
+      return abort.signal.aborted || (await this.svc.state(taskId)).status === 'stopped';
+    } finally {
+      if (this.gateRuns.get(taskId) === abort) this.gateRuns.delete(taskId);
+    }
   }
 
   /** Once the task's run here has ended (after a Stop: its agent and checks are gone), or after `timeoutMs`. */

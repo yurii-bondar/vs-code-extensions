@@ -779,3 +779,20 @@ test('engine: a developer that cannot go on stops the step for you, and a blocke
     h.hooks.dispose();
   }
 });
+
+test('engine: a turn that failed on an overloaded API goes on in the same session after a pause, before you are asked', async () => {
+  const ws = workspace(['api'], 'pipeline: [planner, developer]\nrepos:\n  api: {}\n');
+  const h = await harness(ws, { FAKE_REPOS: 'api', FAKE_API_ERROR_ONCE: 'developer' });
+  h.engine.retryDelayMs = 50;
+  try {
+    const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
+    const s = await runTask(h.engine, taskId);
+    assert.equal(s.checkpoint && s.checkpoint.id, 'confirm-push', JSON.stringify(h.engine.lastError(taskId)));
+    const developer = (await view.detail(h.engine, taskId)).steps.find((st) => st.agent === 'developer' && st.key)!;
+    const items = await h.engine.svc.readTranscript(taskId, developer.key!);
+    assert.ok(items.some((i) => i.type === 'user' && i.from === 'orchestrator' && /Continue where you left off/.test(text(i.text))), 'told to go on, in the same session');
+    assert.equal(only(await h.engine.svc.events(taskId), 'stage_started').filter((e) => e.agent === 'developer').length, 1, 'one step, not a new one');
+  } finally {
+    h.hooks.dispose();
+  }
+});
