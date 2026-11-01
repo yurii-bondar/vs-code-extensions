@@ -152,3 +152,19 @@ test('store: an event recorded after its task was deleted does not bring the tas
   assert.ok(!fs.existsSync(svc.dir(taskId)));
   assert.deepEqual(await svc.list(), []);
 });
+
+test('store: a lease another engine of this process holds counts as elsewhere, so a task never runs twice here', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-lease-'));
+  const a = new TaskService({ workspace });
+  const b = new TaskService({ workspace });
+  fs.mkdirSync(a.dir('T-1'), { recursive: true });
+  const held = await a.takeLease('T-1');
+  assert.equal(held.ok, true);
+  assert.deepEqual(await b.takeLease('T-1'), { ok: false, pid: process.pid });
+  assert.equal(await b.runsElsewhere('T-1'), process.pid);
+  assert.equal(await a.runsElsewhere('T-1'), null, 'not elsewhere for the one that holds it');
+  if (held.ok) await held.release();
+  const again = await b.takeLease('T-1');
+  assert.equal(again.ok, true);
+  if (again.ok) await again.release();
+});

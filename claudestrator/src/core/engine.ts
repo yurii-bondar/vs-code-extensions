@@ -697,7 +697,7 @@ class Engine extends EventEmitter {
     let lease: Awaited<ReturnType<TaskService['takeLease']>>;
     try {
       lease = await this.svc.takeLease(taskId);
-      if (!lease.ok) throw new EngineError('running_elsewhere', `${taskId} runs in another VS Code window (process ${lease.pid}); it goes on there`);
+      if (!lease.ok) throw new EngineError('running_elsewhere', lease.pid === process.pid ? `${taskId} still runs in this window, from before its workspace folder changed; wait for it, or stop it` : `${taskId} runs in another VS Code window (process ${lease.pid}); it goes on there`);
     } catch (e) {
       this.running.delete(taskId);
       throw e;

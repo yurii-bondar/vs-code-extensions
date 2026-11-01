@@ -46,8 +46,16 @@ function alive(pid: number): boolean {
   }
 }
 
-/** The pid of another live process holding this lease and renewing it, or null. */
-async function otherHolder(file: string): Promise<number | null> {
+/**
+ * The leases this process holds, by file, with the task service that took each. Two engines live in one extension
+ * host when the workspace folder changes while a task runs: the new one must see the old one's run as elsewhere too.
+ */
+const leasesHere = new Map<string, object>();
+
+/** The pid of another live process (or another engine of this one) holding this lease and renewing it, or null. */
+async function otherHolder(file: string, me?: object): Promise<number | null> {
+  const here = leasesHere.get(file);
+  if (here !== undefined) return here === me ? null : process.pid;
   try {
     const [text, st] = await Promise.all([fs.promises.readFile(file, 'utf8'), fs.promises.stat(file)]);
     const pid = Number(text.trim());
@@ -441,11 +449,12 @@ class TaskService {
         break;
       } catch (e) {
         if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
-        const pid = await otherHolder(file);
+        const pid = await otherHolder(file, this);
         if (pid !== null) return { ok: false, pid };
         await fs.promises.rm(file, { force: true });
       }
     }
+    leasesHere.set(file, this);
     const renew = setInterval(() => {
       const now = new Date();
       fs.promises.utimes(file, now, now).catch(() => undefined);
@@ -455,6 +464,7 @@ class TaskService {
       ok: true,
       release: async () => {
         clearInterval(renew);
+        if (leasesHere.get(file) === this) leasesHere.delete(file);
         const text = await fs.promises.readFile(file, 'utf8').catch(() => '');
         if (Number(text.trim()) === process.pid) await fs.promises.rm(file, { force: true });
       },
@@ -463,7 +473,7 @@ class TaskService {
 
   /** The pid of another process that runs this task now, or null. */
   runsElsewhere(taskId: string): Promise<number | null> {
-    return otherHolder(path.join(this.dir(taskId), LEASE_FILE));
+    return otherHolder(path.join(this.dir(taskId), LEASE_FILE), this);
   }
 
   /** Tasks another process runs now. */
