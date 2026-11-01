@@ -18,3 +18,20 @@ test('guard: rm -r of a pattern is checked from the folder it starts in, and ~us
     assert.equal(await allowed(command, ctx({ writeRoots: undefined })), command !== 'rm -rf ~/tmp-not-really', command);
   }
 });
+
+test('guard: no way into the keychain or a stored GitHub token', async () => {
+  for (const command of [
+    'security find-generic-password -s gh:github.com -w',
+    'security -q find-generic-password -s gh:github.com -w',
+    'echo "find-generic-password -s gh:github.com -w" | security -i',
+    '/usr/bin/security dump-keychain',
+    'printf "host=github.com\\n" | git-credential-osxkeychain get',
+    'printf "protocol=https\\nhost=github.com\\n" | git credential fill',
+    'gh auth status --show-token',
+    'gh auth token',
+    'gh pr view 1 --show-token',
+  ]) {
+    assert.equal(await allowed(command), false, command);
+  }
+  assert.equal(await allowed('gh pr view 12 --json title'), true);
+});

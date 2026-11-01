@@ -231,7 +231,10 @@ async function checkCommand(cmd: string, args: string[], dir: string, ctx: Guard
   if (cmd === 'gh') return checkGh(args, dir, ctx);
   if (cmd === 'rm') return checkRm(args, dir, ctx);
   if (ctx.agent && publishes(cmd, args)) return deny(`${cmd} ${args.filter((a) => !a.startsWith('-')).slice(0, 2).join(' ')} publishes a package; releases are for humans`);
-  if (ctx.agent && cmd === 'security' && /^(find-(generic|internet)-password|dump-keychain|export|unlock-keychain)$/.test(args[0] ?? '')) return deny('agents do not read the keychain');
+  // The keychain holds gh's token and Claude Code's own; the sandbox does not close it. `security` reads it with any
+  // option first (-q) or from stdin (-i), and git's credential helpers print what it holds for a host.
+  if (ctx.agent && cmd === 'security') return deny('agents do not use the keychain (security)');
+  if (ctx.agent && cmd.startsWith('git-credential')) return deny(`agents do not run ${cmd}: it prints stored credentials`);
   return allow;
 }
 
@@ -631,6 +634,8 @@ const AGENT_GH_READ = new Set<string>(['view', 'list', 'diff', 'checks', 'status
 
 async function checkGh(all: string[], dir: string, ctx: GuardContext): Promise<Verdict> {
   const [group, action, ...args] = all;
+  // `gh auth status --show-token` and `gh auth token` print the token: no gh auth at all, whatever reads.
+  if (ctx.agent && (group === 'auth' || all.some((a) => a.startsWith('--show-token')))) return deny('agents do not use gh auth: it can print your GitHub token');
   if (ctx.agent && group !== 'api' && !AGENT_GH_READ.has(action ?? '')) return deny(`agents only read with gh (view, list, diff, checks, status); gh ${group} ${action ?? ''} is the orchestrator's`);
   if (ctx.agent && group === 'api' && ghApiWrites(all)) return deny('agents only read with gh api (GET)');
   if (group === 'pr' && action === 'merge') return deny('merging PRs is for humans');
