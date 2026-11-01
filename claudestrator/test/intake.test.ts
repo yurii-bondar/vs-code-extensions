@@ -93,3 +93,56 @@ test('intake: acceptance criteria are found under any way of naming them, and ne
   ac(`AC${' '.repeat(50000)}x\n**x${' '.repeat(50000)}y`);
   assert.ok(Date.now() - started < 500);
 });
+
+test('intake: a Jira link keeps its address, a card its URL and a file its name, and text keeps its marks', () => {
+  type Mark = { type: string; attrs?: Record<string, unknown> };
+  const t = (text: string, ...marks: Mark[]) => ({ type: 'text', text, ...(marks.length && { marks }) });
+  const link = (href: string): Mark => ({ type: 'link', attrs: { href } });
+  const doc = (...content: unknown[]) => adfToText({ type: 'doc', content });
+  const p = (...content: unknown[]) => ({ type: 'paragraph', content });
+
+  assert.equal(doc(p(t('Read '), t('the API spec', link('https://acme.example/spec')), t(' first.'))), 'Read [the API spec](https://acme.example/spec) first.');
+  // One link over words formatted differently is one link.
+  assert.equal(doc(p(t('the ', link('https://a.example')), t('API', link('https://a.example'), { type: 'strong' }), t(' spec', link('https://a.example')))), '[the **API** spec](https://a.example)');
+  assert.equal(doc(p(t('mail us', link('mailto:dev@acme.example')))), '[mail us](mailto:dev@acme.example)');
+  assert.equal(doc(p(t('https://a.example/x', link('https://a.example/x')))), 'https://a.example/x', 'a bare address once');
+  assert.equal(doc(p(t('the doc', link('https://a.example/a b(1)')))), '[the doc](https://a.example/a%20b%281%29)');
+  assert.equal(doc(p(t('click', link('javascript:alert(1)')), t(' or '), t('there', link('/relative')))), 'click or there', 'only web and mail addresses');
+  // Code, bold, italics and struck-out text, with spaces outside the marks.
+  assert.equal(doc(p(t('Call '), t('login()', { type: 'code' }), t(' — '), t('must ', { type: 'strong' }), t('now', { type: 'em' }), t(', '), t('or by mail', { type: 'strike' }))), 'Call `login()` — **must** *now*, ~~or by mail~~');
+  // Cards, inline and as blocks of their own.
+  assert.equal(doc(p(t('See '), { type: 'inlineCard', attrs: { url: 'https://acme.atlassian.net/browse/CP-2' } }), { type: 'blockCard', attrs: { url: 'https://figma.com/file/x' } }, { type: 'embedCard', attrs: { url: 'https://loom.com/v/1' } }, p(t('End'))), 'See https://acme.atlassian.net/browse/CP-2\n\nhttps://figma.com/file/x\n\nhttps://loom.com/v/1\n\nEnd');
+  // Files: by alt text, file name or id, each in its place.
+  const media = (attrs: Record<string, unknown>) => ({ type: 'media', attrs: { type: 'file', collection: 'c', ...attrs } });
+  assert.equal(
+    doc(
+      { type: 'mediaSingle', content: [media({ id: 'a1', alt: 'mockup.png' }), { type: 'caption', content: [t('The login screen')] }] },
+      { type: 'mediaGroup', content: [media({ id: 'b2', __fileName: 'spec.pdf' }), media({ id: 'c3' })] },
+      p(t('Log: '), { type: 'mediaInline', attrs: { id: 'd4', __fileName: 'error.log' } }),
+    ),
+    '[attachment: mockup.png] The login screen\n\n[attachment: spec.pdf] [attachment: c3]\n\nLog: [attachment: error.log]'
+  );
+  // A bold "Acceptance criteria:" paragraph still names the list under it.
+  const list = { type: 'bulletList', content: [{ type: 'listItem', content: [p(t('a'))] }] };
+  assert.deepEqual(extractAcceptanceCriteria(doc(p(t('Acceptance criteria:', { type: 'strong' })), list)), ['a']);
+});
+
+test('intake: a Confluence link keeps its address, a page link its title and a file its name', () => {
+  assert.equal(storageToText('<p>See <a href="https://figma.com/file/x?a=1&amp;b=2">the mockup</a>.</p>'), 'See [the mockup](https://figma.com/file/x?a=1&b=2).');
+  assert.equal(storageToText('<p><a href="https://acme.example"><code>run()</code> it</a></p>'), '[`run()` it](https://acme.example)');
+  assert.equal(storageToText('<p><a href="javascript:alert(1)">x</a> <a href="/wiki/spaces/DEV">y</a> <a name="top">z</a></p>'), 'x y z', 'only web and mail addresses');
+  // Links to pages and files, whose text is CDATA: not code.
+  assert.equal(storageToText('<p>Read <ac:link><ri:page ri:space-key="DEV" ri:content-title="Q&amp;A" /><ac:plain-text-link-body><![CDATA[the FAQ]]></ac:plain-text-link-body></ac:link> first.</p>'), 'Read [page: Q&A] first.');
+  assert.equal(storageToText('<p><ac:link><ri:attachment ri:filename="spec.pdf" /></ac:link></p>'), '[attachment: spec.pdf]');
+  assert.equal(storageToText('<p><ac:link><ri:url ri:value="https://acme.example" /><ac:plain-text-link-body><![CDATA[the site]]></ac:plain-text-link-body></ac:link></p>'), '[the site](https://acme.example)');
+  assert.equal(storageToText('<p>Ask <ac:link><ri:user ri:account-id="5b10" /></ac:link>.</p>'), 'Ask .');
+  // Images and files a macro shows.
+  assert.equal(storageToText('<p><ac:image ac:alt="flow"><ri:attachment ri:filename="flow.png" /></ac:image></p><p><ac:image><ri:url ri:value="https://acme.example/a.png" /></ac:image></p>'), '[attachment: flow.png]\n[attachment: https://acme.example/a.png]');
+  assert.equal(storageToText('<ac:structured-macro ac:name="view-file"><ac:parameter ac:name="name"><ri:attachment ri:filename="data.xlsx" /></ac:parameter></ac:structured-macro>'), '[attachment: data.xlsx]');
+  // Bold and italics, so a bold line ends the acceptance criteria as it does in Jira.
+  const page = storageToText('<h2>Acceptance criteria</h2><p>Users can <em>log in</em>.</p><p><strong>Notes</strong></p><ul><li>unrelated</li></ul>');
+  assert.equal(page, '## Acceptance criteria\n\nUsers can *log in*.\n**Notes**\n\n- unrelated');
+  assert.deepEqual(extractAcceptanceCriteria(page), ['Users can *log in*.']);
+  // Text that would look like what is set aside is only text.
+  assert.equal(storageToText('<p>a &#xE000;0&#xE000; b <code>x</code></p>'), 'a 0 b `x`');
+});

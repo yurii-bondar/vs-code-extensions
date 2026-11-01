@@ -319,6 +319,8 @@ interface AdfNode {
   text?: string;
   attrs?: Record<string, unknown>;
   content?: AdfNode[];
+  /** A text node's formatting: `link` (with `attrs.href`), `code`, `strong`, `em`, `strike`… */
+  marks?: { type?: string; attrs?: Record<string, unknown> }[];
 }
 
 const kids = (n: AdfNode): AdfNode[] => n.content ?? [];
@@ -326,22 +328,86 @@ const kids = (n: AdfNode): AdfNode[] => n.content ?? [];
 function inline(n: AdfNode): string {
   switch (n.type) {
     case 'text':
-      return n.text ?? '';
+      return styled(n);
     case 'hardBreak':
       return '\n';
     case 'mention':
     case 'emoji':
       return String((n.attrs && n.attrs.text) ?? '');
+    // A link shown as a card: its address.
     case 'inlineCard':
     case 'blockCard':
-      return String((n.attrs && n.attrs.url) ?? '');
+    case 'embedCard': {
+      const data = n.attrs && n.attrs.data;
+      return String((n.attrs && n.attrs.url) ?? (data && typeof data === 'object' && (data as { url?: unknown }).url) ?? '');
+    }
+    // A file in Jira: the agents cannot open it, but know it is there and what it is called.
+    case 'media':
+    case 'mediaInline': {
+      const a = n.attrs ?? {};
+      return attachment(a.alt, a.__fileName, a.url, a.id);
+    }
     case 'date':
       return dateOf(n.attrs && n.attrs.timestamp);
     case 'status':
       return `[${String((n.attrs && n.attrs.text) ?? '')}]`;
     default:
-      return kids(n).map(inline).join('');
+      return inlines(kids(n));
   }
+}
+
+/** Inline nodes in a row; text under one link becomes one Markdown link, however its words are formatted. */
+function inlines(nodes: AdfNode[]): string {
+  let out = '';
+  for (let i = 0; i < nodes.length; ) {
+    const href = linkOf(nodes[i]!);
+    let text = '';
+    do text += inline(nodes[i++]!);
+    while (href !== undefined && i < nodes.length && linkOf(nodes[i]!) === href);
+    out += href === undefined ? text : markdownLink(text, href);
+  }
+  return out;
+}
+
+const linkOf = (n: AdfNode): string | undefined => {
+  const link = (n.marks ?? []).find((m) => m.type === 'link');
+  const href = link && link.attrs && link.attrs.href;
+  return typeof href === 'string' ? href : undefined;
+};
+
+/** A text node with its marks as Markdown writes them: code in backticks, bold, italics, struck out (a dropped criterion). */
+function styled(n: AdfNode): string {
+  const text = n.text ?? '';
+  const has = (type: string): boolean => (n.marks ?? []).some((m) => m.type === type);
+  if (has('code')) return inlineCode(text);
+  let out = text;
+  if (has('strike')) out = inside(out, (t) => `~~${t}~~`);
+  if (has('em')) out = inside(out, (t) => `*${t}*`);
+  if (has('strong')) out = inside(out, (t) => `**${t}**`);
+  return out;
+}
+
+/** `wrap` applied to the text without the spaces around it, which stay outside: `**bold** `, not `**bold **`. */
+function inside(text: string, wrap: (core: string) => string): string {
+  const core = text.trim();
+  if (!core) return text;
+  return `${text.slice(0, text.length - text.trimStart().length)}${wrap(core)}${text.slice(text.trimEnd().length)}`;
+}
+
+/** A Markdown link to a web or mail address. Any other target (`javascript:`, a relative path) leaves the text alone. */
+function markdownLink(text: string, href: string): string {
+  const url = href.trim();
+  if (!/^(https?|mailto):/i.test(url)) return text;
+  // Spaces and brackets would end the link early.
+  const target = url.replace(/[\s()<>]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`);
+  if (!text.trim()) return target;
+  return inside(text, (label) => (label === url ? target : `[${label.replace(/[[\]]/g, '\\$&')}](${target})`));
+}
+
+/** `[attachment: <name>]`, by the first of `names` there is (a file name, an alt text, an id): a file the agents cannot open, but know of. */
+function attachment(...names: unknown[]): string {
+  const name = names.find((v): v is string => typeof v === 'string' && v.trim() !== '');
+  return `[attachment: ${name ? name.trim() : 'a file'}]`;
 }
 
 function blocks(raw: unknown, depth: number): string {
@@ -361,9 +427,16 @@ function blocks(raw: unknown, depth: number): string {
     case 'heading':
       return `${'#'.repeat(Number((n.attrs && n.attrs.level) ?? 1))} ${inline(n)}\n\n`;
     case 'codeBlock':
-      return `${fenced(inline(n), String((n.attrs && n.attrs.language) ?? ''))}\n\n`;
+      return `${fenced(kids(n).map((c) => c.text ?? '').join(''), String((n.attrs && n.attrs.language) ?? ''))}\n\n`;
     case 'rule':
       return '---\n\n';
+    // Blocks of their own: a link as a card, an image or a row of files (with the caption under it).
+    case 'blockCard':
+    case 'embedCard':
+      return `${inline(n)}\n\n`;
+    case 'mediaSingle':
+    case 'mediaGroup':
+      return `${kids(n).map(inline).filter(Boolean).join(' ')}\n\n`;
     case 'bulletList':
     case 'orderedList':
       return (
@@ -467,23 +540,68 @@ function codeLanguage(params: string): string {
   return m ? plainText(m[1]!) : '';
 }
 
+/** The decoded value of an attribute of the first `tag` in `html` that has it (`ri:page`'s `ri:content-title`). */
+function attribute(html: string, tag: string, name: string): string | undefined {
+  for (const m of html.matchAll(/<([\w:-]+)\b([^>]*)>/g)) {
+    if (m[1] !== tag) continue;
+    const value = m[2]!.match(new RegExp(`(?:^|\\s)${name}="([^"]*)"`));
+    if (value) return decodeEntities(value[1]!);
+  }
+  return undefined;
+}
+
+/** A Confluence link: to a page (`[page: Title]`), to an attachment, to an address, or else (a person, an anchor) its text. */
+function confluenceLink(inner: string): string {
+  const body = inner.match(/<ac:(?:plain-text-)?link-body>([\s\S]*?)<\/ac:(?:plain-text-)?link-body>/);
+  const text = body ? cdata(body[1]!).trim() : '';
+  const page = attribute(inner, 'ri:page', 'ri:content-title') ?? attribute(inner, 'ri:blog-post', 'ri:content-title');
+  if (page) return `[page: ${page}]`;
+  const file = attribute(inner, 'ri:attachment', 'ri:filename');
+  if (file) return attachment(file);
+  const url = attribute(inner, 'ri:url', 'ri:value');
+  return url ? markdownLink(text, url) : text;
+}
+
+/** Marks what `storageToText` set aside: a character of Unicode's private use area, which no page writes. */
+const MARK = String.fromCharCode(0xe000);
+const KEPT = new RegExp(`${MARK}(\\d+)${MARK}`, 'g');
+
 /**
- * Confluence storage format (XHTML) → Markdown-ish text. Rough by design: structure, not fidelity. Code is set aside
- * first, as the agents should read it (`List<String>` in a code block is code, not a tag), and comes back at its place
- * at the end, so neither the tag stripping nor the entity decoding reaches it.
+ * Confluence storage format (XHTML) → Markdown-ish text. Rough by design: structure, not fidelity. Code, links and
+ * files are set aside first, as the agents should read them (`List<String>` in a code block is code, not a tag; a link
+ * keeps its address), and come back at their place at the end, so neither the tag stripping nor the entity decoding
+ * reaches them.
  */
 function storageToText(html: string): string {
   const kept: string[] = [];
-  const keep = (text: string): string => `\uE000${kept.push(text) - 1}\uE000`;
+  const keep = (text: string): string => `${MARK}${kept.push(text) - 1}${MARK}`;
   const block = (text: string): string => `\n\n${keep(text)}\n\n`;
+  // What is set aside holds only what was set aside before it (a link around code): a lower number, so this ends.
+  const restore = (text: string, below: number): string => text.replace(KEPT, (_, i: string) => (Number(i) < below ? restore(kept[Number(i)]!, Number(i)) : ''));
+  // The page's own marks, as characters or as references to one, would bring back what was set aside elsewhere.
   const text = html
-    .replace(/\uE000/g, '')
+    .split(MARK)
+    .join('')
+    .replace(/&#(?:x0*e000|0*57344);/gi, '')
     .replace(CODE_MACRO, (_, params: string, body: string) => block(fenced(cdata(body), codeLanguage(params))))
+    // Links before other CDATA: a link's text is CDATA too.
+    .replace(/<ac:link\b[^>]*>([\s\S]*?)<\/ac:link>/g, (_, inner: string) => keep(confluenceLink(inner)))
+    .replace(/<ac:image\b([^>]*)>([\s\S]*?)<\/ac:image>/g, (_, attrs: string, inner: string) =>
+      keep(attachment(attribute(inner, 'ri:attachment', 'ri:filename'), attribute(inner, 'ri:url', 'ri:value'), attribute(`<ac:image${attrs}>`, 'ac:image', 'ac:alt')))
+    )
     // Other plain-text bodies (noformat): their text is all CDATA, which the tag stripping below would drop.
     .replace(/<ac:plain-text-body>([\s\S]*?)<\/ac:plain-text-body>/g, (_, body: string) => block(fenced(cdata(body))))
     .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, (_, code: string) => block(fenced(code)))
     .replace(/<pre\b[^>]*>([\s\S]*?)<\/pre>/g, (_, code: string) => block(fenced(plainText(code))))
     .replace(/<code\b[^>]*>([\s\S]*?)<\/code>/g, (_, code: string) => keep(inlineCode(plainText(code))))
+    .replace(/<a\b([^>]*)>([\s\S]*?)<\/a>/g, (_, attrs: string, inner: string) => {
+      const href = attribute(`<a${attrs}>`, 'a', 'href');
+      return href === undefined ? inner : keep(markdownLink(plainText(inner), href));
+    })
+    // A file a macro shows (view-file, a PDF).
+    .replace(/<ri:attachment\b[^>]*>/g, (tag: string) => keep(attachment(attribute(tag, 'ri:attachment', 'ri:filename'))))
+    .replace(/<(strong|b)\b[^>]*>([\s\S]*?)<\/\1>/g, (_, _tag: string, inner: string) => (plainText(inner).trim() ? inside(inner, (t) => `**${t}**`) : inner))
+    .replace(/<(em|i)\b[^>]*>([\s\S]*?)<\/\1>/g, (_, _tag: string, inner: string) => (plainText(inner).trim() ? inside(inner, (t) => `*${t}*`) : inner))
     // Task lists: a checklist item each, without the task's id.
     .replace(/<ac:task-id>[^<]*<\/ac:task-id>/g, '')
     .replace(/<ac:task>\s*<ac:task-status>\s*(complete|incomplete)\s*<\/ac:task-status>/g, (_, st: string) => `\n- ${st === 'complete' ? '[x]' : '[ ]'} `)
@@ -494,11 +612,11 @@ function storageToText(html: string): string {
     .replace(/<(br|\/p|\/tr|\/ul|\/ol)[^>]*>/g, '\n')
     .replace(/<\/t[dh]>/g, ' | ')
     .replace(/<[^>]+>/g, '');
-  return decodeEntities(text)
+  const out = decodeEntities(text)
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
-    .trim()
-    .replace(/\uE000(\d+)\uE000/g, (_, i: string) => kept[Number(i)] ?? '');
+    .trim();
+  return restore(out, kept.length);
 }
 
 /**
