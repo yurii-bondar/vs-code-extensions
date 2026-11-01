@@ -50,9 +50,11 @@ interface PromptArgs {
   /** For a review: the checks the user went on past while red, as they last ran. */
   redChecks?: string | undefined;
   repos?: PromptRepo[] | undefined;
+  /** The stage's shell commands run in Claudestrator's sandbox (`policy.sandbox`), which only you widen. */
+  sandboxed?: boolean | undefined;
 }
 
-function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, diffPath, prsPath, rerun, repos, failed, redChecks }: PromptArgs): string {
+function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, diffPath, prsPath, rerun, repos, failed, redChecks, sandboxed }: PromptArgs): string {
   const inputs = next.inputs.map((p) => path.resolve(taskDir, p));
   if (diffPath) inputs.push(diffPath);
   if (prsPath) inputs.push(prsPath);
@@ -95,6 +97,8 @@ function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, 
     lines.push(
       'After your report, hand over its status: {"status": "done"} when your part is done; {"status": "blocked", "blockers": ["<one line each>"]} when you cannot go on (the plan does not hold, a test shows a bug in code that is not yours to change, something only the user can decide), and stop there rather than work around it. As your structured output when you have the StructuredOutput tool, else as a fenced ```json block at the end.'
     );
+    // Claude Code tells it to name Claude Code's sandbox settings, which never reach the checks and git hooks: Claudestrator's do.
+    if (sandboxed) lines.push("Your shell commands run in Claudestrator's sandbox. A command it refuses (EPERM, Operation not permitted) is a blocker for the user, who widens it in Claudestrator's Settings → Safety, not in Claude Code's settings: policy.writable for a folder to write, policy.network for a host to reach, policy.localPorts for a local port to open (a test that starts a server on 127.0.0.1). Name the one it needs.");
   }
   // A later review round checks the findings of the one before first, so rounds converge instead of moving on.
   if (next.output === 'verdict' && next.round > 1) {

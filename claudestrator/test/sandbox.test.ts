@@ -5,7 +5,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-import { probeSandbox, sandboxLauncher, sandboxProblem } from '../src/core/sandbox';
+import { probeSandbox, sandboxLauncher, sandboxProblem, shq } from '../src/core/sandbox';
 import { runShell } from '../src/core/gates';
 import { Engine } from '../src/core/engine';
 import { ClaudeRunner } from '../src/core/runner';
@@ -28,7 +28,7 @@ async function available(): Promise<string | null> {
   const problem = sandboxProblem();
   if (problem) return problem;
   const dir = tmp('cs-probe-');
-  return probeSandbox(sandboxLauncher({ allowWrite: [dir], denyWrite: [], denyRead: [], network: [] }), process.env);
+  return probeSandbox(sandboxLauncher({ allowWrite: [dir], denyWrite: [], denyRead: [], network: [], localPorts: false }), process.env);
 }
 
 test('sandbox: a check writes only in its repo, never its git hooks, reads no secret and reaches only the hosts it may', async (t) => {
@@ -39,7 +39,7 @@ test('sandbox: a check writes only in its repo, never its git hooks, reads no se
   const outside = tmp('cs-sbx-out-');
   const secret = path.join(outside, 'token.txt');
   fs.writeFileSync(secret, 'ghp_secret');
-  const policy: SandboxPolicy = { allowWrite: [repo], denyWrite: [path.join(repo, '.claudestrator')], denyRead: [secret], network: ['registry.npmjs.org'] };
+  const policy: SandboxPolicy = { allowWrite: [repo], denyWrite: [path.join(repo, '.claudestrator')], denyRead: [secret], network: ['registry.npmjs.org'], localPorts: false };
   const run = (cmd: string) => runShell(cmd, { cwd: repo, env: process.env, timeoutMs: 60000, launch: sandboxLauncher(policy) });
 
   assert.equal((await run('echo ok > built.txt && cat built.txt')).code, 0, 'the repo is its to write');
@@ -56,6 +56,20 @@ test('sandbox: a check writes only in its repo, never its git hooks, reads no se
   assert.notEqual(net.code, 0, 'a host it may not reach');
   const hook = await runShell('cat', { cwd: repo, env: process.env, timeoutMs: 60000, launch: sandboxLauncher(policy), input: 'refs/heads/x 1 refs/heads/x 0\n' });
   assert.equal(hook.output, 'refs/heads/x 1 refs/heads/x 0\n', 'a hook reads its stdin');
+});
+
+test('sandbox: a test opens a local port only with policy.localPorts (on macOS; Linux has a loopback of its own)', async (t) => {
+  const missing = await available();
+  if (missing) return t.skip(`no sandbox here: ${missing}`);
+  const repo = tmp('cs-sbx-port-');
+  const server = `${shq(process.execPath)} -e "require('net').createServer().listen(0, '127.0.0.1', function () { this.close(); })"`;
+  const run = (localPorts: boolean) => runShell(server, { cwd: repo, env: process.env, timeoutMs: 60000, launch: sandboxLauncher({ allowWrite: [repo], denyWrite: [], denyRead: [], network: [], localPorts }) });
+  const open = await run(true);
+  assert.equal(open.code, 0, open.output);
+  if (process.platform !== 'darwin') return;
+  const shut = await run(false);
+  assert.notEqual(shut.code, 0);
+  assert.match(shut.output, /listen EPERM/);
 });
 
 test('sandbox: a commit hook that writes the repo works; one that changes git config or a file outside fails the commit', async (t) => {

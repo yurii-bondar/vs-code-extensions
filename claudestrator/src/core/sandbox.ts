@@ -19,6 +19,8 @@ interface SandboxPolicy {
   denyRead: string[];
   /** Hosts it may reach. */
   network: string[];
+  /** Whether it may open local ports and reach what listens on them (macOS; Linux's sandbox has a loopback of its own). */
+  localPorts: boolean;
 }
 
 /** A command as it is spawned; `cleanup` removes what wrapping it left on disk. */
@@ -70,7 +72,7 @@ function sandboxLauncher(policy: SandboxPolicy): Launcher {
   return async (cmd, env) => {
     const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cs-srt-'));
     const settings = path.join(dir, 'settings.json');
-    const config = { network: { allowedDomains: policy.network, deniedDomains: [] }, filesystem: { denyRead: policy.denyRead, allowWrite: policy.allowWrite, denyWrite: policy.denyWrite } };
+    const config = { network: { allowedDomains: policy.network, deniedDomains: [], ...(policy.localPorts && { allowLocalBinding: true }) }, filesystem: { denyRead: policy.denyRead, allowWrite: policy.allowWrite, denyWrite: policy.denyWrite } };
     await fs.promises.writeFile(settings, JSON.stringify(config), { mode: 0o600 });
     const electron = Boolean(process.versions.electron);
     return {

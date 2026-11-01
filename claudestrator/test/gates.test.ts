@@ -167,3 +167,23 @@ test('gates: a sandbox refusal in lower case, as Go, Rust and Python say it, get
   const r = await runGates({ repo, dir, logDir: path.join(ws, 'logs'), force: true, launch: plainLauncher });
   assert.match(r.results[0]!.tail ?? '', /policy\.writable/);
 });
+
+test('gates: a local port the sandbox refuses goes to you with the setting that opens it; another refusal to the agent', { skip: process.platform === 'win32' }, async () => {
+  const ws = workspace(['api'], 'repos:\n  api: {}\n');
+  const dir = path.join(ws, 'api');
+  fs.writeFileSync(path.join(dir, 'x.txt'), 'x\n');
+  const gate = (name: string, says: string) => ({ name, cmd: `echo '${says}' >&2; exit 1` });
+  const repo = { name: 'api', path: 'api', baseBranch: 'main', gates: [gate('node', 'Error: listen EPERM: operation not permitted 127.0.0.1'), gate('go', 'listen tcp 127.0.0.1:0: bind: operation not permitted'), gate('write', "EPERM: operation not permitted, open '/Users/me/.cache/x'")] } as unknown as RepoConfig;
+  const r = await runGates({ repo, dir, logDir: path.join(ws, 'logs'), force: true, launch: plainLauncher });
+  const [node, go, write] = r.results;
+  for (const x of [node!, go!]) {
+    assert.equal(x.unfixable, 'the sandbox refused a test a local port (policy.localPorts)', x.gate);
+    assert.match(x.tail ?? '', /Settings → Safety \(policy\.localPorts\)/, x.gate);
+  }
+  assert.equal(write!.unfixable, undefined, 'a folder to write is the agent\'s to report');
+  assert.match(write!.tail ?? '', /policy\.writable/);
+  assert.doesNotMatch(write!.tail ?? '', /localPorts/);
+  // Outside the sandbox the same words are the code's.
+  const plain = await runGates({ repo, dir, logDir: path.join(ws, 'logs'), force: true });
+  assert.ok(plain.results.every((x) => x.unfixable === undefined && !/policy\./.test(x.tail ?? '')));
+});

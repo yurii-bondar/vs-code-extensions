@@ -119,6 +119,7 @@ repos:
     assert.ok(gate.denyWrite.includes(path.join(ws, '.claudestrator')), "and cannot change Claudestrator's config");
     assert.ok(gate.denyRead.includes('~/.ssh') && gate.denyRead.includes('~/.config/gh'));
     assert.ok(gate.network.includes('registry.npmjs.org') && !gate.network.includes('api.github.com'));
+    assert.equal(gate.localPorts, false, 'no local port unless policy.localPorts');
     const commit = h.sandboxed.find((p) => p.allowWrite.includes(path.join(api, '.git')))!;
     assert.ok(commit, 'the commit ran sandboxed');
     assert.ok(!commit.denyWrite.includes(path.join(api, '.git')), 'git writes its objects and refs');

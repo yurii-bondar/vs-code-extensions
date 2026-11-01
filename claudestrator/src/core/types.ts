@@ -250,6 +250,12 @@ export interface Policy {
   network: string[];
   /** Folders sandboxed commands (agents' and checks') may write besides the repo: build caches such as `~/.cache/go-build`. */
   writable: string[];
+  /**
+   * Let sandboxed commands open local ports and reach what listens on them: a test that starts a server on 127.0.0.1.
+   * It matters on macOS, where every service listening on the machine becomes reachable; Linux's sandbox has a
+   * loopback of its own.
+   */
+  localPorts: boolean;
   /** Variables of your environment that checks and git hooks keep although they look like credentials (a test database's URL). */
   checkEnv: string[];
 }

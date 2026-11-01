@@ -622,6 +622,7 @@ function resolveConfig(layers: Layer[], opts: { flags?: Flags | undefined; readF
         forbidAiAttribution: merged.policy.forbidAiAttribution ?? false,
         allowNoVerify: merged.policy.allowNoVerify ?? false,
         sandbox: merged.policy.sandbox ?? true,
+        localPorts: merged.policy.localPorts ?? false,
         network: merged.policy.network ?? [],
         writable: merged.policy.writable ?? [],
         checkEnv: merged.policy.checkEnv ?? [],
@@ -906,11 +907,12 @@ function loosened(layers: Layer[]): Diagnostic[] {
   if (!project) return [];
   const brought = layers.filter((l) => l.listedBy === 'project');
   const under = mergeLayers(layers.filter((l) => l !== project && !brought.includes(l)));
-  const was = { sandbox: true, allowNoVerify: false, draftPrsOnly: true, forbidAiAttribution: false, protectedBranches: ['main', 'master'], ...under.policy };
+  const was = { sandbox: true, localPorts: false, allowNoVerify: false, draftPrsOnly: true, forbidAiAttribution: false, protectedBranches: ['main', 'master'], ...under.policy };
   const p = project.config.policy ?? {};
   const out: string[] = [];
   if (p.sandbox === false && was.sandbox) out.push("turns the sandbox off: agents' commands, checks and git hooks run without it");
   if (p.network && p.network.includes('*')) out.push('lets sandboxed commands reach any host (network: "*")');
+  if (p.localPorts === true && !was.localPorts) out.push('lets sandboxed commands open local ports and reach every service listening on this machine (localPorts)');
   if (p.allowNoVerify === true && !was.allowNoVerify) out.push('lets git hooks be skipped (allowNoVerify)');
   if (p.draftPrsOnly === false && was.draftPrsOnly) out.push('opens PRs ready for review instead of as drafts');
   if (p.forbidAiAttribution === false && was.forbidAiAttribution) out.push('allows AI attribution in commits and PRs');

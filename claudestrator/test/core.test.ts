@@ -433,7 +433,7 @@ test('reports: plan and verdict blocks are validated, nulls tolerated', async ()
 });
 
 test('guard: a command is recognised behind paths, shell keywords, wrappers, eval, sh -lc and find -exec', async () => {
-  const policy = { protectedBranches: ['main'], draftPrsOnly: true, forbidAiAttribution: false, allowNoVerify: false, sandbox: true, network: [], writable: [], checkEnv: [] };
+  const policy = { protectedBranches: ['main'], draftPrsOnly: true, forbidAiAttribution: false, allowNoVerify: false, sandbox: true, localPorts: false, network: [], writable: [], checkEnv: [] };
   const ctx: GuardContext = { policy, cwd: '/ws/api', workspace: '/ws', home: '/home/u', agent: true, task: { taskId: 'T', canPush: false }, branchOf: async () => 'feat/x', isRepoRoot: async (d) => d === '/ws/api', readFile: async () => null };
   const refused = [
     '/usr/bin/git push --force origin main',
@@ -514,7 +514,7 @@ test('guard: a command is recognised behind paths, shell keywords, wrappers, eva
 });
 
 test('guard: an agent writes files only where its stage works or in a temp folder, never into .git', async () => {
-  const policy = { protectedBranches: ['main'], draftPrsOnly: true, forbidAiAttribution: false, allowNoVerify: false, sandbox: true, network: [], writable: [], checkEnv: [] };
+  const policy = { protectedBranches: ['main'], draftPrsOnly: true, forbidAiAttribution: false, allowNoVerify: false, sandbox: true, localPorts: false, network: [], writable: [], checkEnv: [] };
   const base: GuardContext = { policy, cwd: '/ws/api', workspace: '/ws', home: '/home/u', agent: true, task: { taskId: 'T', canPush: false }, branchOf: async () => 'feat/x', isRepoRoot: async (d) => d === '/ws/api' || d === '/ws/web', readFile: async () => null };
   const developer = { ...base, writeRoots: ['/ws/api'] };
   const reviewer = { ...base, writeRoots: [] };
@@ -557,7 +557,7 @@ test('guard: an agent writes files only where its stage works or in a temp folde
 });
 
 test('guard: an agent makes no link to git metadata or to Claudestrator\'s config, and .git is .git in any case', async () => {
-  const policy = { protectedBranches: ['main'], draftPrsOnly: true, forbidAiAttribution: false, allowNoVerify: false, sandbox: true, network: [], writable: [], checkEnv: [] };
+  const policy = { protectedBranches: ['main'], draftPrsOnly: true, forbidAiAttribution: false, allowNoVerify: false, sandbox: true, localPorts: false, network: [], writable: [], checkEnv: [] };
   const ctx: GuardContext = { policy, cwd: '/ws/api', workspace: '/ws', home: '/home/u', agent: true, task: { taskId: 'T', canPush: false }, writeRoots: ['/ws/api'], protect: ['/ws/.claudestrator'], branchOf: async () => 'feat/x', isRepoRoot: async (d) => d === '/ws/api', readFile: async () => null };
   // A write through the link would land in the file it leads to: Write and Edit run outside the sandbox.
   for (const command of [
@@ -591,7 +591,7 @@ test('hook: a tool call that is not in the expected shape is refused, never pass
 });
 
 test('guard: agents never touch git history, destructive commands are refused', async () => {
-  const policy = { protectedBranches: ['main'], draftPrsOnly: true, forbidAiAttribution: true, allowNoVerify: false, sandbox: true, network: [], writable: [], checkEnv: [] };
+  const policy = { protectedBranches: ['main'], draftPrsOnly: true, forbidAiAttribution: true, allowNoVerify: false, sandbox: true, localPorts: false, network: [], writable: [], checkEnv: [] };
   const ctx = (extra: Partial<GuardContext> = {}): GuardContext => ({ policy, cwd: '/ws/api', workspace: '/ws', home: '/home/u', agent: true, task: { taskId: 'T', canPush: false }, branchOf: async () => 'feat/x', isRepoRoot: async (d) => d === '/ws/api', readFile: async () => null, ...extra });
   const refusal = async (command: string, c: GuardContext) => denied(await guard(command, c)).reason;
   assert.equal((await guard('npm test && git status', ctx())).allow, true);
@@ -903,7 +903,7 @@ test('repos outside the workspace: picked folders, paths and the guard', async (
   assert.deepEqual(r.notRepos, [path.join(outer, 'plain')]);
   assert.equal((await reposFromFolders(ws, [outer], { names: [], dirs: [path.join(outer, 'billing'), path.join(outer, 'group', 'auth')] })).repos.length, 0, 'already configured repos are skipped');
 
-  const policy = { protectedBranches: ['main'], draftPrsOnly: true, forbidAiAttribution: false, allowNoVerify: false, sandbox: true, network: [], writable: [], checkEnv: [] };
+  const policy = { protectedBranches: ['main'], draftPrsOnly: true, forbidAiAttribution: false, allowNoVerify: false, sandbox: true, localPorts: false, network: [], writable: [], checkEnv: [] };
   const ctx = { policy, cwd: path.join(outer, 'billing'), workspace: ws, repoDirs: [path.join(outer, 'billing')], agent: true, branchOf: async () => 'feat/x', isRepoRoot: async (d: string) => d === path.join(outer, 'billing'), readFile: async () => null };
   assert.equal((await guard('rm -rf dist', ctx)).allow, true, 'cleaning inside an outside repo is fine');
   assert.match(denied(await guard(`rm -rf ${path.join(outer, 'billing')}`, ctx)).reason, /contains the workspace, a repository/);
@@ -1587,8 +1587,8 @@ test('config: what the project config relaxes of your safety policy is said, not
   for (const m of [/turns the sandbox off/, /reach any host/, /no longer protects master/, /allows AI attribution/, /git hooks be skipped/, /not as drafts|instead of as drafts/, /Jira projects you did not \(OPS\)/]) assert.ok(said.some((x) => m.test(x)), `${m}: ${said.join(' | ')}`);
   assert.deepEqual(await project("policy: { sandbox: true, protectedBranches: [main, master, release] }\njira: { allowedProjects: [CP] }\n"), [], 'tightening it says nothing');
   // What widens the sandbox without turning it off: a host, a folder, a credential for the checks, a tool that reaches out.
-  const wider = await project('policy: { network: [evil.example], writable: [~/Library/LaunchAgents], checkEnv: [GH_TOKEN, DATABASE_URL] }\nagents:\n  developer: { tools: [Read, Edit, Write, Bash, WebFetch, mcp__github] }\n');
-  for (const m of [/reach evil\.example/, /write ~\/Library\/LaunchAgents/, /hands GH_TOKEN, DATABASE_URL to checks.*a GitHub token/, /gives the developer agent WebFetch, mcp__github/]) assert.ok(wider.some((x) => m.test(x)), `${m}: ${wider.join(' | ')}`);
+  const wider = await project('policy: { network: [evil.example], writable: [~/Library/LaunchAgents], localPorts: true, checkEnv: [GH_TOKEN, DATABASE_URL] }\nagents:\n  developer: { tools: [Read, Edit, Write, Bash, WebFetch, mcp__github] }\n');
+  for (const m of [/reach evil\.example/, /write ~\/Library\/LaunchAgents/, /open local ports and reach every service listening on this machine/, /hands GH_TOKEN, DATABASE_URL to checks.*a GitHub token/, /gives the developer agent WebFetch, mcp__github/]) assert.ok(wider.some((x) => m.test(x)), `${m}: ${wider.join(' | ')}`);
   fs.writeFileSync(path.join(home, '.claudestrator', 'config.yaml'), 'policy: { forbidAiAttribution: true, network: [evil.example], checkEnv: [DATABASE_URL] }\njira: { allowedProjects: [CP] }\n');
   assert.ok(!(await project('policy: { network: [evil.example], checkEnv: [DATABASE_URL] }\n')).some((x) => /evil|DATABASE_URL/.test(x)), 'what your own config already allows is not news');
 

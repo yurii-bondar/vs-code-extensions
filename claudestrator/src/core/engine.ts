@@ -973,6 +973,7 @@ class Engine extends EventEmitter {
       sandbox: config.policy.sandbox,
       network: config.policy.network,
       writable: config.policy.writable,
+      localPorts: config.policy.localPorts,
     });
   }
 
@@ -997,6 +998,7 @@ class Engine extends EventEmitter {
       denyWrite: [...(git ? [] : allowWrite.map((d) => path.join(d, '.git'))), ...runsOutside, ...configPaths(this.workspace, config)],
       denyRead: [...SECRET_PATHS, ...this.secretFiles()],
       network: [...REGISTRIES, ...config.policy.network],
+      localPorts: config.policy.localPorts,
     });
   }
 
@@ -1159,7 +1161,7 @@ class Engine extends EventEmitter {
       prsPath = await this.listPrs(taskId, s.source.key, readRepos);
     }
     const failed = run.mode === 'retry' ? await this.lastFailure(taskId, step) : null;
-    const prompt = buildAgentPrompt({ state, next: run, taskDir, language: config.language, ...(repoDir && { repoDir }), ...(workRepos.length && { workRepos }), ...(diffPath && { diffPath }), ...(prsPath && { prsPath }), ...(next.kind === 'running' && { rerun: true }), ...(readRepos.length && { repos: readRepos }), ...(failed && { failed }), ...(redChecks && { redChecks }) });
+    const prompt = buildAgentPrompt({ state, next: run, taskDir, language: config.language, ...(repoDir && { repoDir }), ...(workRepos.length && { workRepos }), ...(diffPath && { diffPath }), ...(prsPath && { prsPath }), ...(next.kind === 'running' && { rerun: true }), ...(readRepos.length && { repos: readRepos }), ...(failed && { failed }), ...(redChecks && { redChecks }), ...(config.policy.sandbox && { sandboxed: true }) });
     // A stage that writes starts in the repo it writes (the first of them for a stage across repos): Claude Code's
     // sandbox lets a session write its working directories, so the workspace around the repos is never one of them.
     const cwd = repoDir || (workRepos.length ? workRepos[0]!.dir : this.workspace);

@@ -165,13 +165,15 @@ interface SessionSettingsArgs {
   writable: string[];
   /** `policy.network`: hosts commands may reach besides the registries. */
   network: string[];
+  /** `policy.localPorts`: commands may open local ports and reach what listens on them (macOS). */
+  localPorts: boolean;
 }
 
 /** An absolute path in Claude Code's rule syntax, where `//` is the filesystem root: `/ws/x` → `//ws/x`. */
 const ruleRoot = (abs: string): string => `/${abs.split(path.sep).join('/').replace(/^\/*/, '/')}`;
 
 /** One session's settings. */
-function sessionSettings({ hooks, guard, writeRoots, protect, secrets, envVars, cwd, sandbox, network, writable }: SessionSettingsArgs): Record<string, unknown> {
+function sessionSettings({ hooks, guard, writeRoots, protect, secrets, envVars, cwd, sandbox, network, writable, localPorts }: SessionSettingsArgs): Record<string, unknown> {
   return {
     hooks,
     // Edit rules cover Write too. Git metadata is here as well as in the sandbox: the sandbox holds only shell commands.
@@ -188,7 +190,7 @@ function sessionSettings({ hooks, guard, writeRoots, protect, secrets, envVars, 
           // and a stage that changes nothing writes nowhere but a temp folder.
           denyWrite: [...writeRoots.map((r) => path.join(r, '.git')), ...protect, ...(writeRoots.length ? [] : [cwd])],
         },
-        network: { allowedDomains: [...new Set([guard, ...REGISTRIES, ...network])] },
+        network: { allowedDomains: [...new Set([guard, ...REGISTRIES, ...network])], ...(localPorts && { allowLocalBinding: true }) },
         credentials: { envVars: [...new Set([...envVars, ...GITHUB_TOKENS])].map((name) => ({ name, mode: 'deny' })) },
       },
     }),
