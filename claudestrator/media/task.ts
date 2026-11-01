@@ -577,7 +577,7 @@ interface Views {
       const plan = d.plan;
       const questions = plan ? plan.openQuestions : [];
       body = `
-        ${plan ? `<div class="plan-meta"><span class="chip">${esc(plan.type)}</span><span class="chip mono">${icon('branch')}${esc(`${plan.type}/${d.source && d.source.kind === 'jira' ? `${d.taskId}-` : ''}${plan.slug}`)}</span>${plan.repos.map((r) => `<span class="chip">${icon('repo')}${esc(r.name)}${r.mode === 'tests_only' ? ' · tests only' : ''}</span>`).join('')}</div>` : ''}
+        ${plan ? `<div class="plan-meta"><span class="chip">${esc(plan.type)}</span><span class="chip mono">${icon('branch')}${esc(`${plan.type}/${d.source && d.source.kind === 'jira' ? `${d.taskId}-` : ''}${plan.slug}`)}</span>${plan.repos.map((r) => `<span class="chip" ${r.baseBranch ? `title="The task's branch starts from ${esc(r.baseBranch)}, and its PR goes into it"` : ''}>${icon('repo')}${esc(r.name)}${r.mode === 'tests_only' ? ' · tests only' : ''}${r.baseBranch ? ` · from ${esc(r.baseBranch)}` : ''}</span>`).join('')}</div>` : ''}
         ${questions.length ? `<div class="questions"><h4>${icon('info')}Open questions <span class="muted">(the planner's default applies unless you say otherwise)</span></h4>${questions.map((q) => `<div class="q"><div>${esc(q.question)}</div><div class="muted small">Default: ${esc(q.default)}</div></div>`).join('')}</div>` : ''}
         <div class="doc-frame"><div class="markdown">${md(stripJsonBlock(ctx.text || ''))}</div></div>
         ${ctx.file ? `<button class="link small" data-action="open-artifact" data-file="${esc(ctx.file)}" data-preview="1">${icon('ext')}Open the plan in an editor</button>` : ''}`;
@@ -1063,7 +1063,7 @@ interface Views {
     const plan = d.plan;
     const planFile = d.files.filter((f) => f.path.startsWith('plan/')).pop();
     return `<div class="ticket">
-      ${plan ? `<div class="card plan-card"><h4>Plan</h4><div class="plan-meta"><span class="chip">${esc(plan.type)}</span>${plan.title ? `<span>${esc(plan.title)}</span>` : ''}${plan.repos.map((r) => `<span class="chip">${icon('repo')}${esc(r.name)}${r.mode === 'tests_only' ? ' · tests only' : ''}</span>`).join('')}</div>
+      ${plan ? `<div class="card plan-card"><h4>Plan</h4><div class="plan-meta"><span class="chip">${esc(plan.type)}</span>${plan.title ? `<span>${esc(plan.title)}</span>` : ''}${plan.repos.map((r) => `<span class="chip" ${r.baseBranch ? `title="The task's branch starts from ${esc(r.baseBranch)}, and its PR goes into it"` : ''}>${icon('repo')}${esc(r.name)}${r.mode === 'tests_only' ? ' · tests only' : ''}${r.baseBranch ? ` · from ${esc(r.baseBranch)}` : ''}</span>`).join('')}</div>
         ${planFile ? `<button class="link small" data-action="open-artifact" data-file="${esc(planFile.path)}" data-preview="1">${icon('ext')}Open the full plan</button>` : ''}</div>` : ''}
       ${d.ticket ? `<div class="doc-frame"><div class="markdown">${md(d.ticket)}</div></div>` : `<div class="t-empty">The ticket is written when the task starts.</div>`}
       <details class="log-details"><summary>What you typed</summary><pre class="code-pre">${esc(d.input)}</pre></details>

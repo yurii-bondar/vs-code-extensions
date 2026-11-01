@@ -29,7 +29,7 @@ import type { StageSource } from './pipeline';
 import type { RepoGates } from './gates';
 import type { TaskRepo } from './git';
 import type { BlockedRepo, CheckpointContext, CommentResult, ComposerArgs, Preview, TranscriptItem, UsageItem } from './wire';
-import type { AgentStoppedPayload, Checkpoint, Config, Effort, EventBody, EventOf, GatesStatus, Pipeline, PlanMeta, Source, Spec, Step, TaskGroup, TaskInstruction, TaskState, WorkReport } from './types';
+import type { AgentStoppedPayload, Checkpoint, Config, Effort, EventBody, EventOf, GatesStatus, Pipeline, PlanMeta, PlanRepo, Source, Spec, Step, TaskGroup, TaskInstruction, TaskState, WorkReport } from './types';
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 const REPORT_OUTPUTS = new Set(['readiness', 'audit']);
@@ -474,6 +474,12 @@ class Engine extends EventEmitter {
       return (await git.hasBranch(branch)) || (await git.git('rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`)).code === 0;
     });
     return repos.map((x) => x.name);
+  }
+
+  /** The plan's repos whose named base origin does not have; one origin could not be asked about is not refused. */
+  async basesMissing(state: TaskState, config: Config, repos: PlanRepo[]): Promise<PlanRepo[]> {
+    const named = repos.filter((r) => r.baseBranch);
+    return filterAsync(named, async (r) => (await new GitRepo(taskRepos(this.workspace, state, config, [r.name])[0]!.checkout).originHas(r.baseBranch!)) === false);
   }
 
   /** Whether a step of the task has worked in its repos already (so they are on its branch). */
@@ -1267,7 +1273,8 @@ class Engine extends EventEmitter {
               this.setLive(taskId, { phase: 'gates', step, key, text: `Running gates in ${r.name}` });
               runs.push(
                 await runGates({
-                  repo: config.repos[r.name]!,
+                  // "Only if changed" compares with the base this task's branch started from.
+                  repo: { ...config.repos[r.name]!, baseBranch: taskRepos(this.workspace, state, config, [r.name])[0]!.base },
                   dir: r.dir,
                   logDir: path.join(taskDir, 'gates', `r${state.review.round}`),
                   onGate: (name) => this.setLive(taskId, { phase: 'gates', step, key, text: `Gate "${name}" in ${r.name} (attempt ${attempt})` }),
@@ -1322,11 +1329,20 @@ class Engine extends EventEmitter {
           const known = state.knownRepos.length ? `name them as configured: ${state.knownRepos.join(', ')}` : 'name them by their folders in the workspace';
           return { ok: false, error: `the plan names repos this workspace does not have (${unknown.join(', ')}); ${known}` };
         }
+        // A base the planner names is one origin has: the branch starts from it, and the PR goes into it.
+        const noBase = await this.basesMissing(state, config, r.plan.repos);
+        if (noBase.length) return { ok: false, error: `origin has no branch ${noBase.map((x) => `${x.baseBranch} (in ${x.name})`).join(', ')}; name a branch origin has as baseBranch, or leave it out to start from the repo's base` };
         // A plan after the task has worked in its repos (a second planner, one in the review loop) keeps the branch that
-        // work is on: a new slug would leave the work behind on the old one, uncommitted.
+        // work is on: a new slug would leave the work behind on the old one, uncommitted. So does each repo's base, which
+        // that branch was made from.
         if (state.plan && (await this.workedOnRepos(state))) {
           r.plan.type = state.plan.type;
           r.plan.slug = state.plan.slug;
+          r.plan.repos = r.plan.repos.map(({ baseBranch, ...x }) => {
+            const was = state.repos.find((y) => y.name === x.name);
+            const base = was ? was.baseBranch : baseBranch;
+            return base ? { ...x, baseBranch: base } : x;
+          });
           return r;
         }
         const branch = branchName({ ...state, plan: r.plan })!;

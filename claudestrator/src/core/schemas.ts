@@ -2,7 +2,7 @@
 // result over as structured output: Claude Code checks it against the schema and asks the agent again on a mismatch.
 // The checkers in protocol.ts keep the last word, also on what a schema cannot say (a verdict's status follows from its
 // findings), and they are built from the same constants, so the two do not drift apart.
-import { CRITERION_STATUSES, PLAN_TYPES, REPORT_SEVERITIES, SEVERITIES, SLUG_PATTERN } from './protocol';
+import { BRANCH_PATTERN, CRITERION_STATUSES, PLAN_TYPES, REPORT_SEVERITIES, SEVERITIES, SLUG_PATTERN } from './protocol';
 import type { Output } from './types';
 
 type Schema = Record<string, unknown>;
@@ -18,7 +18,7 @@ const PLAN = obj(
     type: oneOf(PLAN_TYPES),
     slug: { type: 'string', pattern: SLUG_PATTERN.source },
     title: str(1, 100),
-    repos: list(obj({ name: str(1), mode: oneOf(['full', 'tests_only']) }, ['name']), 1),
+    repos: list(obj({ name: str(1), mode: oneOf(['full', 'tests_only']), baseBranch: { type: 'string', pattern: BRANCH_PATTERN.source } }, ['name']), 1),
     openQuestions: list(obj({ question: str(), default: str() }, ['question', 'default'])),
   },
   ['type', 'slug', 'repos']

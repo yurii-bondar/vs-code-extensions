@@ -220,7 +220,8 @@ const GATES: Check = (v, p) => {
 const SANDBOX_LIST = 100;
 
 /** A branch name git takes as one (`main`, `release/2.x`): no leading `-`, which git would read as an option, and no `..`. */
-const BRANCH = T.re(/^(?!-)(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9][A-Za-z0-9._/-]*$/, 'a branch name, e.g. main or release/2.x');
+const BRANCH_PATTERN = /^(?!-)(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+const BRANCH = T.re(BRANCH_PATTERN, 'a branch name, e.g. main or release/2.x');
 
 const CONFIG_LAYER = T.obj({
   'agents?': T.rec(agentName, T.obj(AGENT_LAYER)),
@@ -256,7 +257,7 @@ const PLAN = T.obj(
     type: T.oneOf(PLAN_TYPES),
     slug: T.re(SLUG_PATTERN, 'slug must be kebab-case latin'),
     'title?': T.str(1, 100),
-    repos: T.arr(T.obj({ name: T.str(1), 'mode?': T.oneOf(['full', 'tests_only']) }), 1),
+    repos: T.arr(T.obj({ name: T.str(1), 'mode?': T.oneOf(['full', 'tests_only']), 'baseBranch?': BRANCH }), 1),
     'openQuestions?': T.arr(T.obj({ question: T.str(), default: T.str() }, { strict: false })),
   },
   { strict: false }
@@ -276,7 +277,7 @@ function parsePlanMeta(raw: unknown): ParseResult<PlanMeta> {
       type: v.type,
       slug: v.slug,
       ...(v.title && { title: v.title }),
-      repos: v.repos.map((r) => ({ name: r.name, mode: r.mode || 'full' })),
+      repos: v.repos.map((r) => ({ name: r.name, mode: r.mode || 'full', ...(r.baseBranch && { baseBranch: r.baseBranch }) })),
       openQuestions: (v.openQuestions || []).map((q) => ({ question: q.question, default: q.default })),
     },
   };
@@ -287,7 +288,7 @@ interface RawPlan {
   type: string;
   slug: string;
   title?: string;
-  repos: { name: string; mode?: 'full' | 'tests_only' }[];
+  repos: { name: string; mode?: 'full' | 'tests_only'; baseBranch?: string }[];
   openQuestions?: { question: string; default: string }[];
 }
 interface RawVerdict {
@@ -419,6 +420,7 @@ export {
   CRITERION_STATUSES,
   SEVERITIES,
   SLUG_PATTERN,
+  BRANCH_PATTERN,
   INSTRUCTION_MODES,
   AGENT_COLORS,
   RUNS,

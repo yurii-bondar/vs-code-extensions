@@ -165,6 +165,7 @@ ${COMMON}
 3. List every contract the change crosses, with producer and consumers.
 4. Plan only what the ticket asks for; list tempting extras under "Out of scope".
 5. Ask a question only when two readings lead to different code, and give the default you would pick.
+6. The prompt lists each repository's base branch. If the work in one must start from another branch (the ticket names it, or the code it changes is only there: look with git branch -a and git log origin/<branch>), add "baseBranch": "<branch>" to that repo in the json: the task's branch starts from it and its PR goes into it. Leave it out otherwise.
 
 Start the plan with a "## Summary" section of two or three sentences: it becomes the PR description.
 Then give each repository of the plan a section of its own, headed with its name ("### <repo>"): what changes there, in which files and symbols, in what order. Its developer works from that section; a plan without one goes back to you.

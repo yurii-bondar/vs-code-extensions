@@ -179,6 +179,13 @@ class GitRepo {
     return (await this.git('rev-parse', '--verify', '--quiet', `refs/heads/${name}`)).code === 0;
   }
 
+  /** Whether origin has a branch: as last fetched, else as origin says now; null when origin could not be asked. */
+  async originHas(name: string): Promise<boolean | null> {
+    if ((await this.git('rev-parse', '--verify', '--quiet', `refs/remotes/origin/${name}`)).code === 0) return true;
+    const r = await this.gitWith({ timeoutMs: 30000 }, 'ls-remote', '--exit-code', '--heads', 'origin', name);
+    return r.code === 0 ? true : r.code === 2 ? false : null;
+  }
+
   /** Where `of` (HEAD, or a branch) left the base: merge-base with origin/<base>, else with <base>, else HEAD. */
   async baseRef(base: string, of = 'HEAD'): Promise<string> {
     for (const ref of [`origin/${base}`, base]) {
@@ -318,13 +325,17 @@ interface TaskRepo {
 
 type RepoLookup = Pick<Config, 'repos' | 'baseBranch'>;
 
-/** Where each repo of a task lives. Repos missing from the config sit at `<workspace>/<name>` on the default base. */
+/**
+ * Where each repo of a task lives, and the base its branch starts from: the plan's for that repo, else the config's.
+ * Repos missing from the config sit at `<workspace>/<name>` on the default base.
+ */
 function taskRepos(workspace: string, state: TaskState, config: RepoLookup | null | undefined, names: string[]): TaskRepo[] {
   return names.map((name) => {
     const r = config && config.repos[name];
+    const planned = state.repos.find((x) => x.name === name);
     const checkout = path.resolve(workspace, (r && r.path) || name);
     const dir = state.gitMode === 'worktree' ? worktreeDir(workspace, state.taskId, name) : checkout;
-    return { name, checkout, dir, base: (r && r.baseBranch) || (config && config.baseBranch) || 'main', git: new GitRepo(dir) };
+    return { name, checkout, dir, base: (planned && planned.baseBranch) || (r && r.baseBranch) || (config && config.baseBranch) || 'main', git: new GitRepo(dir) };
   });
 }
 

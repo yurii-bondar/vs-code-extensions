@@ -77,6 +77,8 @@ export interface StepRef {
 export interface PlanRepo {
   name: string;
   mode: 'full' | 'tests_only';
+  /** The branch the task's branch starts from and its PR goes into, when the work is not on the repo's base. */
+  baseBranch?: string;
 }
 
 export interface PlanMeta {
