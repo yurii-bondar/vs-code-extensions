@@ -53,10 +53,13 @@ const AUDIT = obj(
   ['summary', 'findings']
 );
 
+/** A code or tests stage: done, or blocked by what it cannot settle (each blocker one line). */
+const WORK = obj({ status: oneOf(['done', 'blocked']), blockers: list(str(1)) }, ['status']);
+
 const draft7 = (schema: Schema): Schema => ({ $schema: 'http://json-schema.org/draft-07/schema#', ...schema });
 
-/** The schema of each output a program reads; code and tests stages hand over no data. */
-const REPORT_SCHEMAS: Partial<Record<Output, Schema>> = { plan: draft7(PLAN), verdict: draft7(VERDICT), readiness: draft7(READINESS), audit: draft7(AUDIT) };
+/** The schema of each output a program reads. */
+const REPORT_SCHEMAS: Partial<Record<Output, Schema>> = { plan: draft7(PLAN), verdict: draft7(VERDICT), readiness: draft7(READINESS), audit: draft7(AUDIT), code: draft7(WORK), tests: draft7(WORK) };
 
 export type { Schema };
 export { REPORT_SCHEMAS };

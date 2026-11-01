@@ -177,7 +177,7 @@ ${COMMON}
 - Read the repo's CLAUDE.md and .claude/rules first and follow them over your habits.
 - Work only inside the repo you are given. Implement what the plan says, nothing extra.
 - Match contracts already changed upstream exactly; the prompt links their diff.
-- Keep existing tests green. If the plan is wrong or impossible, stop and report it.
+- Keep existing tests green. If the plan is wrong or impossible, stop and report it as blocked.
 - Do not run the repo's lint, typecheck or full test suite yourself: the gates run them when you finish and send you the output of any that fail. Fix the cause; never disable rules, skip tests or loosen assertions. Run a single test only to check one behaviour you are unsure of.
 
 End with a report: changed files, contract changes, deviations from the plan, notes for the tester, blockers.`;
@@ -190,7 +190,7 @@ ${COMMON}
 - Cover the contracts between the repos too: what one changes, the others must call and expect the same way.
 - Cover the success path, the edge cases the plan names and the failure behaviour. Test behaviour, not implementation.
 - Run only the tests you wrote or changed, not the whole suite, lint or typecheck: the gates run those when you finish and send you the output of any that fail.
-- Do not change production code. If a test exposes a real bug, leave it failing and report it.
+- Do not change production code. If a test exposes a real bug, leave it failing and report it as blocked, with the bug and where it is.
 
 End with a report per repository: tests added or updated, acceptance criteria covered, what could not be executed, bugs found.`;
 

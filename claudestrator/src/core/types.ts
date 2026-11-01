@@ -102,6 +102,15 @@ export interface Verdict {
   findings: Finding[];
 }
 
+/**
+ * What a code or tests stage says of its own work: done, or blocked by what it cannot settle itself (a plan that does
+ * not hold, a bug in code a tester may not change). Blocked stops the step at once for you to decide.
+ */
+export interface WorkReport {
+  status: 'done' | 'blocked';
+  blockers: string[];
+}
+
 export interface Criterion {
   criterion: string;
   status: CriterionStatus;

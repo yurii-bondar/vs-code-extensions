@@ -2,7 +2,7 @@
 // for what agents hand back (plan and verdict blocks) and for config layers.
 // The on-disk formats match the claudestrator CLI and plugin, so both can work on the same tasks.
 
-import type { Audit, AuditFinding, CheckpointId, Effort, Finding, GroupType, JsonObject, OrchEvent, Output, ParseResult, PlanMeta, Readiness, ReadinessValue, ReadinessVerdict, ReportSeverity, Runs, Scenario, Severity, CriterionStatus } from './types';
+import type { Audit, AuditFinding, CheckpointId, Effort, Finding, GroupType, JsonObject, OrchEvent, Output, ParseResult, PlanMeta, Readiness, ReadinessValue, ReadinessVerdict, ReportSeverity, Runs, Scenario, Severity, CriterionStatus, WorkReport } from './types';
 
 const OUTPUTS: Output[] = ['plan', 'code', 'tests', 'verdict', 'readiness', 'audit'];
 /**
@@ -315,6 +315,18 @@ function parseVerdict(raw: unknown): ParseResult<RawVerdict> {
   return { ok: true, value: { status: v.status, summary: v.summary, findings } };
 }
 
+const WORK = T.obj({ status: T.oneOf(['done', 'blocked']), 'blockers?': T.arr(T.str()) }, { strict: false });
+
+/**
+ * A code or tests stage's status. Lenient where the others are strict: a report without one (an older CLI, an agent
+ * of your own that never says) is done, as before; only `blocked` changes what happens next.
+ */
+function parseWork(raw: unknown): WorkReport {
+  const v = dropNulls(raw) as { status?: string; blockers?: string[] };
+  if (WORK(v, '').length || v.status !== 'blocked') return { status: 'done', blockers: [] };
+  return { status: 'blocked', blockers: (v.blockers || []).map((b) => b.trim()).filter(Boolean) };
+}
+
 // ---------- report scenarios ----------
 
 const asText = (v: unknown): string => (v === undefined ? '' : typeof v === 'string' ? v : JSON.stringify(v));
@@ -411,6 +423,7 @@ export {
   validateAgentPatch,
   parsePlanMeta,
   parseVerdict,
+  parseWork,
   parseReadiness,
   parseAudit,
   readinessVerdict,

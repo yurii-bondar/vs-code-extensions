@@ -745,3 +745,37 @@ test('engine: a retried step is told why its attempt before failed', async () =>
     h.hooks.dispose();
   }
 });
+
+test('engine: a developer that cannot go on stops the step for you, and a blocked tester is not sent back to its red checks', async () => {
+  const ws = workspace(['api'], `pipeline: [planner, developer, tester, reviewer]\nrepos:\n  api:\n    gates:\n      - { name: test, cmd: 'test ! -f feature.test.txt || { echo "1 failing: discount over 100%"; exit 1; }' }\n`);
+  let h = await harness(ws, { FAKE_REPOS: 'api', FAKE_BLOCKED: 'developer' });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
+    const s = await runTask(h.engine, taskId);
+    assert.equal(s.checkpoint && s.checkpoint.id, 'agent-failure');
+    assert.match(s.checkpoint!.reason!, /developer @ api reports it cannot go on: the plan names table bets_v2/);
+    const started = only(await h.engine.svc.events(taskId), 'stage_started').map((e) => e.agent);
+    assert.deepEqual(started, ['planner', 'developer'], 'no checks, tester or review on work it did not do');
+    assert.equal(only(await h.engine.svc.events(taskId), 'gates_ran').length, 0);
+  } finally {
+    h.hooks.dispose();
+  }
+
+  const ws2 = workspace(['api'], `pipeline: [planner, developer, tester, reviewer]\nlimits: { gateAttempts: 3 }\nrepos:\n  api:\n    gates:\n      - { name: test, cmd: 'test ! -f feature.test.txt || { echo "1 failing: discount over 100%"; exit 1; }' }\n`);
+  h = await harness(ws2, { FAKE_REPOS: 'api', FAKE_BLOCKED: 'tester' });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
+    let s = await runTask(h.engine, taskId);
+    assert.equal(s.checkpoint && s.checkpoint.id, 'gate-failure');
+    const testerGates = only(await h.engine.svc.events(taskId), 'gates_ran').filter((e) => e.agent === 'tester');
+    assert.deepEqual(testerGates.map((e) => e.attempt), [1], 'red once, not sent back to fix code it may not change');
+    // You go on: the reviewer is told the check is red, with its output.
+    await h.engine.answer(taskId, 'gate-failure', 'continue');
+    s = await waitFor(async () => (h.engine.isRunning(taskId) ? null : await h.engine.svc.state(taskId)), 60000);
+    const reviewer = (await view.detail(h.engine, taskId)).steps.find((st) => st.agent === 'reviewer' && st.key);
+    const prompt = text((await h.engine.svc.readTranscript(taskId, reviewer!.key!)).find((i) => i.type === 'prompt')!.text);
+    assert.match(prompt, /Checks that are still red: the user chose to go on past them[\s\S]*1 failing: discount over 100%/);
+  } finally {
+    h.hooks.dispose();
+  }
+});

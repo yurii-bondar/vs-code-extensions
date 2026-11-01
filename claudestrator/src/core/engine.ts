@@ -15,7 +15,7 @@ import { TaskService, type DispatchResult } from './store';
 import { exec, getChildEnv, GitRepo, branchAt, taskRepos, prepareRepos, taskDiff, removeWorktrees, SLOW_GIT_MS } from './git';
 import { runGates, runShell, withoutCredentials } from './gates';
 import { guardBash, inGitMetadata, inside, outsideLabel } from './guard';
-import { buildAgentPrompt, parseStageReport, lastJsonBlock, type StageReport } from './prompt';
+import { buildAgentPrompt, parseStageReport, lastJsonBlock, workReport, type StageReport } from './prompt';
 import { commitSubject, prTitle, prBody } from './pr';
 import { renderReport, jiraText } from './report';
 import type { Live, PermissionRequest, RepoStatus } from './wire';
@@ -30,7 +30,7 @@ import type { StageSource } from './pipeline';
 import type { RepoGates } from './gates';
 import type { TaskRepo } from './git';
 import type { BlockedRepo, CheckpointContext, CommentResult, ComposerArgs, Preview, TranscriptItem, UsageItem } from './wire';
-import type { Checkpoint, Config, Effort, EventBody, EventOf, GatesStatus, Pipeline, PlanMeta, Source, Spec, Step, TaskGroup, TaskInstruction, TaskState } from './types';
+import type { Checkpoint, Config, Effort, EventBody, EventOf, GatesStatus, Pipeline, PlanMeta, Source, Spec, Step, TaskGroup, TaskInstruction, TaskState, WorkReport } from './types';
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 const REPORT_OUTPUTS = new Set(['readiness', 'audit']);
@@ -965,6 +965,18 @@ class Engine extends EventEmitter {
     return null;
   }
 
+  /**
+   * The checks you went on past while still red, each as it last ran: the reviewer reads a diff, and a failing test
+   * the tester wrote for a bug (a bug it may not fix) shows there only as a test, not as red.
+   */
+  async redChecks(s: TaskState): Promise<string | null> {
+    const events = await this.svc.events(s.taskId);
+    const last = (step: Step): EventOf<'gates_ran'> | undefined =>
+      events.filter((e): e is EventOf<'gates_ran'> => e.type === 'gates_ran' && e.agent === step.agent && (e.repo ?? undefined) === step.repo).pop();
+    const red = s.gateFailures.map(last).filter((e): e is EventOf<'gates_ran'> => Boolean(e && e.status === 'fail'));
+    return red.length ? [...new Set(red.map((e) => e.summary))].join('\n') : null;
+  }
+
   async spentUsd(taskId: string): Promise<number> {
     let total = 0;
     for (const e of await this.svc.events(taskId)) if (e.type === 'agent_stopped') total += Number((e.payload && e.payload.costUsd) || 0);
@@ -1010,11 +1022,13 @@ class Engine extends EventEmitter {
 
     let diffPath: string | undefined;
     let emptyDiff = false;
+    let redChecks: string | undefined;
     if (stage.output === 'verdict' && s.repos.length) {
       this.setLive(taskId, { phase: 'preparing', step, text: 'Collecting the diff for review' });
       const diff = await taskDiff(taskRepos(this.workspace, s, config, s.repos.map((r) => r.name)));
       diffPath = await this.svc.writeArtifact(taskId, `reviews/r${s.review.round}/diff.patch`, diff.text);
       emptyDiff = diff.empty;
+      redChecks = (await this.redChecks(s)) ?? undefined;
     }
 
     let seq: number;
@@ -1045,7 +1059,7 @@ class Engine extends EventEmitter {
       prsPath = await this.listPrs(taskId, s.source.key, readRepos);
     }
     const failed = run.mode === 'retry' ? await this.lastFailure(taskId, step) : null;
-    const prompt = buildAgentPrompt({ state, next: run, taskDir, language: config.language, ...(repoDir && { repoDir }), ...(workRepos.length && { workRepos }), ...(diffPath && { diffPath }), ...(prsPath && { prsPath }), ...(next.kind === 'running' && { rerun: true }), ...(readRepos.length && { repos: readRepos }), ...(failed && { failed }) });
+    const prompt = buildAgentPrompt({ state, next: run, taskDir, language: config.language, ...(repoDir && { repoDir }), ...(workRepos.length && { workRepos }), ...(diffPath && { diffPath }), ...(prsPath && { prsPath }), ...(next.kind === 'running' && { rerun: true }), ...(readRepos.length && { repos: readRepos }), ...(failed && { failed }), ...(redChecks && { redChecks }) });
     // A stage that writes starts in the repo it writes (the first of them for a stage across repos): Claude Code's
     // sandbox lets a session write its working directories, so the workspace around the repos is never one of them.
     const cwd = repoDir || (workRepos.length ? workRepos[0]!.dir : this.workspace);
@@ -1100,6 +1114,13 @@ class Engine extends EventEmitter {
       if (await stopped()) return;
       if (!t.ok) return void (await fail(t.error || 'the agent failed'));
 
+      // A code or tests stage that says it cannot go on stops here, for you to decide, rather than run the checks,
+      // the tester and a review on work it did not do. A tester's bug in code it may not change goes to its checks
+      // once, so you see them red, and not back to it to fix.
+      const work = (): WorkReport | null => (stage.output === 'code' || stage.output === 'tests' ? workReport(t.report, t.structured) : null);
+      const blocked = (w: WorkReport | null): string | null => (w && w.status === 'blocked' ? `${label} reports it cannot go on${w.blockers.length ? `: ${w.blockers.join('; ')}` : ''}` : null);
+      if (stage.output === 'code' && blocked(work())) return void (await fail(blocked(work())!));
+
       let gates: 'none' | 'pass' | 'fail' = 'none';
       // The repos whose checks run after this step: its own, or every repo a `repos` stage worked in.
       const targets = (stage.scope === 'repo' ? [{ name: step.repo as string, dir: repoDir }] : workRepos).filter((r): r is { name: string; dir: string } => Boolean(r.dir && config.repos[r.name] && config.repos[r.name]!.gates.length));
@@ -1139,7 +1160,7 @@ class Engine extends EventEmitter {
             gates = g.status === 'pass' ? 'pass' : 'none';
             break;
           }
-          if (attempt >= config.limits.gateAttempts) {
+          if (attempt >= config.limits.gateAttempts || blocked(work())) {
             gates = 'fail';
             break;
           }
@@ -1151,6 +1172,8 @@ class Engine extends EventEmitter {
           if (!t.ok) return void (await fail(t.error || 'the agent failed while fixing gates'));
         }
       }
+      // Blocked with its checks green (or none): a tester that found what it cannot settle stops here too.
+      if (stage.output === 'tests' && gates !== 'fail' && blocked(work())) return void (await fail(blocked(work())!));
 
       // A plan for repos this workspace does not have is a report to correct, like one that does not parse: the state
       // machine would refuse it, and the task would stop with nothing the agent could fix. So is a plan whose branch is

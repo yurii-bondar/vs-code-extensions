@@ -229,13 +229,17 @@ function main(): void {
         tool('Write', { file_path: path.join(repoDir!, 'feature.txt'), content: 'feature\n' });
         // FAKE_DEV_FILES: more files the developer writes, as {"path": "content"} (a credential it should not have).
         for (const [file, content] of Object.entries(JSON.parse(process.env.FAKE_DEV_FILES || '{}') as Record<string, string>)) tool('Write', { file_path: path.join(repoDir!, file), content });
-        return reply('Changed feature.txt.', uuid);
+        // FAKE_BLOCKED=developer: the plan does not hold, and the developer says so instead of working around it.
+        if (process.env.FAKE_BLOCKED === 'developer') return reply(`The plan names table bets_v2, which does not exist.\n\`\`\`json\n${JSON.stringify({ status: 'blocked', blockers: ['the plan names table bets_v2, which does not exist'] })}\n\`\`\``, uuid);
+        return reply(`Changed feature.txt.\n\`\`\`json\n${JSON.stringify({ status: 'done' })}\n\`\`\``, uuid);
       }
       case 'tester': {
         // One tester across every repo of the task, or (tasks from before) the one repo it is given.
         const section = (prompt.match(/Repositories of this task[^\n]*\n((?:- .+\n?)+)/) || [])[1] || '';
         const dirs = [...section.matchAll(/^- \S+ at (.+)$/gm)].map((m) => m[1]);
         for (const dir of dirs.length ? dirs : [repoDir]) tool('Write', { file_path: path.join(dir!, 'feature.test.txt'), content: 'test\n' });
+        // FAKE_BLOCKED=tester: its test shows a bug in code it may not change, which it leaves failing.
+        if (process.env.FAKE_BLOCKED === 'tester') return reply(`The new test fails: discount() returns a negative price over 100%.\n\`\`\`json\n${JSON.stringify({ status: 'blocked', blockers: ['discount() returns a negative price for percent > 100 (src/price.js:6)'] })}\n\`\`\``, uuid);
         return reply(`Added feature.test.txt in ${dirs.length || 1} repo(s).`, uuid);
       }
       case 'reviewer': {

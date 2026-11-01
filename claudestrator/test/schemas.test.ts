@@ -4,7 +4,7 @@ import test from 'node:test';
 import * as assert from 'node:assert/strict';
 
 import { REPORT_SCHEMAS } from '../src/core/schemas';
-import { parseStageReport } from '../src/core/prompt';
+import { parseStageReport, workReport } from '../src/core/prompt';
 import { withoutTrailingJson } from '../src/core/runner';
 import * as view from '../src/core/view';
 import { CLI_FLAGS, workspace, harness, runTask } from './helpers/e2e';
@@ -54,7 +54,16 @@ const SAMPLES: Record<string, { good: unknown; bad: unknown[] }> = {
 };
 
 test('schemas: every report schema accepts what its checker accepts and rejects what it rejects', async () => {
-  assert.deepEqual(Object.keys(REPORT_SCHEMAS).sort(), ['audit', 'plan', 'readiness', 'verdict']);
+  assert.deepEqual(Object.keys(REPORT_SCHEMAS).sort(), ['audit', 'code', 'plan', 'readiness', 'tests', 'verdict']);
+  // Code and tests stages say done or blocked; their checker is lenient (no status: done), the schema is not.
+  for (const output of ['code', 'tests'] as const) {
+    const schema = REPORT_SCHEMAS[output]!;
+    assert.ok(valid(schema, { status: 'done' }) && valid(schema, { status: 'blocked', blockers: ['no such table'] }));
+    for (const b of [{ status: 'stuck' }, {}, { status: 'blocked', blockers: [''] }]) assert.ok(!valid(schema, b), `${output}: ${JSON.stringify(b)}`);
+    assert.deepEqual(workReport('', { status: 'blocked', blockers: ['no such table'] }), { status: 'blocked', blockers: ['no such table'] });
+    assert.deepEqual(workReport('Changed a.ts.'), { status: 'done', blockers: [] }, 'a report without one is done, as before');
+    assert.deepEqual(workReport('x\n```json\n{"status": "blocked", "blockers": ["b"]}\n```'), { status: 'blocked', blockers: ['b'] }, 'from a json block without --json-schema');
+  }
   for (const [output, { good, bad }] of Object.entries(SAMPLES)) {
     const schema = REPORT_SCHEMAS[output as Output]!;
     assert.equal(schema.$schema, 'http://json-schema.org/draft-07/schema#', 'Claude Code validates draft-07');
@@ -96,7 +105,7 @@ test('schemas: report stages hand their data over as structured output, and the 
     };
     assert.deepEqual(JSON.parse(schemaOf('planner')!).required, ['type', 'slug', 'repos']);
     assert.deepEqual(JSON.parse(schemaOf('reviewer')!).required, ['status', 'summary', 'findings']);
-    assert.equal(schemaOf('developer'), undefined, 'a code stage hands over no data');
+    assert.deepEqual(JSON.parse(schemaOf('developer')!).required, ['status'], 'a code stage hands over its status');
     assert.equal(s.plan!.slug, 'add-feature');
     const plan = await h.engine.svc.readArtifact(taskId, 'plan/planner.md');
     assert.match(plan, /^## Summary[\s\S]*\n```json\n\{\n {2}"type": "feat",/, 'the report, then its data as a json block');
