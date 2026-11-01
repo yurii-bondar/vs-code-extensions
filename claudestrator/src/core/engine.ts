@@ -179,8 +179,41 @@ const stepLabel = (s: { agent: string; repo?: string | undefined }): string => (
 /** A site's host: `https://acme.atlassian.net/wiki` → `acme.atlassian.net`. */
 const hostOf = (site: string): string => site.replace(/^[a-z]+:\/\//i, '').split(/[/?#]/)[0]!.replace(/^[^@]*@/, '').replace(/:\d+$/, '').toLowerCase();
 
-/** The hosts of the web addresses in a tool call's input. */
-const urlHosts = (input: unknown): string[] => [...new Set(inputStrings(input).flatMap((v) => [...v.matchAll(/\bhttps?:\/\/[^\s"'<>]+/gi)].map((m) => hostOf(m[0]))))];
+/** What a host check says of an input it cannot read through: never an allowed host. */
+const TOO_DEEP = '(an input nested too deep to check)';
+const LOCAL_FILES = 'file:// (your files, outside the sandbox)';
+
+/** Every string of a tool call's input, however deep; past 32 levels, a marker for what was not read. */
+const allStrings = (v: unknown, depth = 0): string[] =>
+  typeof v === 'string' ? [v] : v && typeof v === 'object' ? (depth >= 32 ? [TOO_DEEP] : Object.values(v).flatMap((x) => allStrings(x, depth + 1))) : [];
+
+/**
+ * The host a web address goes to, as a fetch would read it (WHATWG URL): a backslash is a slash there, so
+ * `https://evil.com\@acme.atlassian.net/` goes to evil.com, and `https:/evil.com` to evil.com too. `file:` addresses
+ * read your files.
+ */
+function addressHost(address: string): string {
+  const norm = address.replace(/\\/g, '/');
+  try {
+    const url = new URL(norm.startsWith('//') ? `https:${norm}` : norm);
+    if (url.protocol === 'file:') return LOCAL_FILES;
+    return url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  } catch {
+    return hostOf(norm) || address;
+  }
+}
+
+/** The hosts of the web addresses in a tool call's input: with any scheme and slashes, or none (`//evil.com/x`). */
+const urlHosts = (input: unknown): string[] =>
+  [
+    ...new Set(
+      allStrings(input).flatMap((v) =>
+        v === TOO_DEEP
+          ? [TOO_DEEP]
+          : [...v.matchAll(/\b(?:https?|wss?|ftp|file):[\\/]*[^\s"'<>]*|(?<![\w:/\\])\/\/[a-z0-9.-]+\.[a-z]{2,}[^\s"'<>]*/gi)].map((m) => addressHost(m[0]))
+      )
+    ),
+  ].filter(Boolean);
 
 /** Whether a host is one of `policy.network`'s patterns: `npm.acme.corp`, `*.acme.corp`, or `*` for any. */
 const hostAllowed = (host: string, patterns: string[]): boolean =>
@@ -193,7 +226,7 @@ const hostAllowed = (host: string, patterns: string[]): boolean =>
  * The hosts an MCP read names that it may not: a server that fetches what it is given (a `fetch` or `get_url` tool)
  * reaches them from outside the sandbox, and an address with a ticket's or a repo's text in it is a way out for them.
  */
-const strangeHosts = (input: unknown, allowed: string[]): string[] => urlHosts(input).filter((h) => !hostAllowed(h, allowed));
+const strangeHosts = (input: unknown, allowed: string[]): string[] => urlHosts(input).filter((h) => h === TOO_DEEP || h === LOCAL_FILES || !hostAllowed(h, allowed));
 
 /** The tool's own name, after `mcp__<server>__`. */
 const mcpAction = (tool: string): string => tool.split('__').pop() || '';
@@ -1243,6 +1276,13 @@ class Engine extends EventEmitter {
     if (!agent) return blocked(`the ${step.agent} agent is no longer in the config`);
     const named = (name: string): boolean => Boolean(agent.tools && agent.tools.some((t) => t === name || t.startsWith(`${name}(`)));
     if (WEB_TOOLS.has(tool) && !named(tool)) return blocked(`${tool} reaches any host, outside the sandbox; the ${step.agent} agent uses it only when its tools name it (tools: [${tool}])`);
+    // `WebFetch(domain:docs.acme.com)` in the tools: that host (and its subdomains), not any. Claude Code is not asked,
+    // since the guard's allow answers for it.
+    if (tool === 'WebFetch' && agent.tools && !agent.tools.includes('WebFetch')) {
+      const domains = agent.tools.flatMap((t) => (t.match(/^WebFetch\(domain:([^)]+)\)$/) || []).slice(1)).map((d) => d.toLowerCase());
+      const host = addressHost(String(input.url || ''));
+      if (!domains.some((d) => host === d || host.endsWith(`.${d}`))) return blocked(`WebFetch of ${host || 'that address'}: the ${step.agent} agent fetches only from ${domains.join(', ') || 'the domains its tools name'}`);
+    }
     if (MCP_RESOURCE_TOOLS.has(tool)) {
       if (agent.mcp === false) return blocked(`${tool}: the ${step.agent} agent runs without MCP servers`);
       const strange = strangeHosts(input, webHosts);

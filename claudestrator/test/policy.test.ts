@@ -230,6 +230,29 @@ test('policy: an MCP read reaches only the hosts the sandbox would, unless the a
   assert.equal(await may('verifier', 'mcp__Atlassian__getJiraIssue', { cloudId: 'https://acme.atlassian.net', issueIdOrKey: 'PROJ-1' }), null, "the ticket's own site");
   assert.equal(await may('planner', 'mcp__github__search_code', { query: 'formatDate repo:acme/api' }), null, 'no address, nothing to check');
   assert.equal(await may('auditor', 'mcp__fetch__fetch', { url: 'https://evil.example/' }), null, 'an agent whose tools name it uses it as you said');
+  // Read as a fetch would read them: a backslash is a slash, one slash is enough, no scheme at all, deep inside.
+  for (const [input, host] of [
+    [{ url: 'https://evil.example\\@acme.atlassian.net/' }, /evil\.example/],
+    [{ url: 'https:/evil.example/x' }, /evil\.example/],
+    [{ url: 'https:\\\\evil.example\\x' }, /evil\.example/],
+    [{ url: '//evil.example/x' }, /evil\.example/],
+    [{ url: 'file:///Users/me/.ssh/id_ed25519' }, /file:\/\//],
+    [JSON.parse(`${'{"a":'.repeat(40)}"https://evil.example"${'}'.repeat(40)}`), /too deep/],
+  ] as const) {
+    assert.match((await may('planner', 'mcp__fetch__fetch', input as Record<string, unknown>)) ?? 'allowed', host, JSON.stringify(input).slice(0, 80));
+  }
+});
+
+test('policy: WebFetch(domain:…) in an agent\'s tools fetches from that domain only', async () => {
+  const ws = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cs-policy-')));
+  fs.mkdirSync(path.join(ws, '.claudestrator'));
+  fs.writeFileSync(path.join(ws, '.claudestrator', 'config.yaml'), 'agents:\n  researcher: { description: Reads docs, output: plan, instructions: x, tools: [Read, "WebFetch(domain:docs.acme.com)"] }\n');
+  const engine = new Engine({ workspace: ws, home: ws, runner: {} as EngineOptions['runner'], hooks: {} as EngineOptions['hooks'] });
+  const config = await engine.config();
+  const may = async (url: string): Promise<boolean> => (await engine.decide({ taskId: 'T-1', step: { stage: 0, agent: 'researcher' }, config, call: { tool: 'WebFetch', input: { url, prompt: 'x' }, cwd: ws }, emitItem: () => {} })).allow;
+  assert.equal(await may('https://docs.acme.com/api'), true);
+  assert.equal(await may('https://v2.docs.acme.com/api'), true, 'and its subdomains');
+  for (const url of ['https://evil.example/?d=secret', 'https://docs.acme.com.evil.example/', 'https://evil.example\\@docs.acme.com/']) assert.equal(await may(url), false, url);
 });
 
 test('policy: an agent with no tools of its own gets those of its kind, and a tool the guard does not know is refused', async () => {
