@@ -198,7 +198,7 @@ const entryId = T.re(SCENARIO_ID, 'ids are lowercase kebab-case and start with a
 const GROUP = T.obj({ type: T.oneOf(GROUP_TYPES), label: T.str(1, 80), 'jira?': T.re(JIRA_KEY, 'a Jira key looks like CP-123'), 'instructions?': T.str(1), 'defaultInstructions?': T.arr(entryId) });
 const INSTRUCTION = T.obj({ label: T.str(1, 80), text: T.str(1) });
 
-const GATE = T.obj({ name: T.str(1), cmd: T.str(1), 'dir?': T.str(1), 'when?': T.re(/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[^*?[\]{}]+$/, 'when is a folder or file of the repo, from its root (src/ or package.json), without patterns'), 'timeout?': T.int(1, 24 * 60 * 60) });
+const GATE = T.obj({ name: T.str(1), cmd: T.str(1), 'dir?': T.re(/^(?![\\/~]|[A-Za-z]:)(?!(?:.*[\\/])?\.\.(?:[\\/]|$)).+$/, 'dir is a folder of the repo, from its root (packages/web), never an absolute path, ~ or ..'), 'when?': T.re(/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[^*?[\]{}]+$/, 'when is a folder or file of the repo, from its root (src/ or package.json), without patterns'), 'timeout?': T.int(1, 24 * 60 * 60) });
 /**
  * A repo's checks, each named once: a check writes its log under its name (gates.ts turns any run of characters other
  * than letters, digits, `.`, `_` and `-` into `_`), and macOS and Windows take Lint and lint for one file.

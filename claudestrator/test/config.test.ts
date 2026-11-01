@@ -340,3 +340,11 @@ test("config: a repo's checks are named once each, since each writes its log und
   assert.equal(r.ok, false);
   assert.match(r.ok ? '' : r.errors[0]!.message, /project config: repos\.api\.gates: two checks are named "lint"/);
 });
+
+test('config: a check runs in a folder of its repo, never outside it', async () => {
+  for (const dir of ['.', './packages/web', 'packages/web', 'packages\\web', 'a..b', '.config']) assert.deepEqual(gateIssues({ dir }), [], dir);
+  for (const dir of ['..', '../infra', 'packages/../..', 'a/..', 'a\\..\\..\\b', '/etc', '\\\\server\\share', 'C:\\Windows', 'c:/x', '~/x', '']) {
+    assert.ok(gateIssues({ dir }).some((m) => m.startsWith('repos.api.gates[0].dir:')), dir);
+  }
+  await assert.rejects(() => config.setRepo(workspace('{}\n'), 'api', { gates: [{ name: 'e2e', cmd: 'make e2e', dir: '../infra' }] }), /dir is a folder of the repo/);
+});
