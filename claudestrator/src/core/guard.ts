@@ -17,10 +17,14 @@ interface Segment {
   and: boolean;
 }
 
-/** A simple command as the shell runs it: its words without the redirections, and the files those write. */
+/**
+ * A simple command as the shell runs it: its words without the redirections, the files those write, and the text a
+ * here-string feeds it (`bash <<< 'cmd'`), if any.
+ */
 interface Simple {
   words: string[];
   redirects: string[];
+  herestring: string | null;
 }
 
 /** What the guard knows about the call: the policy, where it runs, and how to look at git and files. */
@@ -215,7 +219,7 @@ async function guardIn(command: string, ctx: GuardContext, start: Dir): Promise<
   let loops = 0;
   for (const { text, and } of simpleCommands(command)) {
     const dirs = and ? here : [...anywhere];
-    const simple: Simple = { words: withoutRedirects(wordsOf(text)), redirects: redirectTargets(text) };
+    const simple: Simple = { ...withoutRedirects(wordsOf(text)), redirects: redirectTargets(text) };
     for (const w of simple.words) {
       if (LOOPS.has(w)) loops++;
       else if (w === 'done') loops = Math.max(0, loops - 1);
@@ -300,7 +304,7 @@ async function checkSimple(simple: Simple, dir: Dir, ctx: GuardContext): Promise
   if (!writes.allow) return writes;
   const links = checkLinks(cmd, args, dir, ctx);
   if (!links.allow) return links;
-  return checkCommand(cmd, args, dir, ctx);
+  return checkCommand({ cmd, args, herestring: simple.herestring }, dir, ctx);
 }
 
 /** A path the guard cannot place: relative to a folder it lost track of. */
@@ -443,10 +447,14 @@ function wgetWrites(args: string[]): string[] {
   return [...logs, ...p.plain.map((u) => path.join(prefix, fromServer ? FROM_SERVER : urlName(u) || 'index.html'))];
 }
 
+/** tar's short options that take a value. */
+const TAR_SHORT = 'fCTXbHKLNVgFI';
+/** tar's arguments with the old style spelled out: `tar xzf a.tgz` is `tar -xzf a.tgz`. */
+const tarArgs = (args: string[]): string[] => (args[0] && /^[A-Za-z]+$/.test(args[0]) ? [`-${args[0]}`, ...args.slice(1)] : args);
+
 /** What tar writes: the folder it extracts into (anywhere with -P), or the archive it creates or adds to. */
 function tarWrites(args: string[]): string[] {
-  // Old style: `tar xzf a.tgz` is `tar -xzf a.tgz`.
-  const p = parseOptions(args[0] && /^[A-Za-z]+$/.test(args[0]) ? [`-${args[0]}`, ...args.slice(1)] : args, 'fCTXbHKLNVgFI', TAR_LONG);
+  const p = parseOptions(tarArgs(args), TAR_SHORT, TAR_LONG);
   const has = (...f: string[]): boolean => f.some((x) => p.flags.has(x));
   if (has('-x', '--extract', '--get')) {
     if (has('-P', '--absolute-names')) return ['/'];
@@ -646,19 +654,65 @@ function checkLinks(cmd: string, args: string[], dir: Dir, ctx: GuardContext): V
   return allow;
 }
 
-async function checkCommand(cmd: string, args: string[], dir: Dir, ctx: GuardContext): Promise<Verdict> {
+/** A path a shell or `source` reads its commands from that is its input: stdin, a pipe, a process substitution. */
+const FROM_INPUT = /^(-|\/dev\/stdin|\/dev\/fd\/\d+|\/proc\/self\/fd\/\d+)$/;
+
+/** A command to judge: its name, its arguments, and the here-string it reads, if any. */
+interface Call {
+  cmd: string;
+  args: string[];
+  herestring: string | null;
+}
+
+async function checkCommand({ cmd, args, herestring }: Call, dir: Dir, ctx: GuardContext): Promise<Verdict> {
   const inner = (script: string): Promise<Verdict> => guardIn(script, ctx, dir);
+  // What a shell or `source` reads on its input the guard never sees (`| bash`, `bash <<EOF`, `source <(…)`), except a
+  // here-string, which it reads as the shell would: commands go with -c, in a here-string, or in a file.
+  const fromInput = (): Promise<Verdict> => (herestring !== null ? inner(herestring) : Promise.resolve(deny(`${cmd} reading commands from its input is not allowed: pass them with -c, or write them to a script file`)));
+  const unreadable = (file: string): boolean => /\$(?!\{?HOME\}?(\/|$))|`/.test(file);
   if (SHELLS.has(cmd)) {
     // `-c`, also combined with other flags: `-lc`, `-ec`, `-xc`.
     const c = args.findIndex((a) => /^-[A-Za-z]*c[A-Za-z]*$/.test(a));
     if (c !== -1) return inner(args[c + 1] ?? '');
-    // Without -c and a script file a shell runs what comes on its input (`| bash`, `bash <<EOF`, `bash -s`), which the
-    // guard never sees: commands go with -c, or in a file.
     const file = args.find((a) => !a.startsWith('-') && !a.startsWith('+'));
-    if (ctx.agent && (!file || args.includes('-s')) && !args.some((a) => a === '--version' || a === '--help')) return deny(`${cmd} reading commands from its input is not allowed: pass them with -c, or write them to a script file`);
+    if (!ctx.agent || args.some((a) => a === '--version' || a === '--help')) return allow;
+    if (!file || args.includes('-s') || FROM_INPUT.test(file)) return fromInput();
+    if (unreadable(file)) return deny(`${cmd} ${file}: spell out the script's path`);
+    return allow;
+  }
+  if (cmd === 'source' || cmd === '.') {
+    const [file] = args;
+    if (!ctx.agent || file === undefined) return allow;
+    if (FROM_INPUT.test(file)) return fromInput();
+    if (unreadable(file)) return deny(`${cmd} ${file}: spell out the script's path`);
     return allow;
   }
   if (cmd === 'eval') return inner(args.join(' '));
+  // `trap 'cmd' EXIT` runs cmd later in this shell, `alias x='cmd'` when x is typed; `trap - INT` and `trap -p` run none.
+  if (cmd === 'trap') {
+    const rest = args[0] === '--' ? args.slice(1) : args;
+    return rest.length >= 2 && !rest[0]!.startsWith('-') ? inner(rest[0]!) : allow;
+  }
+  if (cmd === 'alias') {
+    for (const a of args) {
+      const value = a.match(/^[^=\s]+=(.*)$/s)?.[1];
+      const verdict = value === undefined ? allow : await inner(value);
+      if (!verdict.allow) return verdict;
+    }
+    return allow;
+  }
+  if (cmd === 'tmux') return checkTmux(args, dir, ctx);
+  if (cmd === 'tar' || cmd === 'bsdtar') {
+    // Programs tar runs: on each file, to compress, at a checkpoint, between volumes, to reach a remote tape.
+    const p = parseOptions(tarArgs(args), TAR_SHORT, TAR_LONG);
+    const scripts = [...p.values('--to-command', '-I', '--use-compress-program', '-F', '--info-script', '--new-volume-script', '--rsh-command', '--rmt-command'), ...p.values('--checkpoint-action').filter((v) => v.startsWith('exec=')).map((v) => v.slice(5))];
+    for (const script of scripts) {
+      const verdict = await inner(script);
+      if (!verdict.allow) return verdict;
+    }
+  }
+  // They run commands later, outside any check.
+  if (ctx.agent && ['at', 'batch', 'crontab'].includes(cmd) && !args.includes('-l')) return deny(`agents do not schedule commands (${cmd}): they would run later, unchecked`);
   if (cmd === 'find') return checkFind(args, dir, ctx);
   if (cmd === 'git') return checkGit(args, dir, ctx);
   if (cmd === 'gh') return checkGh(args, dir, ctx);
@@ -667,7 +721,7 @@ async function checkCommand(cmd: string, args: string[], dir: Dir, ctx: GuardCon
   const tool = cmd.replace(/(?<=.)@.*$/, '');
   const run = runs(tool, args);
   if (run) {
-    const verdict = await checkSimple({ words: run, redirects: [] }, dir, ctx);
+    const verdict = await checkSimple({ words: run, redirects: [], herestring }, dir, ctx);
     if (!verdict.allow) return verdict;
   }
   if (ctx.agent && publishes(tool, args)) return deny(`${cmd} ${plainWords(args, VALUED[tool] ?? []).slice(0, 2).join(' ')} publishes a package or an image, or changes one in its registry; releases are for humans`);
@@ -675,6 +729,39 @@ async function checkCommand(cmd: string, args: string[], dir: Dir, ctx: GuardCon
   // option first (-q) or from stdin (-i), and git's credential helpers print what it holds for a host.
   if (ctx.agent && cmd === 'security') return deny('agents do not use the keychain (security)');
   if (ctx.agent && cmd.startsWith('git-credential')) return deny(`agents do not run ${cmd}: it prints stored credentials`);
+  return allow;
+}
+
+/** tmux commands that run the shell command given after their options. */
+const TMUX_RUNS = new Set(['new-session', 'new', 'new-window', 'neww', 'split-window', 'splitw', 'respawn-pane', 'respawnp', 'respawn-window', 'respawnw', 'run-shell', 'run', 'display-popup', 'popup', 'pipe-pane', 'pipep', 'if-shell', 'if']);
+/** Options of those that take a value (`-d`, `-h` and `-b` do not in `new -d` and `splitw -h`, the common ones). */
+const TMUX_VALUED = ['-c', '-e', '-F', '-n', '-s', '-t', '-x', '-y', '-f', '-l', '-p', '-S', '-T', '-w', '-L'];
+
+/** tmux runs a shell command in a new session or pane, or types one (`send-keys`): the guard checks the first, refuses the second. */
+async function checkTmux(args: string[], dir: Dir, ctx: GuardContext): Promise<Verdict> {
+  let i = 0;
+  for (; i < args.length && args[i]!.startsWith('-'); i++) {
+    if (args[i] === '-c') return guardIn(args[i + 1] ?? '', ctx, dir); // tmux -c runs a shell command
+    if (['-L', '-S', '-f', '-T'].includes(args[i]!)) i++;
+  }
+  // Commands are separated by `;` words (`tmux new -d \; send-keys …`).
+  const commands: string[][] = [[]];
+  for (const a of args.slice(i)) {
+    if (a === ';') commands.push([]);
+    else commands[commands.length - 1]!.push(a);
+  }
+  for (const [name, ...rest] of commands) {
+    if (ctx.agent && ['send-keys', 'send', 'source-file', 'source', 'command-prompt', 'confirm-before'].includes(name ?? '')) return deny(`tmux ${name} types or runs tmux commands the guard cannot read`);
+    if (name === undefined || !TMUX_RUNS.has(name)) continue;
+    const words = plainWords(rest, TMUX_VALUED);
+    const verdict = await guardIn(name === 'if-shell' || name === 'if' ? (words[0] ?? '') : words.join(' '), ctx, dir);
+    if (!verdict.allow) return verdict;
+    // if-shell's other words are tmux commands.
+    for (const w of name === 'if-shell' || name === 'if' ? words.slice(1) : []) {
+      const nested = await checkTmux(wordsOf(w), dir, ctx);
+      if (!nested.allow) return nested;
+    }
+  }
   return allow;
 }
 
@@ -886,7 +973,7 @@ async function checkFind(args: string[], dir: Dir, ctx: GuardContext): Promise<V
     if (!['-exec', '-execdir', '-ok', '-okdir'].includes(args[i]!)) continue;
     const end = args.findIndex((a, j) => j > i && (a === ';' || a === '+' || a === '\\;'));
     const argv = args.slice(i + 1, end === -1 ? undefined : end).filter((a) => a !== '{}' && a !== '\\');
-    const verdict = await checkSimple({ words: argv, redirects: [] }, dir, ctx);
+    const verdict = await checkSimple({ words: argv, redirects: [], herestring: null }, dir, ctx);
     if (!verdict.allow) return verdict;
     const [first, ...rest] = stripPrefixes(argv);
     if (first !== undefined && path.basename(first) === 'rm' && recursive(rest)) deletes = `${args[i]} rm -r`;
@@ -971,7 +1058,8 @@ function simpleCommands(command: string): Segment[] {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
     kept.push(line);
-    const heredoc = unquoted(line).match(/<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/);
+    // `<<<` is a here-string, not a heredoc: the lines after it are commands.
+    const heredoc = unquoted(line).match(/(?<!<)<<(?!<)-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/);
     if (heredoc) {
       const end = heredoc[2];
       while (i + 1 < lines.length && lines[i + 1]!.trim() !== end) i++;
@@ -980,17 +1068,21 @@ function simpleCommands(command: string): Segment[] {
   }
 
   // `$(…)` and `` `…` `` run as commands of their own, inside double quotes too; in the command around them they leave
-  // `$SUBST`, a value nobody can check (so `rm -r $(pwd)/..` is refused). A plain `( … )` subshell leaves nothing.
+  // `$SUBST`, a value nobody can check (so `rm -r $(pwd)/..` is refused). A process substitution (`<(…)`, `>(…)`)
+  // leaves the path the shell gives it, `/dev/fd/63`. A plain `( … )` subshell leaves nothing, and an empty one `()`,
+  // which is a function's definition (`f() { …; }`).
+  const SUBST = '$SUBST';
+  const PIPE = '/dev/fd/63';
   const segments: Segment[] = [];
-  const stack: { outer: string; quote: string | null; close: string; sub: boolean; and: boolean }[] = [];
+  const stack: { outer: string; quote: string | null; close: string; leaves: string | null; and: boolean }[] = [];
   let current = '';
   let quote: string | null = null;
   // Whether current runs only once the command before it succeeded; whether a subshell ran inside it, so that what
   // follows its `&&` follows the subshell, not the last command in it (`(cd x && y) && z` runs z here).
   let and = false;
   let nested = false;
-  const open = (close: string, sub: boolean): void => {
-    stack.push({ outer: current, quote, close, sub, and });
+  const open = (close: string, leaves: string | null): void => {
+    stack.push({ outer: current, quote, close, leaves, and });
     current = '';
     quote = null;
     and = false;
@@ -1000,9 +1092,10 @@ function simpleCommands(command: string): Segment[] {
     const ch = text[i]!;
     const top = stack[stack.length - 1];
     if (top && quote === null && ch === top.close) {
+      const empty = !current.trim();
       segments.push({ text: current, and });
       stack.pop();
-      current = top.outer + (top.sub ? '$SUBST' : '');
+      current = top.outer + (top.leaves ?? (empty ? '()' : ''));
       quote = top.quote;
       and = top.and;
       nested = true;
@@ -1024,10 +1117,10 @@ function simpleCommands(command: string): Segment[] {
     }
     if (quote === '"') {
       if (ch === '\\') current += ch + (text[++i] ?? '');
-      else if (ch === '`') open('`', true);
+      else if (ch === '`') open('`', SUBST);
       else if (ch === '$' && text[i + 1] === '(') {
         i++;
-        open(')', true);
+        open(')', SUBST);
       } else {
         current += ch;
         if (ch === '"') quote = null;
@@ -1046,12 +1139,15 @@ function simpleCommands(command: string): Segment[] {
     } else if (ch === '#' && (current === '' || /\s$/.test(current))) {
       while (i + 1 < text.length && text[i + 1] !== '\n') i++;
     } else if (ch === '`') {
-      open('`', true);
+      open('`', SUBST);
     } else if (ch === '$' && text[i + 1] === '(') {
       i++;
-      open(')', true);
+      open(')', SUBST);
+    } else if (ch === '(' && /[<>]$/.test(current)) {
+      current = current.slice(0, -1);
+      open(')', PIPE);
     } else if (ch === '(') {
-      open(')', false);
+      open(')', null);
     } else if ((ch === '&' && (text[i + 1] === '>' || current.endsWith('>'))) || (ch === '|' && current.endsWith('>'))) {
       // Part of a redirection, not a separator: `&> f`, `>& f`, `>| f` write f.
       current += ch;
@@ -1077,22 +1173,25 @@ function unquoted(line: string): string {
 }
 
 /**
- * The words of a command without its redirections (`2>/dev/null`, `> out.txt`, `2>&1`, `< in`): they are not
- * arguments, so `git branch -a 2>/dev/null` lists branches rather than creating one. The files written are checked
- * apart, from the segment's text.
+ * The words of a command without its redirections (`2>/dev/null`, `> out.txt`, `2>&1`, `< in`, `<< EOF`): they are
+ * not arguments, so `git branch -a 2>/dev/null` lists branches rather than creating one. The files written are checked
+ * apart, from the segment's text. A here-string (`<<< 'text'`) is what the command reads.
  */
-function withoutRedirects(argv: string[]): string[] {
+function withoutRedirects(argv: string[]): { words: string[]; herestring: string | null } {
   const out: string[] = [];
+  let herestring: string | null = null;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
-    if (/^(?:\d*|&)(?:>>?|<)[|&]?$/.test(a)) i++; // the operator alone: its target is the next word
-    else if (!/^(?:\d*|&)(?:>>?|<)[|&]?\S+$/.test(a)) out.push(a);
+    const here = a.match(/^\d*<<<(.*)$/s);
+    if (here) herestring = here[1] || (argv[++i] ?? '');
+    else if (/^(?:\d*|&)(?:>>?|<<-?|<>?)[|&]?$/.test(a)) i++; // the operator alone: its target is the next word
+    else if (!/^(?:\d*|&)(?:>>?|<<-?|<>?)[|&]?\S+$/.test(a)) out.push(a);
   }
-  return out;
+  return { words: out, herestring };
 }
 
-/** Words that come before the command itself: shell keywords. */
-const KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'while', 'until', 'do', '!', '{', '}']);
+/** Words that come before the command itself: shell keywords (`coproc` runs it in the background). */
+const KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'while', 'until', 'do', '!', '{', '}', 'coproc']);
 
 /**
  * Commands that run the command in their arguments, and the options of theirs that take a value. `positional` is how
@@ -1128,6 +1227,15 @@ const WRAPPERS: Record<string, { valued: string[]; positional?: number; shell?: 
   corepack: { valued: [] },
   flock: { valued: ['-w', '--wait', '--timeout', '-E', '--conflict-exit-code'], positional: 1, shell: ['-c', '--command'] },
   script: { valued: ['-t', '-T', '-I', '-O', '-B', '-E', '--timing', '--log-io', '--log-in', '--log-out', '--echo'], positional: 1, shell: ['-c', '--command'] },
+  setsid: { valued: [] },
+  'ssh-agent': { valued: ['-a', '-E', '-t', '-P', '-O'] },
+  strace: { valued: ['-e', '-o', '-p', '-s', '-u', '-E', '-a', '-b', '-I', '-O', '-P', '-S', '-X'] },
+  ltrace: { valued: ['-e', '-o', '-p', '-s', '-u', '-a', '-A', '-D', '-l', '-n', '-F', '-x', '-w'] },
+  fakeroot: { valued: ['-l', '--lib', '--faked', '-s', '-i', '-b'] },
+  unbuffer: { valued: [] },
+  chronic: { valued: [] },
+  'sandbox-exec': { valued: ['-f', '-n', '-p', '-D'] },
+  screen: { valued: ['-S', '-c', '-e', '-h', '-p', '-s', '-T', '-t', '-X', '-Logfile'] },
 };
 
 /** Drops what runs before the command: `VAR=value`, shell keywords, and wrappers with their options. */
@@ -1164,11 +1272,21 @@ function splitPrefixes(argv: string[]): { env: string[]; argv: string[]; fed: bo
       continue;
     }
     if (KEYWORDS.has(a)) {
-      i++;
+      // `coproc NAME { …; }` names the coprocess.
+      i += a === 'coproc' && argv[i + 2] === '{' ? 2 : 1;
+      continue;
+    }
+    // A function's definition (`f() { …; }`, `function f { …; }`): its body is the command.
+    if (a === 'function') {
+      i += argv[i + 2] === '()' ? 3 : 2;
+      continue;
+    }
+    if (/^[^\s=]+\(\)$/.test(a) || argv[i + 1] === '()') {
+      i += argv[i + 1] === '()' ? 2 : 1;
       continue;
     }
     const name = path.basename(a);
-    const wrapper = WRAPPERS[name];
+    const wrapper = Object.hasOwn(WRAPPERS, name) ? WRAPPERS[name] : undefined;
     if (!wrapper) break;
     i++;
     if (name === 'xargs' || name === 'parallel') fed = true;
@@ -1188,18 +1306,28 @@ function splitPrefixes(argv: string[]): { env: string[]; argv: string[]; fed: bo
         const inner = splitPrefixes([...tokenize(value), ...rest]);
         return { env: [...env, ...inner.env], argv: fill(inner.argv), fed: fed || inner.fed };
       }
+      // `script -c 'cmd'`, also at the end of a cluster (`-qc`), or `--command=cmd`.
       const long = opt.match(/^(--[^=]+)=(.*)$/s);
-      if (wrapper.shell?.includes(long ? long[1]! : opt)) return { env, argv: fill(['sh', '-c', long ? long[2]! : (argv[i + 1] ?? '')]), fed };
+      const shell = wrapper.shell?.some((s) => s === (long ? long[1] : opt) || (/^-[A-Za-z]$/.test(s) && /^-[A-Za-z]+$/.test(opt) && opt.endsWith(s[1]!)));
+      if (shell) return { env, argv: fill(['sh', '-c', long ? long[2]! : (argv[i + 1] ?? '')]), fed };
       const hole = name === 'xargs' || name === 'parallel' ? replaceString(opt, argv[i + 1]) : null;
       if (hole) holes.push(hole);
       if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(opt)) {
         env.push(opt); // env VAR=value cmd
         i++;
-      } else if (opt.startsWith('-')) i += wrapper.valued.includes(opt) ? 2 : 1;
-      else if (positional > 0) {
+      } else if (opt.startsWith('-')) {
+        // A cluster of short options ending with one that takes a value (`screen -dmS name`) takes the next word.
+        i += wrapper.valued.includes(opt) || (/^-[A-Za-z]{2,}$/.test(opt) && wrapper.valued.includes(`-${opt.slice(-1)}`)) ? 2 : 1;
+      } else if (positional > 0) {
         positional--;
         i++;
       } else break;
+    }
+    // Without a command parallel runs its inputs as commands: the words after one `:::` (checked), or what it reads.
+    if (name === 'parallel' && (i >= argv.length || /^:{3,4}\+?$/.test(argv[i]!))) {
+      const inputs = argv.slice(i + 1);
+      const one = argv[i] === ':::' && !inputs.some((w) => /^:{3,4}\+?$/.test(w));
+      return { env, argv: one ? ['sh', '-c', inputs.join('\n')] : ['sh', '-s'], fed };
     }
   }
   return { env, argv: fill(argv.slice(i)), fed };
