@@ -53,7 +53,7 @@ const CHECKPOINT_OPTIONS: Record<CheckpointId, string[]> = {
 const JIRA_ONLY_OPTIONS = ['approve-post', 'push-comment'];
 
 /** Informational events: recorded for the UI and the audit trail, they never change state. */
-const INFO_EVENT_TYPES = ['agent_stopped', 'note', 'gates_ran', 'transition_rejected', 'jira_comment'] as const;
+const INFO_EVENT_TYPES = ['agent_stopped', 'pr_opened', 'note', 'gates_ran', 'transition_rejected', 'jira_comment'] as const;
 const INFO_EVENTS = new Set<string>(INFO_EVENT_TYPES);
 type InfoEvent = Extract<OrchEvent, { type: (typeof INFO_EVENT_TYPES)[number] }>;
 /** Events that record what happened without changing the task's state. */

@@ -46,6 +46,8 @@ interface ExecOptions {
   input?: string | undefined;
   /** The most of its output read; MAX_OUTPUT unless a caller needs less. */
   maxBytes?: number | undefined;
+  /** Stops the command (a Stop of its task): it ends with code 130. */
+  signal?: AbortSignal | undefined;
 }
 
 /** How long git gets for what moves a whole repository: a fetch, a worktree's checkout, a push. */
@@ -54,15 +56,17 @@ const SLOW_GIT_MS = 10 * 60000;
 /** The most a command's output is read into memory; more is cut, and the result says so (code 125). */
 const MAX_OUTPUT = 64 * 1024 * 1024;
 
-/** Never rejects: `{ code, stdout, stderr }`, code 127 when the binary is missing, 124 on timeout, 125 when cut. */
-function exec(cmd: string, args: readonly string[], { cwd, timeoutMs = 60000, env, input, maxBytes = MAX_OUTPUT }: ExecOptions = {}): Promise<ExecResult> {
+/** Never rejects: `{ code, stdout, stderr }`, code 127 when the binary is missing, 124 on timeout, 125 when cut, 130 when stopped. */
+function exec(cmd: string, args: readonly string[], { cwd, timeoutMs = 60000, env, input, maxBytes = MAX_OUTPUT, signal }: ExecOptions = {}): Promise<ExecResult> {
   return new Promise((resolve) => {
+    if (signal && signal.aborted) return resolve({ code: 130, stdout: '', stderr: `${cmd}: stopped` });
     const [file, argv] = launch(cmd, args);
-    const child = execFile(file, argv, { cwd, timeout: timeoutMs, maxBuffer: maxBytes, env: env || childEnv }, (err, stdout, stderr) => {
+    const child = execFile(file, argv, { cwd, timeout: timeoutMs, maxBuffer: maxBytes, env: env || childEnv, ...(signal && { signal }) }, (err, stdout, stderr) => {
       let code = 0;
       const overflow = Boolean(err && (err.code as unknown) === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER');
-      if (err) code = err.code === 'ENOENT' ? 127 : overflow ? 125 : err.killed ? 124 : typeof err.code === 'number' ? err.code : 1;
-      resolve({ code, stdout: String(stdout ?? ''), stderr: `${stderr ?? ''}${err && err.code === 'ENOENT' ? `${cmd}: not found` : ''}${overflow ? `\n${cmd}: its output passed ${maxBytes} bytes and was cut there` : err && err.killed ? `\nkilled after ${Math.round(timeoutMs / 1000)}s` : ''}` });
+      const stopped = Boolean(err && signal && signal.aborted);
+      if (err) code = stopped ? 130 : err.code === 'ENOENT' ? 127 : overflow ? 125 : err.killed ? 124 : typeof err.code === 'number' ? err.code : 1;
+      resolve({ code, stdout: String(stdout ?? ''), stderr: `${stderr ?? ''}${stopped ? `\n${cmd}: stopped` : err && err.code === 'ENOENT' ? `${cmd}: not found` : ''}${overflow ? `\n${cmd}: its output passed ${maxBytes} bytes and was cut there` : !stopped && err && err.killed ? `\nkilled after ${Math.round(timeoutMs / 1000)}s` : ''}` });
     });
     if (input !== undefined) {
       child.stdin!.on('error', () => {}); // a git that exits before reading it all
@@ -116,9 +120,9 @@ class GitRepo {
     return this.gitWith({}, ...args);
   }
 
-  /** `git(...)` with more in its environment, text on its stdin, or longer than two minutes to run. */
-  async gitWith({ env, input, timeoutMs = 120000 }: { env?: NodeJS.ProcessEnv; input?: string; timeoutMs?: number }, ...args: string[]): Promise<ExecResult> {
-    return exec('git', [...HOST_GIT, '-C', this.dir, ...args], { cwd: (await exists(this.dir)) ? this.dir : undefined, timeoutMs, ...(env && { env: { ...childEnv, ...env } }), ...(input !== undefined && { input }) });
+  /** `git(...)` with more in its environment, text on its stdin, longer than two minutes to run, or a Stop that ends it. */
+  async gitWith({ env, input, timeoutMs = 120000, signal }: { env?: NodeJS.ProcessEnv; input?: string; timeoutMs?: number; signal?: AbortSignal | undefined }, ...args: string[]): Promise<ExecResult> {
+    return exec('git', [...HOST_GIT, '-C', this.dir, ...args], { cwd: (await exists(this.dir)) ? this.dir : undefined, timeoutMs, signal, ...(env && { env: { ...childEnv, ...env } }), ...(input !== undefined && { input }) });
   }
 
   /**

@@ -4,7 +4,7 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
 
-import { GitRepo, prepareRepos, removeWorktrees, taskDiff, taskRepos } from '../src/core/git';
+import { exec, GitRepo, prepareRepos, removeWorktrees, taskDiff, taskRepos } from '../src/core/git';
 import { runGates } from '../src/core/gates';
 import { git, workspace } from './helpers/e2e';
 import type { Config, RepoConfig, TaskState } from '../src/core/types';
@@ -197,4 +197,15 @@ test('git: a checkout lists its dotenv files, also git-ignored ones and those in
     fs.writeFileSync(path.join(dir, f), 'X=1\n');
   }
   assert.deepEqual((await new GitRepo(dir).envFiles()).map((f) => path.relative(dir, f)).sort(), ['.env', '.envrc', 'secrets/.env', 'web/.env.production'].map((f) => path.join(...f.split('/'))).sort());
+});
+
+test('git: a command a Stop aborts ends at once with code 130', { skip: process.platform === 'win32' }, async () => {
+  const abort = new AbortController();
+  const started = Date.now();
+  const run = exec('sleep', ['10'], { signal: abort.signal });
+  setTimeout(() => abort.abort(), 100);
+  const r = await run;
+  assert.equal(r.code, 130);
+  assert.ok(Date.now() - started < 5000);
+  assert.equal((await exec('sleep', ['10'], { signal: abort.signal })).code, 130, 'not started once stopped');
 });

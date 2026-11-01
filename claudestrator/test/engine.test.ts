@@ -811,3 +811,31 @@ test('engine: a check the agent cannot fix (its folder is not there) goes to you
     h.hooks.dispose();
   }
 });
+
+test('engine: Stop during a push ends it, and no PR is opened after it; every PR opened is recorded at once', { skip: process.platform === 'win32' }, async () => {
+  const ws = workspace(['api', 'web'], 'pipeline: [planner, developer]\npolicy: { draftPrsOnly: false }\nrepos:\n  api: {}\n  web: {}\n');
+  const { remote, path: PATH } = remoteSetup(ws, '#!/bin/sh\nexit 0\n', { repos: ['api', 'web'] });
+  // The remote takes its time with web's push.
+  fs.writeFileSync(path.join(ws, 'web-remote.git', 'hooks', 'pre-receive'), '#!/bin/sh\ntouch "$FAKE_STATE/receiving"\nsleep 20\n', { mode: 0o755 });
+  const bin = PATH.split(path.delimiter)[0]!;
+  fs.writeFileSync(path.join(bin, 'gh'), `#!/bin/sh\necho "$@" >> "$FAKE_STATE/gh.log"\ncase "$1 $2" in "pr view") exit 1;; "pr create") echo "https://github.com/acme/$(basename "$PWD")/pull/7";; *) exit 0;; esac\n`, { mode: 0o755 });
+  const h = await harness(ws, { FAKE_REPOS: 'api,web', PATH });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
+    await runTask(h.engine, taskId);
+    await h.engine.answer(taskId, 'confirm-push', 'push');
+    await waitFor(() => fs.existsSync(path.join(h.state, 'receiving')), 60000);
+    const started = Date.now();
+    await h.engine.stop(taskId);
+    await waitFor(() => !h.engine.isRunning(taskId), 15000);
+    assert.ok(Date.now() - started < 10000, 'the push was ended, not waited for');
+    const gh = fs.readFileSync(path.join(h.state, 'gh.log'), 'utf8');
+    assert.equal((gh.match(/^pr create/gm) || []).length, 1, 'api only, opened before the Stop');
+    assert.doesNotMatch(gh, /--draft/, 'policy.draftPrsOnly: false opens PRs ready for review');
+    const opened = only(await h.engine.svc.events(taskId), 'pr_opened');
+    assert.deepEqual(opened.map((e) => [e.repo, e.url]), [['api', 'https://github.com/acme/api/pull/7']]);
+    assert.ok(remote);
+  } finally {
+    h.hooks.dispose();
+  }
+});

@@ -477,6 +477,8 @@ export type OrchEvent = EventBase &
     | { type: 'resumed' }
     | { type: 'pipeline_changed'; pipeline: StoredPipeline }
     | { type: 'agent_stopped'; agent: string; payload?: AgentStoppedPayload }
+    /** A PR opened while publishing, as soon as it is there: a later repo that fails does not leave it untold. */
+    | { type: 'pr_opened'; repo: string; url: string }
     | { type: 'note'; message: string }
     | { type: 'gates_ran'; agent: string; repo?: string; repos?: string[]; status: GatesStatus; attempt: number; summary: string }
     | { type: 'transition_rejected'; event?: unknown; code: string; error: string }

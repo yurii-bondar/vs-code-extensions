@@ -67,6 +67,8 @@ function describeEvent(e: OrchEvent): Described | null {
       const p = e.payload || {};
       return { tone: 'dim', icon: 'circle-small', text: `${e.agent} session ended · ${p.turns || 0} turns · $${Number(p.costUsd || 0).toFixed(2)}` };
     }
+    case 'pr_opened':
+      return { tone: 'ok', icon: 'git-pull-request', text: `PR opened in ${e.repo}` };
     case 'jira_comment': {
       const what = ({ plan: 'the plan', prs: 'the PR links', report: 'the report' } as Record<string, string>)[e.what] || 'a comment';
       return e.ok

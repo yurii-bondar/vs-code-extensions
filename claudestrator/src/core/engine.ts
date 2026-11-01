@@ -1551,23 +1551,31 @@ class Engine extends EventEmitter {
             throw new EngineError('push_failed', `${r.name}: the agents changed .lfsconfig, which says where Git LFS uploads the files; check it and push this branch yourself`);
           }
           this.setLive(s.taskId, { phase: 'publishing', text: `Uploading ${r.name}'s Git LFS files` });
-          const up = await r.git.gitWith({ timeoutMs: 30 * 60000 }, 'lfs', 'push', 'origin', branch);
+          const up = await r.git.gitWith({ timeoutMs: 30 * 60000, signal: abort.signal }, 'lfs', 'push', 'origin', branch);
+          if (await stopped()) return;
           if (up.code !== 0) throw new EngineError('push_failed', `${r.name}: uploading its Git LFS files failed: ${(up.stderr || up.stdout).trim()}`);
         }
         this.setLive(s.taskId, { phase: 'publishing', text: `Pushing ${r.name}` });
         // The hook has run, in the sandbox; git would run it again outside.
-        const push = await r.git.gitWith({ timeoutMs: SLOW_GIT_MS }, 'push', '--no-verify', '-u', 'origin', branch);
+        const push = await r.git.gitWith({ timeoutMs: SLOW_GIT_MS, signal: abort.signal }, 'push', '--no-verify', '-u', 'origin', branch);
+        if (await stopped()) return;
         if (push.code !== 0) throw new EngineError('push_failed', `${r.name}: ${push.stderr.trim()}`);
         // A retry after a partial failure (or a Stop mid-publish) finds the PR it already opened.
-        const open = await exec('gh', ['pr', 'view', branch, '--json', 'url,state', '--jq', 'select(.state == "OPEN") | .url'], { cwd: r.dir, timeoutMs: 60000 });
+        const open = await exec('gh', ['pr', 'view', branch, '--json', 'url,state', '--jq', 'select(.state == "OPEN") | .url'], { cwd: r.dir, timeoutMs: 60000, signal: abort.signal });
+        if (await stopped()) return;
         if (open.code === 0 && /^https?:\/\//.test(open.stdout.trim())) {
           prs[r.name] = open.stdout.trim();
+          await this.svc.record(s.taskId, { type: 'pr_opened', repo: r.name, url: prs[r.name]! });
           continue;
         }
-        this.setLive(s.taskId, { phase: 'publishing', text: `Opening a draft PR in ${r.name}` });
-        const pr = await exec('gh', ['pr', 'create', '--draft', '--base', r.base, '--head', branch, '--title', prTitle(s, config.policy.forbidAiAttribution), '--body-file', await bodyFile(r.name)], { cwd: r.dir, timeoutMs: 120000 });
+        const draft = config.policy.draftPrsOnly;
+        this.setLive(s.taskId, { phase: 'publishing', text: `Opening a ${draft ? 'draft ' : ''}PR in ${r.name}` });
+        const pr = await exec('gh', ['pr', 'create', ...(draft ? ['--draft'] : []), '--base', r.base, '--head', branch, '--title', prTitle(s, config.policy.forbidAiAttribution), '--body-file', await bodyFile(r.name)], { cwd: r.dir, timeoutMs: 120000, signal: abort.signal });
+        if (pr.code !== 0 && (await stopped())) return;
         if (pr.code !== 0) throw new EngineError('pr_failed', `${r.name}: ${pr.stderr.trim() || pr.stdout.trim()}`);
         prs[r.name] = pr.stdout.trim().split('\n').reverse().find((l) => /^https?:\/\//.test(l.trim()))?.trim() || pr.stdout.trim();
+        // Told at once: a later repo that fails leaves this PR open, and the task says where.
+        await this.svc.record(s.taskId, { type: 'pr_opened', repo: r.name, url: prs[r.name]! });
       }
       if (await stopped()) return;
       // Every body lists the others, so link them once all exist.
