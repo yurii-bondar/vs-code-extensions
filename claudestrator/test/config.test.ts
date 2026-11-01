@@ -281,3 +281,28 @@ test("config: a change that is undone puts back only what it wrote, never anothe
   assert.equal(fs.readFileSync(file, 'utf8'), mine);
   assert.equal(fs.existsSync(prompt), false);
 });
+
+test('scenarios: a deleted report scenario comes back as your own config has it', async () => {
+  const home = tmp('cs-home-');
+  fs.mkdirSync(path.join(home, '.claudestrator'));
+  fs.writeFileSync(
+    config.userConfigFile(home),
+    "agents:\n  my-verifier: { extends: verifier, instructions: { mode: append, text: 'Check the docs too.' } }\nscenarios:\n  readiness: [verifier, my-verifier]\n"
+  );
+  const ws = workspace('language: English # mine\n');
+  const scenarios = async () => {
+    const r = passed(await config.loadConfig({ workspace: ws, home }));
+    return { readiness: r.config.scenarios.readiness, removed: r.config.removedScenarios };
+  };
+  await config.removeScenario(ws, 'readiness');
+  assert.deepEqual(await scenarios(), { readiness: [], removed: ['readiness'] });
+  await config.restoreScenario(ws, 'readiness', { home });
+  assert.deepEqual(await scenarios(), { readiness: ['verifier', 'my-verifier'], removed: [] });
+  assert.equal(projectText(ws), 'language: English # mine\n', 'the project config is as it was before the Delete');
+
+  // Removed in your config too: the project brings back the built-in agents.
+  fs.writeFileSync(config.userConfigFile(home), 'scenarios:\n  audit: false\n');
+  await config.restoreScenario(ws, 'audit', { home });
+  assert.deepEqual((await config.readProjectLayer(ws)).scenarios, { audit: ['auditor'] });
+  assert.deepEqual(passed(await config.loadConfig({ workspace: ws, home })).config.scenarios.audit, ['auditor']);
+});

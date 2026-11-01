@@ -1300,9 +1300,20 @@ async function removeScenario(workspace: string, id: string): Promise<string> {
   });
 }
 
-/** Brings a removed built-in report scenario back with its built-in agents. */
-async function restoreScenario(workspace: string, id: string): Promise<string> {
-  return setScenario(workspace, id, BUILTIN.scenarios[id] || []);
+/**
+ * Brings a removed built-in report scenario back. When the layers under the project (built in, libraries, your config)
+ * still list its agents, the project's `false` goes and their list counts again, yours (`readiness: [verifier,
+ * my-verifier]`) included. When they removed it too, the project lists the built-in agents.
+ */
+async function restoreScenario(workspace: string, id: string, { home }: { home?: string | undefined } = {}): Promise<string> {
+  const { layers } = await loadLayers({ workspace, ...(home && { home }) });
+  const under = mergeLayers(layers.filter((l) => l.name !== 'project')).scenarios[id];
+  if (!under || !Array.isArray(under.value)) return setScenario(workspace, id, BUILTIN.scenarios[id] || []);
+  return editProjectConfig(workspace, (doc) => {
+    writeIn(doc, ['scenarios', id], undefined);
+    const left = doc.getIn(['scenarios'], true);
+    if (YAML.isMap(left) && left.items.length === 0) doc.deleteIn(['scenarios']);
+  });
 }
 
 async function setPipeline(workspace: string, pipeline: string[]): Promise<string> {
