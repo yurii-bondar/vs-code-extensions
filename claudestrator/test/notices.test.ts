@@ -2,7 +2,7 @@
 import test from 'node:test';
 import * as assert from 'node:assert/strict';
 
-import { isWebLink, permissionNotice, plainNotice } from '../src/core/view';
+import { isWebLink, logLine, permissionNotice, plainNotice } from '../src/core/view';
 
 /** How VS Code finds the links of a notification's message (`parseLinkedText` in vs/base/common/linkedText.ts). */
 const LINK = /\[([^\]]+)\]\(((?:https?:\/\/|command:|file:)[^)\s]+)(?: (["'])(.+?)(\3))?\)/gi;
@@ -20,6 +20,13 @@ test('notices: a link in an agent\'s or a tool\'s text stays text', () => {
   assert.equal(plainNotice('[Fix it](command:x)'), '[Fix it] (command\u200b:x)', 'the words stay readable');
   assert.equal(plainNotice('vscode://ext.id/do and COMMAND:x'), 'vscode\u200b://ext.id/do and COMMAND\u200b:x');
   assert.equal(plainNotice('T-1: draft PRs are open.'), 'T-1: draft PRs are open.', 'plain text is left as it is');
+});
+
+test('notices: every engine log event goes to the log at its level, with its task', () => {
+  assert.deepEqual(logLine({ level: 'error', message: 'gh pr create failed', taskId: 'T-1' }), { level: 'error', text: '[T-1] gh pr create failed' });
+  assert.deepEqual(logLine({ level: 'warn', message: 'Budget spent' }), { level: 'warn', text: 'Budget spent' });
+  assert.deepEqual(logLine({ level: 'info', message: 'resumed', taskId: 'T-2' }), { level: 'info', text: '[T-2] resumed' });
+  assert.deepEqual(logLine({ level: 'debug', message: 'x' }), { level: 'info', text: 'x' }, 'a level the log has no method for is info');
 });
 
 test('notices: only a web address opens outside the editor, from the dashboard or a notification', () => {

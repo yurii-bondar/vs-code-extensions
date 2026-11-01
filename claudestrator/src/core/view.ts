@@ -383,6 +383,11 @@ function isWebLink(url: unknown): url is string {
   return typeof url === 'string' && /^https?:\/\/\S+$/i.test(url);
 }
 
+/** An engine's `log` event as a line of the extension's log: its level (anything else is info) and its task. */
+function logLine({ level, message, taskId }: { level: string; message: string; taskId?: string }): { level: 'error' | 'warn' | 'info'; text: string } {
+  return { level: level === 'error' || level === 'warn' ? level : 'info', text: taskId ? `[${taskId}] ${message}` : message };
+}
+
 /** The longest command a permission notification shows. */
 const NOTICE_COMMAND = 120;
 
@@ -404,4 +409,4 @@ function permissionNotice(p: Pick<PermissionRequest, 'agent' | 'repo' | 'tool' |
   return { text: plainNotice(`${p.agent}${p.repo ? ` @ ${p.repo}` : ''} wants to ${what}`), whole };
 }
 
-export { isWebLink, loadsRemote, permissionNotice, plainNotice, summary, detail, stepsOf, statusOf, queueOutput, CHECKPOINT_HINT };
+export { isWebLink, loadsRemote, logLine, permissionNotice, plainNotice, summary, detail, stepsOf, statusOf, queueOutput, CHECKPOINT_HINT };

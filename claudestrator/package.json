@@ -178,6 +178,12 @@
         "icon": "$(pulse)"
       },
       {
+        "command": "claudestrator.showLog",
+        "title": "Show Log",
+        "category": "Claudestrator",
+        "icon": "$(output)"
+      },
+      {
         "command": "claudestrator.refresh",
         "title": "Refresh",
         "category": "Claudestrator",
@@ -238,6 +244,11 @@
           "command": "claudestrator.checkHealth",
           "when": "view == claudestrator.tasks",
           "group": "1_config@5"
+        },
+        {
+          "command": "claudestrator.showLog",
+          "when": "view == claudestrator.tasks",
+          "group": "1_config@6"
         }
       ],
       "view/item/context": [

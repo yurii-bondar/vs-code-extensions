@@ -94,6 +94,13 @@ async function updateLimits(item: vscode.StatusBarItem, o: Orchestrator): Promis
 
 function activate(context: vscode.ExtensionContext) {
   orch = new Orchestrator(context);
+  // What the engines report, every level with its task (Claudestrator: Show Log), from before the first engine starts.
+  const log = vscode.window.createOutputChannel('Claudestrator', { log: true });
+  const write = (data: Parameters<typeof view.logLine>[0]): void => {
+    const { level, text } = view.logLine(data);
+    log[level](text);
+  };
+  context.subscriptions.push(log, orch.onEngine((e) => e.name === 'log' && write(e.data)));
   const tree = new TaskTree(orch);
   const treeView = vscode.window.createTreeView('claudestrator.tasks', { treeDataProvider: tree, showCollapseAll: false });
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
@@ -111,7 +118,10 @@ function activate(context: vscode.ExtensionContext) {
     await updateLimits(limitsItem, orch);
   };
 
-  orch.init().then(refresh, (e: Error) => void vscode.window.showErrorMessage(view.plainNotice(`Claudestrator could not start: ${e.message}`)));
+  orch.init().then(refresh, (e: Error) => {
+    write({ level: 'error', message: `Claudestrator could not start: ${e.stack || e.message}` });
+    void vscode.window.showErrorMessage(view.plainNotice(`Claudestrator could not start: ${e.message}`));
+  });
 
   // What an agent does now: the tree's line for its task, without reading every task again.
   context.subscriptions.push(orch.onEngine((e) => e.name === 'live' && tree.setLive(e.data.taskId, e.data.live)));
@@ -179,6 +189,7 @@ function activate(context: vscode.ExtensionContext) {
       try {
         await orch.engine!.resume(taskId);
       } catch (e) {
+        write({ level: 'error', message: (e as Error).message, taskId });
         vscode.window.showErrorMessage(view.plainNotice((e as Error).message));
       }
     }),
@@ -199,6 +210,7 @@ function activate(context: vscode.ExtensionContext) {
       try {
         if ((await deleteTask(engine, taskId)).deleted && DashboardPanel.current) DashboardPanel.current.taskDeleted(taskId);
       } catch (e) {
+        write({ level: 'error', message: (e as Error).message, taskId });
         void vscode.window.showErrorMessage(view.plainNotice((e as Error).message));
       }
     }),
@@ -216,6 +228,7 @@ function activate(context: vscode.ExtensionContext) {
       const detail = [line(h.claude.ok, 'Claude Code', h.claude.version || h.claude.error), line(h.git.ok, 'Git', h.git.version), line(h.gh.ok, 'GitHub CLI', h.gh.ok ? h.gh.account || h.gh.version : h.gh.error)].join('\n');
       vscode.window.showInformationMessage(h.claude.ok && h.git.ok ? 'Claudestrator is ready.' : 'Claudestrator needs attention.', { modal: true, detail });
     }),
+    reg('claudestrator.showLog', () => log.show()),
     reg('claudestrator.refresh', async () => {
       await orch.rebuild();
       await orch.refreshHealth();
