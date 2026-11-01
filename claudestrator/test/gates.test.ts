@@ -7,6 +7,7 @@ import * as path from 'path';
 import { execFileSync } from 'child_process';
 
 import { runGates, runShell, tailOf } from '../src/core/gates';
+import { plainLauncher } from '../src/core/sandbox';
 import { setChildEnv } from '../src/core/git';
 import { workspace, harness, waitFor } from './helpers/e2e';
 import type { RepoConfig } from '../src/core/types';
@@ -156,4 +157,13 @@ test('gates: a check that runs out of time fails as one the agent cannot fix', a
   // Its own time limit, in seconds, over the default.
   const own = { ...repo, gates: [{ name: 'slow', cmd: 'sleep 0.5', timeout: 2 }] } as RepoConfig;
   assert.equal((await runGates({ repo: own, dir, logDir: path.join(ws, 'logs'), force: true, timeoutMs: 100 })).results[0]!.status, 'pass');
+});
+
+test('gates: a sandbox refusal in lower case, as Go, Rust and Python say it, gets the sandbox hint too', { skip: process.platform === 'win32' }, async () => {
+  const ws = workspace(['api'], 'repos:\n  api: {}\n');
+  const dir = path.join(ws, 'api');
+  fs.writeFileSync(path.join(dir, 'x.txt'), 'x\n');
+  const repo = { name: 'api', path: 'api', baseBranch: 'main', gates: [{ name: 'build', cmd: "echo 'open /Users/me/.cache/go-build/x: operation not permitted' >&2; exit 1" }] } as unknown as RepoConfig;
+  const r = await runGates({ repo, dir, logDir: path.join(ws, 'logs'), force: true, launch: plainLauncher });
+  assert.match(r.results[0]!.tail ?? '', /policy\.writable/);
 });

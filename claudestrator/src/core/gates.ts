@@ -67,8 +67,8 @@ function withoutCredentials(env: NodeJS.ProcessEnv, keep: string[] = []): NodeJS
   return out;
 }
 
-/** What a sandboxed command that failed on a write or a read it may not do says. */
-const SANDBOX_REFUSAL = /Operation not permitted|EPERM|Read-only file system|EROFS|CONNECT tunnel failed, response 403/;
+/** What a sandboxed command that failed on a write or a read it may not do says (Go, Rust and Python in lower case). */
+const SANDBOX_REFUSAL = /operation not permitted|\bEPERM\b|read-only file system|\bEROFS\b|CONNECT tunnel failed, response 403/i;
 const SANDBOX_HINT = 'note: checks run in the sandbox (policy.sandbox): they write only in the repo and reach only the package registries. A tool that writes elsewhere (a build cache) needs that folder in policy.writable, a host it needs goes in policy.network.';
 
 interface ShellRun {
