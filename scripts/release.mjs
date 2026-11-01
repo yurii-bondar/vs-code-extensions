@@ -299,6 +299,23 @@ function buildPlugin(version, notes) {
   return path.join(PLUGIN, 'build', 'distributions', `claudestrator-${version}.zip`);
 }
 
+/**
+ * The scripts of the dashboard page as each side lists them: the VS Code extension's `PAGE_SCRIPTS` (panel.ts) and the
+ * JetBrains plugin's `SCRIPTS` (PageHtml.kt), which inlines the same files. A script one side leaves out (stream.js
+ * did) loads nowhere there, and the screens that use it never register.
+ */
+function pageScripts() {
+  const listed = (file, pattern) => {
+    const m = pattern.exec(fs.readFileSync(file, 'utf8'));
+    if (!m) throw new Error(`no list of the dashboard's scripts found in ${path.relative(ROOT, file)}`);
+    return [...m[1].matchAll(/['"]([^'"]+\.js)['"]/g)].map((x) => x[1]);
+  };
+  return {
+    vscode: listed(path.join(EXTENSION, 'src', 'panel.ts'), /const PAGE_SCRIPTS = \[([^\]]*)\]/),
+    jetbrains: listed(path.join(PLUGIN, 'src', 'main', 'kotlin', 'io', 'github', 'yuriibondar', 'claudestrator', 'ui', 'PageHtml.kt'), /val SCRIPTS = listOf\(([^)]*)\)/),
+  };
+}
+
 function verifyPlugin(zip, version) {
   if (!fs.existsSync(zip)) throw new Error(`${path.relative(ROOT, zip)} was not built`);
   const entries = zipEntries(zip);
@@ -306,6 +323,9 @@ function verifyPlugin(zip, version) {
   const problems = [];
   if (!entries.includes(jar)) problems.push(`${jar} is missing`);
   if (!entries.some((e) => e.startsWith('claudestrator/engine/'))) problems.push('the engine is missing');
+  const scripts = pageScripts();
+  if (scripts.jetbrains.join() !== scripts.vscode.join()) problems.push(`its dashboard loads ${scripts.jetbrains.join(', ')}, where VS Code loads ${scripts.vscode.join(', ')} (PageHtml.kt SCRIPTS, panel.ts PAGE_SCRIPTS)`);
+  for (const name of scripts.jetbrains) if (!entries.includes(`claudestrator/engine/dist/media/${name}`)) problems.push(`the engine has no dist/media/${name}`);
   if (!problems.length) {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-release-jar-'));
     try {
