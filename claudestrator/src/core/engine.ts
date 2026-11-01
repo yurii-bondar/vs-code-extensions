@@ -1160,22 +1160,39 @@ class Engine extends EventEmitter {
 
     let t: TurnResult = { ok: false, report: '' };
     const stopped = async (): Promise<boolean> => (await this.svc.state(taskId)).status === 'stopped';
+    /** A message from Claudestrator into the session. One whose CLI has ended is not sent: the next turn says why it ended. */
+    const say = (text: string): void => {
+      try {
+        session.send(text, { from: 'orchestrator' });
+      } catch {
+        // the session ended; its turn() returns the reason
+      }
+    };
+    /**
+     * The agent's turn; null when the task was stopped meanwhile. An overloaded API or a dropped connection, past
+     * Claude Code's own retries, goes on in the same session after a pause (its context kept, and cached), on any turn:
+     * the first, one fixing red checks or one correcting its report.
+     */
+    const turn = async (): Promise<TurnResult | null> => {
+      let r = await this.turnOf(taskId, session);
+      if (await stopped()) return null;
+      for (let n = 1; !r.ok && n <= TRANSIENT_RETRIES && transientError(r.error) && !session.ended; n++) {
+        const wait = this.retryDelayMs * 2 ** (n - 1);
+        this.log('warn', `${label}: ${r.error}; trying again in ${Math.round(wait / 1000)}s`, taskId);
+        this.setLive(taskId, { phase: 'agent', step, key, text: `${label} waits ${Math.round(wait / 1000)}s after an API error` });
+        if (await this.pause(taskId, wait)) return null;
+        say('The last request failed on the API side. Continue where you left off; what you did before it is kept.');
+        r = await this.turnOf(taskId, session);
+        if (await stopped()) return null;
+      }
+      return r;
+    };
     try {
       // Stopped while it started: Stop found no session to interrupt then.
       if (await stopped()) return void (await session.interrupt());
-      t = await this.turnOf(taskId, session);
-      if (await stopped()) return;
-      // An overloaded API or a dropped connection, past Claude Code's own retries: the same session goes on after a
-      // pause (its context kept, and cached), before you are asked to decide.
-      for (let n = 1; !t.ok && n <= TRANSIENT_RETRIES && transientError(t.error) && !session.ended; n++) {
-        const wait = this.retryDelayMs * 2 ** (n - 1);
-        this.log('warn', `${label}: ${t.error}; trying again in ${Math.round(wait / 1000)}s`, taskId);
-        this.setLive(taskId, { phase: 'agent', step, key, text: `${label} waits ${Math.round(wait / 1000)}s after an API error` });
-        if (await this.pause(taskId, wait)) return;
-        session.send('The last request failed on the API side. Continue where you left off; what you did before it is kept.', { from: 'orchestrator' });
-        t = await this.turnOf(taskId, session);
-        if (await stopped()) return;
-      }
+      const first = await turn();
+      if (!first) return;
+      t = first;
       if (!t.ok) return void (await fail(t.error || 'the agent failed'));
 
       // A code or tests stage that says it cannot go on stops here, for you to decide, rather than run the checks,
@@ -1231,15 +1248,17 @@ class Engine extends EventEmitter {
             break;
           }
           const red = runs.filter((x) => x.status === 'fail').map((x) => x.repo).join(', ');
-          session.send(`Gates failed in ${red} (attempt ${attempt} of ${config.limits.gateAttempts}). Fix the causes below. Do not weaken, skip or delete tests or lint rules. Then reply with your full report again.\n\n${g.summary}`, { from: 'orchestrator' });
+          say(`Gates failed in ${red} (attempt ${attempt} of ${config.limits.gateAttempts}). Fix the causes below. Do not weaken, skip or delete tests or lint rules. Then reply with your full report again.\n\n${g.summary}`);
           this.setLive(taskId, { phase: 'agent', step, key, text: `${label} is fixing red gates in ${where.includes(',') ? red : where}` });
-          t = await this.turnOf(taskId, session);
-          if (await stopped()) return;
+          const fixed = await turn();
+          if (!fixed) return;
+          t = fixed;
           if (!t.ok) return void (await fail(t.error || 'the agent failed while fixing gates'));
         }
       }
-      // Blocked with its checks green (or none): a tester that found what it cannot settle stops here too.
-      if (stage.output === 'tests' && gates !== 'fail' && blocked(work())) return void (await fail(blocked(work())!));
+      // Blocked with its checks green (or none): a tester that found what it cannot settle stops here too, and so does a
+      // developer that said so while fixing its checks.
+      if (gates !== 'fail' && blocked(work())) return void (await fail(blocked(work())!));
 
       // A plan for repos this workspace does not have is a report to correct, like one that does not parse: the state
       // machine would refuse it, and the task would stop with nothing the agent could fix. So is a plan whose branch is
@@ -1260,9 +1279,10 @@ class Engine extends EventEmitter {
       let parsed = await check();
       for (let i = 0; !parsed.ok && i < REPORT_RETRIES; i++) {
         this.setLive(taskId, { phase: 'agent', step, key, text: `${label} is correcting its report` });
-        session.send(`Your report could not be read: ${parsed.error}. Reply again with the complete, corrected report.`, { from: 'orchestrator' });
-        t = await this.turnOf(taskId, session);
-        if (await stopped()) return;
+        say(`Your report could not be read: ${parsed.error}. Reply again with the complete, corrected report.`);
+        const corrected = await turn();
+        if (!corrected) return;
+        t = corrected;
         if (!t.ok) return void (await fail(t.error || 'the agent failed while correcting its report'));
         parsed = await check();
       }

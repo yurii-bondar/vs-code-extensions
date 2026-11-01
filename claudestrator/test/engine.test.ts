@@ -797,6 +797,37 @@ test('engine: a turn that failed on an overloaded API goes on in the same sessio
   }
 });
 
+test('engine: an API error while fixing red checks goes on in the same session, and a developer that says it is blocked there stops the step though its checks pass', async () => {
+  // Red on the first run only: the developer's fix turn is what decides.
+  const gates = `repos:\n  api:\n    gates:\n      - { name: lint, cmd: 'test -f .linted || { touch .linted; echo "lint: 1 error"; exit 1; }' }\n`;
+  let ws = workspace(['api'], `pipeline: [planner, developer]\n${gates}`);
+  let h = await harness(ws, { FAKE_REPOS: 'api', FAKE_API_ERROR_GATES: 'developer' });
+  h.engine.retryDelayMs = 50;
+  try {
+    const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
+    const s = await runTask(h.engine, taskId);
+    assert.equal(s.checkpoint && s.checkpoint.id, 'confirm-push', JSON.stringify(h.engine.lastError(taskId)));
+    const developer = (await view.detail(h.engine, taskId)).steps.find((st) => st.agent === 'developer' && st.key)!;
+    const items = await h.engine.svc.readTranscript(taskId, developer.key!);
+    assert.ok(items.some((i) => i.type === 'user' && i.from === 'orchestrator' && /Continue where you left off/.test(text(i.text))), 'the fix turn went on after the pause');
+    assert.equal(only(await h.engine.svc.events(taskId), 'stage_started').filter((e) => e.agent === 'developer').length, 1);
+  } finally {
+    h.hooks.dispose();
+  }
+
+  ws = workspace(['api'], `pipeline: [planner, developer, reviewer]\n${gates}`);
+  h = await harness(ws, { FAKE_REPOS: 'api', FAKE_BLOCKED_ON_GATES: 'developer' });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
+    const s = await runTask(h.engine, taskId);
+    assert.equal(s.checkpoint && s.checkpoint.id, 'agent-failure');
+    assert.match(s.checkpoint!.reason!, /developer @ api reports it cannot go on: the check needs a database/);
+    assert.deepEqual(only(await h.engine.svc.events(taskId), 'stage_started').map((e) => e.agent), ['planner', 'developer'], 'no review of work it said it could not do');
+  } finally {
+    h.hooks.dispose();
+  }
+});
+
 test('engine: a check the agent cannot fix (its folder is not there) goes to you at once, not back to the agent', async () => {
   const ws = workspace(['api'], `pipeline: [planner, developer]\nlimits: { gateAttempts: 3 }\nrepos:\n  api:\n    gates:\n      - { name: e2e, cmd: 'true', dir: e2e }\n`);
   const h = await harness(ws, { FAKE_REPOS: 'api' });

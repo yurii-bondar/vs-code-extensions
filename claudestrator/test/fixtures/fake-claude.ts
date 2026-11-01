@@ -316,6 +316,13 @@ function main(): void {
         }
         first(text, m.uuid);
       } else if (/Continue where you left off/.test(text)) first(firstPrompt, m.uuid);
+      // FAKE_API_ERROR_GATES=<role>: the first turn fixing its red checks ends on an overloaded API.
+      else if (/^Gates failed/.test(text) && process.env.FAKE_API_ERROR_GATES === role && state && !fs.existsSync(path.join(state, `api-error-gates-${role}`))) {
+        fs.writeFileSync(path.join(state, `api-error-gates-${role}`), '1');
+        out({ type: 'result', subtype: 'success', is_error: true, result: 'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}', total_cost_usd: cost, num_turns: 1, user_message_uuids: [m.uuid] });
+      }
+      // FAKE_BLOCKED_ON_GATES=<role>: asked to fix its red checks, it says it cannot.
+      else if (/^Gates failed/.test(text) && process.env.FAKE_BLOCKED_ON_GATES === role) reply(`The check needs a database this machine does not have.\n\`\`\`json\n${JSON.stringify({ status: 'blocked', blockers: ['the check needs a database'] })}\n\`\`\``, m.uuid);
       else if (role === 'planner' && /repos this workspace does not have|named more than once/.test(text)) plan(process.env.FAKE_REPOS || 'api', m.uuid);
       else if (role === 'planner' && /choose another slug/.test(text)) plan(process.env.FAKE_REPOS || 'api', m.uuid, 'add-feature-again');
       else reply(`Follow-up handled: ${text.split('\n')[0]!.slice(0, 60)}`, m.uuid);
