@@ -191,6 +191,19 @@ interface CliMessage {
   errors?: unknown[];
 }
 
+/** How much of a tool call's input the UI and the transcript get: a Write of a big fixture is shown in part anyway. */
+const INPUT_STRING_CHARS = 8000;
+const INPUT_DEPTH = 6;
+
+/** A tool call's input for the UI and the transcript: long strings cut, with how much was left out. The guard sees it whole. */
+function capInput(value: unknown, depth = 0): unknown {
+  if (typeof value === 'string') return value.length > INPUT_STRING_CHARS ? `${value.slice(0, INPUT_STRING_CHARS)}…(+${value.length - INPUT_STRING_CHARS} chars)` : value;
+  if (value === null || typeof value !== 'object') return value;
+  if (depth >= INPUT_DEPTH) return '…';
+  if (Array.isArray(value)) return value.slice(0, 200).map((v) => capInput(v, depth + 1));
+  return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, capInput(v, depth + 1)]));
+}
+
 /** The tool Claude Code adds for --json-schema: the way an agent hands its data over, not a step it chose. */
 const STRUCTURED_OUTPUT = 'StructuredOutput';
 
@@ -524,7 +537,7 @@ class ClaudeSession {
           if (block.type === 'tool_use' && block.name === STRUCTURED_OUTPUT) this.hiddenTools.add(block.id || '');
           else if (block.type === 'tool_use') {
             this.turnText = [];
-            out({ type: 'tool_use', id: block.id || '', name: block.name || '', input: block.input });
+            out({ type: 'tool_use', id: block.id || '', name: block.name || '', input: capInput(block.input) });
           }
         }
         return;
@@ -589,4 +602,4 @@ function parseFlags(helpText: string): Set<string> {
 }
 
 export type { CliMessage, Limit, Limits, RunnerOptions, SessionRequest, TurnResult };
-export { ClaudeRunner, ClaudeSession, buildArgs, parseFlags, limitsOf, sameWindows, versionProblem, withoutTrailingJson, MIN_CLAUDE_VERSION };
+export { ClaudeRunner, ClaudeSession, buildArgs, capInput, parseFlags, limitsOf, sameWindows, versionProblem, withoutTrailingJson, MIN_CLAUDE_VERSION };

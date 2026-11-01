@@ -4,7 +4,7 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
 
-import { ClaudeRunner, ClaudeSession, versionProblem } from '../src/core/runner';
+import { ClaudeRunner, ClaudeSession, capInput, versionProblem } from '../src/core/runner';
 import type { RunnerOptions } from '../src/core/runner';
 import type { TranscriptItem } from '../src/core/store';
 
@@ -123,6 +123,13 @@ test('runner: stopping an agent stops what it started in the background too', { 
   assert.equal(alive(pid), false, 'it went with the agent');
 });
 
+test('runner: a tool call reaches the UI and the transcript with its long strings cut, and saying how much was left out', () => {
+  const big = 'x'.repeat(500000);
+  const capped = capInput({ file_path: '/r/a.json', content: big, edits: [{ old_string: big, new_string: 'y' }] }) as { file_path: string; content: string; edits: { old_string: string; new_string: string }[] };
+  assert.equal(capped.file_path, '/r/a.json');
+  assert.ok(capped.content.length < 9000 && capped.content.endsWith('…(+492000 chars)'));
+  assert.ok(capped.edits[0]!.old_string.length < 9000 && capped.edits[0]!.new_string === 'y');
+});
 test("runner: a subagent's messages are a sign the session is alive, though they are not shown, and a message it cannot handle goes to the log", async () => {
   let alive = 0;
   const warnings: string[] = [];
