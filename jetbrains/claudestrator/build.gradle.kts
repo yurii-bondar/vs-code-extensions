@@ -49,7 +49,10 @@ intellijPlatform {
             // No upper bound: a plugin that sticks to the platform API should not be cut off by the next release.
             untilBuild = provider { null }
         }
-        changeNotes = providers.gradleProperty("pluginVersion").map { "First JetBrains release ($it): the Claudestrator dashboard and task list, identical to the VS Code extension." }
+        // The release notes of this version, from scripts/release.mjs (-PchangeNotes, HTML); a build without them says
+        // what the plugin is.
+        changeNotes = providers.gradleProperty("changeNotes").filter { it.isNotBlank() }
+            .orElse(providers.gradleProperty("pluginVersion").map { "Version $it: the Claudestrator dashboard and task list, the same as in the VS Code extension." })
     }
 
     signing {

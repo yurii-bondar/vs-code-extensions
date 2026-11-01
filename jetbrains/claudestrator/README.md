@@ -68,13 +68,13 @@ Marketplace rules this project is set up for: a unique plugin id, English descri
    openssl req -key private.pem -new -x509 -days 365 -out chain.crt
    ```
    Then `CERTIFICATE_CHAIN` (contents of `chain.crt`), `PRIVATE_KEY` (contents of `private.pem`) and `PRIVATE_KEY_PASSWORD`. Keep the key out of git (`.gitignore` already skips it) and back it up: a plugin must keep being signed with the same chain.
-4. **Release.** Raise `pluginVersion` in `gradle.properties`, then `./gradlew signPlugin publishPlugin`. `PUBLISH_CHANNEL=eap` publishes to the early-access channel first.
+4. **Release.** From the repo root, `npm run release:test` (or `release:build`, or `release:live` with one real task on haiku first): it works out the next `pluginVersion` from the commits since the last `jetbrains-claudestrator-v<version>` tag (`feat` → minor, `fix` → patch, a breaking change → major; the extension's commits count too, since the plugin bundles its engine), writes it with the release notes (`CHANGELOG.md`, and the plugin's change notes), builds and verifies the plugin (`verifyPluginStructure`, `verifyPlugin`), then commits and tags the release. Nothing is built when nothing changed since the last release. Then `./gradlew signPlugin publishPlugin`. `PUBLISH_CHANNEL=eap` publishes to the early-access channel first.
 
 Marketplace asks for a stable plugin id: `bondevn.claudestrator` (in `plugin.xml`) is permanent once published.
 
 ## Not done yet
 
-- **Releases are manual.** The VS Code extensions release with semantic-release per folder; this plugin has no pipeline yet (CI build + `verifyPlugin`, then `publishPlugin` on a tag).
+- **Publishing is manual.** `scripts/release.mjs` versions, builds, verifies and tags a release; signing and `publishPlugin` are run by hand, and there is no CI for it yet.
 - **No automated tests** for the Kotlin side. The sidecar was exercised by hand over stdio (`init` → `dashboard` → page `boot` → `shutdown`); the engine's own tests stay in `claudestrator/`.
 - **Texts that name VS Code.** A few lines of the page mention VS Code (for example "kept in VS Code's secret storage"). They are the extension's strings; making them host-aware is a change in `claudestrator/media`.
 - **Windows and Linux** are untested; the "continue in terminal" command put on the clipboard is quoted for POSIX shells and PowerShell.
