@@ -25,9 +25,11 @@
     s = s.replace(/`([^`\n]+)`/g, (_, c: string) => hold(`<code>${esc(c)}</code>`));
     s = esc(s);
     // A label is one line of at most 300 characters: an unbounded one was read to the end from every `[` of a line
-    // without `]`, which took seconds on a long one.
+    // without `]`. Nor does a label hold a `[`, or an address a `(`: from every `[` of `[a](http://[a](http://…` the
+    // address was read to the end of the line, in time growing with its square (seconds at a few hundred KB). Now each
+    // character is read as part of one label and one address at most. An address with `(` was cut at its `)` before.
     // eslint-disable-next-line no-control-regex -- an address never takes in a placeholder
-    s = s.replace(/\[([^\]\n]{1,300})\]\((https?:\/\/[^)\s\u0000]+)\)/g, (_, label: string, url: string) => hold(`<a href="${url}" data-href="${url}">${emphasis(label)}</a>`));
+    s = s.replace(/\[([^[\]\n]{1,300})\]\((https?:\/\/[^()\s\u0000]+)\)/g, (_, label: string, url: string) => hold(`<a href="${url}" data-href="${url}">${emphasis(label)}</a>`));
     // eslint-disable-next-line no-control-regex -- an address never takes in a placeholder
     s = s.replace(/(^|[\s(])(https?:\/\/[^\s<)\u0000]+[^\s<).,;:!?\u0000])/g, (_, pre: string, url: string) => `${pre}${hold(`<a href="${url}" data-href="${url}">${url}</a>`)}`);
     s = emphasis(s);

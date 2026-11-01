@@ -58,6 +58,20 @@ test('markdown: a long line or a long report renders in time that grows with its
     fn(text);
     assert.ok(Date.now() - started < 200, `${what}: ${Date.now() - started} ms`);
   }
+  // Links whose address never closes, at the size of a long agent reply: each took seconds, growing with its square.
+  const size = 440000;
+  const fill = (unit: string) => unit.repeat(Math.ceil(size / unit.length));
+  for (const [what, text] of [
+    ['links that never close', fill('[a](http://')],
+    ['links that never close, with a letter', fill('[a](http://x')],
+    ['labels of [ before one address', fill(`${'['.repeat(299)}](http://${'x'.repeat(20)}`)],
+    ['an address that runs to the end', `[a](http://${'x'.repeat(size)}`],
+  ] as const) {
+    const started = Date.now();
+    render(text);
+    assert.ok(Date.now() - started < 200, `${what}: ${Date.now() - started} ms`);
+  }
+  assert.match(render('[docs](https://a.example/b?c[]=1&d=[::1])'), /<a href="https:\/\/a\.example\/b\?c\[\]=1&amp;d=\[::1\]" data-href="[^"]*">docs<\/a>/, 'an address keeps its brackets');
   assert.equal(strip('## Plan\n\nDo it.\n\n```json\n{"a": 1}\n```\n'), '## Plan\n\nDo it.');
   assert.equal(strip('Text with ```json inline and no block'), 'Text with ```json inline and no block');
   assert.equal(strip('No block at all'), 'No block at all');
