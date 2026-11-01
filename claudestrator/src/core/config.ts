@@ -5,6 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as YAML from 'yaml';
 import { AsyncLocalStorage } from 'async_hooks';
+import { isDeepStrictEqual } from 'util';
 import { validateConfigLayer, validateAgentPatch, validateLibraryLayer, SCENARIO_OUTPUT, JIRA_KEY } from './protocol';
 import { ORCH_DIR } from './store';
 import { ENV_FILE, SECRET_PATHS, GITHUB_TOKENS } from './settings';
@@ -1004,7 +1005,8 @@ function editProjectConfig(workspace: string, mutate: (doc: YAML.Document) => un
 function editYamlFile(file: string, mutate: (doc: YAML.Document) => unknown, { validate, what }: { validate: (raw: unknown) => string[]; what: string }): Promise<string> {
   return serialized(async () => {
     const read = await signature(file);
-    const doc = YAML.parseDocument((await readIfThere(file)) ?? '');
+    const text = await readIfThere(file);
+    const doc = YAML.parseDocument(text ?? '');
     if (doc.errors.length) throw new Error(`${file}: ${doc.errors[0]!.message}`);
     if (doc.contents === null) doc.contents = doc.createNode({}) as unknown as typeof doc.contents;
     mutate(doc);
@@ -1012,11 +1014,115 @@ function editYamlFile(file: string, mutate: (doc: YAML.Document) => unknown, { v
     pruneEmpty(doc, ['agents']);
     const issues = validate(doc.toJS() ?? {});
     if (issues.length) throw new Error(`the change would make ${what} invalid: ${issues.join('; ')}`);
+    const out = text === null ? doc.toString(YAML_OUT) : inOwnFormatting(text, doc);
+    if (out === text) return file;
     // Edits of this window take turns (serialized); another window or the CLI may have written it meanwhile.
     if ((await signature(file)) !== read) throw new Error(`${file} changed while it was being edited (in another window?); nothing was written, try again`);
-    await writeMaking(file, doc.toString());
+    await writeMaking(file, out);
     return file;
   });
+}
+
+// ---------- writing a YAML file in its own formatting ----------
+
+/** How the yaml library writes a document: a long line (a command, a role) stays one line, never folded at 80 columns. */
+const YAML_OUT: YAML.ToStringOptions = { lineWidth: 0 };
+
+/**
+ * The edited document as the file had it, but for the lines the edit changed. The yaml library writes a document its
+ * own way (`[ a, b ]` for `[a, b]`, one space before a comment, lists indented under their key, folded text joined), so
+ * the lines the edit did not change are taken from the file as it is. When that merge does not mean exactly what the
+ * edit does, the library's text is written.
+ */
+function inOwnFormatting(original: string, doc: YAML.Document): string {
+  const after = doc.toString(YAML_OUT);
+  const merged = keepUnchangedLines(original, YAML.parseDocument(original).toString(YAML_OUT), after);
+  if (merged === null) return after;
+  const check = YAML.parseDocument(merged);
+  return check.errors.length === 0 && isDeepStrictEqual(check.toJS(), YAML.parse(after)) ? merged : after;
+}
+
+/** A line as far as its meaning goes: its indentation, then its text with any run of spaces as one, `[ a ]` as `[a]`. */
+const spacing = (line: string): string => {
+  const body = line.trimStart();
+  return line.slice(0, line.length - body.length) + body.trimEnd().replace(/\s+/g, ' ').replace(/([[{]) /g, '$1').replace(/ ([\]}])/g, '$1');
+};
+
+/**
+ * A three-way merge by lines. `before` is the library's text of `original`, `after` its text of the edited document.
+ * The file's lines are paired with the library's lines that differ from them in spacing at most; a paired line, and the
+ * lines between two pairs, are written as the file has them when the edit kept all their lines, else as `after` has
+ * them. Null when the files are too long to compare line by line.
+ */
+function keepUnchangedLines(original: string, before: string, after: string): string | null {
+  const eol = original.includes('\r\n') ? '\r\n' : '\n';
+  const o = original.split(eol);
+  const a = before.split('\n');
+  const b = after.split('\n');
+  const oa = commonLines(o.map(spacing), a.map(spacing));
+  const ab = commonLines(a, b);
+  if (!oa || !ab) return null;
+  // The file in stretches, each with the library's lines for it: a paired line, or the lines between two pairs.
+  const stretches: { o: [number, number]; a: [number, number] }[] = [];
+  let [po, pa] = [0, 0];
+  for (const [io, ia] of oa) {
+    if (po < io || pa < ia) stretches.push({ o: [po, io], a: [pa, ia] });
+    stretches.push({ o: [io, io + 1], a: [ia, ia + 1] });
+    [po, pa] = [io + 1, ia + 1];
+  }
+  if (po < o.length || pa < a.length) stretches.push({ o: [po, o.length], a: [pa, a.length] });
+
+  const keptAt = new Map(ab);
+  const out: string[] = [];
+  let next = 0; // the first line of `after` not written yet
+  for (const { o: [o0, o1], a: [a0, a1] } of stretches) {
+    const kept = Array.from({ length: a1 - a0 }, (_, k) => keptAt.get(a0 + k)).filter((x): x is number => x !== undefined);
+    const first = kept[0];
+    const last = kept[kept.length - 1];
+    if (first === undefined || last === undefined) {
+      // No line of the library's: the file's own (a second blank line), kept. Or every line the edit removed or changed:
+      // what it wrote instead comes with the next stretch it kept.
+      if (a0 === a1) out.push(...o.slice(o0, o1));
+    } else if (kept.length === a1 - a0 && last - first === kept.length - 1) {
+      // Kept whole: what the edit added before it, then the file's lines.
+      out.push(...b.slice(next, first), ...o.slice(o0, o1));
+      next = last + 1;
+    } else {
+      out.push(...b.slice(next, last + 1));
+      next = last + 1;
+    }
+  }
+  out.push(...b.slice(next));
+  return out.join(eol);
+}
+
+/** The most pairs of lines `commonLines` compares (a table of this many cells): files of a few thousand lines. */
+const MAX_LINE_PAIRS = 1_000_000;
+
+/** Equal lines of `a` and `b` as index pairs, in order (their longest common subsequence); null for files too long. */
+function commonLines(a: readonly string[], b: readonly string[]): [number, number][] | null {
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tail = 0;
+  while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+  const n = a.length - head - tail;
+  const m = b.length - head - tail;
+  if (n * m > MAX_LINE_PAIRS) return null;
+  // lcs[i * w + j]: how many lines the middles of a and b have in common from a[head + i] and b[head + j] on.
+  const w = m + 1;
+  const lcs = new Uint16Array((n + 1) * w);
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) lcs[i * w + j] = a[head + i] === b[head + j] ? lcs[(i + 1) * w + j + 1]! + 1 : Math.max(lcs[(i + 1) * w + j]!, lcs[i * w + j + 1]!);
+  }
+  const pairs: [number, number][] = [];
+  for (let k = 0; k < head; k++) pairs.push([k, k]);
+  for (let i = 0, j = 0; i < n && j < m; ) {
+    if (a[head + i] === b[head + j]) pairs.push([head + i++, head + j++]);
+    else if (lcs[(i + 1) * w + j]! >= lcs[i * w + j + 1]!) i++;
+    else j++;
+  }
+  for (let k = 0; k < tail; k++) pairs.push([a.length - tail + k, b.length - tail + k]);
+  return pairs;
 }
 
 /** A YAML collection node as far as the pruning looks at it. */
@@ -1129,7 +1235,7 @@ function createProjectConfig(workspace: string, layer: ConfigLayer, header?: str
     if (issues.length) throw new Error(issues.join('; '));
     const doc = new YAML.Document(layer);
     if (header) doc.commentBefore = header;
-    await writeMaking(file, doc.toString());
+    await writeMaking(file, doc.toString(YAML_OUT));
     return file;
   });
 }
