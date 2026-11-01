@@ -38,8 +38,12 @@ const PLACEHOLDER = /^(\$\{?\w+\}?|<[^>]*>|\*+|x+|password|pass|secret|changeme|
 /** Files that hold credentials by what they are called. */
 const SECRET_FILE = /(^|\/)(\.env(\.(?!example$|sample$|template$|dist$|defaults?$)[\w.-]+)?|id_(rsa|dsa|ecdsa|ed25519)|[^/]+\.(pem|key|p12|pfx|keystore|jks)|\.npmrc|\.pypirc|\.netrc|\.git-credentials|credentials(\.json)?)$/i;
 
-/** Files of git hook managers: what is there runs when you use git in the repo, outside any sandbox. */
-const HOOK_FILE = /^(\.husky\/|\.githooks\/|\.git-hooks\/|\.lefthook\/|\.?lefthook(-local)?\.ya?ml$|\.pre-commit-config\.yaml$)/;
+/**
+ * Files that act outside the sandbox once pushed or used: a git hook manager's, which run when you use git in the repo;
+ * `.lfsconfig`, which says where Git LFS uploads go; a `CLAUDE.md`, which every Claude Code session there takes as
+ * instructions.
+ */
+const HOOK_FILE = /^(\.husky\/|\.githooks\/|\.git-hooks\/|\.lefthook\/|\.?lefthook(-local)?\.ya?ml$|\.pre-commit-config\.yaml$|\.lfsconfig$)|(^|\/)CLAUDE\.md$/;
 
 const excerptOf = (match: string): string => `${match.slice(0, 6)}… (${match.length} characters)`;
 

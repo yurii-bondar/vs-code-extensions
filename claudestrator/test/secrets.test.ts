@@ -90,3 +90,8 @@ test('secrets: a megabyte line of repeated token prefixes is scanned in millisec
   }
   assert.deepEqual(scanDiff(`+++ b/a.js\n@@ -0,0 +1 @@\n+const u = "postgres://app:s3cretpw@db.prod.acme.io/x"; const k = "${GH}";\n`).secrets.map((s) => s.what), ['a GitHub token', 'a password in a URL']);
 });
+
+test('secrets: a changed .lfsconfig or CLAUDE.md is named with the hooks, since it acts outside the sandbox', () => {
+  const diff = ['.lfsconfig', 'CLAUDE.md', 'packages/web/CLAUDE.md', 'docs/CLAUDE.md.bak'].map((f) => `+++ b/${f}\n@@ -0,0 +1 @@\n+x\n`).join('');
+  assert.deepEqual(scanDiff(diff).hooks, ['.lfsconfig', 'CLAUDE.md', 'packages/web/CLAUDE.md']);
+});

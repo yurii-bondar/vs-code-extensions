@@ -1545,6 +1545,11 @@ class Engine extends EventEmitter {
         if (await stopped()) return;
         if (refused) throw new EngineError('push_failed', `${r.name}: the pre-push hook failed:\n${refused}`);
         if (await r.git.usesLfs()) {
+          // `.lfsconfig` says where the upload goes, and it runs here, outside the sandbox, with your credentials: one
+          // the agents changed could send the files to any host. You read it and push yourself.
+          if ((await r.git.branchChanges(r.base, branch)).includes('.lfsconfig')) {
+            throw new EngineError('push_failed', `${r.name}: the agents changed .lfsconfig, which says where Git LFS uploads the files; check it and push this branch yourself`);
+          }
           this.setLive(s.taskId, { phase: 'publishing', text: `Uploading ${r.name}'s Git LFS files` });
           const up = await r.git.gitWith({ timeoutMs: 30 * 60000 }, 'lfs', 'push', 'origin', branch);
           if (up.code !== 0) throw new EngineError('push_failed', `${r.name}: uploading its Git LFS files failed: ${(up.stderr || up.stdout).trim()}`);
