@@ -6,7 +6,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 
-import { runGates, runShell } from '../src/core/gates';
+import { runGates, runShell, tailOf } from '../src/core/gates';
 import { setChildEnv } from '../src/core/git';
 import { workspace, harness, waitFor } from './helpers/e2e';
 import type { RepoConfig } from '../src/core/types';
@@ -123,4 +123,34 @@ test("gates: a check's when names a folder or a file from the repo's root, writt
   const { validateConfigLayer } = await import('../src/core/protocol');
   for (const when of ['src/**/*.ts', '*.ts', '/abs', '../other', 'src/{a,b}']) assert.ok(validateConfigLayer({ repos: { api: { gates: [{ name: 'x', cmd: 'true', when }] } } }).length > 0, when);
   assert.deepEqual(validateConfigLayer({ repos: { api: { gates: [{ name: 'x', cmd: 'true', when: './src/' }] } } }), []);
+});
+
+test('gates: what an agent reads of a failing check stays a few KB, however long its lines', () => {
+  const json = `{"results":[${'{"file":"src/a.ts","messages":[]},'.repeat(40000)}{}]}`;
+  const tail = tailOf(`ESLint report\n${json}\n1 error\n`);
+  assert.ok(tail.length < 7000, `${tail.length} characters`);
+  assert.match(tail, /more characters\)/, 'a cut line says so');
+  assert.match(tail, /1 error$/, 'the end is kept');
+  const many = tailOf(Array.from({ length: 500 }, (_, i) => `line ${i} ${'x'.repeat(300)}`).join('\n'));
+  assert.ok(many.length <= 6002 && many.endsWith(`line 499 ${'x'.repeat(300)}`), 'the last lines, within the total');
+});
+
+test('gates: a check whose folder is not there, or leads out of the repo, fails as one the agent cannot fix', async () => {
+  const ws = workspace(['api'], 'repos:\n  api: {}\n');
+  const dir = path.join(ws, 'api');
+  fs.writeFileSync(path.join(dir, 'x.txt'), 'x\n');
+  fs.symlinkSync(os.tmpdir(), path.join(dir, 'out'));
+  const repo: RepoConfig = { name: 'api', path: 'api', baseBranch: 'main', gates: [{ name: 'e2e', cmd: 'true', dir: 'e2e' }, { name: 'out', cmd: 'true', dir: 'out' }, { name: 'ok', cmd: 'true' }] } as RepoConfig;
+  const r = await runGates({ repo, dir, logDir: path.join(ws, 'logs'), force: true });
+  assert.deepEqual(r.results.map((x) => [x.gate, x.status, x.unfixable ?? null]), [['e2e', 'fail', 'its dir e2e does not exist'], ['out', 'fail', 'its dir out leads out of the repo'], ['ok', 'pass', null]]);
+});
+
+test('gates: a check that runs out of time fails as one the agent cannot fix', async () => {
+  const ws = workspace(['api'], 'repos:\n  api: {}\n');
+  const dir = path.join(ws, 'api');
+  fs.writeFileSync(path.join(dir, 'x.txt'), 'x\n');
+  const repo = { name: 'api', path: 'api', baseBranch: 'main', gates: [{ name: 'slow', cmd: 'sleep 5' }] } as unknown as RepoConfig;
+  const r = await runGates({ repo, dir, logDir: path.join(ws, 'logs'), force: true, timeoutMs: 300 });
+  assert.equal(r.results[0]!.status, 'fail');
+  assert.equal(r.results[0]!.unfixable, 'it ran out of its 0s');
 });

@@ -9,7 +9,10 @@ import { credentialVars, GITHUB_TOKENS } from './settings';
 import type { RepoConfig } from './types';
 import type { GateResult, RepoGates } from './wire';
 
+/** What an agent reads of a failing check: its last lines, a long line cut, all of it within a few KB. The log has it all. */
 const TAIL_LINES = 40;
+const TAIL_LINE_CHARS = 400;
+const TAIL_CHARS = 6000;
 /** Output kept per gate: the end of it, which is where a failure shows. */
 const KEEP_CHARS = 4 * 1024 * 1024;
 /** How long a gate gets after SIGTERM before its process group is killed. */
@@ -21,6 +24,29 @@ const DRAIN_MS = 500;
 const PLAIN_ENV = { NO_COLOR: '1', FORCE_COLOR: '0', CI: 'true' };
 const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`, 'g');
 const slug = (s: string): string => s.replace(/[^A-Za-z0-9._-]+/g, '_');
+
+/** The end of a check's output, cut to size: one line of a JSON report or minified code can be a megabyte. */
+function tailOf(output: string): string {
+  const lines = output
+    .trimEnd()
+    .split('\n')
+    .slice(-TAIL_LINES)
+    .map((l) => (l.length > TAIL_LINE_CHARS ? `${l.slice(0, TAIL_LINE_CHARS)}… (${l.length - TAIL_LINE_CHARS} more characters)` : l));
+  const tail = lines.join('\n');
+  return tail.length > TAIL_CHARS ? `…\n${tail.slice(tail.indexOf('\n', tail.length - TAIL_CHARS) + 1)}` : tail;
+}
+
+/** Why a check cannot run from `cwd` (missing, not a folder, or outside the repo), or null when it can. */
+async function cwdProblem(repoDir: string, cwd: string): Promise<string | null> {
+  try {
+    const [root, real] = await Promise.all([fs.promises.realpath(repoDir), fs.promises.realpath(cwd)]);
+    if (!(await fs.promises.stat(real)).isDirectory()) return `its dir ${path.relative(repoDir, cwd)} is not a folder`;
+    if (real !== root && !real.startsWith(root + path.sep)) return `its dir ${path.relative(repoDir, cwd)} leads out of the repo`;
+    return null;
+  } catch {
+    return `its dir ${path.relative(repoDir, cwd) || '.'} does not exist`;
+  }
+}
 
 /** Output as an agent should read it: no colour codes, and a progress line redrawn with \r keeps only its last state. */
 function plain(output: string): string {
@@ -206,6 +232,13 @@ async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = fal
     }
     if (onGate) onGate(gate.name);
     const cwd = path.join(dir, gate.dir ?? '.');
+    // A check that cannot start is the config's to fix, not the agent's: it goes to you.
+    const problem = await cwdProblem(dir, cwd);
+    if (problem) {
+      results.push({ repo: repo.name, gate: gate.name, status: 'fail', unfixable: problem });
+      lines.push(`FAIL ${repo.name} ${gate.name}: ${problem} (fix the check in the config)`);
+      continue;
+    }
     const started = Date.now();
     const r = await runShell(gate.cmd, { cwd, timeoutMs, env: { ...withoutCredentials(getChildEnv(), keepEnv), ...PLAIN_ENV }, signal, launch });
     const ms = Date.now() - started;
@@ -217,9 +250,11 @@ async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = fal
       results.push({ repo: repo.name, gate: gate.name, status: 'pass', log, ms });
       lines.push(`PASS ${repo.name} ${gate.name}`);
     } else {
-      results.push({ repo: repo.name, gate: gate.name, status: 'fail', log, ms, tail: output.trimEnd().split('\n').slice(-TAIL_LINES).join('\n') });
-      const tail = output.trimEnd().split('\n').slice(-TAIL_LINES).map((l) => `    ${l}`).join('\n');
-      lines.push(`FAIL ${repo.name} ${gate.name} (exit ${r.code}; cd ${repo.name}/${gate.dir ?? '.'} && ${gate.cmd}) log: ${log}\n${tail}`);
+      const tail = tailOf(output);
+      // Out of time is not an error an agent can fix by changing code (a slow suite, a hung service): it goes to you.
+      const unfixable = r.killed === 'timeout' ? `it ran out of its ${Math.round(timeoutMs / 1000)}s` : undefined;
+      results.push({ repo: repo.name, gate: gate.name, status: 'fail', log, ms, tail, ...(unfixable && { unfixable }) });
+      lines.push(`FAIL ${repo.name} ${gate.name} (exit ${r.code}; cd ${repo.name}/${gate.dir ?? '.'} && ${gate.cmd}) log: ${log}\n${tail.split('\n').map((l) => `    ${l}`).join('\n')}`);
     }
   }
   const status = results.some((r) => r.status === 'fail') ? 'fail' : results.some((r) => r.status === 'pass') ? 'pass' : 'skipped';
@@ -227,4 +262,4 @@ async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = fal
 }
 
 export type { GateResult, RepoGates };
-export { changedUnder, plain, runGates, runShell, withoutCredentials };
+export { changedUnder, plain, runGates, runShell, tailOf, withoutCredentials };

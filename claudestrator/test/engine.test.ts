@@ -796,3 +796,18 @@ test('engine: a turn that failed on an overloaded API goes on in the same sessio
     h.hooks.dispose();
   }
 });
+
+test('engine: a check the agent cannot fix (its folder is not there) goes to you at once, not back to the agent', async () => {
+  const ws = workspace(['api'], `pipeline: [planner, developer]\nlimits: { gateAttempts: 3 }\nrepos:\n  api:\n    gates:\n      - { name: e2e, cmd: 'true', dir: e2e }\n`);
+  const h = await harness(ws, { FAKE_REPOS: 'api' });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
+    const s = await runTask(h.engine, taskId);
+    assert.equal(s.checkpoint && s.checkpoint.id, 'gate-failure');
+    const runs = only(await h.engine.svc.events(taskId), 'gates_ran');
+    assert.deepEqual(runs.map((e) => e.attempt), [1], 'no paid turn on what the agent cannot change');
+    assert.match(runs[0]!.summary, /FAIL api e2e: its dir e2e does not exist \(fix the check in the config\)/);
+  } finally {
+    h.hooks.dispose();
+  }
+});

@@ -744,6 +744,8 @@ export interface GateResult {
   log?: string;
   ms?: number | undefined;
   tail?: string;
+  /** Why the agent cannot fix this failure (the check ran out of time, its folder is not there): it goes to you. */
+  unfixable?: string;
 }
 
 export interface RepoGates {

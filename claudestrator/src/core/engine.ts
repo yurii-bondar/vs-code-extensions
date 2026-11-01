@@ -1179,7 +1179,9 @@ class Engine extends EventEmitter {
             gates = g.status === 'pass' ? 'pass' : 'none';
             break;
           }
-          if (attempt >= config.limits.gateAttempts || blocked(work())) {
+          // A check the agent cannot fix (out of time, its folder missing) goes to you at once, not into paid turns.
+          const unfixable = runs.some((x) => x.results.some((r) => r.status === 'fail' && r.unfixable));
+          if (attempt >= config.limits.gateAttempts || unfixable || blocked(work())) {
             gates = 'fail';
             break;
           }
