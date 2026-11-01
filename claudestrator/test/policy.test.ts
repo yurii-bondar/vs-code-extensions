@@ -247,7 +247,7 @@ test('policy: an agent reads no dotenv file of the repos, by its Read tool or by
   const settings = engine.agentSettings({ writeRoots: [api], cwd: api, config, envFiles }) as { permissions: { deny: string[] }; sandbox: { filesystem: { denyRead: string[] } } };
   assert.ok(settings.sandbox.filesystem.denyRead.includes(path.join(api, '.env')), 'the sandbox keeps commands out of it');
   assert.ok(settings.permissions.deny.includes(`Read(/${path.join(api, '.env')})`));
-  assert.deepEqual(summarizeInput('Bash', { command: `echo ${'x'.repeat(2100)}` }), { command: `echo ${'x'.repeat(1995)}…(+105 chars)` });
+  assert.deepEqual(summarizeInput('Bash', { command: `echo ${'x'.repeat(2100)}` }), { command: `echo ${'x'.repeat(1995)}…+105 chars` });
 });
 
 test('policy: an MCP read reaches only the hosts the sandbox would, unless the agent names the tool', async () => {

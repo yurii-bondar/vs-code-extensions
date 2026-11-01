@@ -127,7 +127,7 @@ test('runner: a tool call reaches the UI and the transcript with its long string
   const big = 'x'.repeat(500000);
   const capped = capInput({ file_path: '/r/a.json', content: big, edits: [{ old_string: big, new_string: 'y' }] }) as { file_path: string; content: string; edits: { old_string: string; new_string: string }[] };
   assert.equal(capped.file_path, '/r/a.json');
-  assert.ok(capped.content.length < 9000 && capped.content.endsWith('…(+492000 chars)'));
+  assert.ok(capped.content.length < 9000 && capped.content.endsWith('…+492000 chars'));
   assert.ok(capped.edits[0]!.old_string.length < 9000 && capped.edits[0]!.new_string === 'y');
 });
 

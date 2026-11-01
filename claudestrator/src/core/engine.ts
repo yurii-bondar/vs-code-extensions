@@ -2034,7 +2034,7 @@ class Engine extends EventEmitter {
 function summarizeInput(tool: string, input: Record<string, unknown>): unknown {
   if (!input || typeof input !== 'object') return input;
   // What is cut says so: a question about a command you see only part of must not read as the whole of it.
-  const cut = (text: string): string => (text.length > 2000 ? `${text.slice(0, 2000)}…(+${text.length - 2000} chars)` : text);
+  const cut = (text: string): string => (text.length > 2000 ? `${text.slice(0, 2000)}…+${text.length - 2000} chars` : text);
   if (tool === 'Bash') return { command: cut(String(input.command || '')), ...((input.description as string | undefined) && { description: input.description }) };
   if (WRITE_TOOLS.has(tool)) return { file_path: input.file_path || input.notebook_path || input.path };
   const json = JSON.stringify(input);

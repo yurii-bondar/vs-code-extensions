@@ -198,7 +198,7 @@ const INPUT_DEPTH = 6;
 
 /** A tool call's input for the UI and the transcript: long strings cut, with how much was left out. The guard sees it whole. */
 function capInput(value: unknown, depth = 0): unknown {
-  if (typeof value === 'string') return value.length > INPUT_STRING_CHARS ? `${value.slice(0, INPUT_STRING_CHARS)}…(+${value.length - INPUT_STRING_CHARS} chars)` : value;
+  if (typeof value === 'string') return value.length > INPUT_STRING_CHARS ? `${value.slice(0, INPUT_STRING_CHARS)}…+${value.length - INPUT_STRING_CHARS} chars` : value;
   if (value === null || typeof value !== 'object') return value;
   if (depth >= INPUT_DEPTH) return '…';
   if (Array.isArray(value)) return value.slice(0, 200).map((v) => capInput(v, depth + 1));
