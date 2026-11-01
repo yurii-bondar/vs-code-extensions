@@ -2,7 +2,7 @@
 import test from 'node:test';
 import * as assert from 'node:assert/strict';
 
-import { adfToText, classifyInput, planFromTicket, projectAllowed, runIntake, storageToText } from '../src/core/intake';
+import { adfToText, classifyInput, extractAcceptanceCriteria, planFromTicket, projectAllowed, runIntake, storageToText } from '../src/core/intake';
 import { branchName } from '../src/core/machine';
 import { commitSubject, prTitle } from '../src/core/pr';
 import { validateConfigLayer } from '../src/core/protocol';
@@ -64,4 +64,32 @@ test('intake: Confluence code keeps its text, its angle brackets and its languag
   assert.equal(storageToText('<p>It&rsquo;s done &mdash; ship it</p>'), 'It’s done — ship it');
   // Jira's code blocks carry their language too.
   assert.equal(adfToText({ type: 'doc', content: [{ type: 'codeBlock', attrs: { language: 'typescript' }, content: [{ type: 'text', text: 'const xs: Array<number> = [];' }] }] }), '```typescript\nconst xs: Array<number> = [];\n```');
+});
+
+test('intake: acceptance criteria are found under any way of naming them, and never taken from the next part', () => {
+  const ac = extractAcceptanceCriteria;
+  // A colon inside or outside the bold, a heading in any case, AC:, the definition of done.
+  assert.deepEqual(ac('Fix it\n\n**Acceptance criteria:**\n- a\n- b'), ['a', 'b']);
+  assert.deepEqual(ac('**Acceptance criteria**:\n- a'), ['a']);
+  assert.deepEqual(ac('*Acceptance criteria:*\n- a'), ['a']);
+  assert.deepEqual(ac('## Acceptance Criteria\n\n1. a\n2. b'), ['a', 'b']);
+  assert.deepEqual(ac('AC:\n- a'), ['a']);
+  assert.deepEqual(ac('Definition of done\n- [ ] tests pass\n- [x] docs'), ['tests pass', 'docs']);
+  assert.deepEqual(ac('Account-wide AC: none\n- a'), [], 'a sentence that mentions them is no heading');
+  // Jira writes a heading node and a bold paragraph that way.
+  const t = (text: string) => ({ type: 'text', text });
+  const list =(...xs: string[]) => ({ type: 'bulletList', content: xs.map((x) => ({ type: 'listItem', content: [{ type: 'paragraph', content: [t(x)] }] })) });
+  assert.deepEqual(ac(adfToText({ type: 'doc', content: [{ type: 'heading', attrs: { level: 3 }, content: [t('Acceptance Criteria')] }, list('a', 'b')] })), ['a', 'b']);
+  // A section of sentences gives its lines, never the next part's list.
+  assert.deepEqual(ac('## Acceptance criteria\nUsers can log in.\n\n**Notes**\n- unrelated note'), ['Users can log in.']);
+  assert.deepEqual(ac('## Acceptance criteria\nUsers can log in.\n\n**Notes:**\n- unrelated note'), ['Users can log in.']);
+  assert.deepEqual(ac('## Acceptance criteria\nUsers can log in.\n\nNotes\n- unrelated note'), ['Users can log in.']);
+  assert.deepEqual(ac('## Acceptance criteria\nUsers can log in.\nAdmins can too.\n\nThey see the dashboard.\n\n---\n\nUnrelated'), ['Users can log in.', 'Admins can too.', 'They see the dashboard.']);
+  // A line that leads into the list is not a criterion; a paragraph after the list ends it.
+  assert.deepEqual(ac('## Acceptance criteria\n\nThe user can:\n\n- log in\n- log out\n  of every device\n\nMore context.\n- not this'), ['log in', 'log out of every device']);
+  assert.deepEqual(ac('No criteria here\n- a'), []);
+  // A long run of spaces costs nothing.
+  const started = Date.now();
+  ac(`AC${' '.repeat(50000)}x\n**x${' '.repeat(50000)}y`);
+  assert.ok(Date.now() - started < 500);
 });

@@ -501,24 +501,48 @@ function storageToText(html: string): string {
     .replace(/\uE000(\d+)\uE000/g, (_, i: string) => kept[Number(i)] ?? '');
 }
 
-const AC_HEADING = /^\s*(?:#{1,6}\s*|\*\*)?(acceptance criteria|critères d'acceptation|критерії (?:приймання|прийняття)|критерии приемки|ac)\s*(?:\*\*)?\s*:?\s*$/i;
+/**
+ * A line that names the acceptance criteria and nothing else: a heading, a bold or italic line, or plain words, with a
+ * colon inside or outside the emphasis (`## Acceptance criteria`, `**Acceptance criteria:**`, `AC:`, `Definition of done`).
+ * Both patterns take a trimmed line, and have one `\s*` in a row, so a long run of spaces costs no backtracking.
+ */
+const AC_HEADING = /^(?:#{1,6}\s*)?(?:\*{1,2}|_{1,2})?(?:acceptance criteri(?:a|on)|definition of done|critères d'acceptation|критерії (?:приймання|прийняття)|критерии приемки|ac|dod)\s*:?(?:\*{1,2}|_{1,2})?:?$/i;
+/** Where the next part of a ticket starts: a heading, a line that is all bold (`**Notes**`, `**Notes:**`), a rule. */
+const SECTION_END = /^(?:#{1,6}\s|(\*\*|__)(?:(?!\1).)+\1\s*:?$|-{3,}$)/;
 const ITEM = /^\s*(?:[-*•]|\d+[.)]|\[[ xX]\])\s+(.*)$/;
 
-/** Finds the list under an "Acceptance criteria" heading. Returns [] when the ticket has none. */
+/**
+ * The criteria under an "Acceptance criteria" heading: its list, or the lines of its paragraphs when it has no list.
+ * The section ends at the next heading or bold line, or at a paragraph after its list. A list that comes only after two
+ * paragraphs is another part's, named by the last of them ("Notes"), and not taken. [] when the ticket has no such heading.
+ */
 function extractAcceptanceCriteria(text: string): string[] {
   const lines = text.split('\n');
-  const start = lines.findIndex((l) => AC_HEADING.test(l));
+  const start = lines.findIndex((l) => AC_HEADING.test(l.trim()));
   if (start === -1) return [];
   const items: string[] = [];
+  const paragraphs: string[][] = [];
+  let gap = true;
   for (const line of lines.slice(start + 1)) {
-    if (/^\s*#{1,6}\s/.test(line)) break;
+    if (SECTION_END.test(line.trim())) break;
+    const empty = line.trim() === '';
     const m = line.match(ITEM);
-    if (m) items.push(m[1]!.replace(/^\[[ xX]\]\s*/, '').trim());
-    else if (line.trim() === '') continue;
-    else if (items.length > 0 && /^\s{2,}/.test(line)) items[items.length - 1] += ` ${line.trim()}`;
-    else if (items.length > 0) break;
+    if (m) {
+      if (!items.length && paragraphs.length > 1) {
+        paragraphs.pop();
+        break;
+      }
+      items.push(m[1]!.replace(/^\[[ xX]\]\s*/, '').trim());
+    } else if (empty) {
+      // A blank line between list items or before an item's indented continuation keeps the list going.
+    } else if (items.length) {
+      if (!/^\s{2,}/.test(line)) break;
+      items[items.length - 1] += ` ${line.trim()}`;
+    } else if (gap) paragraphs.push([line.trim()]);
+    else paragraphs[paragraphs.length - 1]!.push(line.trim());
+    gap = empty;
   }
-  return items.filter(Boolean);
+  return (items.length ? items : paragraphs.flat()).filter(Boolean);
 }
 
 /** Minimal REST client: Jira Cloud v3 and Confluence Cloud v2, plus Jira comments. */
