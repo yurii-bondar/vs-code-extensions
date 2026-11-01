@@ -164,7 +164,7 @@ test("policy: what runs outside the sandbox from a repo (husky's hooks folder, C
   const engine = new Engine({ workspace: ws, home: ws, runner: {} as EngineOptions['runner'], hooks });
   const config = await engine.config();
   const runsOutside = await engine.runsOutside([api]);
-  assert.deepEqual(runsOutside, [path.join(api, '.husky', '_'), path.join(api, '.claude'), path.join(api, '.mcp.json'), path.join(api, '.vscode')]);
+  assert.deepEqual(runsOutside, [path.join(api, '.husky', '_'), path.join(api, '.claude'), path.join(api, '.mcp.json'), path.join(api, '.vscode'), path.join(api, 'CLAUDE.local.md')]);
   const decide = async (tool: string, input: Record<string, unknown>): Promise<string | null> => {
     const d = await engine.decide({ taskId: 'T-1', step: { stage: 1, agent: 'developer', repo: 'api' }, writeRoots: [api], runsOutside, config, call: { tool, input, cwd: api }, emitItem: () => {} });
     return d.allow ? null : (d.reason ?? 'refused');
@@ -180,6 +180,20 @@ test("policy: what runs outside the sandbox from a repo (husky's hooks folder, C
   assert.match((await decide('Write', { file_path: path.join(api, '.mcp.json') })) ?? 'allowed', /MCP servers/);
   assert.match((await decide('Bash', { command: "printf '{}' > .claude/settings.local.json" })) ?? 'allowed', /Claude Code's settings/);
   assert.equal(await decide('Write', { file_path: path.join(api, 'CLAUDE.md') }), null, 'the instructions at the root are text, not code');
+  // The local instructions are git-ignored: no diff shows what an agent planted for the next session, at any depth.
+  assert.match((await decide('Write', { file_path: path.join(api, 'CLAUDE.local.md') })) ?? 'allowed', /CLAUDE\.local\.md/);
+  assert.match((await decide('Edit', { file_path: path.join(api, 'src', 'Claude.Local.md') })) ?? 'allowed', /CLAUDE\.local\.md/);
+  // Claude Code's file tools take an absolute path; another spelling could be read otherwise here than where it lands.
+  assert.match((await decide('Write', { file_path: 'src/x.ts' })) ?? 'allowed', /absolute path/);
+  assert.match((await decide('Write', { file_path: ` ${path.join(api, 'x.ts')}` })) ?? 'allowed', /absolute path/);
+  assert.match((await decide('Write', { file_path: '~/.zshenv' })) ?? 'allowed', /absolute path/);
+  // A link whose target is not there yet: a write through it creates that target, in Claude Code's settings here.
+  fs.mkdirSync(path.join(api, '.claude'), { recursive: true });
+  fs.mkdirSync(path.join(api, 'src'), { recursive: true });
+  fs.symlinkSync('../.claude/settings.local.json', path.join(api, 'src', 'cfg.json'));
+  assert.match((await decide('Write', { file_path: path.join(api, 'src', 'cfg.json') })) ?? 'allowed', /Claude Code's settings/);
+  fs.symlinkSync('../.git/hooks/pre-commit', path.join(api, 'src', 'pc'));
+  assert.match((await decide('Write', { file_path: path.join(api, 'src', 'pc') })) ?? 'allowed', /git metadata/);
   // A task of .vscode/tasks.json can run when the folder opens.
   assert.match((await decide('Write', { file_path: path.join(api, '.vscode', 'tasks.json') })) ?? 'allowed', /VS Code's settings/);
   if (process.platform === 'darwin' || process.platform === 'win32') {

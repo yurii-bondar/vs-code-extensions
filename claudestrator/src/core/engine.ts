@@ -256,15 +256,18 @@ const transcriptKey = (seq: number, step: { agent: string; repo?: string | undef
 
 /**
  * A path with its symlinks followed and, where the file system ignores case, the case it has on disk. A path that does
- * not exist yet is taken from its nearest existing folder. Asked on every tool call that writes, so it never blocks
- * the extension host.
+ * not exist yet is taken from its nearest existing folder, and a link whose target is not there yet from where it
+ * points: a write through `src/cfg.json -> ../.claude/settings.local.json` creates that file. Asked on every tool call
+ * that writes, so it never blocks the extension host.
  */
-async function realPath(p: string): Promise<string> {
+async function realPath(p: string, hops = 0): Promise<string> {
   const rest: string[] = [];
   for (let cur = path.resolve(p); ; ) {
     try {
       return path.join(await fs.promises.realpath(cur), ...rest);
     } catch {
+      const link = hops < 40 ? await fs.promises.readlink(cur).catch(() => null) : null;
+      if (link !== null) return path.join(await realPath(path.resolve(path.dirname(cur), link), hops + 1), ...rest);
       const parent = path.dirname(cur);
       if (parent === cur) return path.resolve(p);
       rest.unshift(path.basename(cur));
@@ -281,6 +284,14 @@ async function realInside(root: string, target: string): Promise<boolean> {
   const [r, t] = await Promise.all([realPath(root), realPath(target)]);
   return inside(t, r);
 }
+
+/**
+ * Claude Code's local instructions, which it loads in a repo (also from a subfolder): git-ignored, so no diff would show
+ * what an agent planted there for the next session. `CLAUDE.md` is tracked: a change there is in the diff the reviewer
+ * reads, and the question about the push names it.
+ */
+const LOCAL_INSTRUCTIONS = 'claude.local.md';
+const isLocalInstructions = (file: string): boolean => path.basename(file).toLowerCase() === LOCAL_INSTRUCTIONS;
 
 /** Whether some element passes an async test, and the elements that pass one. */
 const someAsync = async <T>(xs: T[], test: (x: T) => Promise<boolean>): Promise<boolean> => (await Promise.all(xs.map(test))).some(Boolean);
@@ -933,12 +944,14 @@ class Engine extends EventEmitter {
    * - the folder git runs hooks from, where it sits in the working tree (husky's `.husky/_`, `core.hooksPath`): what
    *   lands there runs with your next git command, and it is git-ignored, so no diff would show it;
    * - Claude Code's settings of the repo (`.claude/`, `.mcp.json`): the next agent's session loads them (the `project`
-   *   setting source), and their hooks and MCP servers, and the scripts those name, run outside its sandbox.
+   *   setting source), and their hooks and MCP servers, and the scripts those name, run outside its sandbox;
+   * - its `CLAUDE.local.md`: the next agent's session (and yours) takes it as instructions, and it is git-ignored, so no
+   *   diff would show what an agent planted there.
    */
   async runsOutside(dirs: string[]): Promise<string[]> {
     const hooks = await Promise.all(dirs.map((d) => new GitRepo(d).hooksDir()));
     // VS Code's too: a task of `.vscode/tasks.json` can run when the folder opens, and its settings name programs.
-    const claude = dirs.flatMap((d) => [path.join(d, '.claude'), path.join(d, '.mcp.json'), path.join(d, '.vscode')]);
+    const claude = dirs.flatMap((d) => [path.join(d, '.claude'), path.join(d, '.mcp.json'), path.join(d, '.vscode'), path.join(d, 'CLAUDE.local.md')]);
     return [...new Set([...hooks.filter((h): h is string => h !== null && !inGitMetadata(h)), ...claude])];
   }
 
@@ -1344,6 +1357,10 @@ class Engine extends EventEmitter {
     if (WRITE_TOOLS.has(tool)) {
       const target = String(input.file_path || input.notebook_path || input.path || '');
       if (!writeRoots.length) return blocked(`the ${step.agent} stage does not change files`);
+      // Claude Code's file tools take an absolute path. Anything else (` /Users/me/.zshenv`, `~/.config/git/config`, a
+      // relative one) could be read otherwise here than where Claude Code writes it.
+      if (!path.isAbsolute(target) || target !== target.trim()) return blocked(`${tool} needs an absolute path, not ${JSON.stringify(target.slice(0, 200))}`);
+      if (isLocalInstructions(target)) return blocked(`${tool} of ${target}: CLAUDE.local.md holds instructions the next agent's session loads, and it is git-ignored, so no diff shows a change; a change there is yours to make`);
       const abs = path.resolve(cwd, target);
       // A link in the repo (`ln -s .git/config cfg`) or a case the file system ignores (`.GIT`) leads there too.
       const real = await realPath(abs);
