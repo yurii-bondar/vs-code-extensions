@@ -402,6 +402,49 @@ function workspace(c: Case): string {
   return ws;
 }
 
+/** One trial of a case, in a fresh workspace. */
+interface Result {
+  name: string;
+  /** Why the answer is wrong, or null. */
+  problem: string | null;
+  remark: string | null;
+  usd: number;
+  ws: string;
+}
+
+/** Runs one trial of `c` through the engine, with agents started by `runner`. */
+async function trial(c: Case, { runner, hooks }: { runner: ClaudeRunner; hooks: HookServer }): Promise<Result> {
+  const ws = workspace(c);
+  const slip = c.slip ? slipping(runner, () => c.slip!(ws)) : null;
+  const jira = c.jira ? fakeJira(c.jira) : null;
+  const engine = new Engine({ workspace: ws, runner: slip ? slip.runner : runner, hooks, atlassian: () => jira });
+  const calls: ToolCall[] = [];
+  engine.on('output', ({ item }: { item: TranscriptItem }) => {
+    if (item.type === 'tool_use') calls.push({ name: item.name, input: item.input });
+  });
+  let problem: string | null;
+  let remark: string | null = null;
+  let usd = 0;
+  try {
+    const { taskId } = await engine.start({ text: c.task });
+    const s = await engine.run(taskId);
+    const err = engine.lastError(taskId);
+    usd = await engine.spentUsd(taskId);
+    const where = s && s.checkpoint ? s.checkpoint.id : undefined;
+    const run: Run = { calls, taskDir: engine.svc.dir(taskId) };
+    const slipped = slip && slip.problem();
+    if (err) problem = `${err.code}: ${err.message}`;
+    else if (slipped) problem = `the slip was not made: ${slipped}`;
+    else if (!s) problem = 'the task did not run';
+    else if (where !== c.expect) problem = where ? `stopped at ${where}: ${s.checkpoint!.reason ?? ''}` : `ran through, where it should have stopped at ${c.expect}`;
+    else problem = c.judge(s, ws, run);
+    if (!problem && s && c.remark) remark = c.remark(s, ws, run);
+  } catch (e) {
+    problem = (e as Error).message;
+  }
+  return { name: c.name, problem, remark, usd, ws };
+}
+
 async function main(): Promise<void> {
   const claude = process.env.CLAUDE_PATH || 'claude';
   const version = execFileSync(claude, ['--version'], { encoding: 'utf8' }).trim();
@@ -416,41 +459,14 @@ async function main(): Promise<void> {
 
   const hooks = new HookServer();
   await hooks.listen();
-  const results: { name: string; problem: string | null; usd: number }[] = [];
+  const results: Result[] = [];
   try {
     for (const c of cases.flatMap((x) => Array.from({ length: trials }, () => x))) {
-      const ws = workspace(c);
-      const claudeRunner = new ClaudeRunner({ command: () => claude, version: () => version, flags: () => flags, settingSources: () => ['project', 'local'], env: () => ({}) });
-      const slip = c.slip ? slipping(claudeRunner, () => c.slip!(ws)) : null;
-      const jira = c.jira ? fakeJira(c.jira) : null;
-      const engine = new Engine({ workspace: ws, runner: slip ? slip.runner : claudeRunner, hooks, atlassian: () => jira });
-      const calls: ToolCall[] = [];
-      engine.on('output', ({ item }: { item: TranscriptItem }) => {
-        if (item.type === 'tool_use') calls.push({ name: item.name, input: item.input });
-      });
-      let problem: string | null;
-      let remark: string | null = null;
-      let usd = 0;
-      try {
-        const { taskId } = await engine.start({ text: c.task });
-        const s = await engine.run(taskId);
-        const err = engine.lastError(taskId);
-        usd = await engine.spentUsd(taskId);
-        const where = s && s.checkpoint ? s.checkpoint.id : undefined;
-        const run: Run = { calls, taskDir: engine.svc.dir(taskId) };
-        const slipped = slip && slip.problem();
-        if (err) problem = `${err.code}: ${err.message}`;
-        else if (slipped) problem = `the slip was not made: ${slipped}`;
-        else if (!s) problem = 'the task did not run';
-        else if (where !== c.expect) problem = where ? `stopped at ${where}: ${s.checkpoint!.reason ?? ''}` : `ran through, where it should have stopped at ${c.expect}`;
-        else problem = c.judge(s, ws, run);
-        if (!problem && s && c.remark) remark = c.remark(s, ws, run);
-      } catch (e) {
-        problem = (e as Error).message;
-      }
-      results.push({ name: c.name, problem, usd });
-      console.log(`${problem ? '✖' : '✔'} ${c.name} ($${usd.toFixed(3)})${problem ? `: ${problem}` : ''}${remark ? ` (note: ${remark})` : ''}${problem || remark ? `\n    workspace: ${ws}` : ''}`);
-      if (!problem && !remark) fs.rmSync(ws, { recursive: true, force: true });
+      const runner = new ClaudeRunner({ command: () => claude, version: () => version, flags: () => flags, settingSources: () => ['project', 'local'], env: () => ({}) });
+      const r = await trial(c, { runner, hooks });
+      results.push(r);
+      console.log(`${r.problem ? '✖' : '✔'} ${c.name} ($${r.usd.toFixed(3)})${r.problem ? `: ${r.problem}` : ''}${r.remark ? ` (note: ${r.remark})` : ''}${r.problem || r.remark ? `\n    workspace: ${r.ws}` : ''}`);
+      if (!r.problem && !r.remark) fs.rmSync(r.ws, { recursive: true, force: true });
     }
   } finally {
     hooks.dispose();
