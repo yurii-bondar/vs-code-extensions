@@ -6,6 +6,7 @@ import * as os from 'os';
 import * as path from 'path';
 
 import * as config from '../src/core/config';
+import * as libraries from '../src/core/library';
 import { validateConfigLayer } from '../src/core/protocol';
 
 const tmp = (prefix: string): string => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
@@ -364,4 +365,14 @@ test('config: PRs open as drafts unless a config says otherwise, and a project t
   assert.deepEqual(await draft('policy: { draftPrsOnly: false }\n'), { draftPrsOnly: false, warnings: ["the project's config (.claudestrator/config.yaml) opens PRs ready for review instead of as drafts"] });
   assert.deepEqual(await draft('{}\n', 'policy: { draftPrsOnly: false }\n'), { draftPrsOnly: false, warnings: [] }, 'your own choice is not news');
   assert.deepEqual(await draft('policy: { draftPrsOnly: true }\n', 'policy: { draftPrsOnly: false }\n'), { draftPrsOnly: true, warnings: [] });
+});
+
+test('config edits: listing or dropping a library keeps the comments on the libraries the config has', async () => {
+  const ws = workspace('# team config\nlibraries:\n  - ../shared-agents # the team\'s\n  # mine, for now\n  - ../old-agents\n');
+  const home = tmp('cs-cfg-h-');
+  const fresh = path.join(ws, 'new-agents');
+  await libraries.addLibrary({ workspace: ws, home, dir: fresh, scope: 'project', create: true });
+  assert.equal(projectText(ws), "# team config\nlibraries:\n  - ../shared-agents # the team's\n  # mine, for now\n  - ../old-agents\n  - ../new-agents\n");
+  await libraries.removeLibrary({ workspace: ws, home, file: path.join(fresh, 'library.yaml'), scope: 'project' });
+  assert.equal(projectText(ws), "# team config\nlibraries:\n  - ../shared-agents # the team's\n  # mine, for now\n  - ../old-agents\n");
 });

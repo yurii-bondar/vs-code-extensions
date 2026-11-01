@@ -1615,4 +1615,5 @@ export {
   setRepo,
   createProjectConfig,
   ensureInstructionsFile,
+  writeIn,
 };

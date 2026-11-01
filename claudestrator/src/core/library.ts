@@ -6,7 +6,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as YAML from 'yaml';
-import { CONFIG_DIR, LIBRARY_FILE, PROMPTS_DIR, editProjectConfig, editYamlFile, libraryFile, libraryLabel, projectConfigFile, readProjectLayer, userConfigFile, withConfigRollback } from './config';
+import { CONFIG_DIR, LIBRARY_FILE, PROMPTS_DIR, editProjectConfig, editYamlFile, libraryFile, libraryLabel, projectConfigFile, readProjectLayer, userConfigFile, withConfigRollback, writeIn } from './config';
 import { exists, writeAtomic } from './files';
 import { validateConfigLayer, validateLibraryLayer } from './protocol';
 import type { AgentLayer, ConfigLayer } from './config';
@@ -109,7 +109,7 @@ async function addLibrary({ dir, scope, create = false, ...where }: Where & { di
       await writeAtomic(file, LIBRARY_TEMPLATE);
     }
     const entries = await entriesOf(config);
-    await editYamlFile(config, (doc) => doc.setIn(['libraries'], doc.createNode([...entries, entry])), { validate: validateConfigLayer, what: config });
+    await editYamlFile(config, (doc) => writeIn(doc, ['libraries'], [...entries, entry]), { validate: validateConfigLayer, what: config });
   });
   return (await listLibraries(where)).find((l) => l.file === file)!;
 }
@@ -120,7 +120,7 @@ async function removeLibrary({ file, scope, ...where }: Where & { file: string; 
   const rest = (await entriesOf(config)).filter((e) => libraryFile(e, path.dirname(config), homeOf(where.home)) !== file);
   await withConfigRollback(where, async (remember) => {
     await remember(config);
-    await editYamlFile(config, (doc) => (rest.length ? doc.setIn(['libraries'], doc.createNode(rest)) : doc.deleteIn(['libraries'])), { validate: validateConfigLayer, what: config });
+    await editYamlFile(config, (doc) => writeIn(doc, ['libraries'], rest.length ? rest : undefined), { validate: validateConfigLayer, what: config });
   });
 }
 
@@ -183,8 +183,9 @@ async function moveToLibrary({ library, agents = [], scenarios = [], ...where }:
           const node = doc.get(key, true);
           if (YAML.isMap(node)) node.flow = false;
         }
-        for (const [name, def] of Object.entries(moved)) doc.setIn(['agents', name], doc.createNode(defined(def)));
-        for (const id of scenarios) doc.setIn(['scenarios', id], doc.createNode(project.scenarios![id]));
+        // Into what the library has there already, so its comments stay.
+        for (const [name, def] of Object.entries(moved)) writeIn(doc, ['agents', name], defined(def));
+        for (const id of scenarios) writeIn(doc, ['scenarios', id], project.scenarios![id]);
       },
       { validate: validateLibraryLayer, what: `library ${target.label}` }
     );
