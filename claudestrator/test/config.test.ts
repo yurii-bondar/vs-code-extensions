@@ -6,6 +6,7 @@ import * as os from 'os';
 import * as path from 'path';
 
 import * as config from '../src/core/config';
+import { validateConfigLayer } from '../src/core/protocol';
 
 const tmp = (prefix: string): string => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
 
@@ -305,4 +306,20 @@ test('scenarios: a deleted report scenario comes back as your own config has it'
   await config.restoreScenario(ws, 'audit', { home });
   assert.deepEqual((await config.readProjectLayer(ws)).scenarios, { audit: ['auditor'] });
   assert.deepEqual(passed(await config.loadConfig({ workspace: ws, home })).config.scenarios.audit, ['auditor']);
+});
+
+/** The problems config.yaml has with this one check of the repo `api`. */
+const gateIssues = (gate: Record<string, unknown>): string[] => validateConfigLayer({ repos: { api: { gates: [{ name: 'e2e', cmd: 'npm run e2e', ...gate }] } } });
+
+test('config: a check has its own time limit in seconds, a whole number up to a day', async () => {
+  for (const timeout of [1, 3600, 86400]) assert.deepEqual(gateIssues({ timeout }), [], String(timeout));
+  for (const timeout of [0, -5, 1.5, '600', 86401]) assert.ok(gateIssues({ timeout }).some((m) => m.startsWith('repos.api.gates[0].timeout:')), String(timeout));
+
+  const ws = workspace('repos:\n  api:\n    gates:\n      - { name: e2e, cmd: npm run e2e, timeout: 3600 }   # the stack is slow\n      - { name: lint, cmd: npm run lint }\n');
+  const home = tmp('cs-home-');
+  const gates = async () => passed(await config.loadConfig({ workspace: ws, home })).config.repos.api!.gates;
+  assert.deepEqual(await gates(), [{ name: 'e2e', cmd: 'npm run e2e', timeout: 3600 }, { name: 'lint', cmd: 'npm run lint' }]);
+  // Saved from the Repos page, which sends the checks as the config resolved them.
+  await config.setRepo(ws, 'api', { role: 'Backend', gates: await gates() });
+  assert.match(projectText(ws), /- \{ name: e2e, cmd: npm run e2e, timeout: 3600 \} {3}# the stack is slow\n/);
 });

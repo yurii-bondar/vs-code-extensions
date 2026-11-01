@@ -164,6 +164,8 @@ export interface Gate {
   cmd: string;
   dir?: string;
   when?: string;
+  /** Seconds the check may run before it is stopped (1 to 86400); unset: the default of 15 minutes. */
+  timeout?: number;
 }
 
 export interface RepoConfig {

@@ -742,7 +742,7 @@ class DashboardPanel implements RpcHandlers {
       ...(layer.role && { role: layer.role }),
       ...(layer.path && layer.path !== name && { path: layer.path }),
       ...(layer.baseBranch && { baseBranch: layer.baseBranch }),
-      gates: (layer.gates || []).filter((g) => g.name && g.cmd).map((g) => ({ name: g.name, cmd: g.cmd, ...(g.dir && { dir: g.dir }), ...(g.when && { when: g.when }) })),
+      gates: (layer.gates || []).filter((g) => g.name && g.cmd).map((g) => ({ name: g.name, cmd: g.cmd, ...(g.dir && { dir: g.dir }), ...(g.when && { when: g.when }), ...(g.timeout !== undefined && { timeout: g.timeout }) })),
     };
     if (!clean.gates!.length) delete clean.gates;
     await cfg.setRepo(this.root, name, clean, oldName);
