@@ -24,8 +24,10 @@
     let s = String(text).replace(/\u0000/g, '');
     s = s.replace(/`([^`\n]+)`/g, (_, c: string) => hold(`<code>${esc(c)}</code>`));
     s = esc(s);
+    // A label is one line of at most 300 characters: an unbounded one was read to the end from every `[` of a line
+    // without `]`, which took seconds on a long one.
     // eslint-disable-next-line no-control-regex -- an address never takes in a placeholder
-    s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s\u0000]+)\)/g, (_, label: string, url: string) => hold(`<a href="${url}" data-href="${url}">${emphasis(label)}</a>`));
+    s = s.replace(/\[([^\]\n]{1,300})\]\((https?:\/\/[^)\s\u0000]+)\)/g, (_, label: string, url: string) => hold(`<a href="${url}" data-href="${url}">${emphasis(label)}</a>`));
     // eslint-disable-next-line no-control-regex -- an address never takes in a placeholder
     s = s.replace(/(^|[\s(])(https?:\/\/[^\s<)\u0000]+[^\s<).,;:!?\u0000])/g, (_, pre: string, url: string) => `${pre}${hold(`<a href="${url}" data-href="${url}">${url}</a>`)}`);
     s = emphasis(s);
@@ -145,6 +147,20 @@
     return out.join('\n');
   }
 
+  /**
+   * The report without the json block at its end (the data a program read): found from its last ```json, which a
+   * regular expression tried from every blank line of a long report, in time growing with its square.
+   */
+  function stripJsonBlock(text: string): string {
+    const at = text.lastIndexOf('```json');
+    if (at === -1) return text.trim();
+    const block = text.slice(at).trimEnd();
+    const open = block.indexOf('\n');
+    const body = block.slice(0, -3);
+    return open !== -1 && block.endsWith('```') && body.length > open && /\n[ \t]*$/.test(body) ? text.slice(0, at).trim() : text.trim();
+  }
+
   window.renderMarkdown = render;
+  window.stripJsonBlock = stripJsonBlock;
   window.escapeHtml = esc;
 })();

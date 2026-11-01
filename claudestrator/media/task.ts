@@ -582,7 +582,7 @@ interface Views {
     </section>`;
   }
 
-  const stripJsonBlock = (text: string) => text.replace(/\n*```json[^\n]*\n[\s\S]*?\n\s*```\s*$/, '').trim();
+  const stripJsonBlock = (text: string) => window.stripJsonBlock(text);
 
   // ---------- steps ----------
 

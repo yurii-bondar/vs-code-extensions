@@ -270,5 +270,6 @@ interface CSApi {
 interface Window {
   escapeHtml: (s: unknown) => string;
   renderMarkdown: (text: string) => string;
+  stripJsonBlock: (text: string) => string;
   CS: CSApi;
 }

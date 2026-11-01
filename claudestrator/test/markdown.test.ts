@@ -6,7 +6,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vm from 'vm';
 
-const page: { renderMarkdown?: (src: string) => string } = {};
+const page: { renderMarkdown?: (src: string) => string; stripJsonBlock?: (src: string) => string } = {};
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'media', 'markdown.js'), 'utf8'), { window: page });
 const render = page.renderMarkdown!;
 
@@ -45,4 +45,20 @@ test('markdown: a long line of spaces, hashes or quote marks renders at once, an
   assert.equal(render('# C# and F# #'), '<h2>C# and F#</h2>', 'closing hashes go, the ones of the text stay');
   assert.equal(render('> > nested'), '<blockquote><blockquote><p>nested</p></blockquote></blockquote>');
   assert.match(render('| a | b |\n|---|:---:|\n| 1 | 2 |'), /<th>a<\/th><th>b<\/th>.*<td>1<\/td><td>2<\/td>/s);
+});
+
+test('markdown: a long line or a long report renders in time that grows with its length, not its square', () => {
+  const strip = page.stripJsonBlock!;
+  for (const [what, text, fn] of [
+    ['a line of [ without ]', '['.repeat(40000), render],
+    ['blank lines', '\n'.repeat(40000) + 'x', strip],
+    ['an open json block', '```json\n' + '\n'.repeat(40000) + 'x', strip],
+  ] as const) {
+    const started = Date.now();
+    fn(text);
+    assert.ok(Date.now() - started < 200, `${what}: ${Date.now() - started} ms`);
+  }
+  assert.equal(strip('## Plan\n\nDo it.\n\n```json\n{"a": 1}\n```\n'), '## Plan\n\nDo it.');
+  assert.equal(strip('Text with ```json inline and no block'), 'Text with ```json inline and no block');
+  assert.equal(strip('No block at all'), 'No block at all');
 });
