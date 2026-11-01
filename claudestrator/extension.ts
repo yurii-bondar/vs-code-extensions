@@ -126,7 +126,8 @@ function activate(context: vscode.ExtensionContext) {
       if (choice) open(context, { name: 'task', taskId });
     } else if (e.name === 'finished' && notify('all')) {
       const { taskId, state } = e.data;
-      const prs = Object.values(state.prs || {});
+      // Only web addresses open, as on the dashboard: a PR's value is what `gh` printed.
+      const prs = Object.values(state.prs || {}).filter(view.isWebLink);
       const msg = state.outcome === 'published' ? `${taskId}: draft PRs are open.` : `${taskId} is done.`;
       const choice = await vscode.window.showInformationMessage(view.plainNotice(msg), ...(prs.length ? ['Open PRs'] : []), 'Open');
       if (choice === 'Open PRs') prs.forEach((u) => vscode.env.openExternal(vscode.Uri.parse(u)));

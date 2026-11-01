@@ -375,6 +375,14 @@ function plainNotice(text: string): string {
   return text.replace(/\]\(/g, '] (').replace(/\b(command|vscode)(?=:)/gi, '$1​');
 }
 
+/**
+ * Whether a value is a web address, the only kind opened outside the editor: a PR's value may be whatever `gh` printed,
+ * and a `command:`, `file:` or `vscode:` address would run something or open a file instead.
+ */
+function isWebLink(url: unknown): url is string {
+  return typeof url === 'string' && /^https?:\/\/\S+$/i.test(url);
+}
+
 /** The longest command a permission notification shows. */
 const NOTICE_COMMAND = 120;
 
@@ -396,4 +404,4 @@ function permissionNotice(p: Pick<PermissionRequest, 'agent' | 'repo' | 'tool' |
   return { text: plainNotice(`${p.agent}${p.repo ? ` @ ${p.repo}` : ''} wants to ${what}`), whole };
 }
 
-export { loadsRemote, permissionNotice, plainNotice, summary, detail, stepsOf, statusOf, queueOutput, CHECKPOINT_HINT };
+export { isWebLink, loadsRemote, permissionNotice, plainNotice, summary, detail, stepsOf, statusOf, queueOutput, CHECKPOINT_HINT };

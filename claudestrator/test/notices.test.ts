@@ -2,7 +2,7 @@
 import test from 'node:test';
 import * as assert from 'node:assert/strict';
 
-import { permissionNotice, plainNotice } from '../src/core/view';
+import { isWebLink, permissionNotice, plainNotice } from '../src/core/view';
 
 /** How VS Code finds the links of a notification's message (`parseLinkedText` in vs/base/common/linkedText.ts). */
 const LINK = /\[([^\]]+)\]\(((?:https?:\/\/|command:|file:)[^)\s]+)(?: (["'])(.+?)(\3))?\)/gi;
@@ -20,6 +20,13 @@ test('notices: a link in an agent\'s or a tool\'s text stays text', () => {
   assert.equal(plainNotice('[Fix it](command:x)'), '[Fix it] (command\u200b:x)', 'the words stay readable');
   assert.equal(plainNotice('vscode://ext.id/do and COMMAND:x'), 'vscode\u200b://ext.id/do and COMMAND\u200b:x');
   assert.equal(plainNotice('T-1: draft PRs are open.'), 'T-1: draft PRs are open.', 'plain text is left as it is');
+});
+
+test('notices: only a web address opens outside the editor, from the dashboard or a notification', () => {
+  for (const url of ['https://github.com/acme/api/pull/7', 'HTTP://example.com/x']) assert.equal(isWebLink(url), true, url);
+  for (const url of ['command:workbench.action.terminal.new', 'file:///etc/passwd', 'vscode://ext/do', 'Creating pull request for feat/x into main\nhttps://github.com/acme/api/pull/7', 'https://github.com/acme/api/pull/7\nwarning: 1 uncommitted change', ' https://x', 7, undefined]) {
+    assert.equal(isWebLink(url), false, String(url));
+  }
 });
 
 test('notices: a permission notification offers Allow only for a command it shows whole', () => {

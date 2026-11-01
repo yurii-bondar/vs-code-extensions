@@ -486,7 +486,7 @@ class DashboardPanel implements RpcHandlers {
   }
 
   async $openExternal({ url }: { url: string }) {
-    if (!/^https?:\/\//.test(url)) throw new Error('not a web link');
+    if (!view.isWebLink(url)) throw new Error('not a web link');
     await vscode.env.openExternal(vscode.Uri.parse(url));
   }
 
