@@ -95,6 +95,9 @@ const paths = (stdout: string): string[] => stdout.split('\0').filter(Boolean);
  */
 const NO_SUBMODULES = '--ignore-submodules=all';
 
+/** The key under `branch.<name>` in the repo's git config that names the task a branch was made for. */
+const OWNER_KEY = 'claudestratorTask';
+
 /** A dotenv file that shows what to set, not the values: `.env.example`, `.env.sample`. */
 const DOTENV_TEMPLATE = /\.env\.(example|sample|template|dist|defaults?)$/i;
 
@@ -356,6 +359,12 @@ async function prepareRepos(workspace: string, state: TaskState, config: RepoLoo
       blocked.push({ repo: name, dir: checkout, problem: 'not a git repository' });
       continue;
     }
+    // A branch another task made (two tasks planned the same name before either started) holds that task's work.
+    const owner = (await main.git('config', '--get', `branch.${branch}.${OWNER_KEY}`)).stdout.trim();
+    if (owner && owner !== state.taskId) {
+      blocked.push({ repo: name, dir: checkout, problem: `the branch ${branch} holds the work of task ${owner}; plan this task again for another branch` });
+      continue;
+    }
     if ((await git.isRepo()) && (await git.branch()) === branch) continue;
     // A folder there already is someone's: a worktree a deleted task kept for its unsaved work, say. It is never
     // removed to make room.
@@ -409,6 +418,8 @@ async function prepareRepos(workspace: string, state: TaskState, config: RepoLoo
       r = had ? await main.git('switch', branch) : await main.git('switch', '-c', branch, from);
       if (r.code === 0 && back) undo.push(async () => (await main.git('switch', ...back), dropBranch()));
     }
+    // The branch says which task it is for; `git branch -D` (the undo) removes this with it.
+    if (r.code === 0 && !had) await main.git('config', `branch.${branch}.${OWNER_KEY}`, state.taskId);
     results.push(r.code !== 0 ? { repo: name, dir, status: 'failed', error: r.stderr.trim() } : had && !worktree ? { repo: name, dir, status: 'switched' } : { repo: name, dir, status: 'created', from, ...note });
     if (r.code !== 0) break;
   }

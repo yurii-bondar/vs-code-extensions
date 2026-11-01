@@ -209,3 +209,16 @@ test('git: a command a Stop aborts ends at once with code 130', { skip: process.
   assert.ok(Date.now() - started < 5000);
   assert.equal((await exec('sleep', ['10'], { signal: abort.signal })).code, 130, 'not started once stopped');
 });
+
+test("git: a branch another task made holds that task's work, and is not taken for this one", async () => {
+  const ws = workspace(['api'], 'repos:\n  api: {}\n');
+  const plan = { type: 'feat', slug: 'add-feature', title: 'add', repos: [{ name: 'api', mode: 'full' }], openQuestions: [] };
+  const a = { ...task(['api'], 'branch'), taskId: 'T-1', plan } as TaskState;
+  const b = { ...task(['api'], 'branch'), taskId: 'T-2', plan } as TaskState;
+  assert.equal((await prepareRepos(ws, a, config)).ok, true);
+  assert.equal(git(path.join(ws, 'api'), 'config', '--get', `branch.${git(path.join(ws, 'api'), 'branch', '--show-current')}.claudestratorTask`), 'T-1');
+  const r = await prepareRepos(ws, b, config);
+  assert.equal(r.ok, false);
+  assert.match(JSON.stringify(r), /holds the work of task T-1/);
+  assert.equal((await prepareRepos(ws, a, config)).ok, true, 'its own task goes on there');
+});
