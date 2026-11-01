@@ -453,6 +453,12 @@ class Engine extends EventEmitter {
     return repos.map((x) => x.name);
   }
 
+  /** Whether a step of the task has worked in its repos already (so they are on its branch). */
+  async workedOnRepos(s: TaskState): Promise<boolean> {
+    const onBranch = (agent: string): boolean => s.pipeline.stages.some((st) => st.agent === agent && onRepos(st));
+    return (await this.svc.events(s.taskId)).some((e) => e.type === 'stage_started' && (Boolean(e.repo) || onBranch(e.agent)));
+  }
+
   /** The plan of a pipeline without a planner: the task's repos and a branch for its ticket no other work is on. */
   async planWithoutPlanner(s: TaskState, spec: Spec): Promise<PlanMeta | undefined> {
     if (!reposBeforePlan(s.pipeline.stages)) return undefined;
@@ -1271,6 +1277,13 @@ class Engine extends EventEmitter {
           const known = state.knownRepos.length ? `name them as configured: ${state.knownRepos.join(', ')}` : 'name them by their folders in the workspace';
           return { ok: false, error: `the plan names repos this workspace does not have (${unknown.join(', ')}); ${known}` };
         }
+        // A plan after the task has worked in its repos (a second planner, one in the review loop) keeps the branch that
+        // work is on: a new slug would leave the work behind on the old one, uncommitted.
+        if (state.plan && (await this.workedOnRepos(state))) {
+          r.plan.type = state.plan.type;
+          r.plan.slug = state.plan.slug;
+          return r;
+        }
         const branch = branchName({ ...state, plan: r.plan })!;
         const taken = await this.branchTaken(state, config, branch, r.plan.repos.map((x) => x.name));
         if (taken.length) return { ok: false, error: `the branch ${branch} is there already in ${taken.join(', ')}, with other work on it; choose another slug` };
@@ -1304,6 +1317,8 @@ class Engine extends EventEmitter {
         ...(emptyDiff && { emptyDiff: true }),
         gates,
       });
+      // A plan may name repos the task did not work in yet: the next step prepares them (those on the branch stay).
+      if (parsed.plan) this.prepared.delete(taskId);
       if (REPORT_OUTPUTS.has(stage.output)) await this.writeReport(taskId, config.language);
     } finally {
       session.close();

@@ -865,6 +865,26 @@ test('engine: every session records its id and cost as it goes, so a run that ne
     h.hooks.dispose();
   }
 });
+
+test('engine: a planner after the agents worked in the repos keeps the branch their work is on', async () => {
+  const ws = workspace(['api'], 'pipeline: [developer, planner, tester]\nrepos:\n  api: {}\n');
+  const h = await harness(ws, { FAKE_REPOS: 'api' });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Add the feature --repos api' });
+    let s = await runTask(h.engine, taskId);
+    const branch = git(path.join(ws, 'api'), 'branch', '--show-current');
+    assert.equal(s.checkpoint && s.checkpoint.id, 'approve-plan', JSON.stringify(h.engine.lastError(taskId)));
+    assert.equal(git(path.join(ws, 'api'), 'branch', '--show-current'), branch);
+    await h.engine.answer(taskId, 'approve-plan', 'approve');
+    s = await waitFor(async () => (h.engine.isRunning(taskId) ? null : await h.engine.svc.state(taskId)), 60000);
+    assert.equal(s.checkpoint && s.checkpoint.id, 'confirm-push', JSON.stringify(h.engine.lastError(taskId)));
+    assert.equal(git(path.join(ws, 'api'), 'branch', '--show-current'), branch, 'the work stayed on its branch');
+    assert.match(git(path.join(ws, 'api'), 'log', '-1', '--name-only', '--format='), /feature\.txt/);
+  } finally {
+    h.hooks.dispose();
+  }
+});
+
 test('engine: Stop during a push ends it, and no PR is opened after it; every PR opened is recorded at once', { skip: process.platform === 'win32' }, async () => {
   const ws = workspace(['api', 'web'], 'pipeline: [planner, developer]\npolicy: { draftPrsOnly: false }\nrepos:\n  api: {}\n  web: {}\n');
   const { remote, path: PATH } = remoteSetup(ws, '#!/bin/sh\nexit 0\n', { repos: ['api', 'web'] });
