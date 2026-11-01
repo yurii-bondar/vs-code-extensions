@@ -54,7 +54,7 @@ function transition(state: TaskState | null, event: OrchEvent): Transition {
       if (!s.running || !sameStep(s.running, event)) return fail('not_running', `${describe(event)} is not running`);
       const step = s.running;
       s.running = null;
-      openCheckpoint(s, 'agent-failure', event.at, step, event.error);
+      openCheckpoint(s, 'agent-failure', { at: event.at, step, reason: event.error, ...(event.blocked && { blocked: true }) });
       return ok(s);
     }
     case 'checkpoint_answered':
@@ -62,11 +62,12 @@ function transition(state: TaskState | null, event: OrchEvent): Transition {
     case 'committed':
       if (s.phase !== 'finish' || s.finishStep !== 'commit') return fail('not_committing', 'nothing to commit at this point');
       s.finishStep = 'confirm';
-      openCheckpoint(s, 'confirm-push', event.at);
+      delete s.lastFailure;
+      openCheckpoint(s, 'confirm-push', { at: event.at });
       return ok(s);
     case 'commit_failed':
       if (s.phase !== 'finish' || s.finishStep !== 'commit') return fail('not_committing', 'nothing to commit at this point');
-      openCheckpoint(s, 'hook-failure', event.at, undefined, `${event.repo}: ${event.output}`);
+      openCheckpoint(s, 'hook-failure', { at: event.at, reason: `${event.repo}: ${event.output}` });
       return ok(s);
     case 'published':
       if (s.phase !== 'finish' || s.finishStep !== 'publish') return fail('push_not_confirmed', 'push was not confirmed');
@@ -186,6 +187,7 @@ function stageCompleted(s: TaskState, e: Ev<'stage_completed'>): Transition {
   if (!s.running || !sameStep(s.running, e)) return fail('not_running', `${describe(e)} is not running`);
   const step = s.running;
   const stage = s.pipeline.stages[step.stage]!;
+  delete s.lastFailure;
 
   if (stage.output === 'plan') {
     if (!e.plan) return fail('plan_meta_required', `plan stage "${step.agent}" must report the plan's JSON block`);
@@ -205,12 +207,12 @@ function stageCompleted(s: TaskState, e: Ev<'stage_completed'>): Transition {
       // Each repo once (the engine has the planner correct a plan that names one twice): a step per repo would
       // otherwise find its own first copy and run again and again.
       s.repos = e.plan!.repos.filter((r, i, all) => all.findIndex((x) => x.name === r.name) === i);
-      if (stage.approval) openCheckpoint(s, 'approve-plan', e.at, step);
+      if (stage.approval) openCheckpoint(s, 'approve-plan', { at: e.at, step });
       else advance(s, step);
       return ok(s);
     case 'code':
     case 'tests':
-      if (e.gates === 'fail') openCheckpoint(s, 'gate-failure', e.at, step);
+      if (e.gates === 'fail') openCheckpoint(s, 'gate-failure', { at: e.at, step });
       else advance(s, step);
       return ok(s);
     case 'verdict':
@@ -233,6 +235,10 @@ function checkpointAnswered(s: TaskState, e: Ev<'checkpoint_answered'>): Transit
   if (!cp) return fail('no_checkpoint', 'no checkpoint is open');
   if (cp.id !== e.id) return fail('wrong_checkpoint', `open checkpoint is "${cp.id}", not "${e.id}"`);
   if (!cp.options.includes(e.option)) return fail('invalid_option', `"${e.option}" is not an option of "${cp.id}": ${cp.options.join(', ')}`);
+  // The agent can change none of what it ran into (the plan, the branch, the sandbox): the same retry ends there again.
+  if (cp.id === 'agent-failure' && cp.repeated && e.option === 'retry' && !(e.feedback && e.feedback.trim())) {
+    return fail('guidance_required', 'the step failed the same way after its last retry: say what the agent should do differently, or fix the cause first');
+  }
 
   s.answers.push({ id: e.id, option: e.option, ...(e.feedback && { feedback: e.feedback }), at: e.at });
   s.checkpoint = null;
@@ -310,10 +316,37 @@ function pipelineChanged(s: TaskState, e: Ev<'pipeline_changed'>): Transition {
   return ok(s);
 }
 
-function openCheckpoint(s: TaskState, id: CheckpointId, at: string, step?: Step, reason?: string): void {
+/** Failures a retry answers, and can repeat as they were: an agent's step, a commit a hook rejected. */
+const RETRIED: CheckpointId[] = ['agent-failure', 'hook-failure'];
+
+/** The words of a failure, without what differs between two runs of the same one: counts, ids, hashes. */
+function failureWords(text: string): Set<string> {
+  return new Set(text.toLowerCase().replace(/\b[0-9a-f]{7,}\b|\d+/g, ' ').split(/[^\p{L}_]+/u).filter((w) => w.length > 2));
+}
+
+/** Whether two failures read as the same one: an agent words its blocker anew each time, so most of their words. */
+function sameFailure(a: string, b: string): boolean {
+  const x = failureWords(a);
+  const y = failureWords(b);
+  if (!x.size || !y.size) return a.trim() === b.trim();
+  const both = [...x].filter((w) => y.has(w)).length;
+  return both / (x.size + y.size - both) >= 0.6;
+}
+
+interface CheckpointArgs {
+  at: string;
+  step?: Step | undefined;
+  reason?: string | undefined;
+  blocked?: boolean | undefined;
+}
+
+function openCheckpoint(s: TaskState, id: CheckpointId, { at, step, reason, blocked }: CheckpointArgs): void {
   const jira = s.source.kind === 'jira';
   const options = CHECKPOINT_OPTIONS[id].filter((o) => jira || !JIRA_ONLY_OPTIONS.includes(o));
-  s.checkpoint = { id, options, ...(step && { step }), ...(reason && { reason }), at };
+  const last = s.lastFailure;
+  const repeated = Boolean(reason && last && last.id === id && (last.step && step ? sameStep(last.step, step) : !last.step && !step) && sameFailure(last.reason, reason));
+  if (reason && RETRIED.includes(id)) s.lastFailure = { id, ...(step && { step }), reason };
+  s.checkpoint = { id, options, ...(step && { step }), ...(reason && { reason }), ...(blocked && { blocked: true }), ...(repeated && { repeated: true }), at };
   s.status = 'waiting';
 }
 
@@ -373,9 +406,9 @@ function evaluateRound(s: TaskState, at: string): void {
   const empty = s.review.verdicts.length > 0 && s.review.verdicts.every((v) => v.emptyDiff);
   s.review.emptyRounds = empty ? s.review.emptyRounds + 1 : 0;
   if (!blocking) passReview(s, false);
-  else if (s.review.emptyRounds >= MAX_EMPTY_ROUNDS) openCheckpoint(s, 'review-limit', at, undefined, `the diff was empty in ${s.review.emptyRounds} review rounds in a row: the agents changed nothing, so another fix round would not help`);
+  else if (s.review.emptyRounds >= MAX_EMPTY_ROUNDS) openCheckpoint(s, 'review-limit', { at, reason: `the diff was empty in ${s.review.emptyRounds} review rounds in a row: the agents changed nothing, so another fix round would not help` });
   else if (s.review.round < s.review.maxRounds) startFixRound(s, null);
-  else openCheckpoint(s, 'review-limit', at, undefined, `round ${s.review.round} of ${s.review.maxRounds} still has blocking findings`);
+  else openCheckpoint(s, 'review-limit', { at, reason: `round ${s.review.round} of ${s.review.maxRounds} still has blocking findings` });
 }
 
 function startFixRound(s: TaskState, feedback: string | null): void {

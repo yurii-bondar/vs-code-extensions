@@ -772,6 +772,8 @@ test('engine: a developer that cannot go on stops the step for you, and a blocke
     const s = await runTask(h.engine, taskId);
     assert.equal(s.checkpoint && s.checkpoint.id, 'agent-failure');
     assert.match(s.checkpoint!.reason!, /developer @ api reports it cannot go on: the plan names table bets_v2/);
+    assert.equal(s.checkpoint!.blocked, true, 'blocked, not stopped early');
+    assert.equal((await view.summary(h.engine, { taskId, state: s })).status.label, 'An agent is blocked');
     const started = only(await h.engine.svc.events(taskId), 'stage_started').map((e) => e.agent);
     assert.deepEqual(started, ['planner', 'developer'], 'no checks, tester or review on work it did not do');
     assert.equal(only(await h.engine.svc.events(taskId), 'gates_ran').length, 0);

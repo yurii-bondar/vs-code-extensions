@@ -2,7 +2,7 @@
 import * as path from 'path';
 import { transition, passSteps, sameStep, branchName, spentOf, MAX_EMPTY_ROUNDS } from './machine';
 import { onRepos } from './pipeline';
-import { describeEvent, CHECKPOINT_TITLE } from './describe';
+import { describeEvent, checkpointTitle } from './describe';
 import { transcriptKey } from './engine';
 import { resultOf } from './report';
 import { parseInvocation } from './intake';
@@ -50,6 +50,15 @@ const CHECKPOINT_HINT: Record<string, string> = {
 };
 
 const EMPTY_DIFF_HINT = 'The last review rounds saw an empty diff: the agents changed nothing, so more fix rounds would not help. Add guidance and retry, ship as it is, or stop.';
+
+/** What a waiting task's notice says of its checkpoint. */
+function hintOf(state: TaskState): string | undefined {
+  const cp = state.checkpoint!;
+  if (cp.id === 'review-limit' && state.review.emptyRounds >= MAX_EMPTY_ROUNDS) return EMPTY_DIFF_HINT;
+  if (cp.id === 'agent-failure' && cp.blocked) return 'An agent reported it cannot go on, and why.';
+  const hint = CHECKPOINT_HINT[cp.id];
+  return cp.repeated && hint ? `${hint} It failed the same way as the attempt before.` : hint;
+}
 
 /** The ticket's title, or before there is one the first line of what was typed, without its flags (`--auto`). */
 function titleOf(s: TaskState | null | undefined, taskId: string): string {
@@ -140,7 +149,7 @@ function stepsOf(events: OrchEvent[], state: TaskState, { running }: { running: 
   for (const st of steps) if (st.kind === 'agent' && st.status === 'running' && !(state.running && sameStep(state.running, st as StepRef) && running)) st.status = state.status === 'stopped' ? 'paused' : 'interrupted';
 
   if (state.checkpoint && state.checkpoint.id !== 'confirm-push') {
-    steps.push({ kind: 'human', id: state.checkpoint.id, label: CHECKPOINT_TITLE[state.checkpoint.id]!, status: state.status === 'stopped' ? 'paused' : 'waiting' });
+    steps.push({ kind: 'human', id: state.checkpoint.id, label: checkpointTitle(state.checkpoint), status: state.status === 'stopped' ? 'paused' : 'waiting' });
   }
 
   const upcoming: StepItem[] = [];
@@ -196,7 +205,7 @@ function baseStatus(state: TaskState | null, { running, elsewhere, error, corrup
   if (running && asking) return { key: 'running', label: 'Asks your permission', tone: 'warn', group: 'attention' };
   if (running) return { key: 'running', label: 'Running', tone: 'accent', group: 'running' };
   if (elsewhere && state!.status === 'active') return { key: 'elsewhere', label: 'Running in another window', tone: 'accent', group: 'running' };
-  if (state!.status === 'waiting') return { key: 'waiting', label: CHECKPOINT_TITLE[state!.checkpoint!.id] || 'Needs you', tone: 'warn', group: 'attention' };
+  if (state!.status === 'waiting') return { key: 'waiting', label: checkpointTitle(state!.checkpoint!), tone: 'warn', group: 'attention' };
   if (state!.status === 'done') {
     const r = resultOf(state!);
     if (r && r.kind === 'readiness') return { key: 'done', label: VERDICT_LABEL[r.verdict]!, tone: r.verdict === 'ready' ? 'ok' : 'warn', group: 'done' };
@@ -207,7 +216,7 @@ function baseStatus(state: TaskState | null, { running, elsewhere, error, corrup
     const label = state!.outcome === 'published' ? 'PRs opened' : state!.outcome === 'local' ? 'Kept local' : 'Done';
     return { key: 'done', label, tone: 'ok', group: 'done' };
   }
-  if (state!.status === 'stopped') return { key: 'stopped', label: state!.checkpoint ? `Stopped at: ${CHECKPOINT_TITLE[state!.checkpoint.id]}` : 'Stopped', tone: 'muted', group: 'stopped' };
+  if (state!.status === 'stopped') return { key: 'stopped', label: state!.checkpoint ? `Stopped at: ${checkpointTitle(state!.checkpoint)}` : 'Stopped', tone: 'muted', group: 'stopped' };
   if (error) return { key: 'failed', label: 'Run failed', tone: 'error', group: 'attention' };
   if (state!.running) return { key: 'interrupted', label: 'Interrupted', tone: 'warn', group: 'attention' };
   return { key: 'ready', label: 'Ready to continue', tone: 'muted', group: 'stopped' };
@@ -289,7 +298,7 @@ async function summary(engine: ViewEngine, entry: TaskEntry): Promise<Card> {
     ...(state.group && { group: state.group }),
     ...(result && { result: result.kind === 'readiness' ? { kind: 'readiness', verdict: result.verdict, met: result.met, total: result.criteria.length } : { kind: 'audit', counts: result.counts } }),
     status: statusOf(state, { running, elsewhere, error, asking: engine.pendingPermissions(taskId).length > 0 }),
-    checkpoint: state.checkpoint ? { id: state.checkpoint.id, title: CHECKPOINT_TITLE[state.checkpoint.id], hint: state.checkpoint.id === 'review-limit' && state.review.emptyRounds >= MAX_EMPTY_ROUNDS ? EMPTY_DIFF_HINT : CHECKPOINT_HINT[state.checkpoint.id] } : null,
+    checkpoint: state.checkpoint ? { id: state.checkpoint.id, title: checkpointTitle(state.checkpoint), hint: hintOf(state) } : null,
     live: engine.live(taskId),
     error,
     stopReason: state.status === 'stopped' && lastStop && lastStop.type === 'stopped' ? lastStop.reason : undefined,

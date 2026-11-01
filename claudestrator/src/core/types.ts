@@ -326,6 +326,10 @@ export interface Checkpoint {
   options: string[];
   step?: Step;
   reason?: string;
+  /** An agent-failure where the agent said it cannot go on, rather than one that ended without a usable report. */
+  blocked?: boolean;
+  /** The failure reads as the one the retry before it ended in: a retry as it was would end there again. */
+  repeated?: boolean;
   at: string;
 }
 
@@ -414,6 +418,8 @@ export interface TaskState {
   spec?: Spec;
   plan?: PlanMeta;
   outcome?: string;
+  /** The last failure a retry answered (an agent's step, a commit a hook rejected), until a step or a commit goes through. */
+  lastFailure?: { id: CheckpointId; step?: Step; reason: string };
 }
 
 // ---------- events ----------
@@ -476,7 +482,7 @@ export type OrchEvent = EventBase &
         /** A verdict stage: the diff it reviewed had no changed file in any repo. */
         emptyDiff?: boolean;
       }
-    | { type: 'stage_failed'; agent: string; repo?: string; error: string }
+    | { type: 'stage_failed'; agent: string; repo?: string; error: string; blocked?: boolean }
     | { type: 'checkpoint_answered'; id: string; option: string; feedback?: string }
     | { type: 'committed'; repos: string[] }
     | { type: 'commit_failed'; repo: string; output: string }

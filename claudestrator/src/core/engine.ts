@@ -1140,9 +1140,10 @@ class Engine extends EventEmitter {
       seq = started.length ? started[started.length - 1]!.seq! : 0;
     }
     const key = transcriptKey(seq, step);
-    const fail = async (error: string) => {
+    /** Ends the step for you to decide; `blocked`: the agent said it cannot go on, rather than ended without a report. */
+    const fail = async (error: string, { blocked = false }: { blocked?: boolean } = {}) => {
       const usedUpNow = usedUpWindow(this.limits, Date.now());
-      return await this.dispatch(taskId, { type: 'stage_failed', agent: step.agent, ...(step.repo && { repo: step.repo }), error: usedUpNow ? `${error} (${usedUpNow})` : error });
+      return await this.dispatch(taskId, { type: 'stage_failed', agent: step.agent, ...(step.repo && { repo: step.repo }), error: usedUpNow ? `${error} (${usedUpNow})` : error, ...(blocked && { blocked: true }) });
     };
 
     if (!agent || !agent.enabled) {
@@ -1251,7 +1252,7 @@ class Engine extends EventEmitter {
       // once, so you see them red, and not back to it to fix.
       const work = (): WorkReport | null => (stage.output === 'code' || stage.output === 'tests' ? workReport(t.report, t.structured) : null);
       const blocked = (w: WorkReport | null): string | null => (w && w.status === 'blocked' ? `${label} reports it cannot go on${w.blockers.length ? `: ${w.blockers.join('; ')}` : ''}` : null);
-      if (stage.output === 'code' && blocked(work())) return void (await fail(blocked(work())!));
+      if (stage.output === 'code' && blocked(work())) return void (await fail(blocked(work())!, { blocked: true }));
 
       let gates: 'none' | 'pass' | 'fail' = 'none';
       // The repos whose checks run after this step: its own, or every repo a `repos` stage worked in.
@@ -1309,7 +1310,7 @@ class Engine extends EventEmitter {
       }
       // Blocked with its checks green (or none): a tester that found what it cannot settle stops here too, and so does a
       // developer that said so while fixing its checks.
-      if (gates !== 'fail' && blocked(work())) return void (await fail(blocked(work())!));
+      if (gates !== 'fail' && blocked(work())) return void (await fail(blocked(work())!, { blocked: true }));
 
       // A plan for repos this workspace does not have is a report to correct, like one that does not parse: the state
       // machine would refuse it, and the task would stop with nothing the agent could fix. So is a plan whose branch is

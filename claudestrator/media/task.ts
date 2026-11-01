@@ -315,7 +315,7 @@ interface Views {
       }
       if (e.target.id === 'cp-feedback') {
         const cp = T.d && T.d.checkpointFull;
-        const ui = cp ? CP_UI[cp.id] : undefined;
+        const ui = cp ? cpUi(cp) : undefined;
         const option = cp && ui ? submitOption(cp, ui) : undefined;
         const btn = option !== undefined ? $(`.checkpoint [data-option="${option}"]`) : null;
         if (btn) btn.click();
@@ -346,7 +346,7 @@ interface Views {
       answer: async (el) => {
         const option = el.dataset.option;
         const checkpointId = T.d!.checkpointFull!.id;
-        const spec = CP_UI[checkpointId]!.options[option];
+        const spec = cpUi(T.d!.checkpointFull!).options[option];
         const ta = $<HTMLTextAreaElement>('#cp-feedback');
         const feedback = ta ? ta.value.trim() : '';
         if (spec?.feedback === 'required' && !feedback) {
@@ -428,12 +428,24 @@ interface Views {
         T.feedback = el.value;
         const hint = $('#cp-kbd');
         const cp = T.d && T.d.checkpointFull;
-        const ui = cp ? CP_UI[cp.id] : undefined;
+        const ui = cp ? cpUi(cp) : undefined;
         const option = cp && ui ? submitOption(cp, ui) : undefined;
         if (hint && ui) hint.textContent = (option !== undefined && ui.options[option]?.label) || '';
       },
     },
   };
+
+  /**
+   * A checkpoint's wording. An agent that said it cannot go on is not one that stopped early; a failure that repeats the
+   * one before it needs guidance for its retry, which would end there again as it was.
+   */
+  function cpUi(cp: NonNullable<TaskScreen['checkpointFull']>): CpUi {
+    const ui = CP_UI[cp.id]!;
+    if (cp.id !== 'agent-failure') return ui;
+    const blocked = cp.blocked ? { title: "The agent can't go on", lead: 'It reported what stops it (below) and stopped there rather than work around it. A retry runs into the same thing until its cause changes: fix that first (the plan, the branch, the sandbox in Settings → Safety), or tell the agent what to do instead.' } : {};
+    const repeated = cp.repeated ? { placeholder: 'What should the agent do differently? Needed: the last retry ended the same way', options: { ...ui.options, retry: { ...ui.options.retry!, feedback: 'required' as const } } } : {};
+    return { ...ui, ...blocked, ...repeated };
+  }
 
   /**
    * What ⌘↵ in the feedback box answers: the primary option, but with words in the box the option that takes them
@@ -553,7 +565,7 @@ interface Views {
   function checkpointHtml(d: TaskScreen) {
     const cp = d.checkpointFull;
     if (!cp) return '';
-    const ui = CP_UI[cp.id]!;
+    const ui = cpUi(cp);
     const ctx: Partial<CheckpointContext> = d.checkpointContext ?? {};
     const stopped = d.status.key === 'stopped';
     let body = '';
@@ -592,6 +604,10 @@ interface Views {
       if (cp.id === 'agent-failure' && /Failed to authenticate|OAuth (session|token) (has )?expired|Invalid API key|Please run \/login|not logged in|authentication_error/i.test(ctx.text || '')) {
         body += `<div class="banner error">${icon('user')}<div class="grow"><b>Claude Code is signed out for this account.</b> Sign in again (or switch the account), then retry the step.</div><div class="banner-actions"><button class="btn sm primary" data-action="claude-login">Sign in to Claude</button><button class="btn sm" data-action="open-account-menu">Switch account</button></div></div>`;
       }
+    }
+    if (cp.repeated) {
+      const what = cp.id === 'hook-failure' ? 'Retrying the commit as it is ends there again: fix what the hook needs first.' : 'A retry as it was ends there again: say what the agent should do differently, or fix the cause first.';
+      body += `<div class="banner warn">${icon('alert')}<div class="grow"><b>The same failure as the attempt before.</b> ${what}</div></div>`;
     }
     const needsFeedback = Object.keys(ui.options).some((o) => cp.options.includes(o) && ui.options[o]?.feedback);
     const buttons = cp.options
