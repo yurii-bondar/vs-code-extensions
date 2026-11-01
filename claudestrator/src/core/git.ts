@@ -61,7 +61,10 @@ function exec(cmd: string, args: readonly string[], { cwd, timeoutMs = 60000, en
       if (err) code = err.code === 'ENOENT' ? 127 : overflow ? 125 : err.killed ? 124 : typeof err.code === 'number' ? err.code : 1;
       resolve({ code, stdout: String(stdout ?? ''), stderr: `${stderr ?? ''}${err && err.code === 'ENOENT' ? `${cmd}: not found` : ''}${overflow ? `\n${cmd}: its output passed ${maxBytes} bytes and was cut there` : err && err.killed ? `\nkilled after ${Math.round(timeoutMs / 1000)}s` : ''}` });
     });
-    if (input !== undefined) child.stdin!.end(input);
+    if (input !== undefined) {
+      child.stdin!.on('error', () => {}); // a git that exits before reading it all
+      child.stdin!.end(input);
+    }
   });
 }
 
