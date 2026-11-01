@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import os from 'os';
 import * as path from 'path';
 
-import { transition, replay, nextAction, passSteps, stepRepos, editableFrom } from '../src/core/machine';
+import { transition, replay, nextAction, passSteps, stepRepos, editableFrom, runOf as rerunOf } from '../src/core/machine';
 import { buildPipeline, outline, taskPipeline } from '../src/core/pipeline';
 import * as config from '../src/core/config';
 import * as backups from '../src/core/backup';
@@ -261,6 +261,44 @@ function reviewedRounds(emptyDiffs: boolean[], reviewRounds: number): TaskState 
   });
   return rpl(timed(events));
 }
+
+test('machine: your feedback stays with a step run again after a Stop, and reaches every step of the fix round', async () => {
+  const { pipeline } = defaultPipeline();
+  const planned: EventBody[] = [
+    createdEvent(pipeline, { knownRepos: [] }),
+    { type: 'intake_completed', spec },
+    { type: 'stage_started', agent: 'planner' },
+    { type: 'stage_completed', agent: 'planner', artifact: 'plan/planner.md', plan: { ...PLAN, repos: [{ name: 'api', mode: 'full' }, { name: 'web', mode: 'full' }] } },
+  ];
+  // "Request changes", the planner starts, Stop, resume: it runs again with the feedback.
+  const s = rpl(timed([...planned, { type: 'checkpoint_answered', id: 'approve-plan', option: 'change', feedback: 'split it in two' }, { type: 'stage_started', agent: 'planner' }, { type: 'stopped', reason: 'x' }, { type: 'resumed' }]));
+  const again = rerunOf(s, s.running!);
+  assert.deepEqual([again.mode, again.feedback], ['replan', 'split it in two']);
+  assert.ok(again.inputs.includes('plan/planner.md'), 'and its previous plan');
+
+  // "Priorities for the fix round" (at the round limit, "retry" with them): every step of the round gets them.
+  const finding = (repo: string) => ({ severity: 'major' as const, repo, problem: 'x' });
+  const limited = rpl(timed([
+    { ...createdEvent(pipeline, { knownRepos: [] }), limits: { reviewRounds: 1, gateAttempts: 3 } },
+    ...planned.slice(1),
+    { type: 'checkpoint_answered', id: 'approve-plan', option: 'approve' },
+    { type: 'stage_started', agent: 'developer', repo: 'api' }, { type: 'stage_completed', agent: 'developer', repo: 'api', artifact: 'reports/r1/developer-api.md', gates: 'pass' },
+    { type: 'stage_started', agent: 'developer', repo: 'web' }, { type: 'stage_completed', agent: 'developer', repo: 'web', artifact: 'reports/r1/developer-web.md', gates: 'pass' },
+    { type: 'stage_started', agent: 'tester' }, { type: 'stage_completed', agent: 'tester', artifact: 'reports/r1/tester.md', gates: 'pass' },
+    { type: 'stage_started', agent: 'reviewer' }, { type: 'stage_completed', agent: 'reviewer', artifact: 'reviews/r1/reviewer.md', verdict: { status: 'changes_requested', summary: 'x', findings: [finding('api'), finding('web')] } },
+    { type: 'checkpoint_answered', id: 'review-limit', option: 'retry', feedback: 'performance first' },
+    { type: 'stage_started', agent: 'developer', repo: 'api' }, { type: 'stage_completed', agent: 'developer', repo: 'api', artifact: 'reports/r2/developer-api.md', gates: 'pass' },
+  ]));
+  const next = nx(limited) as RunAction;
+  assert.deepEqual([next.step.agent, next.step.repo, next.mode, next.feedback], ['developer', 'web', 'fix', 'performance first'], 'the second repo of the round too');
+  assert.ok(next.inputs.includes('reviews/r1/reviewer.md'));
+
+  // A fix-round step that failed and is retried still reads the findings it fixes.
+  const retried = passed(tr(passed(tr(limited, { type: 'stage_started', agent: 'developer', repo: 'web', at: at(90) } as OrchEvent)).state, { type: 'stage_failed', agent: 'developer', repo: 'web', error: 'maxTurns', at: at(91) } as OrchEvent)).state;
+  const retry = nx(passed(tr(retried, { type: 'checkpoint_answered', id: 'agent-failure', option: 'retry', at: at(92) } as OrchEvent)).state) as RunAction;
+  assert.equal(retry.mode, 'retry');
+  assert.ok(retry.inputs.includes('reviews/r1/reviewer.md'), 'the findings are among its inputs');
+});
 
 test('machine: two review rounds in a row with an empty diff stop the loop before the round limit', async () => {
   // The limit would allow five rounds; the agents changed nothing twice, so a third fix round is not started.

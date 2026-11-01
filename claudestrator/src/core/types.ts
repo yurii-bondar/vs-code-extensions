@@ -331,6 +331,8 @@ export interface ReviewState {
   verdicts: RecordedVerdict[];
   lastVerdicts: RecordedVerdict[];
   openFindings: Finding[];
+  /** What you said for the fix round ("Priorities for the fix round"): every step of the round gets it. */
+  roundFeedback?: string | null | undefined;
 }
 
 export interface Artifact {

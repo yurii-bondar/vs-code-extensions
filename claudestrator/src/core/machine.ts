@@ -178,7 +178,7 @@ function stageStarted(s: TaskState, e: Ev<'stage_started'>): Transition {
   if (!sameStep(s.next, e)) return fail('wrong_stage', `expected ${describe(s.next)}, got ${describe(e)}`);
   s.running = s.next;
   s.next = null;
-  s.feedback = null;
+  // The feedback stays with the running step until it ends: run again after a Stop or a reload, it still has it.
   return ok(s);
 }
 
@@ -388,6 +388,7 @@ function startFixRound(s: TaskState, feedback: string | null): void {
   s.review.verdicts = [];
   s.review.round += 1;
   s.review.fixing = true;
+  s.review.roundFeedback = feedback;
   setNext(s, passSteps(s)[0] ?? null, 'fix', feedback);
 }
 
@@ -398,6 +399,7 @@ function passReview(s: TaskState, shipBlocking: boolean): void {
   s.review.lastVerdicts = s.review.verdicts;
   s.review.verdicts = [];
   s.review.fixing = false;
+  s.review.roundFeedback = null;
   const end = s.pipeline.reviewLoop!.end;
   setNext(s, passSteps(s).find((p) => p.stage > end) ?? null, 'initial');
 }
@@ -486,7 +488,7 @@ function nextAction(s: TaskState): NextAction {
     output,
     mode: s.nextMode,
     round: s.review.round,
-    feedback: s.feedback,
+    feedback: s.feedback ?? (s.review.fixing ? (s.review.roundFeedback ?? null) : null),
     inputs: inputsFor(s, step, output),
     artifact: artifactPath(output, step.agent, s.review.round, step.repo),
   };
@@ -517,7 +519,8 @@ function inputsFor(s: TaskState, step: Step, output: Output): string[] {
     // a stage across all repos reads every repo's.
     const repos = stepRepos(s, step);
     inputs.push(...latest((a) => a.round === s.review.round && (a.output === 'code' || a.output === 'tests') && (step.repo ? a.repo === step.repo : !a.repo || repos.includes(a.repo))));
-    if (s.nextMode === 'fix') inputs.push(...s.review.lastVerdicts.map((v) => v.artifact));
+    // A fix round's steps read the findings they fix, also one retried after it failed.
+    if (s.review.fixing) inputs.push(...s.review.lastVerdicts.map((v) => v.artifact));
   }
   // Verdict stages get only the ticket and plan: fresh context is the point. The diff is added by the engine.
   return unique(inputs);

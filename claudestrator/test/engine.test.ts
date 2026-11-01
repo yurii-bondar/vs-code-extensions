@@ -727,3 +727,21 @@ test('engine: Git LFS files are uploaded with your credentials before the push, 
     h.hooks.dispose();
   }
 });
+
+test('engine: a retried step is told why its attempt before failed', async () => {
+  const ws = workspace(['api'], `pipeline: [planner, developer]\nlimits: { gateAttempts: 1 }\nrepos:\n  api:\n    gates:\n      - { name: lint, cmd: 'echo "lint: 1 error in src/a.ts"; exit 1' }\n`);
+  const h = await harness(ws, { FAKE_REPOS: 'api' });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
+    let s = await runTask(h.engine, taskId);
+    assert.equal(s.checkpoint && s.checkpoint.id, 'gate-failure');
+    await h.engine.answer(taskId, 'gate-failure', 'retry');
+    s = await waitFor(async () => (h.engine.isRunning(taskId) ? null : await h.engine.svc.state(taskId)), 60000);
+    const steps = (await view.detail(h.engine, taskId)).steps.filter((st) => st.agent === 'developer' && st.key);
+    const prompt = text((await h.engine.svc.readTranscript(taskId, steps[steps.length - 1]!.key!)).find((i) => i.type === 'prompt')!.text);
+    assert.match(prompt, /Mode: retry: the previous attempt failed; why is below/);
+    assert.match(prompt, /Why the previous attempt failed[^\n]*:\nChecks were still red after 1 attempt:\n[\s\S]*lint: 1 error in src\/a\.ts/);
+  } finally {
+    h.hooks.dispose();
+  }
+});
