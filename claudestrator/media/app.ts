@@ -1071,7 +1071,7 @@ interface Views {
             <span class="muted">→</span>
             <span class="chip mono">${esc(p.taskId)}</span>
             ${p.exists ? `<span class="badge tone-warn">continues the existing task</span>` : ''}
-            ${p.scenario === 'readiness' && p.source.kind === 'text' && /\b[A-Z][A-Z0-9]+-\d+\b/.test(S.draft.text) ? `<span class="detect warn">${icon('info')}Checked against your words only: name exactly one Jira issue to read it from Jira</span>` : ''}
+            ${p.scenario === 'readiness' && p.source.kind === 'text' && /\b[A-Z][A-Z0-9_]+-\d+\b/.test(S.draft.text) ? `<span class="detect warn">${icon('info')}Checked against your words only: name exactly one Jira issue to read it from Jira</span>` : ''}
             ${p.problem ? `<span class="detect error">${icon('alert')}${esc(p.problem)}</span>` : ''}
             ${needsAtlassian ? `<span class="detect warn">${icon('alert')}Jira/Confluence is not connected. <a data-action="nav" data-name="mcp">Sign in to Atlassian MCP</a> or <a data-action="nav" data-name="settings">add a token</a></span>` : ''}
           </div>
