@@ -143,6 +143,40 @@ test('panel: Continue in terminal runs Claude itself, so no shell reads a path w
   assert.equal((opened[0]!.env as { CLAUDE_CONFIG_DIR?: string }).CLAUDE_CONFIG_DIR, 'C:\\Users\\me\\.claude-work', 'the account the step ran under');
 });
 
+test('panel: the sidebar deletes a task and opens config.yaml without a dashboard', async () => {
+  const { deleteTask, openConfig } = await import('../src/panel');
+  const done: string[] = [];
+  const engine = {
+    svc: { state: async () => ({ gitMode: 'worktree', repos: [{ name: 'api' }] }), runsElsewhere: async () => null },
+    isRunning: () => true,
+    stop: async () => void done.push('stop'),
+    settled: async () => void done.push('settled'),
+    cleanup: async () => (done.push('cleanup'), []),
+    remove: async () => void done.push('remove'),
+  } as unknown as Parameters<typeof deleteTask>[0];
+  vscodeStub.window.showWarningMessage = async () => undefined;
+  assert.deepEqual(await deleteTask(engine, 'T-1'), { deleted: false }, 'nothing without your yes');
+  assert.deepEqual(done, []);
+  vscodeStub.window.showWarningMessage = async () => 'Delete';
+  assert.deepEqual(await deleteTask(engine, 'T-1'), { deleted: true });
+  assert.deepEqual(done, ['stop', 'settled', 'cleanup', 'remove'], 'stopped and settled before its worktrees go');
+
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-open-config-'));
+  const shown: string[] = [];
+  vscodeStub.window.showTextDocument = async (uri: { fsPath: string }) => void shown.push(uri.fsPath);
+  await openConfig(ws, 'project');
+  assert.deepEqual(shown, [path.join(ws, '.claudestrator', 'config.yaml')]);
+  assert.match(fs.readFileSync(shown[0]!, 'utf8'), /^# Claudestrator workspace config/);
+
+  // A dashboard that shows the deleted task leaves it; one that shows another stays.
+  const { p, posted } = panel();
+  Object.assign(p, { viewing: 'T-2' });
+  p.taskDeleted('T-1');
+  Object.assign(p, { viewing: 'T-1' });
+  p.taskDeleted('T-1');
+  assert.deepEqual(posted, [{ type: 'navigate', route: { name: 'home' } }]);
+});
+
 test("panel: a deleted task's screen hears so, and goes home", async () => {
   const { p } = panel();
   const svc = { exists: async () => false };

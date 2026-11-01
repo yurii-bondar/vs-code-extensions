@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { Orchestrator, settings } from './src/orchestrator';
 import { TaskTree, escapeMd } from './src/tree';
-import { DashboardPanel } from './src/panel';
+import { DashboardPanel, deleteTask, openConfig } from './src/panel';
 import * as view from './src/core/view';
 import { CHECKPOINT_TITLE } from './src/core/describe';
 import type { Route } from './src/panel';
@@ -191,9 +191,16 @@ function activate(context: vscode.ExtensionContext) {
       const taskId = idOf(arg);
       if (taskId) vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(path.join(orch.engine!.svc.dir(taskId), 'events.ndjson')));
     }),
+    // From the sidebar, without opening the dashboard; one that shows the task leaves it.
     reg('claudestrator.deleteTask', async (arg) => {
       const taskId = idOf(arg) || (await pickTask('Delete which task?', (c) => c.status.key !== 'running'));
-      if (taskId) await open(context).$deleteTask({ taskId });
+      const engine = orch.engine;
+      if (!taskId || !engine) return;
+      try {
+        if ((await deleteTask(engine, taskId)).deleted && DashboardPanel.current) DashboardPanel.current.taskDeleted(taskId);
+      } catch (e) {
+        void vscode.window.showErrorMessage(view.plainNotice((e as Error).message));
+      }
     }),
     reg('claudestrator.agents', () => open(context, { name: 'agents' })),
     reg('claudestrator.repos', () => open(context, { name: 'repos' })),
@@ -201,7 +208,7 @@ function activate(context: vscode.ExtensionContext) {
     reg('claudestrator.setup', () => open(context, { name: 'setup' })),
     reg('claudestrator.openConfig', () => {
       if (!orch.root) return vscode.window.showWarningMessage('Open a folder first.');
-      return open(context).$openConfig({ which: 'project' });
+      return openConfig(orch.root, 'project');
     }),
     reg('claudestrator.checkHealth', async () => {
       const h = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Checking Claude Code, Git and GitHub CLI…' }, () => orch.refreshHealth());

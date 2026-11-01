@@ -431,25 +431,12 @@ class DashboardPanel implements RpcHandlers {
   }
 
   async $deleteTask({ taskId }: { taskId: string }) {
-    const state = await this.engine.svc.state(taskId);
-    const worktrees = state.gitMode === 'worktree' && state.repos.length;
-    const choice = await vscode.window.showWarningMessage(
-      `Delete task ${taskId}?`,
-      { modal: true, detail: `This removes .orch/tasks/${taskId} (its log, plan, reports and transcripts). Branches and commits in your repos stay.${worktrees ? ' Its worktrees are removed too, if they have no uncommitted work.' : ''}` },
-      'Delete'
-    );
-    if (choice !== 'Delete') return { deleted: false };
-    if ((await this.engine.svc.runsElsewhere(taskId)) !== null) throw new Error(`${taskId} runs in another VS Code window; stop it there first`);
-    // Stopped first, and its run ended: a worktree is never removed under an agent that still works in it.
-    if (this.engine.isRunning(taskId)) {
-      await this.engine.stop(taskId);
-      await this.engine.settled(taskId);
-    }
-    if (worktrees) await this.engine.cleanup(taskId, false);
-    await this.engine.remove(taskId);
-    // Deleted from the sidebar while its screen is open: the page leaves it.
+    return deleteTask(this.engine, taskId);
+  }
+
+  /** A task deleted elsewhere (from the sidebar) while its screen is open: the page leaves it. */
+  taskDeleted(taskId: string): void {
     if (this.viewing === taskId) void this.post({ type: 'navigate', route: { name: 'home' } });
-    return { deleted: true };
   }
 
   async $cleanup({ taskId }: { taskId: string }) {
@@ -715,12 +702,7 @@ class DashboardPanel implements RpcHandlers {
   }
 
   async $openConfig({ which }: { which: string }) {
-    const file = which === 'user' ? cfg.userConfigFile() : cfg.projectConfigFile(this.root);
-    if (!(await exists(file))) {
-      await fs.promises.mkdir(path.dirname(file), { recursive: true });
-      await fs.promises.writeFile(file, `# Claudestrator ${which === 'user' ? 'user' : 'workspace'} config. Later layers override earlier ones field by field:\n# built-in defaults → ~/.claudestrator/config.yaml → <workspace>/.claudestrator/config.yaml\n{}\n`);
-    }
-    await vscode.window.showTextDocument(vscode.Uri.file(file));
+    await openConfig(this.root, which);
   }
 
   // ---------- repos ----------
@@ -923,5 +905,38 @@ class DashboardPanel implements RpcHandlers {
   }
 }
 
+// What the dashboard and the sidebar's commands both do; a command does it without opening the dashboard.
+
+/** Deletes a task once you confirm, with its worktrees when they hold no uncommitted work. */
+async function deleteTask(engine: Engine, taskId: string): Promise<{ deleted: boolean }> {
+  const state = await engine.svc.state(taskId);
+  const worktrees = state.gitMode === 'worktree' && state.repos.length;
+  const choice = await vscode.window.showWarningMessage(
+    `Delete task ${taskId}?`,
+    { modal: true, detail: `This removes .orch/tasks/${taskId} (its log, plan, reports and transcripts). Branches and commits in your repos stay.${worktrees ? ' Its worktrees are removed too, if they have no uncommitted work.' : ''}` },
+    'Delete'
+  );
+  if (choice !== 'Delete') return { deleted: false };
+  if ((await engine.svc.runsElsewhere(taskId)) !== null) throw new Error(`${taskId} runs in another VS Code window; stop it there first`);
+  // Stopped first, and its run ended: a worktree is never removed under an agent that still works in it.
+  if (engine.isRunning(taskId)) {
+    await engine.stop(taskId);
+    await engine.settled(taskId);
+  }
+  if (worktrees) await engine.cleanup(taskId, false);
+  await engine.remove(taskId);
+  return { deleted: true };
+}
+
+/** Opens your (`user`) or the workspace's config.yaml in an editor, written first with a comment when there is none. */
+async function openConfig(root: string, which: string): Promise<void> {
+  const file = which === 'user' ? cfg.userConfigFile() : cfg.projectConfigFile(root);
+  if (!(await exists(file))) {
+    await fs.promises.mkdir(path.dirname(file), { recursive: true });
+    await fs.promises.writeFile(file, `# Claudestrator ${which === 'user' ? 'user' : 'workspace'} config. Later layers override earlier ones field by field:\n# built-in defaults → ~/.claudestrator/config.yaml → <workspace>/.claudestrator/config.yaml\n{}\n`);
+  }
+  await vscode.window.showTextDocument(vscode.Uri.file(file));
+}
+
 export type { Route };
-export { DashboardPanel };
+export { DashboardPanel, deleteTask, openConfig };
