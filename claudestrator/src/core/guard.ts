@@ -8,6 +8,21 @@ import type { Policy } from './types';
 
 type Verdict = { allow: true } | { allow: false; reason: string };
 
+/** Where a command runs: a folder, or null after a `cd` the guard cannot follow (`cd $X`, `cd -`, `popd`, one in a loop). */
+type Dir = string | null;
+
+/** A simple command of a command line, and whether it runs only once the command before it succeeded, in its shell (`a && b`). */
+interface Segment {
+  text: string;
+  and: boolean;
+}
+
+/** A simple command as the shell runs it: its words without the redirections, and the files those write. */
+interface Simple {
+  words: string[];
+  redirects: string[];
+}
+
 /** What the guard knows about the call: the policy, where it runs, and how to look at git and files. */
 interface GuardContext {
   policy: Policy;
@@ -180,47 +195,115 @@ const AI_CREDIT = /co-authored-by:[^\n]*(claude|anthropic|copilot|cursor|openai|
  *        branchOf(dir) → string|null, isRepoRoot(dir) → boolean, readFile(file) → string|null }
  */
 async function guardBash(command: string, ctx: GuardContext): Promise<Verdict> {
-  let dir = ctx.cwd;
-  for (const segment of simpleCommands(command)) {
-    let argv: string[];
-    try {
-      argv = tokenize(segment);
-    } catch {
-      argv = segment.trim().split(/\s+/);
+  return guardIn(command, ctx, ctx.cwd);
+}
+
+/** Commands that start a loop: a `cd` in one may run any number of times. */
+const LOOPS = new Set(['for', 'while', 'until', 'select']);
+
+/**
+ * A command line run from start. A `cd` (`pushd`, `popd`) moves only the commands that run once it succeeded, in its
+ * shell (`cd x && …`): after `;`, `||`, a pipe or a subshell they may run where the shell was before (the cd failed or
+ * ran elsewhere), so they are checked in every folder the shell may be in by then.
+ */
+async function guardIn(command: string, ctx: GuardContext, start: Dir): Promise<Verdict> {
+  // A folder in CDPATH comes first: `CDPATH=~ cd Documents` is ~/Documents, not ./Documents.
+  const cdpath = /(^|\W)CDPATH=/.test(command);
+  let here: Dir[] = [start];
+  const anywhere = new Set<Dir>(here);
+  const pushed: Dir[] = [];
+  let loops = 0;
+  for (const { text, and } of simpleCommands(command)) {
+    const dirs = and ? here : [...anywhere];
+    const simple: Simple = { words: withoutRedirects(wordsOf(text)), redirects: redirectTargets(text) };
+    for (const w of simple.words) {
+      if (LOOPS.has(w)) loops++;
+      else if (w === 'done') loops = Math.max(0, loops - 1);
+      else if (!KEYWORDS.has(w)) break;
     }
-    const split = splitPrefixes(withoutRedirects(argv));
-    const [first, ...args] = split.argv;
-    // A redirection with no command (`> f`, what `x &> f` was split into before) still writes its file.
-    if (!first) {
-      const writes = checkWrites(redirectTargets(segment), 'a redirection', dir, ctx);
-      if (!writes.allow) return writes;
-      continue;
-    }
-    // One word that is a whole command (`watch "git push"`): the shell splits it again. A path with spaces in its
-    // folders (`"/Users/A B/bin/git"`) is still the command its name says.
-    if (/\s/.test(path.basename(first))) {
-      const verdict = await guardBash(split.argv.join(' '), { ...ctx, cwd: dir });
+    for (const dir of dirs) {
+      const verdict = await checkSimple(simple, dir, ctx);
       if (!verdict.allow) return verdict;
-      continue;
     }
-    // A command named by what only the shell knows (`$CMD`, `$(which git)`, a pattern) cannot be checked.
-    if (ctx.agent && first !== '[' && first !== '[[' && /[$`*?[\]{}]/.test(first)) return deny(`${first} is not a command the guard can read: spell out its name`);
-    const cmd = path.basename(first);
-    const env = ctx.agent ? gitEnvRefusal(cmd, split.env, args) : null;
-    if (env) return env;
-    if (cmd === 'cd') {
-      dir = resolveIn(dir, args[0] ?? '~', ctx);
-      continue;
+    const [first, ...args] = stripPrefixes(simple.words);
+    const cmd = first === undefined ? '' : path.basename(first);
+    let next = dirs;
+    if (cmd === 'cd' || cmd === 'pushd') {
+      let to = cdTarget(cmd, args);
+      if (to !== null && cdpath && !/^(\/|~|\$|\.{1,2}(\/|$))/.test(to)) to = null;
+      next = loops ? [null] : [...new Set(dirs.map((d) => (to === null ? null : resolveIn(d, to, ctx))))];
+      if (cmd === 'pushd') pushed.push(...dirs);
+    } else if (cmd === 'popd') {
+      // Back to where a pushd left from: any of them, as one that failed pushed nothing.
+      next = loops || args.length || !pushed.length ? [null] : [...new Set(pushed)];
+    } else if (cmd === 'eval') {
+      next = [null]; // a cd in it moves this shell
     }
-    const writes = checkWrites([...redirectTargets(segment), ...writeTargets(cmd, args)], cmd, dir, ctx);
-    if (!writes.allow) return writes;
-    const links = checkLinks(cmd, args, dir, ctx);
-    if (!links.allow) return links;
-    const verdict = await checkCommand(cmd, args, dir, ctx);
-    if (!verdict.allow) return verdict;
+    here = next;
+    for (const d of next) anywhere.add(d);
   }
   return allow;
 }
+
+/** The words of a simple command, as the shell splits them (or at whitespace if they do not parse). */
+function wordsOf(text: string): string[] {
+  try {
+    return tokenize(text);
+  } catch {
+    return text.trim().split(/\s+/);
+  }
+}
+
+/**
+ * The folder `cd` or `pushd` goes to, as written; null for one the guard cannot follow: `cd -` and pushd's stack
+ * (`+1`, `-2`), a variable or a substitution, `~-`, `~+` or `~user`, a pattern, zsh's `cd old new`.
+ */
+function cdTarget(cmd: string, args: string[]): string | null {
+  const plain: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (a === '--') {
+      plain.push(...args.slice(i + 1));
+      break;
+    }
+    if (cmd === 'cd' && /^-[LPe@qs]+$/.test(a)) continue;
+    if (/^[-+]/.test(a)) return null;
+    plain.push(a);
+  }
+  if (plain.length > 1) return null;
+  // `pushd` alone swaps the top of its stack.
+  const to = plain[0] ?? (cmd === 'cd' ? '~' : null);
+  if (to === null || /\$(?!\{?HOME\}?(\/|$))|[`*?[]/.test(to) || /^~(?!\/|$)/.test(to)) return null;
+  return to;
+}
+
+/** What a simple command does in dir: the files it writes or links, and what it runs. */
+async function checkSimple(simple: Simple, dir: Dir, ctx: GuardContext): Promise<Verdict> {
+  const split = splitPrefixes(simple.words);
+  const [first, ...args] = split.argv;
+  // A redirection with no command (`> f`, what `x &> f` was split into before) still writes its file.
+  if (!first) return checkWrites(simple.redirects, 'a redirection', dir, ctx);
+  // One word that is a whole command (`watch "git push"`): the shell splits it again. A path with spaces in its
+  // folders (`"/Users/A B/bin/git"`) is still the command its name says.
+  if (/\s/.test(path.basename(first))) {
+    const writes = checkWrites(simple.redirects, 'a redirection', dir, ctx);
+    return writes.allow ? guardIn(split.argv.join(' '), ctx, dir) : writes;
+  }
+  // A command named by what only the shell knows (`$CMD`, `$(which git)`, a pattern) cannot be checked.
+  if (ctx.agent && first !== '[' && first !== '[[' && /[$`*?[\]{}]/.test(first)) return deny(`${first} is not a command the guard can read: spell out its name`);
+  const cmd = path.basename(first);
+  const env = ctx.agent ? gitEnvRefusal(cmd, split.env, args) : null;
+  if (env) return env;
+  const writes = checkWrites([...simple.redirects, ...writeTargets(cmd, args)], cmd, dir, ctx);
+  if (!writes.allow) return writes;
+  const links = checkLinks(cmd, args, dir, ctx);
+  if (!links.allow) return links;
+  return checkCommand(cmd, args, dir, ctx);
+}
+
+/** A path the guard cannot place: relative to a folder it lost track of. */
+const lost = (what: string): Verdict =>
+  deny(`${what}: after a cd the guard cannot follow ($VAR, cd -, popd, a cd in a loop or an eval) it does not know which folder that is; give the whole path, or cd to a path first`);
 
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'fish']);
 
@@ -321,12 +404,13 @@ function ownedBy(abs: string, ctx: GuardContext): string | null {
 }
 
 /** An agent writes only where its stage works (or a temp folder), and never into git metadata. */
-function checkWrites(targets: string[], cmd: string, dir: string, ctx: GuardContext): Verdict {
+function checkWrites(targets: string[], cmd: string, dir: Dir, ctx: GuardContext): Verdict {
   if (!ctx.writeRoots || !targets.length) return allow;
   const roots = ctx.writeRoots.map((r) => path.resolve(r));
   for (const t of targets) {
     if (/\$(?!\{?HOME\}?(\/|$))|`/.test(t)) return deny(`${cmd} writes to ${t}: spell out the path instead of a variable`);
     const abs = resolveIn(dir, t, ctx);
+    if (abs === null) return lost(`${cmd} writes ${t}`);
     const owned = ownedBy(abs, ctx);
     if (owned) return deny(`${cmd} would write into ${owned} (${abs}); Claudestrator owns git`);
     if ((ctx.protect || []).some((p) => inside(abs, path.resolve(p)))) return deny(`${cmd} writes ${abs}: Claudestrator's config and task state are not an agent's to change`);
@@ -352,13 +436,16 @@ function linkedTo(cmd: string, args: string[]): { sources: string[]; at: string 
  * An agent links to nothing it may not write: Write and Edit run outside the sandbox, so a write through a link to
  * `.git/config` or Claudestrator's config would land there.
  */
-function checkLinks(cmd: string, args: string[], dir: string, ctx: GuardContext): Verdict {
+function checkLinks(cmd: string, args: string[], dir: Dir, ctx: GuardContext): Verdict {
   const link = ctx.writeRoots && linkedTo(cmd, args);
   if (!link) return allow;
   const at = link.at === undefined ? dir : resolveIn(dir, link.at, ctx);
+  if (at === null) return lost(`${cmd} makes a link`);
   for (const s of link.sources) {
     // A symlink's target counts from where the link is (`ln -s ../.git/config src/cfg`), a hard link's from here.
-    for (const abs of [resolveIn(dir, s, ctx), path.resolve(at, s), path.resolve(path.dirname(at), s)]) {
+    const here = resolveIn(dir, s, ctx);
+    if (here === null) return lost(`${cmd} links to ${s}`);
+    for (const abs of [here, path.resolve(at, s), path.resolve(path.dirname(at), s)]) {
       const owned = ownedBy(abs, ctx);
       if (owned) return deny(`${cmd} would link to ${owned} (${s}): a write through the link would change it, and Claudestrator owns git`);
       if ((ctx.protect || []).some((p) => inside(abs, path.resolve(p)))) return deny(`${cmd} would link to ${abs}: Claudestrator's config and task state are not an agent's to change`);
@@ -367,8 +454,8 @@ function checkLinks(cmd: string, args: string[], dir: string, ctx: GuardContext)
   return allow;
 }
 
-async function checkCommand(cmd: string, args: string[], dir: string, ctx: GuardContext): Promise<Verdict> {
-  const inner = (script: string): Promise<Verdict> => guardBash(script, { ...ctx, cwd: dir });
+async function checkCommand(cmd: string, args: string[], dir: Dir, ctx: GuardContext): Promise<Verdict> {
+  const inner = (script: string): Promise<Verdict> => guardIn(script, ctx, dir);
   if (SHELLS.has(cmd)) {
     // `-c`, also combined with other flags: `-lc`, `-ec`, `-xc`.
     const c = args.findIndex((a) => /^-[A-Za-z]*c[A-Za-z]*$/.test(a));
@@ -423,7 +510,7 @@ function publishes(cmd: string, args: string[]): boolean {
 const FIND_TESTS = new Set(['-name', '-iname', '-path', '-ipath', '-wholename', '-regex', '-iregex', '-type', '-newer', '-mtime', '-mmin', '-atime', '-ctime', '-size', '-empty', '-user', '-perm']);
 
 /** `find … -exec cmd {} ;` runs cmd; `find … -delete` is a recursive delete of what it searches. */
-async function checkFind(args: string[], dir: string, ctx: GuardContext): Promise<Verdict> {
+async function checkFind(args: string[], dir: Dir, ctx: GuardContext): Promise<Verdict> {
   for (let i = 0; i < args.length; i++) {
     if (!['-exec', '-execdir', '-ok', '-okdir'].includes(args[i]!)) continue;
     const end = args.findIndex((a, j) => j > i && (a === ';' || a === '+' || a === '\\;'));
@@ -442,15 +529,20 @@ async function checkFind(args: string[], dir: string, ctx: GuardContext): Promis
     const filtered = args.some((a) => FIND_TESTS.has(a));
     if (!filtered) return checkRm(['-r', ...roots], dir, ctx);
     for (const root of roots) {
-      const verdict = await checkRm(['-r', path.join(resolveIn(dir, root, ctx), 'x')], dir, ctx);
+      const abs = resolveIn(dir, root, ctx);
+      if (abs === null) return lost(`find ${root} … -delete`);
+      const verdict = await checkRm(['-r', path.join(abs, 'x')], dir, ctx);
       if (!verdict.allow) return deny(`find ${root} … -delete: ${verdict.reason}`);
     }
   }
   return allow;
 }
 
-/** Splits on `;`, `&&`, `||`, `|`, `&` and newlines outside quotes; drops heredoc bodies and comments. */
-function simpleCommands(command: string): string[] {
+/**
+ * Splits on `;`, `&&`, `||`, `|`, `&` and newlines outside quotes; drops heredoc bodies and comments. A command after
+ * `&&` is marked as one that runs only if the command before it succeeded, unless a subshell came between.
+ */
+function simpleCommands(command: string): Segment[] {
   // A `\` at the end of a line continues the command: `git \⏎ push -f` is one command.
   const lines = command.replace(/\\\r?\n/g, ' ').split('\n');
   const kept: string[] = [];
@@ -467,24 +559,31 @@ function simpleCommands(command: string): string[] {
 
   // `$(…)` and `` `…` `` run as commands of their own, inside double quotes too; in the command around them they leave
   // `$SUBST`, a value nobody can check (so `rm -r $(pwd)/..` is refused). A plain `( … )` subshell leaves nothing.
-  const segments: string[] = [];
-  const stack: { outer: string; quote: string | null; close: string; sub: boolean }[] = [];
+  const segments: Segment[] = [];
+  const stack: { outer: string; quote: string | null; close: string; sub: boolean; and: boolean }[] = [];
   let current = '';
   let quote: string | null = null;
+  // Whether current runs only once the command before it succeeded; whether a subshell ran inside it, so that what
+  // follows its `&&` follows the subshell, not the last command in it (`(cd x && y) && z` runs z here).
+  let and = false;
+  let nested = false;
   const open = (close: string, sub: boolean): void => {
-    stack.push({ outer: current, quote, close, sub });
+    stack.push({ outer: current, quote, close, sub, and });
     current = '';
     quote = null;
+    and = false;
   };
   const text = kept.join('\n');
   for (let i = 0; i < text.length; i++) {
     const ch = text[i]!;
     const top = stack[stack.length - 1];
     if (top && quote === null && ch === top.close) {
-      segments.push(current);
+      segments.push({ text: current, and });
       stack.pop();
       current = top.outer + (top.sub ? '$SUBST' : '');
       quote = top.quote;
+      and = top.and;
+      nested = true;
       continue;
     }
     if (quote === "'") {
@@ -535,16 +634,19 @@ function simpleCommands(command: string): string[] {
       // Part of a redirection, not a separator: `&> f`, `>& f`, `>| f` write f.
       current += ch;
     } else if (ch === ';' || ch === '\n' || ch === '|' || ch === '&' || ch === ')') {
-      segments.push(current);
+      segments.push({ text: current, and });
+      const twice = (ch === '|' || ch === '&') && text[i + 1] === ch;
+      and = ch === '&' && twice && !nested;
+      nested = false;
       current = '';
-      if ((ch === '|' || ch === '&') && text[i + 1] === ch) i++;
+      if (twice) i++;
       else if (ch === '|' && text[i + 1] === '&') i++; // |& pipes stderr too
     } else current += ch;
   }
-  segments.push(current);
+  segments.push({ text: current, and });
   // Unclosed substitutions: what was around them is still a command.
-  while (stack.length) segments.push(stack.pop()!.outer);
-  return segments.map((s) => s.trim()).filter(Boolean);
+  while (stack.length) segments.push({ text: stack.pop()!.outer, and: false });
+  return segments.map((s) => ({ text: s.text.trim(), and: s.and })).filter((s) => s.text);
 }
 
 /** The line with quoted text blanked out, so `echo "<<EOF"` is not taken for a heredoc. */
@@ -665,10 +767,12 @@ function gitEnvRefusal(cmd: string, env: string[], args: string[]): Verdict | nu
   return bad ? deny(`agents do not set git's environment (${bad.split('=')[0]}); Claudestrator owns git`) : null;
 }
 
-function resolveIn(dir: string, p: string, ctx: GuardContext): string {
+/** A path as the shell finds it from dir (`~` and `$HOME` are your home); null if it is relative to a folder not known. */
+function resolveIn(dir: Dir, p: string, ctx: GuardContext): string | null {
   const home = ctx.home ?? os.homedir();
   const expanded = p.replace(/^~(?=$|\/)/, home).replace(/^\$\{?HOME\}?(?=$|\/)/, home);
-  return path.resolve(dir, expanded);
+  if (path.isAbsolute(expanded)) return path.resolve(expanded);
+  return dir === null ? null : path.resolve(dir, expanded);
 }
 
 /** Flags of a subcommand, with `--x=y` split and combined short flags (`-rf`) expanded. */
@@ -694,12 +798,13 @@ function optionValues(args: string[], names: string[]): string[] {
   return out;
 }
 
-async function attributionIn(texts: string[], files: string[], dir: string, ctx: GuardContext): Promise<Verdict> {
+async function attributionIn(texts: string[], files: string[], dir: Dir, ctx: GuardContext): Promise<Verdict> {
   if (!ctx.policy.forbidAiAttribution) return allow;
   if (texts.some((t) => AI_CREDIT.test(t))) return deny('no AI attribution in commits or PRs (policy.forbidAiAttribution); remove the Co-Authored-By / Generated-with lines');
   for (const f of files) {
     if (f === '-') continue;
-    const content = await ctx.readFile(path.resolve(dir, f));
+    if (dir === null && !path.isAbsolute(f)) return lost(`the message in ${f}`);
+    const content = await ctx.readFile(path.resolve(dir ?? '/', f));
     if (content && AI_CREDIT.test(content)) return deny(`no AI attribution in ${f} (policy.forbidAiAttribution)`);
   }
   return allow;
@@ -742,7 +847,7 @@ const AGENT_GIT_READ_ONLY: Record<string, string[]> = { stash: ['list', 'show'],
 /** Options that run a program or write a file: `--upload-pack=cmd`, `grep -O<cmd>`, `--output=<file>`. */
 const AGENT_GIT_OPTIONS = /^(--upload-pack|--receive-pack|--exec|--output|--open-files-in-pager|-O)(=|$)|^-O./;
 
-async function checkGit(all: string[], cwd: string, ctx: GuardContext): Promise<Verdict> {
+async function checkGit(all: string[], cwd: Dir, ctx: GuardContext): Promise<Verdict> {
   let dir = cwd;
   let i = 0;
   while (i < all.length && all[i]!.startsWith('-')) {
@@ -789,7 +894,8 @@ async function checkGit(all: string[], cwd: string, ctx: GuardContext): Promise<
       if (refspecs.some((r) => r.startsWith('+'))) return deny('forced refspecs (+branch) are not allowed');
       if (refspecs.some((r) => r.startsWith(':'))) return deny('deleting remote branches is not allowed');
       const targets = refspecs.map((r) => r.split(':').pop()!.replace(/^refs\/heads\//, ''));
-      const current = await ctx.branchOf(dir);
+      if (dir === null && (refspecs.length === 0 || targets.includes('HEAD'))) return lost('git push of the current branch');
+      const current = dir === null ? null : await ctx.branchOf(dir);
       if (refspecs.length === 0 && current) targets.push(current);
       const hit = targets.find((t) => protectedBranches.includes(t) || (t === 'HEAD' && protectedBranches.includes(current ?? '')));
       if (hit) return deny(`pushing to ${hit === 'HEAD' ? current : hit} is not allowed; push the feature branch`);
@@ -797,6 +903,7 @@ async function checkGit(all: string[], cwd: string, ctx: GuardContext): Promise<
       return allow;
     }
     case 'commit': {
+      if (dir === null) return lost('git commit');
       const b = await ctx.branchOf(dir);
       if (b && protectedBranches.includes(b)) return deny(`refusing to commit on ${b} in ${dir}; create the task branch first`);
       return attributionIn(optionValues(args, ['-m', '--message']), optionValues(args, ['-F', '--file']), dir, ctx);
@@ -818,7 +925,7 @@ async function checkGit(all: string[], cwd: string, ctx: GuardContext): Promise<
 /** gh actions an agent may use, for reading only. */
 const AGENT_GH_READ = new Set<string>(['view', 'list', 'diff', 'checks', 'status']);
 
-async function checkGh(all: string[], dir: string, ctx: GuardContext): Promise<Verdict> {
+async function checkGh(all: string[], dir: Dir, ctx: GuardContext): Promise<Verdict> {
   const [group, action, ...args] = all;
   // `gh auth status --show-token` and `gh auth token` print the token: no gh auth at all, whatever reads.
   if (ctx.agent && (group === 'auth' || all.some((a) => a.startsWith('--show-token')))) return deny('agents do not use gh auth: it can print your GitHub token');
@@ -851,7 +958,7 @@ function ghApiWrites(all: string[]): boolean {
   return all.some((a) => /^(-f|-F|--field|--raw-field|--input)(=|$)/.test(a) || /^-[fF].+/.test(a));
 }
 
-async function checkRm(args: string[], dir: string, ctx: GuardContext): Promise<Verdict> {
+async function checkRm(args: string[], dir: Dir, ctx: GuardContext): Promise<Verdict> {
   const flags = flagSet(args);
   const recursive = flags.has('-r') || flags.has('-R') || flags.has('--recursive');
   if (!recursive) return allow;
@@ -875,11 +982,13 @@ async function checkRm(args: string[], dir: string, ctx: GuardContext): Promise<
     if (glob !== -1) {
       if (/\.\./.test(t.slice(glob))) return deny(`rm -r ${t}: a pattern that climbs out with .. is not allowed`);
       const from = resolveIn(dir, t.slice(0, glob).replace(/[^/]*$/, '') || '.', ctx);
+      if (from === null) return lost(`rm -r ${t}`);
       const verdict = await checkRm(['-r', '--', from], dir, ctx);
       if (!verdict.allow) return deny(`rm -r ${t} deletes what is in ${from}: ${verdict.reason}`);
       continue;
     }
     const abs = resolveIn(dir, t.replace(/\/\*$/, ''), ctx);
+    if (abs === null) return lost(`rm -r ${t}`);
     const inside = (root: string): boolean => abs === root || abs.startsWith(root + path.sep);
     const contains = (root: string): boolean => root === abs || root.startsWith(abs + path.sep);
     if (abs === '/' || abs === home || roots.some(contains)) return deny(`rm -r ${t} would delete ${abs}, which contains the workspace, a repository or your home`);

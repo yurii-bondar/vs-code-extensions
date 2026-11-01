@@ -85,3 +85,44 @@ test('guard: a command is read as the shell runs it, whatever escapes, quotes or
   // A path with spaces in its folders is still the command its name says.
   assert.equal(await allowed('"/opt/x y/git" push -f origin main'), false);
 });
+
+test('guard: after a cd it cannot follow the folder is unknown, and a cd that may fail or ran in a subshell moves nothing after it', async () => {
+  // rm -r is checked whatever the stage writes; with the sandbox off nothing else stops it.
+  for (const command of [
+    'cd $PWD/.. && rm -r app',
+    'cd $(dirname $PWD) && rm -r app',
+    'cd `dirname $PWD` && rm -r app',
+    'cd - && rm -r app',
+    'cd ~+ && rm -r app',
+    'cd ~- && rm -r app',
+    'popd && rm -r app',
+    'pushd ~ && rm -r Documents',
+    'cd api .. && rm -rf home/u',
+    'CDPATH=/home/u cd Documents && rm -r x',
+    'for i in 1 2 3; do cd ..; done && rm -rf home/u',
+    'eval "cd /"; rm -rf home/u',
+    '(cd /tmp/a/b); rm -rf ../..',
+    '(cd /tmp/a/b && true) && rm -rf ../..',
+    'echo $(cd /tmp/a/b); rm -rf ../..',
+    'cd /tmp/a/b || rm -rf ../..',
+    'cd /tmp/missing/b; rm -rf ../..',
+    'cd /tmp/a/b | true; rm -rf ../..',
+  ]) {
+    assert.equal(await allowed(command, ctx({ writeRoots: undefined })), false, command);
+  }
+  for (const command of ['pushd .git && echo x > config', 'cd $X && echo x > .git/config', 'cd $X && echo x > a.txt', 'cd - && ln -s /home/u h']) {
+    assert.equal(await allowed(command), false, command);
+  }
+  for (const command of [
+    'cd src && rm -r build',
+    'cd /ws/api/src && rm -rf build && cd .. && npm test',
+    'cd src && cd .. && rm -rf dist',
+    'cd packages/a && rm -rf ../../dist',
+    'pushd src && npm test && popd && rm -rf dist',
+    'cd /tmp/work && rm -rf build',
+    'cd $X && npm test',
+    'cd $X && git status > /tmp/status.txt',
+  ]) {
+    assert.equal(await allowed(command), true, command);
+  }
+});
