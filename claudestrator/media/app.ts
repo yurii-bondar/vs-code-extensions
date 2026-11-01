@@ -318,16 +318,38 @@ interface Views {
   /** The HTML each region was last given, to skip a patch that would change nothing. */
   const rendered = new WeakMap<HTMLElement, string>();
 
-  /** Replaces a region's content only when it changed; keeps the focused field and its caret. */
+  /** The attributes that tell an element from its neighbours, such as a task card (`data-id`) from the others. */
+  const IDENTITY = ['key', 'action', 'id', 'name', 'tab', 'option', 'file'];
+  /**
+   * How to find an element again in a region drawn anew: by its id, else its tag and identifying attributes (a task
+   * card and its button carry the same `data-id`, not the same tag).
+   */
+  function selectorOf(a: HTMLElement): string | null {
+    if (a.id) return `#${CSS.escape(a.id)}`;
+    const attrs = IDENTITY.flatMap((k) => {
+      const v = a.dataset[k];
+      return v ? [`[data-${k}="${CSS.escape(v)}"]`] : [];
+    });
+    const name = a.getAttribute('name');
+    if (name) attrs.push(`[name="${CSS.escape(name)}"]`);
+    return attrs.length ? `${a.tagName.toLowerCase()}${attrs.join('')}` : null;
+  }
+
+  /** Durations ("2m 13s") from `data-since`: drawn by the ticker, never into a region's HTML, which would then change every second. */
+  function tick(root: ParentNode = document) {
+    for (const el of $$('[data-since]', root)) el.textContent = dur(Date.now() - Number(el.dataset.since));
+  }
+
+  /** Replaces a region's content only when it changed; keeps the focused element, its caret and the open menu. */
   function patch(name: string | HTMLElement, html: string) {
     const el = typeof name === 'string' ? $(`[data-region="${name}"]`) : name;
     if (!el) return false;
     if (rendered.get(el) === html) return false;
     const active = document.activeElement;
-    let key: string | undefined;
+    let key: string | null = null;
     let sel: [number | null, number | null] | null = null;
     if (active instanceof HTMLElement && el.contains(active)) {
-      key = active.id || active.dataset.key || active.getAttribute('name') || undefined;
+      key = selectorOf(active);
       if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
         try {
           sel = [active.selectionStart, active.selectionEnd];
@@ -336,10 +358,17 @@ interface Views {
         }
       }
     }
+    // A menu is known by the button that opens it: the same button drawn again opens it again.
+    const opener = (w: HTMLElement) => (w.querySelector('[data-action]') || w).outerHTML;
+    const open = new Set($$('.menu-wrap.open', el).map(opener));
     el.innerHTML = html;
     rendered.set(el, html);
+    tick(el);
+    if (open.size) for (const w of $$('.menu-wrap', el)) if (open.has(opener(w))) w.classList.add('open');
     if (key) {
-      const again = el.querySelector<HTMLElement>(`#${CSS.escape(key)}`) || el.querySelector<HTMLElement>(`[data-key="${CSS.escape(key)}"]`) || el.querySelector<HTMLElement>(`[name="${CSS.escape(key)}"]`);
+      // Only an element found once: focus never jumps to a look-alike.
+      const found = el.querySelectorAll<HTMLElement>(key);
+      const again = found.length === 1 ? found[0] : undefined;
       if (again) {
         again.focus();
         if (sel && (again instanceof HTMLInputElement || again instanceof HTMLTextAreaElement)) {
@@ -1107,7 +1136,7 @@ interface Views {
           ${groupChip(t.group)}
           ${statusBadge(t.status, t.live)}
           ${t.result && t.result.kind === 'audit' ? sevCounts(t.result.counts ?? {}) : ''}
-          ${live ? `<span class="muted small" data-since="${live.since ?? Date.now()}">${dur(Date.now() - (live.since ?? Date.now()))}</span>` : ''}
+          ${live && live.since ? `<span class="muted small" data-since="${live.since}"></span>` : ''}
           ${t.branch ? `<span class="muted small">${icon('branch')}${esc(t.branch)}</span>` : ''}
           ${t.cost ? `<span class="muted small">${money(t.cost)}</span>` : ''}
           <span class="muted small">${ago(t.updatedAt)}</span>
@@ -1888,9 +1917,7 @@ interface Views {
   });
 
   // Live durations ("2m 13s") tick without re-rendering anything else.
-  setInterval(() => {
-    for (const el of $$('[data-since]')) el.textContent = dur(Date.now() - Number(el.dataset.since));
-  }, 1000);
+  setInterval(() => tick(), 1000);
 
   window.CS = { vscode, call, attempt, toast, icon, esc, md, $, $$, ago, clock, dur, money, fmtTokens, resetIn, meter, level, EFFORT_LABEL, effortTag, size, plural, stepName, OUTPUT_INFO, SCENARIO_INFO, scInfo, modelChoices, scenarioChip, groupChip, sevCounts, agentColor, S, views, pipeRowHtml, libraryBlock, libraryMove, pipeEditors, pipeDragging: () => Boolean(pipeDrag), go, patch, debounce, persist, statusBadge, miniSteps, sourceChip, outlineHtml, permissionCard, loadOverview, autosize, shake, refreshSoon, actions, changes, inputs,
     // Called by the last script to load (config.js) once every view is registered.

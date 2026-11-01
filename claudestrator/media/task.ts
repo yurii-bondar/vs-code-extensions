@@ -452,7 +452,8 @@ interface Views {
     const k = d.status.key;
     const canResume = d.status.resumable;
     const live = k === 'running' ? d.live : null;
-    const since = live ? (live.since ?? Date.now()) : 0;
+    // The duration is the ticker's to draw (`data-since`): in the HTML it would change the header, and close its menu, at every push.
+    const since = live ? live.since : undefined;
     return `<header class="task-header">
       <div class="th-main">
         <h1 class="th-title">${esc(d.title)}</h1>
@@ -462,7 +463,7 @@ interface Views {
           ${scenarioChip(d.scenario, d.scenarioLabel)}
           ${groupChip(d.group)}
           ${statusBadge(d.status, d.live)}
-          ${live ? `<span class="muted small">${icon('clock')}<span data-since="${since}">${dur(Date.now() - since)}</span></span>` : ''}
+          ${since ? `<span class="muted small">${icon('clock')}<span data-since="${since}"></span></span>` : ''}
           ${d.round > 1 ? `<span class="chip">${icon('refresh')}round ${d.round}/${d.maxRounds}</span>` : ''}
           ${d.cost ? `<span class="chip" title="Spent by this task's agents so far">${icon('dollar')}${money(d.cost).slice(1)}</span>` : ''}
         </div>
