@@ -43,3 +43,12 @@ test("pr: the plan's title is one line in the commit and the PR, and AI credit s
   assert.match(strict, /- \[minor\] `a\.ts:3` naming/, 'the rest of what the agents wrote stays');
   assert.match(await prBody({ state, repo: 'api', taskDir: dir, language: 'English' }), /Generated with Claude Code/, 'without the policy it is left as written');
 });
+
+test('pr: a long plan or many findings make a PR body GitHub still takes', async () => {
+  const { state, dir } = task('Cap bets', 'x'.repeat(100000));
+  state.review.openFindings = Array.from({ length: 400 }, (_, i) => ({ severity: 'minor', repo: 'api', file: `f${i}.ts`, line: 1, problem: 'p'.repeat(300), fix: 'f' }));
+  const body = await prBody({ state, repo: 'api', taskDir: dir, language: 'English' });
+  assert.ok(body.length <= 65536, `${body.length} characters`);
+  assert.match(body, /… 350 more in the task's review/);
+  assert.match(body, /## Related PRs/, 'every section is still there');
+});

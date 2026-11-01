@@ -62,6 +62,11 @@ interface PrBodyArgs {
   forbidAttribution?: boolean;
 }
 
+/** GitHub refuses a PR body over 65,536 characters; a plan or a list of findings can be longer. */
+const MAX_BODY = 60000;
+const MAX_SUMMARY = 20000;
+const MAX_FINDINGS = 50;
+
 async function prBody({ state, repo, taskDir, language, prs = {}, forbidAttribution = false }: PrBodyArgs): Promise<string> {
   const t = /ukrain|україн/i.test(language) ? UK : EN;
   const link = state.spec && state.spec.links[0];
@@ -70,22 +75,26 @@ async function prBody({ state, repo, taskDir, language, prs = {}, forbidAttribut
   // A step across all repos (the tester) left its checks red in some of them; each PR mentions it.
   const failed = state.gateFailures.filter((g) => !g.repo || g.repo === repo);
   const findings = state.review.openFindings.filter((f) => !f.repo || f.repo === repo);
+  const summary = (await planSummary(taskDir, state)) || (state.spec && state.spec.title) || '';
+  const listed = findings.slice(0, MAX_FINDINGS).map((f) => `- [${f.severity}] ${f.file ? `\`${f.file}${f.line ? `:${f.line}` : ''}\` ` : ''}${f.problem}${f.fix ? ` → ${f.fix}` : ''}`);
+  if (findings.length > MAX_FINDINGS) listed.push(`- … ${findings.length - MAX_FINDINGS} more in the task's review`);
   const body = [
     `## ${t.what}`,
-    (await planSummary(taskDir, state)) || (state.spec && state.spec.title) || '',
+    summary.length > MAX_SUMMARY ? `${summary.slice(0, MAX_SUMMARY)}\n\n…` : summary,
     `## ${t.why}`,
     link ? `[${link.title}](${link.url})` : (state.spec && state.spec.title) || state.input,
     `## ${t.gates}`,
     failed.length ? failed.map((g) => `- ${g.agent}: ${t.failed}`).join('\n') : `_${t.none}_`,
     `## ${t.findings}`,
-    findings.length ? findings.map((f) => `- [${f.severity}] ${f.file ? `\`${f.file}${f.line ? `:${f.line}` : ''}\` ` : ''}${f.problem}${f.fix ? ` → ${f.fix}` : ''}`).join('\n') : `_${t.none}_`,
+    listed.length ? listed.join('\n') : `_${t.none}_`,
     `## ${t.related}`,
     related,
     `## ${t.repos}`,
     order,
     '',
   ].join('\n\n');
-  return forbidAttribution ? withoutAttribution(body) : body;
+  const out = forbidAttribution ? withoutAttribution(body) : body;
+  return out.length > MAX_BODY ? `${out.slice(0, MAX_BODY)}\n\n…` : out;
 }
 
 export type { PrBodyArgs };
