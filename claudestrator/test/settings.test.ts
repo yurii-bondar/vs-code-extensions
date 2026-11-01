@@ -59,6 +59,9 @@ test('settings: tokens for GitHub and package registries are secrets too, and ap
 test('settings: credentials in the environment are found by name or by a password in a URL', async () => {
   const env = { PATH: '/bin', HOME: '/h', NPM_TOKEN: 'x', AWS_ACCESS_KEY_ID: 'x', AWS_SECRET_ACCESS_KEY: 'x', ANTHROPIC_API_KEY: 'x', GOOGLE_APPLICATION_CREDENTIALS: '/k.json', SSH_AUTH_SOCK: '/s', DB_PASSWORD: 'x', DATABASE_URL: 'postgres://app:hunter2@db:5432/app', REDIS_URL: 'redis://cache:6379', TOKENIZERS_PARALLELISM: 'false', LANG: 'en' };
   assert.deepEqual(credentialVars(env), ['ANTHROPIC_API_KEY', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'DATABASE_URL', 'DB_PASSWORD', 'GOOGLE_APPLICATION_CREDENTIALS', 'NPM_TOKEN', 'SSH_AUTH_SOCK']);
+  // Names that spell it another way, and values that are a token whatever the name.
+  const more = { PGPASSWORD: 'x', MYSQL_PWD: 'x', npm_config__authToken: 'x', GITHUB_PAT: 'x', OPENAI_KEY: 'x', STRIPE_KEY: 'x', APP_SIGNING_KEY: 'x', APP_SECRETS: 'x', REDIS_PASS: 'x', SENTRY_DSN: 'x', SLACK_WEBHOOK_URL: 'x', CI_JOB_JWT: 'x', OP_SESSION_my: 'x', BW_SESSION: 'x', MY_THING: 'ghp_abcdefghijklmnopqrstuvwxyz0123', PWD: '/ws', OLDPWD: '/', TERM_SESSION_ID: 'w0', KEYBOARD_LAYOUT: 'us' };
+  assert.deepEqual(credentialVars(more), Object.keys(more).filter((k) => !['PWD', 'OLDPWD', 'TERM_SESSION_ID', 'KEYBOARD_LAYOUT'].includes(k)).sort());
 });
 
 test("settings: an agent never writes Claudestrator's config or task state, also inside its own repo", async () => {

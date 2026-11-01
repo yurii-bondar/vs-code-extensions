@@ -28,10 +28,18 @@ const SECRET_FILES = [
   '~/.claude.json',
   '~/.claude*/.claude.json',
   '~/.claude*/.credentials.json',
+  // Read by builds too, so only Read is refused them: a build's own tool still reads its registry's settings.
+  '~/.m2/settings.xml',
+  '~/.gradle/gradle.properties',
+  '~/.yarnrc',
+  '~/.config/pip/pip.conf',
+  '~/.pip/pip.conf',
+  ...['~/.config/git/credentials', '~/.terraform.d/credentials.tfrc.json', '~/.pgpass', '~/.my.cnf', '~/.vault-token', '~/.composer/auth.json', '~/.config/composer/auth.json', '~/.config/glab-cli/**', '~/.config/hub', '~/.bash_history', '~/.zsh_history', '~/.local/share/fish/fish_history'],
   '//**/.env',
+  '//**/.envrc',
   '//**/.env.local',
   '//**/.env.*.local',
-  '//**/.env.production',
+  ...['production', 'prod', 'staging', 'stage', 'development', 'dev', 'test'].map((name) => `//**/.env.${name}`),
 ];
 
 /** A dotenv file by its name: `.env`, `.env.local`, `.env.staging`, direnv's `.envrc`. Its values are credentials. */
@@ -58,18 +66,42 @@ const SECRET_PATHS = [
   '~/.claude.json',
   '~/.claude*/.claude.json',
   '~/.claude*/.credentials.json',
+  '~/.config/git/credentials',
+  '~/.terraform.d/credentials.tfrc.json',
+  '~/.pgpass',
+  '~/.my.cnf',
+  '~/.vault-token',
+  '~/.composer/auth.json',
+  '~/.config/composer/auth.json',
+  '~/.config/glab-cli',
+  '~/.config/hub',
+  '~/.bash_history',
+  '~/.zsh_history',
+  '~/.local/share/fish/fish_history',
 ];
 
 /**
  * Environment variables that hold a credential: by name (`NPM_TOKEN`, `AWS_SECRET_ACCESS_KEY`, `SSH_AUTH_SOCK`), or by
  * a password in a URL (`DATABASE_URL=postgres://u:p@…`). A sandboxed command gets none of them.
  */
-const CREDENTIAL_NAME = /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|PASSPHRASE|API_?KEY|ACCESS_?KEY(?:_ID)?|PRIVATE_?KEY|CREDENTIALS?|AUTH)(?:_|$)/i;
+/** A word of a variable's name that makes it a credential: NPM_TOKEN, MYSQL_PWD, GITHUB_PAT, CI_JOB_JWT, SENTRY_DSN. */
+const CREDENTIAL_WORD = /^(TOKENS?|SECRETS?|PASSWORD|PASSWD|PASS|PWD|PASSPHRASE|APIKEY|KEYS?|CREDENTIALS?|AUTH|AUTHTOKEN|PAT|JWT|DSN|WEBHOOK|SESSION|COOKIE|PRIVATE)$/;
+/** One word that ends in one: PGPASSWORD, GHTOKEN. */
+const CREDENTIAL_END = /(TOKEN|SECRET|PASSWORD|PASSWD)$/;
+/** Names with such a word that hold none: the shell's folders, a desktop's or a terminal's session. */
+const NOT_CREDENTIALS = new Set(['PWD', 'OLDPWD', 'XDG_SESSION_ID', 'XDG_SESSION_TYPE', 'XDG_SESSION_CLASS', 'XDG_SESSION_DESKTOP', 'DBUS_SESSION_BUS_ADDRESS', 'SESSION_MANAGER', 'TERM_SESSION_ID', 'ITERM_SESSION_ID', 'TOKENIZERS_PARALLELISM']);
 const URL_PASSWORD = /:\/\/[^/\s:@]+:[^/\s@]+@/;
+/** A value that is a token by its shape: GitHub, Slack, OpenAI, Anthropic, AWS, Stripe and npm keys. */
+const TOKEN_VALUE = /^(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|xox[abprs]-[\w-]{10,}|sk-(ant-)?[\w-]{20,}|AKIA[0-9A-Z]{16}|[sr]k_live_\w{10,}|npm_[A-Za-z0-9]{30,})$/;
+
+const credentialName = (name: string): boolean => {
+  const upper = name.toUpperCase();
+  return !NOT_CREDENTIALS.has(upper) && upper.split(/_+/).some((w) => CREDENTIAL_WORD.test(w) || CREDENTIAL_END.test(w));
+};
 
 function credentialVars(env: Record<string, string | undefined>): string[] {
   return Object.keys(env)
-    .filter((name) => CREDENTIAL_NAME.test(name) || URL_PASSWORD.test(env[name] ?? ''))
+    .filter((name) => credentialName(name) || URL_PASSWORD.test(env[name] ?? '') || TOKEN_VALUE.test((env[name] ?? '').trim()))
     .sort();
 }
 
