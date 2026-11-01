@@ -2,7 +2,7 @@
 import test from 'node:test';
 import * as assert from 'node:assert/strict';
 
-import { classifyInput, planFromTicket, projectAllowed, runIntake } from '../src/core/intake';
+import { adfToText, classifyInput, planFromTicket, projectAllowed, runIntake, storageToText } from '../src/core/intake';
 import { branchName } from '../src/core/machine';
 import { commitSubject, prTitle } from '../src/core/pr';
 import { validateConfigLayer } from '../src/core/protocol';
@@ -45,4 +45,23 @@ test('intake: a Jira task without a planner names its branch and PR after the su
   assert.equal(named('CP-123 Other issue').slug, 'cp-123-other-issue', 'another key is part of the summary');
   // Free text keeps its words.
   assert.equal(named('CP-12 Fix login', { kind: 'text', text: 'CP-12 Fix login' }, 'T-1').branch, 'fix/cp-12-fix-login');
+});
+
+test('intake: Confluence code keeps its text, its angle brackets and its language', () => {
+  const code = (body: string, language = ''): string =>
+    `<ac:structured-macro ac:name="code" ac:schema-version="1">${language && `<ac:parameter ac:name="language">${language}</ac:parameter>`}<ac:plain-text-body><![CDATA[${body}]]></ac:plain-text-body></ac:structured-macro>`;
+  assert.equal(storageToText(`<p>Change it:</p>${code('List<String> xs = load();\nif (a < b && c > d) {}', 'java')}<p>Done.</p>`), 'Change it:\n\n```java\nList<String> xs = load();\nif (a < b && c > d) {}\n```\n\nDone.');
+  assert.equal(storageToText(code('<div class="x">hi</div>')), '```\n<div class="x">hi</div>\n```');
+  assert.equal(storageToText(code('x &lt; y')), '```\nx &lt; y\n```', 'code is not decoded: it is written as it is');
+  assert.equal(storageToText(code('a]]]]><![CDATA[>b')), '```\na]]>b\n```', 'code with ]]> in it comes in two sections');
+  assert.equal(storageToText(code('```md\nx\n```')), '````\n```md\nx\n```\n````', 'a fence longer than the code has');
+  // A code macro without a body takes nothing after it.
+  assert.equal(storageToText('<ac:structured-macro ac:name="code"><ac:plain-text-body/></ac:structured-macro><p>After</p><ac:structured-macro ac:name="noformat"><ac:plain-text-body><![CDATA[x < y]]></ac:plain-text-body></ac:structured-macro>'), 'After\n\n```\nx < y\n```');
+  // <pre> and <code>, whose text is written with entities: decoded once.
+  assert.equal(storageToText('<pre>if (a &lt; b) {<br/>  run();<br/>}</pre>'), '```\nif (a < b) {\n  run();\n}\n```');
+  assert.equal(storageToText('<p>Use <code>Map&lt;K, V&gt;</code> here &amp; there, not <code>a`b</code>.</p>'), 'Use `Map<K, V>` here & there, not ``a`b``.');
+  assert.equal(storageToText('<p>&amp;lt;b&amp;gt; is written as text</p>'), '&lt;b&gt; is written as text');
+  assert.equal(storageToText('<p>It&rsquo;s done &mdash; ship it</p>'), 'It’s done — ship it');
+  // Jira's code blocks carry their language too.
+  assert.equal(adfToText({ type: 'doc', content: [{ type: 'codeBlock', attrs: { language: 'typescript' }, content: [{ type: 'text', text: 'const xs: Array<number> = [];' }] }] }), '```typescript\nconst xs: Array<number> = [];\n```');
 });

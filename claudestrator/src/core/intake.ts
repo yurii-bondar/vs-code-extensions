@@ -361,7 +361,7 @@ function blocks(raw: unknown, depth: number): string {
     case 'heading':
       return `${'#'.repeat(Number((n.attrs && n.attrs.level) ?? 1))} ${inline(n)}\n\n`;
     case 'codeBlock':
-      return '```\n' + inline(n) + '\n```\n\n';
+      return `${fenced(inline(n), String((n.attrs && n.attrs.language) ?? ''))}\n\n`;
     case 'rule':
       return '---\n\n';
     case 'bulletList':
@@ -397,9 +397,50 @@ function blocks(raw: unknown, depth: number): string {
   }
 }
 
-const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+const ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  nbsp: ' ',
+  lsquo: '‘',
+  rsquo: '’',
+  ldquo: '“',
+  rdquo: '”',
+  ndash: '–',
+  mdash: '—',
+  hellip: '…',
+  bull: '•',
+  middot: '·',
+  laquo: '«',
+  raquo: '»',
+  times: '×',
+};
 
-/** Confluence storage format (XHTML) → Markdown-ish text. Rough by design: structure, not fidelity. */
+/** Text with its character references (`&lt;`, `&#x1F680;`, `&rsquo;`) decoded; one that names nothing stays as written. */
+function decodeEntities(text: string): string {
+  return text.replace(/&(#\d+|#x[0-9a-f]+|\w+);/gi, (m, e: string) => (e[0] === '#' ? codePoint(e[1]!.toLowerCase() === 'x' ? parseInt(e.slice(2), 16) : Number(e.slice(1))) ?? m : ENTITIES[e] ?? m));
+}
+
+/** The text of an XHTML fragment: its line breaks kept, its tags dropped, its entities decoded. */
+const plainText = (html: string): string => decodeEntities(html.replace(/<(br|\/p|\/div)\b[^>]*>/g, '\n').replace(/<[^>]+>/g, ''));
+
+/** A fenced code block, with a fence longer than any run of backticks in the code, and its language as one word. */
+function fenced(code: string, language = ''): string {
+  const fence = '`'.repeat(Math.max(3, longestRun(code) + 1));
+  return `${fence}${language.replace(/[^\w+#.-]/g, '')}\n${code.replace(/^\n+/, '').trimEnd()}\n${fence}`;
+}
+
+/** Inline code: backticks around it, more of them than it has in a row. */
+function inlineCode(code: string): string {
+  const ticks = '`'.repeat(longestRun(code) + 1);
+  const pad = code.startsWith('`') || code.endsWith('`') ? ' ' : '';
+  return `${ticks}${pad}${code}${pad}${ticks}`;
+}
+
+const longestRun = (text: string): number => [...text.matchAll(/`+/g)].reduce((n, m) => Math.max(n, m[0].length), 0);
+
 /** A character by its number, or undefined for one Unicode does not have (`&#99999999;` would throw). */
 function codePoint(n: number): string | undefined {
   return Number.isInteger(n) && n >= 0 && n <= 0x10ffff ? String.fromCodePoint(n) : undefined;
@@ -411,11 +452,38 @@ function dateOf(timestamp: unknown): string {
   return timestamp && !Number.isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : '';
 }
 
+/** A code macro: its parameters (the language), then its body. */
+const CODE_MACRO = /<ac:structured-macro\b[^>]*\bac:name="code"[^>]*>((?:(?!<\/ac:structured-macro>|<ac:plain-text-body>)[\s\S])*)<ac:plain-text-body>([\s\S]*?)<\/ac:plain-text-body>\s*<\/ac:structured-macro>/g;
+
+/** A plain-text body's code: its CDATA sections joined (code with `]]>` in it is split into two), else its decoded text. */
+function cdata(body: string): string {
+  const sections = [...body.matchAll(/<!\[CDATA\[([\s\S]*?)\]\]>/g)];
+  return sections.length ? sections.map((m) => m[1]).join('') : plainText(body);
+}
+
+/** A code macro's language parameter, as a fence may carry it. */
+function codeLanguage(params: string): string {
+  const m = params.match(/<ac:parameter\b[^>]*\bac:name="language"[^>]*>([\s\S]*?)<\/ac:parameter>/);
+  return m ? plainText(m[1]!) : '';
+}
+
+/**
+ * Confluence storage format (XHTML) → Markdown-ish text. Rough by design: structure, not fidelity. Code is set aside
+ * first, as the agents should read it (`List<String>` in a code block is code, not a tag), and comes back at its place
+ * at the end, so neither the tag stripping nor the entity decoding reaches it.
+ */
 function storageToText(html: string): string {
-  return html
-    .replace(/<ac:structured-macro[^>]*ac:name="code"[^>]*>[\s\S]*?<!\[CDATA\[([\s\S]*?)\]\]>[\s\S]*?<\/ac:structured-macro>/g, '\n```\n$1\n```\n')
+  const kept: string[] = [];
+  const keep = (text: string): string => `\uE000${kept.push(text) - 1}\uE000`;
+  const block = (text: string): string => `\n\n${keep(text)}\n\n`;
+  const text = html
+    .replace(/\uE000/g, '')
+    .replace(CODE_MACRO, (_, params: string, body: string) => block(fenced(cdata(body), codeLanguage(params))))
     // Other plain-text bodies (noformat): their text is all CDATA, which the tag stripping below would drop.
-    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '\n```\n$1\n```\n')
+    .replace(/<ac:plain-text-body>([\s\S]*?)<\/ac:plain-text-body>/g, (_, body: string) => block(fenced(cdata(body))))
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, (_, code: string) => block(fenced(code)))
+    .replace(/<pre\b[^>]*>([\s\S]*?)<\/pre>/g, (_, code: string) => block(fenced(plainText(code))))
+    .replace(/<code\b[^>]*>([\s\S]*?)<\/code>/g, (_, code: string) => keep(inlineCode(plainText(code))))
     // Task lists: a checklist item each, without the task's id.
     .replace(/<ac:task-id>[^<]*<\/ac:task-id>/g, '')
     .replace(/<ac:task>\s*<ac:task-status>\s*(complete|incomplete)\s*<\/ac:task-status>/g, (_, st: string) => `\n- ${st === 'complete' ? '[x]' : '[ ]'} `)
@@ -425,11 +493,12 @@ function storageToText(html: string): string {
     .replace(/<li[^>]*>/g, '\n- ')
     .replace(/<(br|\/p|\/tr|\/ul|\/ol)[^>]*>/g, '\n')
     .replace(/<\/t[dh]>/g, ' | ')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&(#\d+|#x[0-9a-f]+|\w+);/gi, (m, e: string) => (e[0] === '#' ? codePoint(e[1]!.toLowerCase() === 'x' ? parseInt(e.slice(2), 16) : Number(e.slice(1))) ?? m : ENTITIES[e] ?? m))
+    .replace(/<[^>]+>/g, '');
+  return decodeEntities(text)
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
-    .trim();
+    .trim()
+    .replace(/\uE000(\d+)\uE000/g, (_, i: string) => kept[Number(i)] ?? '');
 }
 
 const AC_HEADING = /^\s*(?:#{1,6}\s*|\*\*)?(acceptance criteria|critères d'acceptation|критерії (?:приймання|прийняття)|критерии приемки|ac)\s*(?:\*\*)?\s*:?\s*$/i;
