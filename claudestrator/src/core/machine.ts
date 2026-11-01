@@ -522,7 +522,9 @@ function inputsFor(s: TaskState, step: Step, output: Output): string[] {
     // A fix round's steps read the findings they fix, also one retried after it failed.
     if (s.review.fixing) inputs.push(...s.review.lastVerdicts.map((v) => v.artifact));
   }
-  // Verdict stages get only the ticket and plan: fresh context is the point. The diff is added by the engine.
+  // Verdict stages get the ticket and plan, in a fresh session: fresh context is the point. The diff is added by the
+  // engine. A later round also gets its own review of the round before, to check its findings first.
+  if (output === 'verdict' && s.review.round > 1) inputs.push(...s.review.lastVerdicts.filter((v) => v.agent === step.agent).map((v) => v.artifact));
   return unique(inputs);
 }
 

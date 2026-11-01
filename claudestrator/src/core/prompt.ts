@@ -96,6 +96,10 @@ function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, 
       'After your report, hand over its status: {"status": "done"} when your part is done; {"status": "blocked", "blockers": ["<one line each>"]} when you cannot go on (the plan does not hold, a test shows a bug in code that is not yours to change, something only the user can decide), and stop there rather than work around it. As your structured output when you have the StructuredOutput tool, else as a fenced ```json block at the end.'
     );
   }
+  // A later review round checks the findings of the one before first, so rounds converge instead of moving on.
+  if (next.output === 'verdict' && next.round > 1) {
+    lines.push('', `This is review round ${next.round}: the previous round's review is among the inputs. Check first that each of its blocker and major findings is fixed, and report again any that is not. Raise a new blocker or major finding only for what the fixes broke or what truly blocks the change, not for what the earlier round could have raised.`);
+  }
   lines.push('Do not commit, push, stash or switch branches: Claudestrator owns git.', 'Your final message is your report; nothing may follow it.');
   return lines.join('\n');
 }

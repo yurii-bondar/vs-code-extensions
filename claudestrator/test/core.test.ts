@@ -300,6 +300,21 @@ test('machine: your feedback stays with a step run again after a Stop, and reach
   assert.ok(retry.inputs.includes('reviews/r1/reviewer.md'), 'the findings are among its inputs');
 });
 
+test('machine: the review of a later round reads the one before it, to check its findings first', async () => {
+  let s = reviewedRounds([false], 3);
+  for (const e of [
+    { type: 'stage_started', agent: 'developer', repo: 'api' },
+    { type: 'stage_completed', agent: 'developer', repo: 'api', artifact: 'reports/r2/developer-api.md', gates: 'pass' },
+    { type: 'stage_started', agent: 'tester' },
+    { type: 'stage_completed', agent: 'tester', artifact: 'reports/r2/tester.md', gates: 'pass' },
+  ] as EventBody[]) s = passed(tr(s, { ...e, at: at(80) } as OrchEvent)).state;
+  const review = runOf(nx(s));
+  assert.deepEqual([review.step.agent, review.round], ['reviewer', 2]);
+  assert.ok(review.inputs.includes('reviews/r1/reviewer.md'), review.inputs.join(', '));
+  const prompt = buildAgentPrompt({ state: s, next: review, taskDir: '/ws/.orch/tasks/T-1', language: 'English' });
+  assert.match(prompt, /review round 2: the previous round's review is among the inputs\. Check first that each of its blocker and major findings is fixed/);
+});
+
 test('machine: two review rounds in a row with an empty diff stop the loop before the round limit', async () => {
   // The limit would allow five rounds; the agents changed nothing twice, so a third fix round is not started.
   const s = reviewedRounds([true, true], 5);
