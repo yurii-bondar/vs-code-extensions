@@ -25,6 +25,7 @@ function panel() {
   const view = { visible: true };
   const p = Object.assign(Object.create(DashboardPanel.prototype) as InstanceType<typeof DashboardPanel>, {
     panel: view,
+    booted: true,
     outputQueue: [],
     outputTimer: undefined,
     missedText: new Set<string>(),
@@ -175,6 +176,16 @@ test('panel: the sidebar deletes a task and opens config.yaml without a dashboar
   Object.assign(p, { viewing: 'T-1' });
   p.taskDeleted('T-1');
   assert.deepEqual(posted, [{ type: 'navigate', route: { name: 'home' } }]);
+});
+
+test('panel: a page still loading starts on the last screen asked for, not the first', async () => {
+  const { p, posted } = panel();
+  Object.assign(p, { booted: false, initialRoute: { name: 'task', taskId: 'A' }, context: { extension: { packageJSON: { version: '1.0.0' } } } });
+  p.navigate({ name: 'task', taskId: 'B' });
+  assert.deepEqual(posted, [], 'nothing goes to a page that does not listen yet');
+  assert.deepEqual((await p.$boot()).route, { name: 'task', taskId: 'B' });
+  p.navigate({ name: 'task', taskId: 'C' });
+  assert.deepEqual(posted, [{ type: 'navigate', route: { name: 'task', taskId: 'C' } }], 'a booted page is sent there');
 });
 
 test("panel: a deleted task's screen hears so, and goes home", async () => {

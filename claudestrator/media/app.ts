@@ -1874,6 +1874,10 @@ interface Views {
     }, 150);
   }
 
+  /** Whether the page asked the host where to start and went there; a screen sent before that waits in `early`. */
+  let booted = false;
+  let early: Route | null = null;
+
   window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
     const msg = event.data;
     switch (msg.type) {
@@ -1886,7 +1890,9 @@ interface Views {
         return;
       }
       case 'navigate':
-        go(msg.route);
+        // Before the page booted, the screen to start on: the boot's own route is older.
+        if (booted) go(msg.route);
+        else early = msg.route;
         return;
       case 'changed':
         refreshSoon();
@@ -1924,7 +1930,8 @@ interface Views {
     boot: async () => {
       renderShell();
       const boot = await call('boot');
-      go(boot.route || S.route || { name: 'home' });
+      booted = true;
+      go(early || boot.route || S.route || { name: 'home' });
     },
   };
 })();

@@ -58,11 +58,23 @@ class DashboardPanel implements RpcHandlers {
   static show(context: vscode.ExtensionContext, orch: Orchestrator, route?: Route): DashboardPanel {
     if (DashboardPanel.current) {
       DashboardPanel.current.panel.reveal(DashboardPanel.current.panel.viewColumn);
-      if (route) DashboardPanel.current.post({ type: 'navigate', route });
+      if (route) DashboardPanel.current.navigate(route);
       return DashboardPanel.current;
     }
     DashboardPanel.current = new DashboardPanel(context, orch, route);
     return DashboardPanel.current;
+  }
+
+  /** Whether the page has asked where to start: before that, a screen to show is where it starts. */
+  booted = false;
+
+  /**
+   * Shows a screen. A page still loading would get the message before it listens, or go there and then to where it
+   * was opened for (two quick "Open Task" clicks ended on the first task): it starts on the latest one instead.
+   */
+  navigate(route: Route): void {
+    if (this.booted) void this.post({ type: 'navigate', route });
+    else this.initialRoute = route;
   }
 
   constructor(context: vscode.ExtensionContext, orch: Orchestrator, route?: Route) {
@@ -212,6 +224,7 @@ class DashboardPanel implements RpcHandlers {
   async $boot() {
     const route = this.initialRoute || null;
     this.initialRoute = undefined;
+    this.booted = true;
     return { route, platform: process.platform, version: this.context.extension.packageJSON.version };
   }
 
@@ -436,7 +449,7 @@ class DashboardPanel implements RpcHandlers {
 
   /** A task deleted elsewhere (from the sidebar) while its screen is open: the page leaves it. */
   taskDeleted(taskId: string): void {
-    if (this.viewing === taskId) void this.post({ type: 'navigate', route: { name: 'home' } });
+    if (this.viewing === taskId) this.navigate({ name: 'home' });
   }
 
   async $cleanup({ taskId }: { taskId: string }) {
