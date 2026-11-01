@@ -37,8 +37,8 @@ const PLAN_TYPES = ['feat', 'fix', 'chore', 'refactor'];
 const SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 /** What a task group is. */
 const GROUP_TYPES: GroupType[] = ['epic', 'story', 'group'];
-/** A Jira issue key, as a group names it: `CP-123`. */
-const JIRA_KEY = /^[A-Z][A-Z0-9]+-\d+$/;
+/** A Jira issue key, as a group names it: `CP-123`, `MY_PROJ-12` (a project key may have `_`). */
+const JIRA_KEY = /^[A-Z][A-Z0-9_]+-\d+$/;
 const SEVERITIES: Severity[] = ['blocker', 'major', 'minor'];
 
 /** Where a human must decide. Ids are shared with the CLI and the plugin. */

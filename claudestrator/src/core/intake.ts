@@ -110,7 +110,8 @@ function detectScenario(text: string): string {
   return 'deliver';
 }
 
-const JIRA_KEY = /^[A-Z][A-Z0-9]+-\d+$/;
+/** A Jira issue key: a project key (a capital letter, then capitals, digits or `_`) and a number, `CP-12`, `MY_PROJ-3`. */
+const JIRA_KEY = /^[A-Z][A-Z0-9_]+-\d+$/;
 /** Look like Jira keys, are not. */
 const NOT_A_KEY = /^(UTF|ISO|SHA|RFC|HTTP|TLS|SSL|ES|MD|AES|RSA|CVE|GPT|COVID|IPV|IP|X)-/;
 
@@ -135,7 +136,7 @@ function classifyInput(input: string, { embedded = false, projects = [] }: { emb
     url = null;
   }
   if (url) {
-    const browse = url.pathname.match(/\/browse\/([A-Z][A-Z0-9]+-\d+)/);
+    const browse = url.pathname.match(/\/browse\/([A-Z][A-Z0-9_]+-\d+)/);
     const selected = url.searchParams.get('selectedIssue');
     const key = (browse && browse[1]) || (selected && JIRA_KEY.test(selected) ? selected : undefined);
     if (key) return { kind: 'jira', key, site: url.host };
@@ -148,6 +149,12 @@ function classifyInput(input: string, { embedded = false, projects = [] }: { emb
   return { kind: 'text', text };
 }
 
+/** Whether a Jira key's project is one of `allowed`, written in any case; an empty list allows every project. */
+function projectAllowed(key: string, allowed: readonly string[]): boolean {
+  const project = key.split('-')[0]!.toUpperCase();
+  return !allowed.length || allowed.some((p) => p.trim().toUpperCase() === project);
+}
+
 function embeddedIssue(text: string, projects: string[]): Classified | null {
   const keys = new Map<string, Extract<Source, { kind: 'jira' }> & { raw: string }>();
   for (const m of text.matchAll(/https?:\/\/\S+/g)) {
@@ -155,9 +162,9 @@ function embeddedIssue(text: string, projects: string[]): Classified | null {
     if (c.kind === 'jira') keys.set(c.key, { ...c, raw: m[0] });
   }
   if (!keys.size) {
-    for (const m of text.matchAll(/(?<![\w/-])([A-Z][A-Z0-9]+-\d+)(?![\w-])/g)) {
+    for (const m of text.matchAll(/(?<![\w/$-])([A-Z][A-Z0-9_]+-\d+)(?![\w-])/g)) {
       const key = m[1]!;
-      if (NOT_A_KEY.test(key) || (projects.length && !projects.includes(key.split('-')[0]!))) continue;
+      if (NOT_A_KEY.test(key) || !projectAllowed(key, projects)) continue;
       keys.set(key, { kind: 'jira', key, raw: key });
     }
   }
@@ -220,10 +227,9 @@ async function runIntake(taskId: string, source: Source, opts: { allowedProjects
     case 'text':
       return fromText(taskId, source);
     case 'jira': {
-      const project = source.key.split('-')[0]!;
       const allowed = opts.allowedProjects ?? [];
-      if (allowed.length > 0 && !allowed.includes(project)) {
-        throw new IntakeError('project_not_allowed', `Jira project ${project} is not allowed (allowed: ${allowed.join(', ')})`);
+      if (!projectAllowed(source.key, allowed)) {
+        throw new IntakeError('project_not_allowed', `Jira project ${source.key.split('-')[0]!} is not allowed (allowed: ${allowed.join(', ')})`);
       }
       const client = requireClient(opts, source);
       const issue = await attempt(() => client.issue(source.key));
@@ -635,5 +641,6 @@ export {
   storageToText,
   extractAcceptanceCriteria,
   otherSite,
+  projectAllowed,
   AtlassianClient,
 };
