@@ -9,12 +9,13 @@ One commit = one logical change. No mixing refactor and feature.
 - Branches: `feat/short-name`, `fix/short-name`. Name reflects the task, not the person.
 - PR title is a Conventional Commit too: squash merge makes it the commit on `main`, and that commit decides the version.
 
-## Releases are automatic
+## Releases follow semantic-release
 
-`semantic-release` runs per extension folder (`release.config.base.cjs`, `.github/workflows/release.yml`).
+`semantic-release` runs per extension folder (`release.config.base.cjs`, `.github/workflows/release.yml`). The workflow is paused, so Claudestrator (the VS Code extension and the JetBrains plugin) is released with `scripts/release.mjs`, which applies the same rules locally.
 
 - `feat` → minor, `fix` → patch, `feat!` or a `BREAKING CHANGE:` footer → major. `refactor`, `test`, `docs`, `chore` publish nothing.
-- **Never edit `version` or `CHANGELOG.md` by hand.** CI writes them, plus the `chore(release): <name>-v<version> [skip ci]` commit and the tag.
+- **Never edit `version`, `pluginVersion` or `CHANGELOG.md` by hand.** CI or `scripts/release.mjs` writes them, plus the `chore(release): <tag> [skip ci]` commit and the tag (`claudestrator-v<version>`, `jetbrains-claudestrator-v<version>`). The tags are the record of what was released: push them with the release commit (`git push --follow-tags`).
+- `npm run release:build | release:test | release:live` in the repo root: build and verify; the tests first; the tests and one real task on haiku first. Add `-- --dry-run` to build without recording a release, `-- --only vscode|jetbrains` for one target. Nothing is built when a target's folders hold what its last release did, or when no commit since then calls for a release.
 - There is no pre-commit version bump in this repo.
 - Do not commit `*.vsix`, `*.log`, `node_modules/`, `.claudestrator/`, `.orch/` (see `.gitignore`).
 

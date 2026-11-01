@@ -15,6 +15,9 @@
     "semantic-release-vsce": "^6.1.8"
   },
   "scripts": {
-    "prepare": "husky"
+    "prepare": "husky",
+    "release:build": "node scripts/release.mjs build",
+    "release:test": "node scripts/release.mjs test",
+    "release:live": "node scripts/release.mjs live"
   }
 }
