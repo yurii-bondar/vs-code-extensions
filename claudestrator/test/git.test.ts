@@ -187,3 +187,14 @@ test('git: the diff shows a file as it is, whatever .gitattributes says of it', 
   assert.match(diff, /\+AKIA-planted/);
   assert.doesNotMatch(diff, /Binary files/);
 });
+
+test('git: a checkout lists its dotenv files, also git-ignored ones and those in ignored folders, not the templates', async () => {
+  const ws = workspace(['api'], 'repos:\n  api: {}\n');
+  const dir = path.join(ws, 'api');
+  fs.writeFileSync(path.join(dir, '.gitignore'), '.env\nsecrets/\n');
+  for (const f of ['.env', '.env.example', '.envrc', 'secrets/.env', 'web/.env.production', 'web/.env.sample', 'src/environment.ts']) {
+    fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true });
+    fs.writeFileSync(path.join(dir, f), 'X=1\n');
+  }
+  assert.deepEqual((await new GitRepo(dir).envFiles()).map((f) => path.relative(dir, f)).sort(), ['.env', '.envrc', 'secrets/.env', 'web/.env.production'].map((f) => path.join(...f.split('/'))).sort());
+});

@@ -91,6 +91,9 @@ const paths = (stdout: string): string[] => stdout.split('\0').filter(Boolean);
  */
 const NO_SUBMODULES = '--ignore-submodules=all';
 
+/** A dotenv file that shows what to set, not the values: `.env.example`, `.env.sample`. */
+const DOTENV_TEMPLATE = /\.env\.(example|sample|template|dist|defaults?)$/i;
+
 /**
  * A patch as the files really are: an attribute (`-diff`, `binary`, a textconv driver) a change set in `.gitattributes`
  * would otherwise show a file as "Binary files differ", or as a driver's rendering, to the reviewer and the secret scan.
@@ -226,6 +229,15 @@ class GitRepo {
     } finally {
       if (tmp) await fs.promises.rm(tmp, { recursive: true, force: true });
     }
+  }
+
+  /**
+   * The checkout's dotenv files that hold values (`.env`, `.env.local`, `.env.production`, `.envrc`; not
+   * `.env.example`), absolute: tracked, new or git-ignored, in any folder. One git call, however big the repo.
+   */
+  async envFiles(): Promise<string[]> {
+    const r = await this.git('ls-files', '-z', '--cached', '--others', '--', ':(glob)**/.env', ':(glob)**/.env.*', ':(glob)**/.envrc');
+    return [...new Set(paths(r.stdout))].filter((f) => !DOTENV_TEMPLATE.test(f)).map((f) => path.join(this.dir, f));
   }
 
   /** Where git keeps this checkout's metadata: its own folder and, for a worktree, the repository's shared one. */

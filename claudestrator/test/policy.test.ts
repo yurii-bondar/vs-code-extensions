@@ -210,6 +210,26 @@ test('policy: a Jira comment session posts on its issue and the text it was give
   assert.match(commentMismatch({ issueIdOrKey: 'PROJ-805', commentBody: `${text}\nSECRET-1: hunter2` }, 'PROJ-805', text)!, /exactly as given/);
 });
 
+test('policy: an agent reads no dotenv file of the repos, by its Read tool or by a command', async () => {
+  const ws = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cs-policy-')));
+  const api = path.join(ws, 'api');
+  fs.mkdirSync(api);
+  execFileSync('git', ['init', '-q', api]);
+  fs.writeFileSync(path.join(api, '.gitignore'), '.env\n');
+  fs.writeFileSync(path.join(api, '.env'), 'DB_PASSWORD=x\n');
+  fs.writeFileSync(path.join(api, '.env.example'), 'DB_PASSWORD=\n');
+  fs.mkdirSync(path.join(ws, '.claudestrator'));
+  fs.writeFileSync(path.join(ws, '.claudestrator', 'config.yaml'), 'repos:\n  api: {}\n');
+  const hooks = { settings: () => ({}), host: () => '127.0.0.1:1' } as unknown as EngineOptions['hooks'];
+  const engine = new Engine({ workspace: ws, home: ws, runner: {} as EngineOptions['runner'], hooks });
+  const config = await engine.config();
+  const envFiles = await engine.envFiles([api]);
+  assert.deepEqual(envFiles, [path.join(api, '.env')]);
+  const settings = engine.agentSettings({ writeRoots: [api], cwd: api, config, envFiles }) as { permissions: { deny: string[] }; sandbox: { filesystem: { denyRead: string[] } } };
+  assert.ok(settings.sandbox.filesystem.denyRead.includes(path.join(api, '.env')), 'the sandbox keeps commands out of it');
+  assert.ok(settings.permissions.deny.includes(`Read(/${path.join(api, '.env')})`));
+});
+
 test('policy: an MCP read reaches only the hosts the sandbox would, unless the agent names the tool', async () => {
   const ws = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cs-policy-')));
   fs.mkdirSync(path.join(ws, '.claudestrator'));

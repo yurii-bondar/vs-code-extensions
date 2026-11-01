@@ -878,19 +878,28 @@ class Engine extends EventEmitter {
    * A session's settings (`--settings`): the guard hook in front of every tool call, and what Claude Code enforces
    * itself: deny rules for secrets and pushes, and the sandbox around shell commands (writes only in `writeRoots`).
    */
-  agentSettings({ writeRoots, cwd, config, runsOutside = [] }: { writeRoots: string[]; cwd: string; config: Config; runsOutside?: string[] }): Record<string, unknown> {
+  agentSettings({ writeRoots, cwd, config, runsOutside = [], envFiles = [] }: { writeRoots: string[]; cwd: string; config: Config; runsOutside?: string[]; envFiles?: string[] }): Record<string, unknown> {
     return sessionSettings({
       hooks: this.hooks.settings(),
       guard: this.hooks.host(),
       writeRoots,
       protect: [...configPaths(this.workspace, config), ...runsOutside],
-      secrets: this.secretFiles(),
+      secrets: [...this.secretFiles(), ...envFiles],
       envVars: credentialVars({ ...getChildEnv(), [TOKEN_ENV]: '' }),
       cwd,
       sandbox: config.policy.sandbox,
       network: config.policy.network,
       writable: config.policy.writable,
     });
+  }
+
+  /**
+   * The dotenv files of the repos an agent reads, which neither its Read tool nor its commands may read: a deny rule
+   * covers Read by name anywhere, but the sandbox needs them by path (bubblewrap binds files, not patterns).
+   */
+  async envFiles(dirs: string[]): Promise<string[]> {
+    const found = await Promise.all([...new Set(dirs)].map(async (d) => ((await exists(d)) ? new GitRepo(d).envFiles() : [])));
+    return found.flat();
   }
 
   /**
@@ -1088,7 +1097,7 @@ class Engine extends EventEmitter {
       agent,
       prompt,
       cwd,
-      settings: this.agentSettings({ writeRoots, cwd, config, runsOutside }),
+      settings: this.agentSettings({ writeRoots, cwd, config, runsOutside, envFiles: await this.envFiles([...writeRoots, ...Object.values(config.repos).map((r) => path.resolve(this.workspace, r.path))]) }),
       ...(REPORT_SCHEMAS[stage.output] && { jsonSchema: REPORT_SCHEMAS[stage.output] }),
       // Only the repos a stage writes are working directories; it reads the task folder, the workspace and other repos
       // through the guard, which allows reading.
