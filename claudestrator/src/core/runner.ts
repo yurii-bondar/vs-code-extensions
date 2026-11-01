@@ -286,8 +286,6 @@ class ClaudeSession {
    * Text before a tool call is it thinking aloud ("I'll read that file"), as Claude Code's own `result` leaves it out.
    */
   turnText: string[] = [];
-  /** StructuredOutput calls, whose results are not shown either. */
-  hiddenTools = new Set<string>();
   closing?: boolean;
   endReason?: string;
   /** The account (CLAUDE_CONFIG_DIR) it runs under; none: Claude Code's default. */
@@ -538,11 +536,10 @@ class ClaudeSession {
             this.turnText.push(block.text);
             out({ type: 'text', text: block.text });
           }
-          if (block.type === 'tool_use' && block.name === STRUCTURED_OUTPUT) this.hiddenTools.add(block.id || '');
-          else if (block.type === 'tool_use') {
-            this.turnText = [];
-            out({ type: 'tool_use', id: block.id || '', name: block.name || '', input: capInput(block.input) });
-          }
+          if (block.type !== 'tool_use') continue;
+          // Handing over the report's data ends the report; any other call makes what came before it thinking aloud.
+          if (block.name !== STRUCTURED_OUTPUT) this.turnText = [];
+          out({ type: 'tool_use', id: block.id || '', name: block.name || '', input: capInput(block.input) });
         }
         return;
       }
@@ -550,7 +547,7 @@ class ClaudeSession {
         const content = m.message && m.message.content;
         if (m.parent_tool_use_id || typeof content === 'string' || !Array.isArray(content)) return;
         for (const block of content) {
-          if (block.type !== 'tool_result' || this.hiddenTools.has(block.tool_use_id || '')) continue;
+          if (block.type !== 'tool_result') continue;
           const text = typeof block.content === 'string' ? block.content : Array.isArray(block.content) ? (block.content as { text?: string }[]).map((c) => c.text || '').join('\n') : JSON.stringify(block.content ?? '');
           out({ type: 'tool_result', id: block.tool_use_id || '', isError: block.is_error === true, text: text.slice(0, 4000) });
         }

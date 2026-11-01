@@ -763,6 +763,8 @@ interface Views {
         return { ic: 'bot', title: 'Subagent', detail: esc(field(input, 'description') || '') };
       case 'TodoWrite':
         return { ic: 'list', title: 'Updated its to-do list', detail: '' };
+      case 'StructuredOutput':
+        return { ic: 'check', title: "Handed over its report's data", detail: '' };
       default:
         return { ic: 'zap', title: esc(name), detail: '' };
     }

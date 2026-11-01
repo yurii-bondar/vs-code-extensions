@@ -114,7 +114,9 @@ test('schemas: report stages hand their data over as structured output, and the 
     assert.match(plan, /^## Summary[\s\S]*\n```json\n\{\n {2}"type": "feat",/, 'the report, then its data as a json block');
     assert.equal((plan.match(/```json/g) || []).length, 1);
     const key = (await view.detail(h.engine, taskId)).steps.find((st) => st.agent === 'reviewer')!.key!;
-    assert.ok(!(await h.engine.svc.readTranscript(taskId, key)).some((i) => i.type === 'tool_use' && i.name === 'StructuredOutput'), 'the hand-over is not shown as a step');
+    // What the agent handed over shows in its transcript: a report that came as data alone is seen there.
+    const handover = (await h.engine.svc.readTranscript(taskId, key)).find((i) => i.type === 'tool_use' && i.name === 'StructuredOutput');
+    assert.ok(handover && handover.type === 'tool_use' && (handover.input as { status?: string }).status, 'the hand-over is shown, with its data');
   } finally {
     h.hooks.dispose();
   }

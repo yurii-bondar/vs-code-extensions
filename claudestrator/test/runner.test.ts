@@ -88,7 +88,7 @@ test('runner: text cut inside a multi-byte character by the pipe arrives intact'
 });
 
 test('runner: with structured output the report is what the agent wrote after its last tool call', async () => {
-  const { s } = session('hang');
+  const { s, items } = session('hang');
   try {
     const assistant = (content: unknown[]) => s.handle({ type: 'assistant', parent_tool_use_id: null, message: { content: content as never } });
     assistant([{ type: 'text', text: "I'll read calc.js first." }, { type: 'tool_use', id: 't1', name: 'Read', input: { file_path: 'calc.js' } }]);
@@ -98,6 +98,12 @@ test('runner: with structured output the report is what the agent wrote after it
     s.handle({ type: 'result', subtype: 'success', result: '{"summary":"s","findings":[]}', structured_output: { summary: 's', findings: [] }, num_turns: 2 });
     assert.equal(got!.report, '## Audit\n\n- div has no zero check.', 'no thinking aloud before a tool call');
     assert.deepEqual(got!.structured, { summary: 's', findings: [] });
+    // Data handed over with nothing written after the last tool call: an empty report, which the engine sends back.
+    assistant([{ type: 'text', text: 'Reading the tests.' }, { type: 'tool_use', id: 't3', name: 'Read', input: { file_path: 'calc.test.js' } }]);
+    assistant([{ type: 'tool_use', id: 't4', name: 'StructuredOutput', input: { summary: 's', findings: [] } }]);
+    s.handle({ type: 'result', subtype: 'success', result: '{"summary":"s","findings":[]}', structured_output: { summary: 's', findings: [] }, num_turns: 2 });
+    assert.equal(got!.report, '');
+    assert.deepEqual(items.filter((i) => i.type === 'tool_use' && i.name === 'StructuredOutput').map((i) => i.type === 'tool_use' && i.id), ['t2', 't4'], 'each hand-over shows in the transcript');
   } finally {
     s.close();
   }
