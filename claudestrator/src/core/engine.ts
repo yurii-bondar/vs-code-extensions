@@ -771,7 +771,8 @@ class Engine extends EventEmitter {
     spec = capSpec(spec);
     await this.svc.writeArtifact(s.taskId, TASK_FILES.ticketJson, `${JSON.stringify(spec, null, 2)}\n`);
     await this.svc.writeArtifact(s.taskId, TASK_FILES.ticket, renderTicket(spec));
-    const plan = await this.planWithoutPlanner(s, spec);
+    // The pipeline as it is now: it may have been edited while the ticket was read.
+    const plan = await this.planWithoutPlanner(await this.svc.state(s.taskId), spec);
     await this.dispatch(s.taskId, { type: 'intake_completed', spec, ...(plan && { plan }) });
   }
 
