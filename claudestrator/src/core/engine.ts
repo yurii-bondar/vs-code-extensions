@@ -2008,11 +2008,13 @@ class Engine extends EventEmitter {
 
 function summarizeInput(tool: string, input: Record<string, unknown>): unknown {
   if (!input || typeof input !== 'object') return input;
-  if (tool === 'Bash') return { command: String(input.command || '').slice(0, 2000), ...((input.description as string | undefined) && { description: input.description }) };
+  // What is cut says so: a question about a command you see only part of must not read as the whole of it.
+  const cut = (text: string): string => (text.length > 2000 ? `${text.slice(0, 2000)}…(+${text.length - 2000} chars)` : text);
+  if (tool === 'Bash') return { command: cut(String(input.command || '')), ...((input.description as string | undefined) && { description: input.description }) };
   if (WRITE_TOOLS.has(tool)) return { file_path: input.file_path || input.notebook_path || input.path };
   const json = JSON.stringify(input);
-  return json.length > 2000 ? { preview: `${json.slice(0, 2000)}…` } : input;
+  return json.length > 2000 ? { preview: cut(json) } : input;
 }
 
 export type { CheckpointContext, ComposerArgs, EngineOptions, Live, McpIntake, PermissionRequest };
-export { Engine, EngineError, stepLabel, transcriptKey, realInside, cloudIdsFor, commentMismatch, CLAUDE_AUTH };
+export { Engine, EngineError, stepLabel, transcriptKey, realInside, cloudIdsFor, commentMismatch, summarizeInput, CLAUDE_AUTH };

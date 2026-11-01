@@ -6,7 +6,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 
-import { Engine, cloudIdsFor, commentMismatch } from '../src/core/engine';
+import { Engine, cloudIdsFor, commentMismatch, summarizeInput } from '../src/core/engine';
 import { buildArgs } from '../src/core/runner';
 import type { EngineOptions } from '../src/core/engine';
 import type { RunnerOptions } from '../src/core/runner';
@@ -229,7 +229,7 @@ test('policy: a Jira comment session posts on its issue and the text it was give
   for (const cloudId of ['clientb.atlassian.net', 'c-client', 'https://acme.atlassian.net.evil.io']) assert.match(commentMismatch({ cloudId, issueIdOrKey: 'PROJ-805', commentBody: text }, 'PROJ-805', text, cloud)!, /on acme\.atlassian\.net, no other site/, cloudId);
 });
 
-test('policy: an agent reads no dotenv file of the repos, by its Read tool or by a command', async () => {
+test('policy: an agent reads no dotenv file of the repos, by its Read tool or by a command; a cut input says so', async () => {
   const ws = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cs-policy-')));
   const api = path.join(ws, 'api');
   fs.mkdirSync(api);
@@ -247,6 +247,7 @@ test('policy: an agent reads no dotenv file of the repos, by its Read tool or by
   const settings = engine.agentSettings({ writeRoots: [api], cwd: api, config, envFiles }) as { permissions: { deny: string[] }; sandbox: { filesystem: { denyRead: string[] } } };
   assert.ok(settings.sandbox.filesystem.denyRead.includes(path.join(api, '.env')), 'the sandbox keeps commands out of it');
   assert.ok(settings.permissions.deny.includes(`Read(/${path.join(api, '.env')})`));
+  assert.deepEqual(summarizeInput('Bash', { command: `echo ${'x'.repeat(2100)}` }), { command: `echo ${'x'.repeat(1995)}…(+105 chars)` });
 });
 
 test('policy: an MCP read reaches only the hosts the sandbox would, unless the agent names the tool', async () => {
