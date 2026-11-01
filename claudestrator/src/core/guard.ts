@@ -473,7 +473,14 @@ async function checkCommand(cmd: string, args: string[], dir: Dir, ctx: GuardCon
   if (cmd === 'git') return checkGit(args, dir, ctx);
   if (cmd === 'gh') return checkGh(args, dir, ctx);
   if (cmd === 'rm') return checkRm(args, dir, ctx);
-  if (ctx.agent && publishes(cmd, args)) return deny(`${cmd} ${args.filter((a) => !a.startsWith('-')).slice(0, 2).join(' ')} publishes a package; releases are for humans`);
+  // `npm@10`, `yarn@4` (through corepack or npx) are npm and yarn.
+  const tool = cmd.replace(/(?<=.)@.*$/, '');
+  const run = runs(tool, args);
+  if (run) {
+    const verdict = await checkSimple({ words: run, redirects: [] }, dir, ctx);
+    if (!verdict.allow) return verdict;
+  }
+  if (ctx.agent && publishes(tool, args)) return deny(`${cmd} ${plainWords(args, VALUED[tool] ?? []).slice(0, 2).join(' ')} publishes a package or an image, or changes one in its registry; releases are for humans`);
   // The keychain holds gh's token and Claude Code's own; the sandbox does not close it. `security` reads it with any
   // option first (-q) or from stdin (-i), and git's credential helpers print what it holds for a host.
   if (ctx.agent && cmd === 'security') return deny('agents do not use the keychain (security)');
@@ -481,28 +488,193 @@ async function checkCommand(cmd: string, args: string[], dir: Dir, ctx: GuardCon
   return allow;
 }
 
-/** Package managers' publish commands: a registry the sandbox lets a command reach takes uploads too. */
-function publishes(cmd: string, args: string[]): boolean {
-  const words = args.filter((a) => !a.startsWith('-'));
-  const [first, second] = words;
-  switch (cmd) {
-    case 'npm':
+/** Per tool, its options that take a value: its subcommand is the first word past them (`npm -w pkg publish`). */
+const VALUED: Record<string, string[]> = {
+  npm: ['-w', '--workspace', '-C', '--prefix', '--registry', '--tag', '--otp', '--access', '--userconfig', '--globalconfig', '--cache', '--loglevel', '--scope', '-p', '--package', '--include', '--omit'],
+  pnpm: ['-C', '--dir', '-F', '--filter', '--filter-prod', '--workspace-dir', '--registry', '--tag', '--otp', '--access', '--reporter', '--loglevel', '--config', '--package'],
+  yarn: ['--cwd', '--registry', '--tag', '--otp', '--access', '--include', '--exclude', '--from', '--since', '-j', '--jobs'],
+  bun: ['--cwd', '--registry', '--tag', '--otp', '--access', '--config'],
+  cargo: ['-Z', '-C', '--config', '--manifest-path', '--color', '-j', '--jobs', '-p', '--package', '--registry', '--index', '--token', '--target', '-F', '--features', '--target-dir'],
+  poetry: ['-C', '--directory', '-P', '--project', '-r', '--repository', '-u', '--username', '-p', '--password', '--cert', '--client-cert'],
+  uv: ['--directory', '--project', '--python', '-p', '--with', '--from', '--package', '--index', '--index-url', '--extra-index-url', '--cache-dir', '--config-file', '--color', '--env-file', '--extra', '--group'],
+  pipx: ['--spec', '--python', '--pip-args', '--index-url'],
+  docker: ['-H', '--host', '-c', '--context', '--config', '-l', '--log-level', '--tlscacert', '--tlscert', '--tlskey', '-f', '--file', '-p', '--project-name', '--profile', '--env-file', '--project-directory'],
+  podman: ['--root', '--runroot', '--storage-driver', '--url', '-c', '--connection', '--log-level', '-f', '--file'],
+  buildah: ['--root', '--runroot', '--storage-driver', '--log-level'],
+  mvn: ['-f', '--file', '-s', '--settings', '-gs', '--global-settings', '-pl', '--projects', '-rf', '--resume-from', '-P', '--activate-profiles', '-T', '--threads', '-l', '--log-file', '-t', '--toolchains', '-b', '--builder', '-D'],
+  gradle: ['-p', '--project-dir', '-x', '--exclude-task', '-b', '--build-file', '-c', '--settings-file', '-g', '--gradle-user-home', '-I', '--init-script', '--console', '--warning-mode', '--max-workers', '-D', '-P'],
+};
+VALUED.mvnw = VALUED.mvn!;
+VALUED.gradlew = VALUED.gradle!;
+VALUED.nerdctl = VALUED.docker!;
+
+/** The plain words of a command line, past its options and the values they take. */
+function plainWords(args: string[], valued: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (a === '--') return [...out, ...args.slice(i + 1)];
+    if (!a.startsWith('-')) out.push(a);
+    else if (valued.includes(a)) i++;
+  }
+  return out;
+}
+
+/** Per tool, the subcommands that run the command after them (`npm exec -- npm publish`, `pipx run twine upload`). */
+const RUNNERS: Record<string, string[]> = {
+  npm: ['exec', 'x'],
+  pnpm: ['exec', 'dlx'],
+  yarn: ['exec', 'dlx'],
+  bun: ['x'],
+  pipx: ['run'],
+  uv: ['run'],
+  poetry: ['run'],
+  pdm: ['run'],
+  hatch: ['run'],
+  pipenv: ['run'],
+  rye: ['run'],
+  bundle: ['exec'],
+  direnv: ['exec'],
+};
+/** Options of those subcommands that take a value, and those whose value is a command line for a shell. */
+const RUNNER_VALUED = ['-p', '--package', '--spec', '--python', '--pip-args', '--with', '--from', '--index-url', '--env-file', '--extra', '--group'];
+const RUNNER_SHELL = ['-c', '--call'];
+
+/**
+ * The command a tool runs of its arguments: `npm exec -- npm publish`, `pnpm dlx`, `yarn workspace x npm publish`,
+ * `pipx run twine upload`, `uv tool run`, `python -m twine upload`. Null when it runs none.
+ */
+function runs(tool: string, args: string[]): string[] | null {
+  if (/^(python|pypy)[\d.]*$|^py$/.test(tool)) return pythonModule(args);
+  const words = plainWords(args, VALUED[tool] ?? []);
+  const [sub, next] = words;
+  if (sub === undefined) return null;
+  const k = args.indexOf(sub);
+  if (tool === 'yarn' && sub === 'workspace') return ['yarn', ...args.slice(k + 2)];
+  if (tool === 'yarn' && sub === 'workspaces' && next === 'foreach') return ['yarn', ...args.slice(args.indexOf('foreach', k) + 1)];
+  let rest = tool === 'uv' && sub === 'tool' && next === 'run' ? args.slice(args.indexOf('run', k) + 1) : (RUNNERS[tool] ?? []).includes(sub) ? args.slice(k + 1) : null;
+  if (rest === null) return null;
+  if (tool === 'direnv') rest = rest.slice(1); // the folder whose .envrc it loads
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i]!;
+    if (a === '--') return rest.slice(i + 1);
+    const call = a.match(/^(--call)=(.*)$/s);
+    if (call || RUNNER_SHELL.includes(a)) return ['sh', '-c', call ? call[2]! : (rest[i + 1] ?? '')];
+    if (!a.startsWith('-')) return rest.slice(i);
+    if (RUNNER_VALUED.includes(a)) i++;
+  }
+  return [];
+}
+
+/** `python -m twine upload …` runs twine: the module and its arguments; null for a script or `-c`. */
+function pythonModule(args: string[]): string[] | null {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (!a.startsWith('-') || a === '-') return null;
+    if (a.startsWith('--')) continue;
+    // In `-Im twine` or `-mtwine` the first of c, m, W, X takes the rest of the word, or the next one.
+    const at = a.slice(1).search(/[cmWX]/);
+    if (at === -1) continue;
+    const attached = a.slice(at + 2);
+    const value = attached || (args[i + 1] ?? '');
+    if (!attached) i++;
+    if (a[at + 1] === 'c') return null;
+    if (a[at + 1] === 'm') return [value, ...args.slice(i + 1)];
+  }
+  return null;
+}
+
+/** npm's commands that change a registry, always or with one of these actions (pnpm hands them to npm; yarn has most). */
+const REGISTRY: Record<string, true | string[]> = {
+  publish: true,
+  unpublish: true,
+  deprecate: true,
+  undeprecate: true,
+  'dist-tag': ['add', 'rm', 'set'],
+  'dist-tags': ['add', 'rm', 'set'],
+  tag: ['add', 'rm', 'remove'],
+  owner: ['add', 'rm', 'remove'],
+  author: ['add', 'rm'],
+  access: ['grant', 'revoke', 'set', 'public', 'restricted', '2fa-required', '2fa-not-required', 'edit'],
+  team: ['create', 'destroy', 'add', 'rm'],
+  org: ['set', 'rm'],
+  token: ['create', 'revoke'],
+  profile: ['set', 'enable-2fa', 'disable-2fa'],
+};
+/** npm takes a command by any start of its name no other command shares (`npm pub`): the shortest it takes of these. */
+const NPM_ABBREVIATIONS: Record<string, number> = { publish: 2, unpublish: 3, deprecate: 3, undeprecate: 3, 'dist-tag': 3, owner: 2, author: 3, access: 2, team: 3, org: 2, token: 2, profile: 4 };
+
+const changesRegistry = (command: string, action: string): boolean => {
+  const r = Object.hasOwn(REGISTRY, command) ? REGISTRY[command] : undefined;
+  return r === true || (Array.isArray(r) && r.includes(action));
+};
+
+/** Maven goals and phases that upload: deploy, a release, a staging repository, an image jib pushes. */
+const mavenUploads = (w: string): boolean => w === 'deploy' || w === 'site-deploy' || w === 'jib:build' || /^(release|deploy|nexus-staging|wagon):/.test(w) || /:(deploy(-file)?|sign-and-deploy-file|push)$/.test(w);
+/** Gradle tasks that upload (`publish`, `:lib:publishAllPublicationsToX`, an abbreviation of one), but publishToMavenLocal. */
+const gradleUploads = (task: string): boolean => (/^pu/.test(task) && !/ToMavenLocal$/.test(task)) || /^(uploadArchives|artifactoryPublish|bintrayUpload|jib|closeAndRelease\w*|release\w*StagingRepository)$/.test(task);
+
+/** Whether docker, podman or buildah pushes an image: `push`, `image push`, `compose push`, `build --push`. */
+function pushesImage(words: string[], args: string[]): boolean {
+  const [a = '', b = '', c = ''] = words;
+  if (a === 'push' || (['image', 'manifest', 'compose'].includes(a) && b === 'push') || (a === 'buildx' && b === 'imagetools' && c === 'create')) return true;
+  const builds = a === 'build' || a === 'bud' || (['buildx', 'image', 'builder'].includes(a) && ['build', 'bake'].includes(b));
+  return builds && args.some((x) => x === '--push' || /type=registry|push=true/.test(x));
+}
+
+/** Whether a command publishes a package or an image, or changes one in its registry: a registry the sandbox lets a command reach takes uploads too. */
+function publishes(tool: string, args: string[]): boolean {
+  const words = plainWords(args, VALUED[tool] ?? []);
+  const [first = '', second = '', third = ''] = words;
+  switch (tool) {
+    case 'npm': {
+      const command = Object.keys(NPM_ABBREVIATIONS).find((c) => c === first || (first.length >= NPM_ABBREVIATIONS[c]! && c.startsWith(first)));
+      return changesRegistry(command ?? first, second);
+    }
     case 'pnpm':
     case 'bun':
+      return changesRegistry(first, second);
+    case 'yarn':
+      return first === 'npm' ? changesRegistry(second, third) : changesRegistry(first, second);
+    case 'cargo': {
+      const [sub] = words.filter((w) => !w.startsWith('+')); // +nightly
+      return sub === 'publish' || sub === 'yank' || (sub === 'owner' && args.some((a) => /^(-a|--add|-r|--remove)(=|$)/.test(a)));
+    }
     case 'poetry':
-    case 'uv':
     case 'flit':
     case 'hatch':
-    case 'cargo':
+    case 'uv':
+    case 'pdm':
+    case 'deno':
+    case 'jsr':
       return first === 'publish';
-    case 'yarn':
-      return first === 'publish' || (first === 'npm' && second === 'publish');
+    case 'vsce':
+    case 'ovsx':
+      return first === 'publish' || first === 'unpublish';
     case 'twine':
-      return first === 'upload';
+      return first === 'upload' || first === 'register';
     case 'gem':
-      return first === 'push';
+      return first === 'push' || first === 'yank' || (first === 'owner' && args.some((a) => /^(-a|--add|-r|--remove)(=|$)/.test(a)));
     case 'dotnet':
-      return first === 'nuget' && second === 'push';
+      return first === 'nuget' && (second === 'push' || second === 'delete');
+    case 'nuget':
+      return first === 'push' || first === 'delete';
+    case 'mvn':
+    case 'mvnw':
+      return words.some(mavenUploads);
+    case 'gradle':
+    case 'gradlew':
+      return words.some((w) => gradleUploads(w.split(':').pop()!));
+    case 'docker':
+    case 'podman':
+    case 'buildah':
+    case 'nerdctl':
+      return pushesImage(words, args);
+    case 'docker-compose':
+    case 'helm':
+      return first === 'push';
+    case 'pod':
+      return first === 'trunk' && ['push', 'delete', 'deprecate'].includes(second);
     default:
       return false;
   }
@@ -759,6 +931,11 @@ const WRAPPERS: Record<string, { valued: string[]; positional?: number; shell?: 
   doas: { valued: ['-u', '-C'] },
   time: { valued: ['-f', '-o', '--format', '--output'] },
   watch: { valued: ['-n', '--interval', '-q', '--equexit'] },
+  npx: { valued: ['-p', '--package', '-w', '--workspace', '--prefix', '--registry', '--cache', '--userconfig'], shell: ['-c', '--call'] },
+  pnpx: { valued: [] },
+  bunx: { valued: ['-p', '--package'] },
+  uvx: { valued: ['--from', '--with', '--python', '-p', '--index', '--index-url', '--extra-index-url', '--env-file', '--directory', '--with-requirements'] },
+  corepack: { valued: [] },
   flock: { valued: ['-w', '--wait', '--timeout', '-E', '--conflict-exit-code'], positional: 1, shell: ['-c', '--command'] },
   script: { valued: ['-t', '-T', '-I', '-O', '-B', '-E', '--timing', '--log-io', '--log-in', '--log-out', '--echo'], positional: 1, shell: ['-c', '--command'] },
 };
@@ -821,7 +998,8 @@ function splitPrefixes(argv: string[]): { env: string[]; argv: string[]; fed: bo
         const inner = splitPrefixes([...tokenize(value), ...rest]);
         return { env: [...env, ...inner.env], argv: fill(inner.argv), fed: fed || inner.fed };
       }
-      if (wrapper.shell && wrapper.shell.includes(opt)) return { env, argv: fill(['sh', '-c', argv[i + 1] ?? '']), fed };
+      const long = opt.match(/^(--[^=]+)=(.*)$/s);
+      if (wrapper.shell?.includes(long ? long[1]! : opt)) return { env, argv: fill(['sh', '-c', long ? long[2]! : (argv[i + 1] ?? '')]), fed };
       const hole = name === 'xargs' || name === 'parallel' ? replaceString(opt, argv[i + 1]) : null;
       if (hole) holes.push(hole);
       if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(opt)) {
