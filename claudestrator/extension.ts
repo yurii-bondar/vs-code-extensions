@@ -111,36 +111,37 @@ function activate(context: vscode.ExtensionContext) {
     await updateLimits(limitsItem, orch);
   };
 
-  orch.init().then(refresh, (e: Error) => void vscode.window.showErrorMessage(`Claudestrator could not start: ${e.message}`));
+  orch.init().then(refresh, (e: Error) => void vscode.window.showErrorMessage(view.plainNotice(`Claudestrator could not start: ${e.message}`)));
 
   // What an agent does now: the tree's line for its task, without reading every task again.
   context.subscriptions.push(orch.onEngine((e) => e.name === 'live' && tree.setLive(e.data.taskId, e.data.live)));
 
-  // Notifications: a checkpoint, a finished task, a failure, a permission prompt.
+  // Notifications: a checkpoint, a finished task, a failure, a permission prompt. Their text comes from tasks, agents
+  // and tools, so it goes through plainNotice: none of it becomes a link.
   orch.onEngine(async (e) => {
     const visible = DashboardPanel.current && DashboardPanel.current.panel.visible;
     if (e.name === 'checkpoint' && notify('needsYou') && !visible) {
       const { taskId, checkpoint, title } = e.data;
-      const choice = await vscode.window.showInformationMessage(`${taskId} needs you: ${CHECKPOINT_TITLE[checkpoint.id]}`, { detail: title }, 'Open');
+      const choice = await vscode.window.showInformationMessage(view.plainNotice(`${taskId} needs you: ${CHECKPOINT_TITLE[checkpoint.id]}`), { detail: title }, 'Open');
       if (choice) open(context, { name: 'task', taskId });
     } else if (e.name === 'finished' && notify('all')) {
       const { taskId, state } = e.data;
       const prs = Object.values(state.prs || {});
       const msg = state.outcome === 'published' ? `${taskId}: draft PRs are open.` : `${taskId} is done.`;
-      const choice = await vscode.window.showInformationMessage(msg, ...(prs.length ? ['Open PRs'] : []), 'Open');
+      const choice = await vscode.window.showInformationMessage(view.plainNotice(msg), ...(prs.length ? ['Open PRs'] : []), 'Open');
       if (choice === 'Open PRs') prs.forEach((u) => vscode.env.openExternal(vscode.Uri.parse(u)));
       else if (choice) open(context, { name: 'task', taskId });
     } else if (e.name === 'log' && e.data.level === 'error' && notify('all') && !visible) {
       const { taskId, message } = e.data;
-      const choice = await vscode.window.showErrorMessage(`${taskId ? `${taskId}: ` : ''}${message}`, ...(taskId ? ['Open'] : []));
+      const choice = await vscode.window.showErrorMessage(view.plainNotice(`${taskId ? `${taskId}: ` : ''}${message}`), ...(taskId ? ['Open'] : []));
       if (choice && taskId) open(context, { name: 'task', taskId });
     } else if (e.name === 'permission' && notify('needsYou') && !visible) {
       // A question for you, like a checkpoint: the dashboard, when it shows, asks it itself.
       const p = e.data;
       const input = (typeof p.input === 'object' && p.input !== null ? p.input : {}) as { command?: unknown; file_path?: unknown };
       const what = p.tool === 'Bash' ? `run \`${String(input.command || '').slice(0, 120)}\`` : typeof input.file_path === 'string' ? `${p.tool.toLowerCase()} ${path.basename(input.file_path)}` : `use ${p.tool}`;
-      const choice = await vscode.window.showWarningMessage(`${p.agent}${p.repo ? ` @ ${p.repo}` : ''} wants to ${what}`, { detail: `Task ${p.taskId}` }, 'Allow', 'Deny', 'Open');
-      if ((choice === 'Allow' || choice === 'Deny') && !orch.permissionReply(p.requestId, choice === 'Allow')) void vscode.window.showInformationMessage(`${p.agent}'s question was answered already: on the dashboard, or denied when nobody answered in time.`);
+      const choice = await vscode.window.showWarningMessage(view.plainNotice(`${p.agent}${p.repo ? ` @ ${p.repo}` : ''} wants to ${what}`), { detail: `Task ${p.taskId}` }, 'Allow', 'Deny', 'Open');
+      if ((choice === 'Allow' || choice === 'Deny') && !orch.permissionReply(p.requestId, choice === 'Allow')) void vscode.window.showInformationMessage(view.plainNotice(`${p.agent}'s question was answered already: on the dashboard, or denied when nobody answered in time.`));
       else if (choice === 'Open') open(context, { name: 'task', taskId: p.taskId });
     }
   }, null, context.subscriptions);
@@ -177,7 +178,7 @@ function activate(context: vscode.ExtensionContext) {
       try {
         await orch.engine!.resume(taskId);
       } catch (e) {
-        vscode.window.showErrorMessage((e as Error).message);
+        vscode.window.showErrorMessage(view.plainNotice((e as Error).message));
       }
     }),
     reg('claudestrator.stopTask', async (arg) => {

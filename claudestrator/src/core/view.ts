@@ -364,4 +364,14 @@ function loadsRemote(markdown: string): boolean {
   return /!\[[^\]\n]{0,300}\]\(\s*<?(?:https?:)?\/\//i.test(markdown) || /<(?:img|image|source|video|audio|iframe|object|embed|link)\b[^>]*\b(?:src|href|srcset|data|poster)\s*=\s*["']?\s*(?:https?:)?\/\//i.test(markdown) || (/!\[/.test(markdown) && /^\s{0,3}\[[^\]\n]+\]:\s*<?(?:https?:)?\/\//m.test(markdown));
 }
 
-export { loadsRemote, summary, detail, stepsOf, statusOf, queueOutput, CHECKPOINT_HINT };
+/**
+ * Text for a notification, shown as it is written. In a notification's message VS Code makes `[label](command:…)` (or
+ * `file:`, `https:`) a link it opens on a click, commands included; the text may come from an agent, a ticket, an MCP
+ * server or the output of git and gh. A space between `]` and `(` leaves the brackets as text, and a bare `command:` or
+ * `vscode:` address gets a zero-width space before its colon.
+ */
+function plainNotice(text: string): string {
+  return text.replace(/\]\(/g, '] (').replace(/\b(command|vscode)(?=:)/gi, '$1​');
+}
+
+export { loadsRemote, plainNotice, summary, detail, stepsOf, statusOf, queueOutput, CHECKPOINT_HINT };
