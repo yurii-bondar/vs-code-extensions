@@ -195,7 +195,7 @@ const broadcast = (msg: unknown) => {
   // A panel without a webview: same handlers, messages go to the browser over SSE.
   const panel: InstanceType<typeof DashboardPanel> = Object.create(DashboardPanel.prototype);
   // The panel's own fields (Object.create skips their initializers) and a page that is always in view.
-  Object.assign(panel, { context, orch, initialRoute: null, disposables: [], panel: { visible: true }, missedChange: false, outputQueue: [], outputTimer: undefined, missedText: new Set(), post: (m: unknown) => broadcast(m) });
+  Object.assign(panel, { context, orch, initialRoute: null, disposables: [], panel: { visible: true }, missedChange: false, outputQueue: [], outputTimer: undefined, missedText: new Set(), viewing: null, post: (m: unknown) => broadcast(m) });
   // What the page hears comes through the panel's own listeners: batched output, toasts, changes.
   panel.listen();
 

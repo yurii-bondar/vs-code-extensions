@@ -35,6 +35,7 @@ const composer = obj({
 /** One checker per request; the compiler makes sure a new request gets one. */
 const PARAMS: { [M in keyof Rpc]: Check } = {
   boot: none,
+  view: obj({ taskId: nullable(id) }),
   overview: none,
   health: obj({ 'refresh?': T.bool() }),
   detect: none,

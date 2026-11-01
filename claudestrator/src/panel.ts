@@ -101,6 +101,8 @@ class DashboardPanel implements RpcHandlers {
     orch.onEngine((e) => {
       switch (e.name) {
         case 'output':
+          // Only the task on screen streams; a Write's whole file of another task need not cross to the page.
+          if (e.data.taskId !== this.viewing) return;
           return this.queueOutput({ type: 'output', ...e.data });
         case 'live':
           return void this.post({ type: 'live', ...e.data });
@@ -197,6 +199,14 @@ class DashboardPanel implements RpcHandlers {
   // ---------- overview ----------
 
   /** The route the panel was opened with, once: a reload of the page goes back to where you were, not to it. */
+  /** The task the page shows, whose agent's output it gets. */
+  viewing: string | null = null;
+
+  async $view({ taskId }: { taskId: string | null }) {
+    this.viewing = taskId;
+    return null;
+  }
+
   async $boot() {
     const route = this.initialRoute || null;
     this.initialRoute = undefined;

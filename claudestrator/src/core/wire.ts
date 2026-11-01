@@ -791,6 +791,8 @@ export interface NewAgentParams {
 /** Every request the page can make: its parameters and what comes back. */
 export interface Rpc {
   boot: { params: void; result: Boot };
+  /** Which task the page shows (null: none): only its agent's output is sent. */
+  view: { params: { taskId: string | null }; result: null };
   overview: { params: void; result: Overview };
   health: { params: { refresh?: boolean }; result: HealthSummary };
   detect: { params: void; result: DetectData };

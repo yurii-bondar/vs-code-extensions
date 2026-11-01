@@ -299,6 +299,8 @@ interface Views {
     if (current && current.leave) current.leave();
     S.route = route;
     persist();
+    // The host sends the output of the task on screen only.
+    void call('view', { taskId: (route.name === 'task' && route.taskId) || null }).catch(() => undefined);
     const v = views[route.name] || views.home;
     current = v;
     renderShell();

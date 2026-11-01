@@ -10,7 +10,7 @@ import type { HostMessage } from '../src/core/wire';
 
 // panel.ts loads `vscode`: the dialogs a test answers, nothing else.
 /* eslint-disable @typescript-eslint/no-require-imports */
-const vscodeStub = { window: {} as Record<string, unknown>, Uri: { file: (fsPath: string) => ({ fsPath }) } };
+const vscodeStub = { window: {} as Record<string, unknown>, workspace: { onDidChangeConfiguration: () => ({ dispose() {} }) }, Uri: { file: (fsPath: string) => ({ fsPath }) } };
 const loader = Module as unknown as { _load: (request: string, ...rest: unknown[]) => unknown };
 const load = loader._load;
 loader._load = function (this: unknown, request: string, ...rest: unknown[]) {
@@ -82,4 +82,22 @@ test('panel: a report that would load images from the web is opened as text, not
   for (const md of ['# Plan\n\n[docs](https://docs.acme.com) and https://example.com', '![diagram](./diagram.png)', '[l]: https://example.com with no image']) {
     assert.equal(loadsRemote(md), false, md);
   }
+});
+
+test('panel: the page gets the streamed output of the task it shows, and of no other', async () => {
+  let engine: ((e: { name: string; data: unknown }) => void) | undefined;
+  const on = () => ({ dispose() {} });
+  const orch = { onEngine: (fn: typeof engine) => ((engine = fn), { dispose() {} }), onDidChange: on, onDidChangeConfig: on };
+  const { p, posted } = panel();
+  Object.assign(p, { orch, disposables: [], viewing: null });
+  p.listen();
+  const item = { type: 'tool_use', id: '1', name: 'Write', input: { file_path: 'a.ts', content: 'x'.repeat(1000) } };
+  engine!({ name: 'output', data: { taskId: 'A', key: 'k', item } });
+  await flushed();
+  assert.equal(posted.length, 0, 'the page shows no task');
+  await p.$view({ taskId: 'B' });
+  engine!({ name: 'output', data: { taskId: 'A', key: 'k', item } });
+  engine!({ name: 'output', data: { taskId: 'B', key: 'k', item } });
+  await flushed();
+  assert.deepEqual(posted.map((m) => (m as { taskId?: string }).taskId), ['B']);
 });
