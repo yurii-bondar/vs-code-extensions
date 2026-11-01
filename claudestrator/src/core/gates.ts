@@ -167,6 +167,15 @@ interface GatesArgs {
   keepEnv?: string[] | undefined;
 }
 
+/**
+ * Whether a changed file is what a check's `when` names, from the repo's root: that file, or a file in that folder
+ * (`src/` and `src` alike, `./src/` too), never one that only starts the same (`src-legacy/`).
+ */
+function changedUnder(file: string, when: string): boolean {
+  const w = when.replace(/\\/g, '/').replace(/^(\.\/)+/, '').replace(/\/+$/, '');
+  return w === '' || w === '.' || file === w || file.startsWith(`${w}/`);
+}
+
 async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = false, onGate, signal, launch, keepEnv }: GatesArgs): Promise<RepoGates> {
   const git = new GitRepo(dir);
   if (!(await git.isRepo())) {
@@ -190,7 +199,7 @@ async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = fal
       lines.push(`SKIP ${repo.name} ${gate.name}: the task was stopped`);
       continue;
     }
-    if (!force && gate.when && !changed.some((f) => f.startsWith(gate.when!))) {
+    if (!force && gate.when && !changed.some((f) => changedUnder(f, gate.when!))) {
       results.push({ repo: repo.name, gate: gate.name, status: 'skipped' });
       lines.push(`SKIP ${repo.name} ${gate.name}: nothing under ${gate.when}`);
       continue;
@@ -218,4 +227,4 @@ async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = fal
 }
 
 export type { GateResult, RepoGates };
-export { plain, runGates, runShell, withoutCredentials };
+export { changedUnder, plain, runGates, runShell, withoutCredentials };

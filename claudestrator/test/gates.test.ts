@@ -111,3 +111,16 @@ test('gates: a passing check that leaves a process in the background passes, and
   assert.ok(Date.now() - started < 5000, 'not held until its time ran out');
   await waitFor(async () => !alive(Number(fs.readFileSync(pidFile, 'utf8'))), 5000);
 });
+
+test("gates: a check's when names a folder or a file from the repo's root, written either way", async () => {
+  const { changedUnder } = await import('../src/core/gates');
+  for (const when of ['src/', 'src', './src/', './src']) {
+    assert.equal(changedUnder('src/a.ts', when), true, when);
+    assert.equal(changedUnder('src-legacy/a.ts', when), false, `${when}: not a folder that only starts the same`);
+  }
+  assert.equal(changedUnder('package.json', 'package.json'), true);
+  assert.equal(changedUnder('package.json.bak', 'package.json'), false);
+  const { validateConfigLayer } = await import('../src/core/protocol');
+  for (const when of ['src/**/*.ts', '*.ts', '/abs', '../other', 'src/{a,b}']) assert.ok(validateConfigLayer({ repos: { api: { gates: [{ name: 'x', cmd: 'true', when }] } } }).length > 0, when);
+  assert.deepEqual(validateConfigLayer({ repos: { api: { gates: [{ name: 'x', cmd: 'true', when: './src/' }] } } }), []);
+});
