@@ -348,3 +348,20 @@ test('config: a check runs in a folder of its repo, never outside it', async () 
   }
   await assert.rejects(() => config.setRepo(workspace('{}\n'), 'api', { gates: [{ name: 'e2e', cmd: 'make e2e', dir: '../infra' }] }), /dir is a folder of the repo/);
 });
+
+test('config: PRs open as drafts unless a config says otherwise, and a project that says so is warned about', async () => {
+  const draft = async (yaml: string, mine = '') => {
+    const ws = workspace(yaml);
+    const home = tmp('cs-home-');
+    if (mine) {
+      fs.mkdirSync(path.join(home, '.claudestrator'));
+      fs.writeFileSync(config.userConfigFile(home), mine);
+    }
+    const r = passed(await config.loadConfig({ workspace: ws, home }));
+    return { draftPrsOnly: r.config.policy.draftPrsOnly, warnings: r.warnings.filter((w) => w.code === 'policy_loosened').map((w) => w.message) };
+  };
+  assert.deepEqual(await draft('{}\n'), { draftPrsOnly: true, warnings: [] });
+  assert.deepEqual(await draft('policy: { draftPrsOnly: false }\n'), { draftPrsOnly: false, warnings: ["the project's config (.claudestrator/config.yaml) opens PRs ready for review instead of as drafts"] });
+  assert.deepEqual(await draft('{}\n', 'policy: { draftPrsOnly: false }\n'), { draftPrsOnly: false, warnings: [] }, 'your own choice is not news');
+  assert.deepEqual(await draft('policy: { draftPrsOnly: true }\n', 'policy: { draftPrsOnly: false }\n'), { draftPrsOnly: true, warnings: [] });
+});
