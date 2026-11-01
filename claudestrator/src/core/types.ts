@@ -477,6 +477,8 @@ export type OrchEvent = EventBase &
     | { type: 'resumed' }
     | { type: 'pipeline_changed'; pipeline: StoredPipeline }
     | { type: 'agent_stopped'; agent: string; payload?: AgentStoppedPayload }
+    /** A session's running totals as it goes (its id once it starts, its cost after each turn): what a session that never ends spent still counts. */
+    | { type: 'agent_progress'; agent: string; payload: AgentStoppedPayload }
     /** A PR opened while publishing, as soon as it is there: a later repo that fails does not leave it untold. */
     | { type: 'pr_opened'; repo: string; url: string }
     | { type: 'note'; message: string }

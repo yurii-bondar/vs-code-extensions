@@ -126,7 +126,8 @@ interface SessionRequest {
   /** The JSON Schema of the data a turn hands over (`--json-schema`); it comes back as `TurnResult.structured`. */
   jsonSchema?: Record<string, unknown> | undefined;
   onOutput(item: TranscriptItem): void;
-  onSession?: ((sessionId: string, model: string | undefined) => void) | undefined;
+  /** The session started: its id, model, and the account (CLAUDE_CONFIG_DIR) it runs under. */
+  onSession?: ((sessionId: string, model: string | undefined, configDir: string | undefined) => void) | undefined;
   onLimits?: ((limits: Limits & { at: number }) => void) | undefined;
 }
 
@@ -475,7 +476,7 @@ class ClaudeSession {
         if (m.subtype === 'init' && m.session_id) {
           this.sessionId = m.session_id;
           if (m.model) this.model = m.model;
-          if (this.req.onSession) this.req.onSession(m.session_id, m.model);
+          if (this.req.onSession) this.req.onSession(m.session_id, m.model, this.configDir);
         }
         return;
       case 'stream_event': {

@@ -1,5 +1,5 @@
 // UI models built from a task's state and events: cards for lists, a step timeline, the activity feed.
-import { transition, passSteps, sameStep, branchName, MAX_EMPTY_ROUNDS } from './machine';
+import { transition, passSteps, sameStep, branchName, spentOf, MAX_EMPTY_ROUNDS } from './machine';
 import { onRepos } from './pipeline';
 import { describeEvent, CHECKPOINT_TITLE } from './describe';
 import { transcriptKey } from './engine';
@@ -72,12 +72,6 @@ function sourceOf(s: TaskState | null | undefined): TaskSource | null {
   return { kind: 'text', label: 'Description' };
 }
 
-function costOf(events: OrchEvent[]): number {
-  let cost = 0;
-  for (const e of events) if (e.type === 'agent_stopped') cost += Number((e.payload && e.payload.costUsd) || 0);
-  return cost;
-}
-
 /** Executed steps, from the log, plus what is still to come. */
 function stepsOf(events: OrchEvent[], state: TaskState, { running }: { running: boolean }): StepItem[] {
   let s = null as TaskState | null;
@@ -89,6 +83,7 @@ function stepsOf(events: OrchEvent[], state: TaskState, { running }: { running: 
     for (let i = steps.length - 1; i >= 0; i--) if (pred(steps[i]!)) return steps[i]!;
     return null;
   };
+  const totals = new Map<StepItem, Map<string, { costUsd: number; turns: number; tokens: number }>>();
   for (const e of events) {
     switch (e.type) {
       case 'stage_started':
@@ -109,25 +104,36 @@ function stepsOf(events: OrchEvent[], state: TaskState, { running }: { running: 
         if (st) st.gateRuns = [...(st.gateRuns || []), { attempt: e.attempt, status: e.status }];
         break;
       }
+      case 'agent_progress':
       case 'agent_stopped': {
         const p = e.payload || {};
         const st = (p.transcript && findLast((x) => x.key === p.transcript)) || findLast((x) => x.agent === e.agent);
         if (st) {
-          st.costUsd = (st.costUsd || 0) + Number(p.costUsd || 0);
-          st.turns = (st.turns || 0) + Number(p.turns || 0);
+          // A session reports running totals: each counts once, at its latest, and a step adds up its sessions.
+          const sessions = totals.get(st) || new Map<string, { costUsd: number; turns: number; tokens: number }>();
+          totals.set(st, sessions);
+          const id = p.sessionId || `#${e.seq}`;
+          const was = sessions.get(id) || { costUsd: 0, turns: 0, tokens: 0 };
+          sessions.set(id, { costUsd: Math.max(was.costUsd, Number(p.costUsd) || 0), turns: Math.max(was.turns, Number(p.turns) || 0), tokens: Math.max(was.tokens, Number(p.tokens) || 0) });
           if (p.sessionId) st.sessionId = p.sessionId;
           if (p.cwd) st.cwd = p.cwd;
           if (p.configDir) st.configDir = p.configDir;
           if (p.model) st.model = p.model;
           if (p.effort) st.effort = p.effort;
           if (p.ctxPct !== undefined) st.ctxPct = p.ctxPct;
-          if (p.tokens) st.tokens = (st.tokens || 0) + p.tokens;
         }
         break;
       }
     }
     const r = transition(s, e);
     if (r.ok) s = r.state;
+  }
+  for (const [st, sessions] of totals) {
+    const all = [...sessions.values()];
+    st.costUsd = all.reduce((n, x) => n + x.costUsd, 0);
+    st.turns = all.reduce((n, x) => n + x.turns, 0);
+    const tokens = all.reduce((n, x) => n + x.tokens, 0);
+    if (tokens) st.tokens = tokens;
   }
   // The step the state still calls running: live here, or interrupted (VS Code closed, or another tool runs it).
   for (const st of steps) if (st.kind === 'agent' && st.status === 'running' && !(state.running && sameStep(state.running, st as StepRef) && running)) st.status = state.status === 'stopped' ? 'paused' : 'interrupted';
@@ -229,7 +235,7 @@ async function derive(engine: ViewEngine, taskId: string, state: TaskState, runn
   } catch {
     // raced with a delete
   }
-  const derived = { steps: stepsOf(events, state, { running }), cost: costOf(events), lastStop: [...events].reverse().find((e) => e.type === 'stopped') };
+  const derived = { steps: stepsOf(events, state, { running }), cost: spentOf(events), lastStop: [...events].reverse().find((e) => e.type === 'stopped') };
   byRunning.set(running, derived);
   derivedCache.set(state, byRunning);
   return derived;

@@ -812,6 +812,28 @@ test('engine: a check the agent cannot fix (its folder is not there) goes to you
   }
 });
 
+test('engine: every session records its id and cost as it goes, so a run that never ended still counts against the budget', async () => {
+  const ws = workspace(['api'], 'pipeline: [planner, developer]\nrepos:\n  api: {}\n');
+  const h = await harness(ws, { FAKE_REPOS: 'api' });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
+    await runTask(h.engine, taskId);
+    const events = await h.engine.svc.events(taskId);
+    const progress = only(events, 'agent_progress');
+    assert.ok(progress.some((e) => e.agent === 'developer' && e.payload.sessionId && e.payload.costUsd === 0), 'the session id, as soon as it starts');
+    assert.ok(progress.some((e) => e.agent === 'developer' && Number(e.payload.costUsd) > 0), 'its cost after a turn');
+    const stopped = only(events, 'agent_stopped');
+    const total = stopped.reduce((n, e) => n + Number(e.payload!.costUsd), 0);
+    assert.equal((await h.engine.spentUsd(taskId)).toFixed(4), total.toFixed(4), 'each session counts once');
+    // VS Code closed before a session ended: its last progress still counts.
+    const lost = { ...progress.filter((e) => e.agent === 'developer').pop()!, payload: { ...progress.filter((e) => e.agent === 'developer').pop()!.payload, sessionId: 'lost-session', costUsd: 0.5 } };
+    await h.engine.svc.record(taskId, { type: 'agent_progress', agent: lost.agent, payload: lost.payload });
+    assert.equal((await h.engine.spentUsd(taskId)).toFixed(4), (total + 0.5).toFixed(4));
+    assert.equal((await view.detail(h.engine, taskId)).cost.toFixed(4), (total + 0.5).toFixed(4));
+  } finally {
+    h.hooks.dispose();
+  }
+});
 test('engine: Stop during a push ends it, and no PR is opened after it; every PR opened is recorded at once', { skip: process.platform === 'win32' }, async () => {
   const ws = workspace(['api', 'web'], 'pipeline: [planner, developer]\npolicy: { draftPrsOnly: false }\nrepos:\n  api: {}\n  web: {}\n');
   const { remote, path: PATH } = remoteSetup(ws, '#!/bin/sh\nexit 0\n', { repos: ['api', 'web'] });

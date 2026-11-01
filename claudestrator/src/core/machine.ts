@@ -423,6 +423,39 @@ function finish(s: TaskState, outcome: string): void {
 // ---------- what runs next ----------
 
 /** Paths inside the task folder. Agents pass these to each other, never the contents. */
+/**
+ * What each agent session of a task spent and did, from its log. Claude Code reports a session's cost, turns and tokens
+ * as running totals, so each session counts once, at the latest total it reported: a session that never ended (VS Code
+ * closed, the host crashed) still counts what it spent up to its last turn.
+ */
+interface SessionTotals {
+  agent: string;
+  transcript: string | undefined;
+  costUsd: number;
+  turns: number;
+  tokens: number;
+}
+function sessionTotals(events: readonly OrchEvent[]): SessionTotals[] {
+  const out: SessionTotals[] = [];
+  const byId = new Map<string, SessionTotals>();
+  for (const e of events) {
+    if (e.type !== 'agent_stopped' && e.type !== 'agent_progress') continue;
+    const p = e.payload || {};
+    const now = { agent: e.agent, transcript: p.transcript, costUsd: Number(p.costUsd) || 0, turns: Number(p.turns) || 0, tokens: Number(p.tokens) || 0 };
+    const known = p.sessionId ? byId.get(p.sessionId) : undefined;
+    if (known) {
+      known.costUsd = Math.max(known.costUsd, now.costUsd);
+      known.turns = Math.max(known.turns, now.turns);
+      known.tokens = Math.max(known.tokens, now.tokens);
+      continue;
+    }
+    out.push(now);
+    if (p.sessionId) byId.set(p.sessionId, now);
+  }
+  return out;
+}
+const spentOf = (events: readonly OrchEvent[]): number => sessionTotals(events).reduce((n, x) => n + x.costUsd, 0);
+
 const TASK_FILES = { events: 'events.ndjson', ticket: 'ticket.md', ticketJson: 'ticket.json', report: 'report.md' };
 
 /** The repos a step works in: its own, or for a `repos` stage every repo of the pass (a fix round: the ones sent back). */
@@ -537,5 +570,5 @@ function branchName(s: TaskState): string | null {
   return `${s.plan.type}/${key}${s.plan.slug}`;
 }
 
-export type { NextAction, RunAction };
-export { MAX_EMPTY_ROUNDS, transition, replay, canPush, passSteps, editableFrom, stepRepos, nextAction, runOf, artifactPath, branchName, sameStep, unknownRepos, TASK_FILES };
+export type { NextAction, RunAction, SessionTotals };
+export { MAX_EMPTY_ROUNDS, sessionTotals, spentOf, transition, replay, canPush, passSteps, editableFrom, stepRepos, nextAction, runOf, artifactPath, branchName, sameStep, unknownRepos, TASK_FILES };

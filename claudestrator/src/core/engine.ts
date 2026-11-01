@@ -9,7 +9,7 @@ import { loadConfig, configPaths } from './config';
 import { exists } from './files';
 import { EFFORTS, REPO_NAME, SCENARIOS } from './protocol';
 import { buildPipeline, scenarioKind, taskPipeline, fitsScenario, onRepos, reposBeforePlan } from './pipeline';
-import { nextAction, runOf, artifactPath, branchName, sameStep, editableFrom, stepRepos, unknownRepos, TASK_FILES, type NextAction, type RunAction } from './machine';
+import { nextAction, runOf, artifactPath, branchName, sameStep, editableFrom, spentOf, stepRepos, unknownRepos, TASK_FILES, type NextAction, type RunAction } from './machine';
 import { parseInvocation, classifyInput, detectScenario, runIntake, renderTicket, IntakeError, extractAcceptanceCriteria, otherSite, planFromTicket, capSpec } from './intake';
 import { TaskService, type DispatchResult } from './store';
 import { AS_TEXT, exec, getChildEnv, GitRepo, branchAt, taskRepos, prepareRepos, taskDiff, removeWorktrees, SLOW_GIT_MS } from './git';
@@ -19,7 +19,7 @@ import { buildAgentPrompt, parseStageReport, lastJsonBlock, workReport, type Sta
 import { commitSubject, prTitle, prBody } from './pr';
 import { renderReport, jiraText } from './report';
 import type { Live, PermissionRequest, RepoStatus } from './wire';
-import type { ClaudeRunner, ClaudeSession, Limits, TurnResult } from './runner';
+import type { ClaudeRunner, ClaudeSession, Limits, SessionRequest, TurnResult } from './runner';
 import { HOOK_TIMEOUT_S, TOKEN_ENV, type HookServer, type Decision, type ToolCall } from './hookserver';
 import { sessionSettings, credentialVars, REGISTRIES, SECRET_PATHS } from './settings';
 import { probeSandbox, sandboxLauncher, sandboxProblem, shq, type Launcher, type SandboxPolicy } from './sandbox';
@@ -30,7 +30,7 @@ import type { StageSource } from './pipeline';
 import type { RepoGates } from './gates';
 import type { TaskRepo } from './git';
 import type { BlockedRepo, CheckpointContext, CommentResult, ComposerArgs, Preview, TranscriptItem, UsageItem } from './wire';
-import type { Checkpoint, Config, Effort, EventBody, EventOf, GatesStatus, Pipeline, PlanMeta, Source, Spec, Step, TaskGroup, TaskInstruction, TaskState, WorkReport } from './types';
+import type { AgentStoppedPayload, Checkpoint, Config, Effort, EventBody, EventOf, GatesStatus, Pipeline, PlanMeta, Source, Spec, Step, TaskGroup, TaskInstruction, TaskState, WorkReport } from './types';
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 const REPORT_OUTPUTS = new Set(['readiness', 'audit']);
@@ -759,6 +759,31 @@ class Engine extends EventEmitter {
   }
 
   /**
+   * A session's hooks that record its running totals as it goes: its id once it starts (where `claude --resume` finds
+   * it) and its cost after each turn. A session that never ends (VS Code closed, the host crashed) still counts against
+   * the budget, and can still be resumed.
+   */
+  progress(taskId: string, { agent, transcript, cwd, onOutput }: { agent: string; transcript: string; cwd: string; onOutput(item: TranscriptItem): void }): Pick<SessionRequest, 'onOutput' | 'onSession'> {
+    let sessionId: string | undefined;
+    let configDir: string | undefined;
+    const record = (payload: AgentStoppedPayload): void =>
+      void this.svc
+        .record(taskId, { type: 'agent_progress', agent, payload: { ...payload, cwd, transcript, ...(configDir && { configDir }) } })
+        .catch((e: Error) => this.log('warn', `${agent}: its progress could not be recorded (${e.message})`, taskId));
+    return {
+      onSession: (id, _model, dir) => {
+        sessionId = id;
+        configDir = dir;
+        record({ sessionId: id, costUsd: 0, turns: 0 });
+      },
+      onOutput: (item) => {
+        onOutput(item);
+        if (item.type === 'turn_end' && sessionId) record({ sessionId, costUsd: Number(item.costUsd) || 0, turns: Number(item.turns) || 0 });
+      },
+    };
+  }
+
+  /**
    * The agent's next turn. An agent that shows no sign of work for `stallMs` (a question waiting for you does not
    * count) is interrupted, and the turn fails with that reason: a hung MCP server or network never keeps a task
    * "working" forever.
@@ -830,7 +855,7 @@ class Engine extends EventEmitter {
       return { allow: false, reason: 'Claudestrator: the intake only reads; use the get/search/fetch tools' };
     });
     this.setLive(s.taskId, { phase: 'intake', key: INTAKE_KEY, text: `Reading ${src.kind === 'jira' ? src.key : 'the page'} via ${via.server}` });
-    const session = await this.runner.start({ agent, prompt, cwd: this.workspace, settings: this.agentSettings({ writeRoots: [], cwd: this.workspace, config: await this.config() }), additionalDirectories: [], env: this.agentEnv(hook.env, await this.config()), name: `claudestrator ${s.taskId} · intake`, onOutput: emitItem }).catch((e: Error) => {
+    const session = await this.runner.start({ agent, prompt, cwd: this.workspace, settings: this.agentSettings({ writeRoots: [], cwd: this.workspace, config: await this.config() }), additionalDirectories: [], env: this.agentEnv(hook.env, await this.config()), name: `claudestrator ${s.taskId} · intake`, ...this.progress(s.taskId, { agent: 'intake', transcript: INTAKE_KEY, cwd: this.workspace, onOutput: emitItem }) }).catch((e: Error) => {
       this.hooks.unregister(hook.token);
       throw e;
     });
@@ -1008,9 +1033,7 @@ class Engine extends EventEmitter {
   }
 
   async spentUsd(taskId: string): Promise<number> {
-    let total = 0;
-    for (const e of await this.svc.events(taskId)) if (e.type === 'agent_stopped') total += Number((e.payload && e.payload.costUsd) || 0);
-    return total;
+    return spentOf(await this.svc.events(taskId));
   }
 
   async runStep(s: TaskState, next: NextAction): Promise<void> {
@@ -1117,7 +1140,7 @@ class Engine extends EventEmitter {
       additionalDirectories: await filterAsync([...new Set(writeRoots)], async (d) => !(await realInside(cwd, d))),
       env: this.agentEnv(hook.env, config),
       name: `claudestrator ${taskId} · ${label}`,
-      onOutput: emitItem,
+      ...this.progress(taskId, { agent: step.agent, transcript: key, cwd, onOutput: emitItem }),
       // The account the session started under: switching accounts meanwhile does not move its limits to the other.
       onLimits: ((account) => (limits: EngineLimits) => {
         this.limitsBy.set(account, limits);
@@ -1664,7 +1687,7 @@ class Engine extends EventEmitter {
       return { allow: false, reason: posted ? 'Claudestrator: the comment is already posted; stop and report' : 'Claudestrator: only the add-comment tool and the cloud id lookup are allowed here' };
     });
     const agent = { name: 'jira-comment', description: 'Posts one Jira comment', model: 'haiku', effort: 'low' as const, instructions: COMMENT_INSTRUCTIONS, output: 'plan' };
-    const session = await this.runner.start({ agent, prompt, cwd: this.workspace, settings: this.agentSettings({ writeRoots: [], cwd: this.workspace, config: await this.config() }), additionalDirectories: [], env: this.agentEnv(hook.env, await this.config()), name: `claudestrator ${s.taskId} · Jira comment`, onOutput: append }).catch((e: Error) => {
+    const session = await this.runner.start({ agent, prompt, cwd: this.workspace, settings: this.agentSettings({ writeRoots: [], cwd: this.workspace, config: await this.config() }), additionalDirectories: [], env: this.agentEnv(hook.env, await this.config()), name: `claudestrator ${s.taskId} · Jira comment`, ...this.progress(s.taskId, { agent: 'jira-comment', transcript, cwd: this.workspace, onOutput: append }) }).catch((e: Error) => {
       this.hooks.unregister(hook.token);
       throw e;
     });
@@ -1787,9 +1810,12 @@ class Engine extends EventEmitter {
    * that has not ended within a few seconds is killed with its process group then, not by a timer that never fires.
    */
   async stopAll(graceMs = 2500): Promise<void> {
-    const sessions = [...this.running].map((id) => this.sessions.get(id)).filter((x): x is ClaudeSession => x !== undefined);
-    await Promise.all([...this.running].map((id) => this.stop(id, 'VS Code closed the workspace').catch(() => {})));
+    const ids = [...this.running];
+    const sessions = ids.map((id) => this.sessions.get(id)).filter((x): x is ClaudeSession => x !== undefined);
+    await Promise.all(ids.map((id) => this.stop(id, 'VS Code closed the workspace').catch(() => {})));
     await Promise.all(sessions.map((x) => x.terminate(graceMs)));
+    // Then a moment for each run to record how its session ended (its cost, where to resume it).
+    await Promise.all(ids.map((id) => this.settled(id, graceMs)));
   }
 
   /** What a human needs to decide a checkpoint: `{ format: 'markdown'|'log', text, files? }`. */
