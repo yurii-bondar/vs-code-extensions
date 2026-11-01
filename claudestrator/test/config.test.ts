@@ -224,3 +224,60 @@ test("config: a project's config that lifts the budget cap or raises the rounds 
   assert.deepEqual(await loosenedBy('limits: { budgetUsd: 10, reviewRounds: 1, gateAttempts: 3 }\n'), [], 'a lower cap and fewer rounds tighten it');
   assert.deepEqual(await loosenedBy('limits: { budgetUsd: 0, reviewRounds: 4 }\n', 'limits: { budgetUsd: 0, reviewRounds: 5 }\n'), [], 'what your config already allows is not news');
 });
+
+test("config: a change that is undone puts back only what it wrote, never another window's edit", async () => {
+  const home = tmp('cs-home-');
+  const mine = 'language: English\n';
+  const theirs = 'language: Ukrainian # from the other window\n';
+  const ws = workspace(mine);
+  const file = config.projectConfigFile(ws);
+  const where = { workspace: ws, home };
+
+  // The edit is refused because another window wrote the file under it: that window's text stays.
+  await assert.rejects(
+    () => config.withConfigRollback(where, () => config.editProjectConfig(ws, (doc) => (fs.writeFileSync(file, theirs), doc.setIn(['baseBranch'], 'develop')))),
+    /changed while it was being edited/
+  );
+  assert.equal(fs.readFileSync(file, 'utf8'), theirs);
+
+  // This change wrote the file, then another window wrote over it before the change failed: the other window's text stays.
+  fs.writeFileSync(file, mine);
+  await assert.rejects(
+    () =>
+      config.withConfigRollback(where, async () => {
+        await config.setProjectValue(ws, ['language'], 'German');
+        fs.writeFileSync(file, theirs);
+        throw new Error('boom');
+      }),
+    /boom/
+  );
+  assert.equal(fs.readFileSync(file, 'utf8'), theirs);
+
+  // config.yaml written by another window during a change that never touched it stays too.
+  fs.writeFileSync(file, mine);
+  await assert.rejects(
+    () =>
+      config.withConfigRollback(where, () => {
+        fs.writeFileSync(file, theirs);
+        throw new Error('boom');
+      }),
+    /boom/
+  );
+  assert.equal(fs.readFileSync(file, 'utf8'), theirs);
+
+  // What the change itself wrote goes back: config.yaml, and a file it named and wrote some other way.
+  fs.writeFileSync(file, mine);
+  const prompt = path.join(ws, '.claudestrator', 'prompts', 'x.md');
+  await assert.rejects(
+    () =>
+      config.withConfigRollback(where, async (remember) => {
+        await remember(prompt);
+        fs.mkdirSync(path.dirname(prompt), { recursive: true });
+        fs.writeFileSync(prompt, 'x');
+        await config.setPipeline(ws, ['planner', 'ghost']);
+      }),
+    /unknown agent "ghost"/
+  );
+  assert.equal(fs.readFileSync(file, 'utf8'), mine);
+  assert.equal(fs.existsSync(prompt), false);
+});

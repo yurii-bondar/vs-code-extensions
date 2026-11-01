@@ -974,7 +974,18 @@ async function readIfThere(file: string): Promise<string | null> {
   }
 }
 
-const writeMaking = writeAtomic;
+/**
+ * In a change `withConfigRollback` runs: the files it edits or writes, each with the text it last wrote there
+ * (`undefined`: it set out to edit the file and wrote nothing). Its rollback restores only a file that still holds that.
+ */
+const changeWrites = new AsyncLocalStorage<Map<string, string | undefined>>();
+
+/** Writes a file whole (`writeAtomic`) and notes it for the change that runs, if one does. */
+async function writeMaking(file: string, text: string): Promise<void> {
+  await writeAtomic(file, text);
+  const wrote = changeWrites.getStore();
+  if (wrote) wrote.set(path.resolve(file), text);
+}
 
 /** Whether the edit running now was started inside another one (an agent added with its scenario set). */
 const inEdit = new AsyncLocalStorage<true>();
@@ -1014,6 +1025,8 @@ function editProjectConfig(workspace: string, mutate: (doc: YAML.Document) => un
  */
 function editYamlFile(file: string, mutate: (doc: YAML.Document) => unknown, { validate, what }: { validate: (raw: unknown) => string[]; what: string }): Promise<string> {
   return serialized(async () => {
+    const wrote = changeWrites.getStore();
+    if (wrote && !wrote.has(path.resolve(file))) wrote.set(path.resolve(file), undefined);
     const read = await signature(file);
     const text = await readIfThere(file);
     const doc = YAML.parseDocument(text ?? '');
@@ -1368,16 +1381,25 @@ function configRelative(workspace: string, file: string): string {
  * Runs `change` on the project and keeps it only if the config still resolves. Otherwise config.yaml, and every file
  * `change` named through `remember` before writing it, go back to what they were, and the problems are thrown: a config
  * that does not resolve would stop every task. `explain` picks the problems worth showing (all of them by default).
+ * Only what this change wrote goes back: a config file another window (or the CLI) wrote meanwhile, an edit refused
+ * because of that included, is left as that window wrote it.
  */
 function withConfigRollback<T>({ workspace, home, explain }: { workspace: string; home?: string | undefined; explain?: (errors: Diagnostic[]) => Diagnostic[] }, change: (remember: (file: string) => Promise<void>) => T | Promise<T>): Promise<T> {
   return serialized(async () => {
     const saved = new Map<string, string | null>();
-    const remember = async (file: string): Promise<void> => {
+    // The files `change` said it writes; config.yaml is looked after even when it does not.
+    const named = new Set<string>();
+    const snapshot = async (file: string): Promise<void> => {
       if (!saved.has(file)) saved.set(file, await readIfThere(file));
     };
-    await remember(projectConfigFile(workspace));
+    const remember = async (file: string): Promise<void> => {
+      named.add(path.resolve(file));
+      await snapshot(file);
+    };
+    await snapshot(projectConfigFile(workspace));
+    const wrote = changeWrites.getStore() ?? new Map<string, string | undefined>();
     try {
-      const result = await change(remember);
+      const result = await changeWrites.run(wrote, () => change(remember));
       const after = await loadConfig({ workspace, home });
       if (!after.ok) {
         const shown = explain ? explain(after.errors) : after.errors;
@@ -1386,6 +1408,11 @@ function withConfigRollback<T>({ workspace, home, explain }: { workspace: string
       return result;
     } catch (e) {
       for (const [file, content] of saved) {
+        const now = await readIfThere(file);
+        const key = path.resolve(file);
+        // A file edited here goes back only if it holds what this change wrote; one written some other way, if `change`
+        // named it (an instructions file it wrote or removed).
+        if (now === content || (wrote.has(key) ? wrote.get(key) !== now : !named.has(key))) continue;
         if (content === null) await fs.promises.rm(file, { force: true });
         else await writeAtomic(file, content);
       }
