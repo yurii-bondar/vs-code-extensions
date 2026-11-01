@@ -4,10 +4,17 @@
 // must find a planted vulnerability, a developer must do its task and leave undone what text planted for AI agents in a
 // repo file or a Jira issue asks, a verifier must find the acceptance criterion the code misses, review rounds must
 // converge on a fix, a planner must follow a renamed API field to the repo that reads it. A change to an agent's
-// instructions, model or effort is run against them before it ships. The agents run with their configured models;
-// EVAL_MODEL and EVAL_EFFORT (haiku, low) make a cheap run, EVAL_CASES (reviewer-blocks,planner-scope) picks cases, and
-// EVAL_TRIALS=3 runs each case three times: an agent's answer varies from run to run, so one pass says little, and the
-// pass rate per case is what to compare.
+// instructions, model or effort is run against them before it ships.
+//
+// EVAL_CASES (reviewer-blocks,planner-scope) picks cases. EVAL_TRIALS=3 runs each case three times: an agent's answer
+// varies from run to run, so one pass says little, and the pass rate per case is what to compare. EVAL_MODEL and
+// EVAL_EFFORT (haiku, low) make a cheap run of a few cents a case: it checks the wiring and catches gross regressions
+// of the instructions, not how the agents do on the models they run with. A release check runs the configured models
+// (no EVAL_MODEL or EVAL_EFFORT) with EVAL_TRIALS=3 or more.
+//
+// Each run appends its summary to .eval/history.ndjson (git-ignored): date, git HEAD, CLI version, model and effort,
+// trials, each case's passes and cost. Then each case's pass rate is printed next to the latest earlier run with the
+// same model and effort, so a regression between two changes of the instructions shows.
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -484,6 +491,83 @@ async function trial(c: Case, { runner, hooks }: { runner: ClaudeRunner; hooks: 
   return { name: c.name, problem, remark, usd, ws };
 }
 
+/** A case's passes, trials and spend in one run. */
+interface Tally {
+  passed: number;
+  trials: number;
+  usd: number;
+}
+
+/** One run of the evals: a line of `.eval/history.ndjson`. */
+interface HistoryLine {
+  date: string;
+  /** This package's git HEAD, short; `dirty` when it had uncommitted changes (an instruction edit under test). */
+  head: string;
+  dirty: boolean;
+  cli: string;
+  /** EVAL_MODEL and EVAL_EFFORT, or `configured`: a run compares with earlier runs of the same. */
+  model: string;
+  effort: string;
+  trials: number;
+  cases: Record<string, Tally>;
+  usd: number;
+}
+
+const PACKAGE = path.resolve(__dirname, '..', '..', '..');
+const HISTORY = path.join(PACKAGE, '.eval', 'history.ndjson');
+
+const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+
+/** A line an earlier run wrote, or null for one that is not a run's summary. */
+function historyLine(raw: unknown): HistoryLine | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.date !== 'string' || typeof r.model !== 'string' || typeof r.effort !== 'string' || typeof r.cases !== 'object' || r.cases === null) return null;
+  const cases: Record<string, Tally> = {};
+  for (const [name, t] of Object.entries(r.cases as Record<string, unknown>)) {
+    const x: Record<string, unknown> = typeof t === 'object' && t !== null ? (t as Record<string, unknown>) : {};
+    if (num(x.trials) > 0) cases[name] = { passed: num(x.passed), trials: num(x.trials), usd: num(x.usd) };
+  }
+  return { date: r.date, head: field(r, 'head'), dirty: r.dirty === true, cli: field(r, 'cli'), model: r.model, effort: r.effort, trials: num(r.trials), cases, usd: num(r.usd) };
+}
+
+/** The latest earlier run with the same model and effort, or null. */
+function lastComparable(now: HistoryLine): HistoryLine | null {
+  if (!fs.existsSync(HISTORY)) return null;
+  const lines = fs.readFileSync(HISTORY, 'utf8').split('\n').filter(Boolean).reverse();
+  for (const text of lines) {
+    let line: HistoryLine | null;
+    try {
+      line = historyLine(JSON.parse(text));
+    } catch {
+      line = null;
+    }
+    if (line && line.model === now.model && line.effort === now.effort) return line;
+  }
+  return null;
+}
+
+/** Each case's pass rate and cost a trial in this run, next to the earlier run's. */
+function compared(now: HistoryLine, before: HistoryLine | null): string[] {
+  const rate = (t: Tally): number => t.passed / t.trials;
+  const each = (t: Tally): string => `$${(t.usd / t.trials).toFixed(3)}`;
+  return Object.entries(now.cases).map(([name, t]) => {
+    const was = before && before.cases[name];
+    const pts = was ? Math.round((rate(t) - rate(was)) * 100) : 0;
+    const change = !before ? '' : !was ? '; new' : `; was ${was.passed}/${was.trials}, ${each(was)}${pts ? ` (${pts > 0 ? '+' : '−'}${Math.abs(pts)} pts)` : ''}`;
+    return `  ${name}: ${t.passed}/${t.trials}, ${each(t)} a trial${change}`;
+  });
+}
+
+/** This package's git HEAD and whether it has uncommitted changes; `unknown` outside a git checkout. */
+function gitHead(): Pick<HistoryLine, 'head' | 'dirty'> {
+  try {
+    return { head: git(PACKAGE, 'rev-parse', '--short', 'HEAD'), dirty: git(PACKAGE, 'status', '--porcelain', '--', '.') !== '' };
+  } catch {
+    return { head: 'unknown', dirty: false };
+  }
+}
+
 async function main(): Promise<void> {
   const claude = process.env.CLAUDE_PATH || 'claude';
   const version = execFileSync(claude, ['--version'], { encoding: 'utf8' }).trim();
@@ -511,8 +595,20 @@ async function main(): Promise<void> {
     hooks.dispose();
   }
   const passed = results.filter((r) => !r.problem).length;
-  if (trials > 1) for (const c of cases) console.log(`  ${c.name}: ${results.filter((r) => r.name === c.name && !r.problem).length}/${trials}`);
-  console.log(`${passed}/${results.length} passed, $${results.reduce((n, r) => n + r.usd, 0).toFixed(2)}`);
+  const usd = results.reduce((n, r) => n + r.usd, 0);
+  const tallies = Object.fromEntries(
+    cases.map((c) => {
+      const mine = results.filter((r) => r.name === c.name);
+      return [c.name, { passed: mine.filter((r) => !r.problem).length, trials: mine.length, usd: Number(mine.reduce((n, r) => n + r.usd, 0).toFixed(4)) }];
+    })
+  );
+  const line: HistoryLine = { date: new Date().toISOString(), ...gitHead(), cli: version, model: process.env.EVAL_MODEL || 'configured', effort: process.env.EVAL_EFFORT || 'configured', trials, cases: tallies, usd: Number(usd.toFixed(4)) };
+  const before = lastComparable(line);
+  if (trials > 1 || before) for (const l of compared(line, before)) console.log(l);
+  if (before) console.log(`  (against the run of ${before.date.slice(0, 16).replace('T', ' ')} UTC at ${before.head}${before.dirty ? ' with uncommitted changes' : ''}, $${before.usd.toFixed(2)})`);
+  fs.mkdirSync(path.dirname(HISTORY), { recursive: true });
+  fs.appendFileSync(HISTORY, `${JSON.stringify(line)}\n`);
+  console.log(`${passed}/${results.length} passed, $${usd.toFixed(2)}; kept in ${path.relative(process.cwd(), HISTORY) || HISTORY}`);
   if (passed < results.length) process.exitCode = 1;
 }
 
