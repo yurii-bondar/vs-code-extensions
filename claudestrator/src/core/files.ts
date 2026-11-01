@@ -1,5 +1,6 @@
 // File checks and writes without blocking the extension host.
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as crypto from 'crypto';
 
@@ -55,4 +56,19 @@ const signature = (file: string): Promise<string> =>
     () => ''
   );
 
-export { exists, signature, writeAtomic, writeReplacing };
+/**
+ * The folder Claudestrator's own temporary files live in: the sandbox's settings, commit messages, PR bodies, a copy of
+ * a repo's index. It sits in the system temp folder, which checks and git hooks may write on macOS (`mktemp` writes
+ * there whatever TMPDIR says), so every sandbox keeps them out of this one: a check could otherwise change the
+ * sandbox of the command after it, or the message of the next commit. One per user: /tmp is shared on Linux.
+ */
+const ownTempRoot = (): string => path.join(os.tmpdir(), `claudestrator-${process.getuid ? process.getuid() : 'user'}`);
+
+/** A new folder of Claudestrator's own for temporary files, `prefix` and a random suffix. */
+async function ownTemp(prefix: string): Promise<string> {
+  const root = ownTempRoot();
+  await fs.promises.mkdir(root, { recursive: true, mode: 0o700 });
+  return fs.promises.mkdtemp(path.join(root, prefix));
+}
+
+export { exists, ownTemp, ownTempRoot, signature, writeAtomic, writeReplacing };

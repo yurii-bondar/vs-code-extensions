@@ -4,6 +4,7 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { execFileSync } from 'child_process';
 
 import { probeSandbox, sandboxLauncher, sandboxProblem, shq } from '../src/core/sandbox';
 import { runShell } from '../src/core/gates';
@@ -11,6 +12,7 @@ import { Engine } from '../src/core/engine';
 import { ClaudeRunner } from '../src/core/runner';
 import { HookServer } from '../src/core/hookserver';
 import { setChildEnv } from '../src/core/git';
+import { ownTemp, ownTempRoot } from '../src/core/files';
 import { FAKE, git, workspace, waitFor } from './helpers/e2e';
 import type { SandboxPolicy } from '../src/core/sandbox';
 
@@ -70,6 +72,40 @@ test('sandbox: a test opens a local port only with policy.localPorts (on macOS; 
   const shut = await run(false);
   assert.notEqual(shut.code, 0);
   assert.match(shut.output, /listen EPERM/);
+});
+
+test("sandbox: a hook or a test makes temp files with mktemp; Claudestrator's own temp files stay out of its reach", async (t) => {
+  const missing = await available();
+  if (missing) return t.skip(`no sandbox here: ${missing}`);
+  const repo = tmp('cs-sbx-temp-');
+  git(repo, 'init', '-q', '-b', 'main');
+  git(repo, 'config', 'user.email', 't@t');
+  git(repo, 'config', 'user.name', 't');
+  fs.writeFileSync(path.join(repo, 'a.txt'), 'a');
+  git(repo, 'add', 'a.txt');
+  // A commit-msg hook as many repos have: it strips a trailer through a temp file, and empties the message when mktemp
+  // fails. macOS's mktemp writes in the user's temp folder whatever TMPDIR says.
+  fs.writeFileSync(path.join(repo, '.git', 'hooks', 'commit-msg'), '#!/bin/sh\ntmp_file=$(mktemp)\ngrep -v "^Co-Authored-By: Claude" "$1" > "$tmp_file"\ncat "$tmp_file" > "$1"\nrm -f "$tmp_file"\n', { mode: 0o755 });
+  const own = await ownTemp('message-');
+  const message = path.join(own, 'message.txt');
+  fs.writeFileSync(message, 'feat: add a\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n');
+  const launch = sandboxLauncher({ allowWrite: [repo, path.join(repo, '.git')], denyWrite: [], denyRead: [], network: [], localPorts: false });
+  const commit = await runShell(`git -c commit.gpgsign=false commit -F '${message}'`, { cwd: repo, env: process.env, timeoutMs: 60000, launch });
+  assert.equal(commit.code, 0, commit.output);
+  assert.equal(git(repo, 'log', '-1', '--format=%B').trim(), 'feat: add a', 'the hook did its work, and the message is whole');
+  const tamper = await runShell(`echo 'feat: something else' > '${message}'`, { cwd: repo, env: process.env, timeoutMs: 60000, launch });
+  assert.notEqual(tamper.code, 0, 'the next commit message is not a command\'s to change');
+  assert.match(fs.readFileSync(message, 'utf8'), /^feat: add a/);
+  assert.ok(own.startsWith(ownTempRoot()));
+  // mktemp -d too, and nothing else of that folder: other programs' temp files there are not a command's to change.
+  const dir = await runShell('d=$(mktemp -d) && echo x > "$d/f" && cat "$d/f" && rm -r "$d"', { cwd: repo, env: process.env, timeoutMs: 60000, launch });
+  assert.equal(dir.code, 0, dir.output);
+  if (process.platform === 'darwin') {
+    const other = path.join(path.dirname(execFileSync('mktemp', ['-u']).toString().trim()), `pip-build-${process.pid}`);
+    const planted = await runShell(`echo x > '${other}'`, { cwd: repo, env: process.env, timeoutMs: 60000, launch });
+    assert.notEqual(planted.code, 0, planted.output);
+    assert.ok(!fs.existsSync(other));
+  }
 });
 
 test('sandbox: a commit hook that writes the repo works; one that changes git config or a file outside fails the commit', async (t) => {

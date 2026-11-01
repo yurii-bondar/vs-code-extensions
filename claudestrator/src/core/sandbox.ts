@@ -4,10 +4,9 @@
 // which keeps its ES module build and the Node it needs out of the extension host. Native Windows has no sandbox, for
 // the agents either.
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
-import { spawn } from 'child_process';
-import { exists } from './files';
+import { execFile, spawn } from 'child_process';
+import { exists, ownTemp, ownTempRoot } from './files';
 
 /** What a sandboxed command may do. */
 interface SandboxPolicy {
@@ -59,6 +58,20 @@ function sandboxProblem(platform: string = process.platform, nodeVersion: string
   return null;
 }
 
+/** macOS's temp folder of the user, looked up once; null elsewhere, or when getconf does not say. */
+let userTemp: Promise<string | null> | undefined;
+
+/**
+ * Where `mktemp` writes on macOS (`getconf DARWIN_USER_TEMP_DIR`): there, whatever TMPDIR says, so srt's own TMPDIR
+ * does not reach it, and a git hook or a test that makes a temp file fails in the sandbox with "Operation not
+ * permitted" (a commit-msg hook then empties the message).
+ */
+function darwinUserTemp(): Promise<string | null> {
+  if (process.platform !== 'darwin') return Promise.resolve(null);
+  userTemp ??= new Promise((resolve) => execFile('getconf', ['DARWIN_USER_TEMP_DIR'], { timeout: 5000 }, (e, out) => resolve(e ? null : out.trim().replace(/\/+$/, '') || null)));
+  return userTemp;
+}
+
 /** srt's command line entry, from the installed package. */
 function srtCli(): string {
   return path.join(path.dirname(require.resolve('@anthropic-ai/sandbox-runtime')), 'cli.js');
@@ -70,9 +83,15 @@ function srtCli(): string {
  */
 function sandboxLauncher(policy: SandboxPolicy): Launcher {
   return async (cmd, env) => {
-    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cs-srt-'));
+    const dir = await ownTemp('srt-');
     const settings = path.join(dir, 'settings.json');
-    const config = { network: { allowedDomains: policy.network, deniedDomains: [], ...(policy.localPorts && { allowLocalBinding: true }) }, filesystem: { denyRead: policy.denyRead, allowWrite: policy.allowWrite, denyWrite: policy.denyWrite } };
+    // Only what mktemp makes there (`tmp.XXXXXXXXXX`, and in it with -d): every program of yours keeps its temp files in
+    // that folder, a build some later run (pip's), which no command here may change.
+    const temp = await darwinUserTemp();
+    // srt takes a trailing `/**` off an allowed pattern, so what is in a folder of `mktemp -d` is `tmp.*/**/*`.
+    const mktemp = temp ? [path.join(temp, 'tmp.*'), path.join(temp, 'tmp.*', '**', '*')] : [];
+    const filesystem = { denyRead: policy.denyRead, allowWrite: [...policy.allowWrite, ...mktemp], denyWrite: [...policy.denyWrite, ownTempRoot()] };
+    const config = { network: { allowedDomains: policy.network, deniedDomains: [], ...(policy.localPorts && { allowLocalBinding: true }) }, filesystem };
     await fs.promises.writeFile(settings, JSON.stringify(config), { mode: 0o600 });
     const electron = Boolean(process.versions.electron);
     return {

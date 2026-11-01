@@ -1,10 +1,9 @@
 // Git for the orchestrator: async everywhere (gates and fetches take seconds, the extension host must stay
 // responsive), with every read degrading to a safe answer when git fails.
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import { execFile } from 'child_process';
-import { exists } from './files';
+import { exists, ownTemp } from './files';
 import { ORCH_DIR } from './store';
 import { branchName } from './machine';
 import type { Config, TaskState } from './types';
@@ -220,7 +219,7 @@ class GitRepo {
     const untracked = await this.untracked();
     // Untracked files are marked intent-to-add in a copy of the index, which the checkout's own never sees: one
     // `git diff` then shows them as new files, where a `git diff --no-index` per file took a process each.
-    const tmp = untracked.length ? await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cs-index-')) : null;
+    const tmp = untracked.length ? await ownTemp('index-') : null;
     try {
       let env: NodeJS.ProcessEnv = {};
       if (tmp) {

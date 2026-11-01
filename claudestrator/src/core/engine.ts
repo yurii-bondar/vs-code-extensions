@@ -1,12 +1,11 @@
 // The engine: drives tasks through the state machine, runs each agent as a Claude Code session, runs gates,
 // commits, pushes and opens draft PRs. Independent of VS Code; the extension listens to its events.
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { EventEmitter } from 'events';
 import { loadConfig, configPaths } from './config';
-import { exists } from './files';
+import { exists, ownTemp, ownTempRoot } from './files';
 import { EFFORTS, REPO_NAME, SCENARIOS } from './protocol';
 import { buildPipeline, scenarioKind, taskPipeline, fitsScenario, onRepos, reposBeforePlan } from './pipeline';
 import { nextAction, runOf, artifactPath, branchName, sameStep, editableFrom, spentOf, stepRepos, unknownRepos, TASK_FILES, type NextAction, type RunAction } from './machine';
@@ -966,7 +965,7 @@ class Engine extends EventEmitter {
       hooks: this.hooks.settings(),
       guard: this.hooks.host(),
       writeRoots,
-      protect: [...configPaths(this.workspace, config), ...runsOutside],
+      protect: [...configPaths(this.workspace, config), ...runsOutside, ownTempRoot()],
       secrets: [...this.secretFiles(), ...envFiles],
       envVars: credentialVars({ ...getChildEnv(), [TOKEN_ENV]: '' }),
       cwd,
@@ -1438,7 +1437,7 @@ class Engine extends EventEmitter {
     // StructuredOutput is how an agent hands over its report's data (--json-schema): nothing it reaches.
     if (READ_TOOLS.has(tool) || tool === 'StructuredOutput') return { allow: true };
     const cwd = writeRoots.length === 1 ? writeRoots[0]! : this.workspace;
-    const protect = configPaths(this.workspace, config);
+    const protect = [...configPaths(this.workspace, config), ownTempRoot()];
     // Commands the guard cannot read are not run: PowerShell's own syntax, and a Monitor that watches anything but a command.
     if (tool === 'PowerShell') return blocked('PowerShell commands are not read by the guard, and native Windows has no sandbox; agents run commands with Bash');
     if (tool === 'Monitor' && typeof input.command !== 'string') return blocked('Monitor watches a command here, nothing else');
@@ -1547,7 +1546,7 @@ class Engine extends EventEmitter {
     const body = s.source.kind === 'jira' ? `Refs: ${s.taskId}` : '';
     const branch = branchName(s) as string;
     const committed: string[] = [];
-    const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cs-commit-'));
+    const tmp = await ownTemp('commit-');
     // Stop ends a commit hook that runs (it can take minutes), and no repo after it is committed.
     const abort = new AbortController();
     this.gateRuns.set(s.taskId, abort);
@@ -1636,7 +1635,7 @@ class Engine extends EventEmitter {
     for (const r of all) if ((await r.git.branchChanges(r.base, branch)).length) repos.push(r);
     const prs = { ...s.prs };
     await this.ensureSandbox(config);
-    const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cs-pr-'));
+    const tmp = await ownTemp('pr-');
     const bodyFile = async (repo: string): Promise<string> => {
       const f = path.join(tmp, `${repo}.md`);
       await fs.promises.writeFile(f, await prBody({ state: await this.svc.state(s.taskId), repo, taskDir, language: config.language, prs, forbidAttribution: config.policy.forbidAiAttribution }));
