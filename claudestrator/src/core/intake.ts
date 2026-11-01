@@ -610,10 +610,13 @@ class AtlassianClient {
 
 /**
  * The plan of a pipeline without a planner, from the ticket: its repos, a type and a branch slug from the title (latin
- * letters and digits; `change` when the title has none), and the title as the commit subject.
+ * letters and digits; `change` when the title has none), and the title as the commit subject. A Jira ticket's title
+ * starts with its key (`CP-12 Fix login`), which the branch (`fix/CP-12-…`) and the PR title (`… (CP-12)`) have
+ * already: the slug and the subject take the summary after it.
  */
-function planFromTicket(spec: Pick<Spec, 'title'>, input: string, repos: string[]): PlanMeta {
-  const title = spec.title.replace(/\s+/g, ' ').trim().slice(0, 100);
+function planFromTicket(spec: Pick<Spec, 'title' | 'source'>, input: string, repos: string[]): PlanMeta {
+  const summary = spec.source.kind === 'jira' ? withoutKey(spec.title, spec.source.key) : spec.title;
+  const title = summary.replace(/\s+/g, ' ').trim().slice(0, 100);
   const slug =
     title
       .normalize('NFKD')
@@ -624,6 +627,14 @@ function planFromTicket(spec: Pick<Spec, 'title'>, input: string, repos: string[
       .replace(/^-+|-+$/g, '') || 'change';
   const type = /\b(fix(es|ed)?|bugs?|bugfix|hotfix|regression)\b/i.test(`${title} ${input}`) || /виправ|помилк|баг/i.test(`${title} ${input}`) ? 'fix' : 'feat';
   return { type, slug, ...(title && { title }), repos: repos.map((name) => ({ name, mode: 'full' as const })), openQuestions: [] };
+}
+
+/** A title without the issue key it starts with: `CP-12 Fix login`, `[CP-12] Fix login`, `CP-12: Fix login` → `Fix login`. */
+function withoutKey(title: string, key: string): string {
+  const t = title.trim();
+  const at = t.startsWith(`[${key}]`) ? key.length + 2 : t.startsWith(key) ? key.length : 0;
+  if (!at || /[\w-]/.test(t.charAt(at))) return t;
+  return t.slice(at).replace(/^[\s:–—-]+/, '');
 }
 
 export type { Classified, Invocation };
