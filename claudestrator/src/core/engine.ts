@@ -10,7 +10,7 @@ import { exists } from './files';
 import { EFFORTS, REPO_NAME, SCENARIOS } from './protocol';
 import { buildPipeline, scenarioKind, taskPipeline, fitsScenario, onRepos, reposBeforePlan } from './pipeline';
 import { nextAction, runOf, artifactPath, branchName, sameStep, editableFrom, stepRepos, unknownRepos, TASK_FILES, type NextAction, type RunAction } from './machine';
-import { parseInvocation, classifyInput, detectScenario, runIntake, renderTicket, IntakeError, extractAcceptanceCriteria, otherSite, planFromTicket } from './intake';
+import { parseInvocation, classifyInput, detectScenario, runIntake, renderTicket, IntakeError, extractAcceptanceCriteria, otherSite, planFromTicket, capSpec } from './intake';
 import { TaskService, type DispatchResult } from './store';
 import { exec, getChildEnv, GitRepo, branchAt, taskRepos, prepareRepos, taskDiff, removeWorktrees, SLOW_GIT_MS } from './git';
 import { runGates, runShell, withoutCredentials } from './gates';
@@ -707,6 +707,7 @@ class Engine extends EventEmitter {
     }
     // What the user wrote next to the issue key ("check it is ready") travels with the ticket.
     if (s.source.note && !spec.request) spec = { ...spec, request: s.source.note };
+    spec = capSpec(spec);
     await this.svc.writeArtifact(s.taskId, TASK_FILES.ticketJson, `${JSON.stringify(spec, null, 2)}\n`);
     await this.svc.writeArtifact(s.taskId, TASK_FILES.ticket, renderTicket(spec));
     const plan = await this.planWithoutPlanner(s, spec);

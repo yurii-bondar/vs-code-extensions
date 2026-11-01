@@ -83,3 +83,12 @@ test("atlassian: a link to another site is not read or commented on with this si
   assert.ok(!r.ok && /PROJ-12 is on clientb\.atlassian\.net, and the API token is for acme\.atlassian\.net/.test(r.error ?? ''), r.error);
   assert.equal(none.calls.length, 0, 'no comment on the wrong issue');
 });
+
+test('atlassian: a ticket with a huge description or hundreds of comments is cut, and says so', async () => {
+  const { capSpec } = await import('../src/core/intake');
+  const spec = { id: 'T', source: { kind: 'text' as const, text: 'x' }, title: 'x', description: 'd'.repeat(100000), acceptanceCriteria: [], links: [], context: `${'old '.repeat(20000)}LATEST COMMENT` };
+  const capped = capSpec(spec);
+  assert.ok(capped.description.length < 41000 && /more characters of the description are left out/.test(capped.description));
+  assert.ok(capped.context!.length < 21000 && capped.context!.endsWith('LATEST COMMENT'), 'the latest comments stay');
+  assert.deepEqual(capSpec({ ...spec, description: 'short', context: 'short' }), { ...spec, description: 'short', context: 'short' });
+});

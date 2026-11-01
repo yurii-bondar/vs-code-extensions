@@ -196,6 +196,24 @@ class IntakeError extends Error {
   }
 }
 
+/** The most of a ticket's description, and of its comments, that goes into the ticket every agent reads first. */
+const MAX_DESCRIPTION = 40000;
+const MAX_CONTEXT = 20000;
+
+/**
+ * A ticket every agent of the task reads, and every replay of its state carries: a description cut at its end, the
+ * comments from their end (the latest say most), each saying so. Hundreds of bot comments cost every agent tokens.
+ */
+function capSpec(spec: Spec): Spec {
+  const head = (text: string, max: number, what: string): string => (text.length <= max ? text : `${text.slice(0, max)}\n\n[${text.length - max} more characters of the ${what} are left out here: read the rest where the ticket is]`);
+  const tail = (text: string, max: number, what: string): string => (text.length <= max ? text : `[${text.length - max} characters of the ${what} before this are left out here: read them where the ticket is]\n\n${text.slice(-max)}`);
+  return {
+    ...spec,
+    description: head(spec.description, MAX_DESCRIPTION, 'description'),
+    ...(spec.context !== undefined && { context: tail(spec.context, MAX_CONTEXT, 'comments') }),
+  };
+}
+
 /** Turns a classified source into a task spec. Refuses disallowed Jira projects before any request is made. */
 async function runIntake(taskId: string, source: Source, opts: { allowedProjects?: string[] | undefined; atlassian?: AtlassianClient | null | undefined } = {}): Promise<Spec> {
   switch (source.kind) {
@@ -604,6 +622,7 @@ function planFromTicket(spec: Pick<Spec, 'title'>, input: string, repos: string[
 
 export type { Classified, Invocation };
 export {
+  capSpec,
   planFromTicket,
   parseInvocation,
   detectScenario,
