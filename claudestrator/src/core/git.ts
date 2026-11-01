@@ -48,6 +48,9 @@ interface ExecOptions {
   maxBytes?: number | undefined;
 }
 
+/** How long git gets for what moves a whole repository: a fetch, a worktree's checkout, a push. */
+const SLOW_GIT_MS = 10 * 60000;
+
 /** The most a command's output is read into memory; more is cut, and the result says so (code 125). */
 const MAX_OUTPUT = 64 * 1024 * 1024;
 
@@ -352,9 +355,11 @@ async function prepareRepos(workspace: string, state: TaskState, config: RepoLoo
       continue;
     }
     const main = new GitRepo(checkout);
-    const fetched = (await main.git('fetch', 'origin', base)).code === 0;
+    // A big repo or a slow network takes longer than git's usual two minutes here.
+    const fetch = await main.gitWith({ timeoutMs: SLOW_GIT_MS }, 'fetch', 'origin', base);
+    const fetched = fetch.code === 0;
     const from = fetched || (await main.git('rev-parse', '--verify', '--quiet', `origin/${base}`)).code === 0 ? `origin/${base}` : base;
-    const note = fetched ? {} : { note: 'fetch failed; branched from the local ref' };
+    const note = fetched ? {} : { note: `fetch failed${fetch.code === 124 ? ' (timed out)' : ''}; branched from the local ref` };
     const had = await main.hasBranch(branch);
     const dropBranch = (): Promise<unknown> => (had ? Promise.resolve() : main.git('branch', '-D', branch));
     let r: ExecResult;
@@ -365,7 +370,7 @@ async function prepareRepos(workspace: string, state: TaskState, config: RepoLoo
         results.push({ repo: name, dir, status: 'failed', error: `${dir} is there already` });
         break;
       }
-      r = had ? await main.git('worktree', 'add', dir, branch) : await main.git('worktree', 'add', '-b', branch, dir, from);
+      r = had ? await main.gitWith({ timeoutMs: SLOW_GIT_MS }, 'worktree', 'add', dir, branch) : await main.gitWith({ timeoutMs: SLOW_GIT_MS }, 'worktree', 'add', '-b', branch, dir, from);
       // A worktree half made (a timeout on a big repo) would make the next try fail with "already exists". The folder
       // was not there before this call, so what is in it now is that half-made worktree and nothing of yours.
       const removeWorktree = async (): Promise<void> => {
@@ -428,4 +433,4 @@ async function removeWorktrees(workspace: string, state: TaskState, config: Repo
 }
 
 export type { ExecResult, ExecOptions, TaskRepo, Prepared, PrepareResult };
-export { exec, launch, setShim, setChildEnv, getChildEnv, GitRepo, branchAt, worktreeDir, taskRepos, prepareRepos, taskDiff, removeWorktrees, isOwn };
+export { exec, launch, setShim, setChildEnv, getChildEnv, GitRepo, branchAt, worktreeDir, taskRepos, prepareRepos, taskDiff, removeWorktrees, isOwn, SLOW_GIT_MS };

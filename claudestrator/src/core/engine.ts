@@ -12,7 +12,7 @@ import { buildPipeline, scenarioKind, taskPipeline, fitsScenario, onRepos, repos
 import { nextAction, runOf, artifactPath, branchName, sameStep, editableFrom, stepRepos, unknownRepos, TASK_FILES, type NextAction, type RunAction } from './machine';
 import { parseInvocation, classifyInput, detectScenario, runIntake, renderTicket, IntakeError, extractAcceptanceCriteria, otherSite, planFromTicket } from './intake';
 import { TaskService, type DispatchResult } from './store';
-import { exec, getChildEnv, GitRepo, branchAt, taskRepos, prepareRepos, taskDiff, removeWorktrees } from './git';
+import { exec, getChildEnv, GitRepo, branchAt, taskRepos, prepareRepos, taskDiff, removeWorktrees, SLOW_GIT_MS } from './git';
 import { runGates, runShell, withoutCredentials } from './gates';
 import { guardBash, inGitMetadata, inside, outsideLabel } from './guard';
 import { buildAgentPrompt, parseStageReport, lastJsonBlock, type StageReport } from './prompt';
@@ -1449,7 +1449,7 @@ class Engine extends EventEmitter {
         }
         this.setLive(s.taskId, { phase: 'publishing', text: `Pushing ${r.name}` });
         // The hook has run, in the sandbox; git would run it again outside.
-        const push = await r.git.git('push', '--no-verify', '-u', 'origin', branch);
+        const push = await r.git.gitWith({ timeoutMs: SLOW_GIT_MS }, 'push', '--no-verify', '-u', 'origin', branch);
         if (push.code !== 0) throw new EngineError('push_failed', `${r.name}: ${push.stderr.trim()}`);
         // A retry after a partial failure (or a Stop mid-publish) finds the PR it already opened.
         const open = await exec('gh', ['pr', 'view', branch, '--json', 'url,state', '--jq', 'select(.state == "OPEN") | .url'], { cwd: r.dir, timeoutMs: 60000 });
