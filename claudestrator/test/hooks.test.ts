@@ -113,3 +113,18 @@ test('hooks: a call without a live token is refused before its body is read', as
     server.dispose();
   }
 });
+
+test('hooks: the guard starts with the first agent, also after it was not listening', async () => {
+  const ws = workspace(['api'], 'repos:\n  api: {}\n');
+  const h = await harness(ws, { FAKE_REPOS: 'api' });
+  h.hooks.dispose(); // as at activation now: no port open
+  assert.equal(h.hooks.url, null);
+  try {
+    const { taskId } = await h.engine.start({ text: 'Do a thing' });
+    const s = await runTask(h.engine, taskId);
+    assert.equal(s.checkpoint && s.checkpoint.id, 'approve-plan', JSON.stringify(h.engine.lastError(taskId)));
+    assert.match(h.hooks.url!, /^http:\/\/127\.0\.0\.1:\d+\/pretooluse$/);
+  } finally {
+    h.hooks.dispose();
+  }
+});

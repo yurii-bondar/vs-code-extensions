@@ -561,6 +561,18 @@ class Engine extends EventEmitter {
     return this.errors.get(taskId) || null;
   }
 
+  /**
+   * The guard's server, started with the first agent rather than with VS Code: a window that runs none opens no port,
+   * and one that could not start (a port refused once) is tried again here instead of failing every task until a reload.
+   */
+  async guardListening(): Promise<void> {
+    try {
+      await this.hooks.listen();
+    } catch (e) {
+      throw new EngineError('guard_unavailable', `the guard server could not start, so no agent may run: ${(e as Error).message}`);
+    }
+  }
+
   /** The account agents start under now: its config folder, '' for Claude Code's default. */
   account(): string {
     const opts = (this.runner as Partial<Pick<ClaudeRunner, 'opts'>>).opts;
@@ -786,6 +798,7 @@ class Engine extends EventEmitter {
     emitItem({ type: 'prompt', text: prompt });
     const agent = { name: 'intake', description: 'Reads the task source', model: 'haiku', effort: 'low' as const, instructions: INTAKE_INSTRUCTIONS, output: 'plan' };
     const webHosts = await this.webHosts(s, await this.config());
+    await this.guardListening();
     const hook = this.hooks.register(async ({ tool, input }) => {
       if (READ_TOOLS.has(tool) || tool === 'ToolSearch') return { allow: true };
       const strange = strangeHosts(input, webHosts);
@@ -1028,6 +1041,7 @@ class Engine extends EventEmitter {
     if (gated) await this.ensureSandbox(config);
     const runsOutside = await this.runsOutside(writeRoots);
     const webHosts = await this.webHosts(state, config);
+    await this.guardListening();
     const hook = this.hooks.register((call) => this.decide({ taskId, step, writeRoots, runsOutside, webHosts, config, call, emitItem }));
     let session: ClaudeSession;
     try {
@@ -1532,6 +1546,7 @@ class Engine extends EventEmitter {
     const prompt = `Add one comment to the Jira issue ${key}${site ? ` on ${site}` : ''} with the "${via.server}" MCP server's tools. The comment body is everything between the two marker lines, verbatim:\n-----BEGIN COMMENT-----\n${text}\n-----END COMMENT-----`;
     append({ type: 'prompt', text: prompt });
     let posted = 0;
+    await this.guardListening();
     const hook = this.hooks.register(async ({ tool, input }) => {
       if (tool === 'ToolSearch') return { allow: true };
       const action = tool.startsWith('mcp__') ? mcpAction(tool) : '';

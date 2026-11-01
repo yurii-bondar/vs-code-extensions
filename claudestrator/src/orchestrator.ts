@@ -139,7 +139,7 @@ class Orchestrator {
       this.lastAccount = dir;
       this.onAccountChanged();
     });
-    await this.hooks.listen();
+    // The guard's server starts with the first agent (Engine.guardListening), not with VS Code.
     this.token = await this.context.secrets.get(SECRET_KEY);
     // No processes at activation: the health checks (and the model, sign-in and MCP checks after them) start the
     // first time something needs them, see ensureReady.
