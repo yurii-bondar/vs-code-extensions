@@ -1553,7 +1553,10 @@ class Engine extends EventEmitter {
         if (!(await r.git.branchChanges(r.base, branch)).length) continue;
         // Signed as git would sign it (commit.gpgsign), with your keys, git's hooks off: the hooks ran in the sandbox.
         // Also a commit a stopped run left unsigned.
-        if ((await r.git.git('config', '--bool', 'commit.gpgsign')).stdout.trim() === 'true' && (await r.git.branch()) === branch && !(await r.git.headSigned())) {
+        if ((await r.git.git('config', '--bool', 'commit.gpgsign')).stdout.trim() === 'true' && !(await r.git.headSigned(`refs/heads/${branch}`))) {
+          // Signing amends the commit checked out: on another branch, the task's would be pushed unsigned.
+          const current = await r.git.branch();
+          if (current !== branch) throw new EngineError('wrong_branch', `${r.name}: the task's commit on ${branch} is not signed yet (commit.gpgsign is on), and the repo is on ${current || 'a detached HEAD'}; switch back (git switch ${branch}) and try again`);
           const signed = await r.git.git('commit', '--amend', '--no-edit', '--no-verify', '--allow-empty', '-S');
           if (signed.code !== 0) {
             await this.dispatch(s.taskId, { type: 'commit_failed', repo: r.name, output: `the commit was made, but signing it failed (commit.gpgsign is on):\n${signed.stderr.trim().slice(-8000)}` });

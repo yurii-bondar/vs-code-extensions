@@ -140,9 +140,9 @@ class GitRepo {
     return /git[ -]lfs/.test(hook);
   }
 
-  /** Whether HEAD carries a signature (gpg, ssh or x509): git writes it as the commit's gpgsig header. */
-  async headSigned(): Promise<boolean> {
-    const r = await this.git('cat-file', 'commit', 'HEAD');
+  /** Whether a commit (HEAD, or a branch's tip) carries a signature (gpg, ssh or x509): git writes it as its gpgsig header. */
+  async headSigned(ref = 'HEAD'): Promise<boolean> {
+    const r = await this.git('cat-file', 'commit', ref);
     return r.code === 0 && /^gpgsig(-sha256)? /m.test(r.stdout.split('\n\n')[0] ?? '');
   }
 

@@ -912,3 +912,26 @@ test('engine: Stop during a push ends it, and no PR is opened after it; every PR
     h.hooks.dispose();
   }
 });
+
+test("engine: a task's commit left unsigned while the repo is on another branch is not pushed unsigned: you are asked to switch back", { skip: process.platform === 'win32' }, async () => {
+  const ws = workspace(['api'], 'pipeline: [planner, developer]\nrepos:\n  api: {}\n');
+  const api = path.join(ws, 'api');
+  const keys = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-sign-'));
+  execFileSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', path.join(keys, 'id'), '-C', 'cs-test']);
+  git(api, 'config', 'gpg.format', 'ssh');
+  git(api, 'config', 'user.signingkey', path.join(keys, 'id'));
+  git(api, 'config', 'commit.gpgsign', 'true');
+  const h = await harness(ws, { FAKE_REPOS: 'api' });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
+    await runTask(h.engine, taskId);
+    // A Stop between the sandboxed commit and its signing, then you switch the checkout.
+    git(api, 'commit', '--amend', '--no-edit', '--no-gpg-sign');
+    git(api, 'switch', '-q', 'main');
+    await assert.rejects(h.engine.commit(await h.engine.svc.state(taskId)), /not signed yet \(commit\.gpgsign is on\), and the repo is on main; switch back/);
+    assert.doesNotMatch(execFileSync('git', ['cat-file', 'commit', 'feat/add-feature'], { cwd: api, encoding: 'utf8' }), /^gpgsig/m, 'nothing amended on main meanwhile');
+    assert.equal(git(api, 'log', '-1', '--format=%s', 'main'), 'init');
+  } finally {
+    h.hooks.dispose();
+  }
+});
