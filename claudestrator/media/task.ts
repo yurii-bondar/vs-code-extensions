@@ -498,8 +498,8 @@ interface Views {
         body = `<b>Some repos are not ready, so nothing was changed.</b><ul>${e.blocked.map((b) => `<li><code>${esc(b.repo)}</code>: ${esc(b.problem)}${b.files ? `<div class="mono small muted">${b.files.map((f) => esc(f)).join('<br>')}</div>` : ''}</li>`).join('')}</ul><div class="muted small">Commit or stash that work (branch mode switches your checkout), then retry. New tasks can use worktrees instead (Settings → Git).</div>`;
       } else if (e.code === 'claude_login') {
         action = `<button class="btn sm primary" data-action="claude-login">${icon('user')}Sign in to Claude</button><button class="btn sm" data-action="open-account-menu">Switch account</button>${action}`;
-      } else if (e.code === 'atlassian_not_configured') {
-        action = `<button class="btn sm primary" data-action="nav" data-name="mcp">${icon('plug')}Sign in to Atlassian MCP</button><button class="btn sm" data-action="settings-atlassian">Use an API token</button>${action}`;
+      } else if (e.code === 'atlassian_not_configured' || e.code === 'atlassian_auth') {
+        action = `<button class="btn sm primary" data-action="nav" data-name="mcp">${icon('plug')}Sign in to Atlassian MCP</button><button class="btn sm" data-action="settings-atlassian">${e.code === 'atlassian_auth' ? 'Renew the API token' : 'Use an API token'}</button>${action}`;
       } else if (e.code === 'config_invalid') {
         action = `<button class="btn sm" data-action="open-config">Open config.yaml</button>${action}`;
       } else if (e.code === 'busy') {
@@ -584,7 +584,7 @@ interface Views {
       }
       const hooks = ctx.hooks || [];
       if (hooks.length) {
-        body += `<div class="banner warn">${icon('alert')}<div class="grow"><b>The agents changed git hooks.</b> They run when you use git in ${hooks.length === 1 ? 'that repo' : 'those repos'}, outside the sandbox: read them first.<ul>${hooks.map((h) => `<li><code>${esc(h.repo)}/${esc(h.file)}</code></li>`).join('')}</ul></div></div>`;
+        body += `<div class="banner warn">${icon('alert')}<div class="grow"><b>The agents changed what acts outside the sandbox.</b> Git hooks run when you use git in ${hooks.length === 1 ? 'that repo' : 'those repos'}, <code>.lfsconfig</code> says where Git LFS uploads, and every Claude Code session there takes <code>CLAUDE.md</code> as instructions: read them first.<ul>${hooks.map((h) => `<li><code>${esc(h.repo)}/${esc(h.file)}</code></li>`).join('')}</ul></div></div>`;
       }
     } else {
       body = ctx.text ? `<pre class="log ${cp.id === 'gate-failure' || cp.id === 'hook-failure' ? 'error' : ''}">${esc(ctx.text)}</pre>` : '';
