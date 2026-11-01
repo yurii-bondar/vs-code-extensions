@@ -286,10 +286,12 @@ function otherSite(source: Source, site: string): string | null {
   return own && host(own) !== host(site) ? host(own) : null;
 }
 
+/** A REST read that failed: `atlassian_auth` when the site refused the API token (the MCP reader may still get in), else `fetch_failed`. */
 async function attempt<T>(fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
   } catch (e) {
+    if (e instanceof AtlassianError && e.status === 401) throw new IntakeError('atlassian_auth', e.message);
     throw new IntakeError('fetch_failed', (e as Error).message || String(e));
   }
 }
@@ -482,6 +484,53 @@ function retryAfterMs(header: string | null, fallbackMs: number): number {
   return Number.isFinite(ms) && ms >= 0 ? Math.min(ms, 30000) : fallbackMs;
 }
 
+/** A failed REST call. `status` is the HTTP status, or null when no answer came; the message says what to do about it. */
+class AtlassianError extends Error {
+  readonly status: number | null;
+
+  constructor(message: string, status: number | null) {
+    super(message);
+    this.name = 'AtlassianError';
+    this.status = status;
+  }
+}
+
+const SETTINGS = 'Settings → Jira & Confluence';
+
+/** What a refusal means: the token, the account's access, or an issue or page that is not there for it. */
+function refusal(status: number, site: string): string {
+  switch (status) {
+    case 401:
+      return `${site} refused the API token: it may have expired, been revoked or belong to another email. Create a new one at id.atlassian.com and save it in ${SETTINGS}`;
+    case 403:
+      return `the API token's account has no access to this on ${site}: ask a Jira or Confluence admin for it`;
+    case 404:
+      return `there is no such issue or page on ${site}, or the API token's account cannot see it`;
+    default:
+      return '';
+  }
+}
+
+/**
+ * Why a request got no answer. Node's fetch says only "fetch failed" and keeps the reason in `cause`: a site that is
+ * not there (ENOTFOUND), a refused connection, a certificate this machine does not trust.
+ */
+function unreachable(e: Error, host: string): string {
+  const cause = (e as { cause?: unknown }).cause;
+  const c = cause && typeof cause === 'object' ? (cause as { code?: unknown; message?: unknown; errors?: unknown }) : {};
+  const code = typeof c.code === 'string' ? c.code : '';
+  // Every address refused: an AggregateError with no message of its own.
+  const first = Array.isArray(c.errors) && c.errors[0] instanceof Error ? c.errors[0].message : '';
+  const detail = (typeof c.message === 'string' && c.message) || first;
+  const why = detail && code && !detail.includes(code) ? `${code}: ${detail}` : detail || code;
+  const hint = /^(ENOTFOUND|EAI_AGAIN)$/.test(code)
+    ? `: is the site right? (${SETTINGS})`
+    : /CERT|SELF_SIGNED|UNABLE_TO_VERIFY|ERR_TLS/.test(code)
+      ? ': its certificate is not trusted here (a proxy that inspects HTTPS?)'
+      : '';
+  return `the connection to ${host} failed: ${e.message}${why ? ` (${why})` : ''}${hint}`;
+}
+
 /** The Jira and Confluence replies, as far as this client reads them. */
 interface JiraIssueReply {
   key: string;
@@ -528,6 +577,11 @@ class AtlassianClient {
    */
   async request<T = unknown>(method: string, pathAndQuery: string, body?: unknown): Promise<T> {
     const retryable = method === 'GET' ? RETRY_STATUS : RETRY_STATUS_POST;
+    const credentials = Buffer.from(`${this.auth.email}:${this.auth.token}`).toString('base64');
+    // What goes into an error never carries the token, whatever a server or a library put in its text (an API token is
+    // long: a short one is a test's, and hiding every "t" would garble the message).
+    const fail = (what: string, status: number | null): AtlassianError =>
+      new AtlassianError(`${method} ${pathAndQuery}: ${[this.auth.token, credentials].reduce((m, secret) => (secret.length >= 8 ? m.split(secret).join('***') : m), what)}`, status);
     for (let attempt = 1; ; attempt++) {
       const backoff = 1000 * 2 ** (attempt - 1);
       let res: Response;
@@ -535,7 +589,7 @@ class AtlassianClient {
         res = await this.fetch(`${this.base}${pathAndQuery}`, {
           method,
           headers: {
-            Authorization: `Basic ${Buffer.from(`${this.auth.email}:${this.auth.token}`).toString('base64')}`,
+            Authorization: `Basic ${credentials}`,
             Accept: 'application/json',
             ...(body !== undefined && { 'Content-Type': 'application/json' }),
           },
@@ -548,13 +602,16 @@ class AtlassianClient {
           await this.sleep(backoff);
           continue;
         }
-        throw new Error(`${method} ${pathAndQuery}: ${timedOut ? `no answer in ${Math.round(this.timeoutMs / 1000)}s` : (e as Error).message}`);
+        throw fail(timedOut ? `${this.site} gave no answer in ${Math.round(this.timeoutMs / 1000)}s` : unreachable(e as Error, this.site), null);
       }
       if (!res.ok && retryable.has(res.status) && attempt < ATTEMPTS) {
         await this.sleep(retryAfterMs(res.headers.get('retry-after'), backoff));
         continue;
       }
-      if (!res.ok) throw new Error(`${method} ${pathAndQuery}: ${res.status} ${res.statusText}`);
+      if (!res.ok) {
+        const hint = refusal(res.status, this.site);
+        throw fail(`${res.status}${res.statusText ? ` ${res.statusText}` : ''}${hint ? `: ${hint}` : ''}`, res.status);
+      }
       return (await res.json()) as T;
     }
   }
@@ -654,4 +711,5 @@ export {
   otherSite,
   projectAllowed,
   AtlassianClient,
+  AtlassianError,
 };

@@ -6,7 +6,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-import { AtlassianClient, IntakeError, classifyInput, otherSite, runIntake } from '../src/core/intake';
+import { AtlassianClient, AtlassianError, IntakeError, classifyInput, otherSite, runIntake } from '../src/core/intake';
 import { Engine, type EngineOptions } from '../src/core/engine';
 import type { TaskState } from '../src/core/types';
 
@@ -91,4 +91,46 @@ test('atlassian: a ticket with a huge description or hundreds of comments is cut
   assert.ok(capped.description.length < 41000 && /more characters of the description are left out/.test(capped.description));
   assert.ok(capped.context!.length < 21000 && capped.context!.endsWith('LATEST COMMENT'), 'the latest comments stay');
   assert.deepEqual(capSpec({ ...spec, description: 'short', context: 'short' }), { ...spec, description: 'short', context: 'short' });
+});
+
+test('atlassian: a refused token, a missing access or a misspelt site says what to do, never with the token', async () => {
+  const secret = { site: 'acme.atlassian.net', email: 'dev@example.com', token: 'ATATT-secret-123' };
+  const header = Buffer.from(`${secret.email}:${secret.token}`).toString('base64');
+  const sleep = async (): Promise<void> => {};
+  const failure = async (steps: Parameters<typeof scripted>[0], read: (c: AtlassianClient) => Promise<unknown>): Promise<Error> => {
+    const { fetch } = scripted(steps);
+    try {
+      await read(new AtlassianClient(secret, { fetch, sleep }));
+    } catch (e) {
+      const message = (e as Error).message;
+      assert.ok(!message.includes(secret.token) && !message.includes(header), `no token in "${message}"`);
+      return e as Error;
+    }
+    throw new Error('it did not fail');
+  };
+
+  const expired = await failure([{ status: 401 }], (c) => c.myself());
+  assert.match(expired.message, /^GET \/rest\/api\/3\/myself: 401: acme\.atlassian\.net refused the API token: .*Settings → Jira & Confluence$/);
+  assert.equal((expired as AtlassianError).status, 401);
+  // The intake tells a refused token from the rest, so the engine can read through the MCP server instead.
+  const { fetch } = scripted([{ status: 401 }]);
+  await assert.rejects(runIntake('PROJ-1', { kind: 'jira', key: 'PROJ-1' }, { atlassian: new AtlassianClient(secret, { fetch, sleep }) }), (e: IntakeError) => e.code === 'atlassian_auth' && /API token/.test(e.message));
+
+  assert.match((await failure([{ status: 403 }], (c) => c.issue('PROJ-1'))).message, /403: the API token's account has no access to this on acme\.atlassian\.net/);
+  assert.match((await failure([{ status: 404 }], (c) => c.page('42'))).message, /404: there is no such issue or page on acme\.atlassian\.net, or the API token's account cannot see it/);
+
+  // Node's fetch says "fetch failed"; the reason is in its cause.
+  const cause = (code: string, message: string): Error => Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error(message), { code }) });
+  const misspelt = cause('ENOTFOUND', 'getaddrinfo ENOTFOUND acme.atlassian.net');
+  const nowhere = await failure([misspelt, misspelt, misspelt], (c) => c.myself());
+  assert.match(nowhere.message, /the connection to acme\.atlassian\.net failed: fetch failed \(getaddrinfo ENOTFOUND acme\.atlassian\.net\): is the site right\? \(Settings → Jira & Confluence\)/);
+  assert.equal((nowhere as AtlassianError).status, null);
+  const proxy = cause('UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'unable to verify the first certificate');
+  assert.match((await failure([proxy, proxy, proxy], (c) => c.myself())).message, /fetch failed \(UNABLE_TO_VERIFY_LEAF_SIGNATURE: unable to verify the first certificate\): its certificate is not trusted here/);
+  // Every address refused: an AggregateError without a message of its own.
+  const refused = Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new AggregateError([new Error('connect ECONNREFUSED 10.0.0.1:443')], ''), { code: 'ECONNREFUSED' }) });
+  assert.match((await failure([refused, refused, refused], (c) => c.myself())).message, /fetch failed \(connect ECONNREFUSED 10\.0\.0\.1:443\)$/);
+  // A library that put the credentials into its text does not get them into the message.
+  const leaky = new TypeError(`invalid header Basic ${header}`);
+  assert.match((await failure([leaky], (c) => c.addComment('PROJ-1', 'hi'))).message, /invalid header Basic \*\*\*/);
 });
