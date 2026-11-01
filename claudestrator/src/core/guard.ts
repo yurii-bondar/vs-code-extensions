@@ -333,6 +333,145 @@ function redirectTargets(segment: string): string[] {
   return out;
 }
 
+/** Options that take a value, of the commands that copy, move or link files. */
+const COPY_VALUED: Record<string, string[]> = {
+  cp: ['-t', '--target-directory', '-S', '--suffix'],
+  mv: ['-t', '--target-directory', '-S', '--suffix'],
+  ln: ['-t', '--target-directory', '-S', '--suffix'],
+  install: ['-t', '--target-directory', '-S', '--suffix', '-m', '--mode', '-o', '--owner', '-g', '--group', '--strip-program'],
+  rsync: ['-e', '--rsh', '--exclude', '--include', '--filter', '-f', '--files-from', '--exclude-from', '--include-from', '--chmod', '--chown', '--log-file', '--backup-dir', '-T', '--temp-dir', '--partial-dir', '--compare-dest', '--copy-dest', '--link-dest', '--suffix', '--rsync-path', '--password-file', '--port', '--bwlimit', '--timeout', '--max-size', '--min-size', '-B', '--block-size', '--out-format', '-M', '--remote-option'],
+};
+
+/** The folder of `-t DIR`, `-tDIR`, `-rt DIR`, `--target-directory=DIR`: where cp, mv, ln or install put what they are given. */
+function targetDirectory(args: string[]): string | undefined {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (a === '--') return undefined;
+    if (a === '--target-directory') return args[i + 1];
+    if (a.startsWith('--target-directory=')) return a.slice('--target-directory='.length);
+    // In a cluster of short options `t` takes the rest of it, or the next word.
+    const t = a.match(/^-[A-Za-z]*?t(.*)$/s);
+    if (t) return t[1] || args[i + 1];
+  }
+  return undefined;
+}
+
+/**
+ * What cp, mv, ln, install, rsync or ditto write: the destination, and in it each source's name, as a destination
+ * that is a folder takes it (`cp -r /tmp/e/.claude .` writes ./.claude), or the folder of `-t`.
+ */
+function copied(cmd: string, args: string[]): string[] {
+  const words = plainWords(args, COPY_VALUED[cmd] ?? []);
+  const into = cmd === 'rsync' || cmd === 'ditto' ? undefined : targetDirectory(args);
+  // `ln -s ../x` makes ./x.
+  if (into === undefined && words.length === 1 && cmd === 'ln') return [path.basename(words[0]!)];
+  const dest = into ?? words[words.length - 1];
+  if (dest === undefined) return [];
+  const sources = into === undefined ? words.slice(0, -1) : words;
+  return [dest, ...sources.map((s) => path.join(dest, path.basename(s.replace(/\/+$/, '')) || '.'))];
+}
+
+/**
+ * Options parsed as a command does: `-o F`, `-oF`, `-sSLo F` (a cluster ends at its first option that takes a value),
+ * `--output F`, `--output=F`. `short` holds the letters of the options that take a value, `long` the long ones.
+ */
+function parseOptions(args: string[], short: string, long: string[]): { values: (...names: string[]) => string[]; flags: Set<string>; plain: string[] } {
+  const found: [string, string][] = [];
+  const flags = new Set<string>();
+  const plain: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (a === '--') {
+      plain.push(...args.slice(i + 1));
+      break;
+    }
+    if (a.startsWith('--')) {
+      const eq = a.indexOf('=');
+      if (eq !== -1) found.push([a.slice(0, eq), a.slice(eq + 1)]);
+      else if (long.includes(a)) found.push([a, args[++i] ?? '']);
+      else flags.add(a);
+    } else if (a.startsWith('-') && a.length > 1) {
+      for (let j = 1; j < a.length; j++) {
+        const c = a[j]!;
+        if (!short.includes(c)) {
+          flags.add(`-${c}`);
+          continue;
+        }
+        found.push([`-${c}`, a.slice(j + 1) || (args[++i] ?? '')]);
+        break;
+      }
+    } else plain.push(a);
+  }
+  return { values: (...names) => found.filter(([n]) => names.includes(n)).map(([, v]) => v), flags, plain };
+}
+
+/** The name a download takes from its address: the last part of its path (`https://x/a/pre-commit?y` → pre-commit). */
+const urlName = (url: string): string => path.basename(url.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*/i, '').replace(/[?#].*$/s, ''));
+
+/** A file named by what a server sends (`curl -J`, `wget -r`): nobody can check it before. */
+const FROM_SERVER = '$NAME_FROM_SERVER';
+
+const CURL_LONG = ['--output', '--output-dir', '--dump-header', '--cookie-jar', '--trace', '--trace-ascii', '--stderr', '--etag-save', '--libcurl', '--hsts', '--alt-svc', '--config', '--header', '--data', '--data-raw', '--data-binary', '--data-urlencode', '--form', '--user', '--user-agent', '--referer', '--request', '--proxy', '--max-time', '--connect-timeout', '--retry', '--cookie', '--cacert', '--cert', '--key', '--upload-file', '--write-out', '--range', '--resolve', '--url'];
+const WGET_LONG = ['--output-document', '--output-file', '--append-output', '--directory-prefix', '--execute', '--input-file', '--tries', '--timeout', '--wait', '--user-agent', '--header', '--post-data', '--post-file', '--body-data', '--method', '--user', '--password', '--level', '--accept', '--reject', '--domains', '--include-directories', '--exclude-directories', '--base', '--config', '--save-cookies', '--load-cookies', '--rejected-log', '--warc-file', '--quota', '--limit-rate', '--cut-dirs'];
+const TAR_LONG = ['--file', '--directory', '--files-from', '--exclude-from', '--blocking-factor', '--format', '--starting-file', '--newer', '--label', '--listed-incremental', '--info-script', '--new-volume-script', '--use-compress-program', '--to-command', '--exclude', '--transform', '--xform', '--owner', '--group', '--mode', '--mtime', '--checkpoint-action', '--index-file', '--rsh-command', '--rmt-command', '--suffix', '--strip-components', '--record-size', '--tape-length', '--volno-file', '--warning', '--sort'];
+const PATCH_LONG = ['--prefix', '--directory', '--ifdef', '--fuzz', '--input', '--output', '--strip', '--reject-file', '--version-control', '--basename-prefix', '--suffix', '--get', '--quoting-style', '--read-only'];
+
+/** The files curl writes: -o (in --output-dir), the name -O takes from the address, headers, cookies, traces. */
+function curlWrites(args: string[]): string[] {
+  const p = parseOptions(args, 'AbcCdDeEFHKmoPQrtTuUwxXyYz', CURL_LONG);
+  const [outDir] = p.values('--output-dir');
+  const inDir = (f: string): string => (outDir !== undefined && !/^[/~$]/.test(f) ? path.join(outDir, f) : f);
+  const files = p.values('-o', '--output').filter((f) => f !== '-').map(inDir);
+  if (['-O', '--remote-name', '--remote-name-all'].some((f) => p.flags.has(f))) {
+    const fromServer = p.flags.has('-J') || p.flags.has('--remote-header-name');
+    files.push(...[...p.plain, ...p.values('--url')].map((u) => (fromServer ? FROM_SERVER : urlName(u))).filter(Boolean).map(inDir));
+  }
+  return [...files, ...p.values('-D', '--dump-header', '-c', '--cookie-jar', '--trace', '--trace-ascii', '--stderr', '--etag-save', '--libcurl', '--hsts', '--alt-svc').filter((f) => f !== '-')];
+}
+
+/** The files wget writes: -O, logs and cookies, else each address's name in -P's folder (-e sets them too). */
+function wgetWrites(args: string[]): string[] {
+  const p = parseOptions(args, 'OoaPtTwQUeiBDIXARln', WGET_LONG);
+  // `-e output_document=~/.zshrc` is -O as a wgetrc command.
+  const settings = p.values('-e', '--execute').map((e) => e.match(/^\s*([\w-]+)\s*=\s*(.*)$/s)).filter((m): m is RegExpMatchArray => m !== null);
+  const setting = (name: string): string[] => settings.filter((m) => m[1]!.replace(/[_-]/g, '').toLowerCase() === name).map((m) => m[2]!);
+  const document = [...p.values('-O', '--output-document'), ...setting('outputdocument')].filter((f) => f !== '-');
+  const logs = [...p.values('-o', '--output-file', '-a', '--append-output', '--save-cookies', '--rejected-log'), ...setting('logfile')];
+  if (document.length || p.values('-O', '--output-document').length) return [...document, ...logs];
+  const prefix = [...p.values('-P', '--directory-prefix'), ...setting('dirprefix')].pop() ?? '.';
+  const fromServer = ['-r', '--recursive', '-m', '--mirror', '-p', '--page-requisites', '--content-disposition'].some((f) => p.flags.has(f));
+  return [...logs, ...p.plain.map((u) => path.join(prefix, fromServer ? FROM_SERVER : urlName(u) || 'index.html'))];
+}
+
+/** What tar writes: the folder it extracts into (anywhere with -P), or the archive it creates or adds to. */
+function tarWrites(args: string[]): string[] {
+  // Old style: `tar xzf a.tgz` is `tar -xzf a.tgz`.
+  const p = parseOptions(args[0] && /^[A-Za-z]+$/.test(args[0]) ? [`-${args[0]}`, ...args.slice(1)] : args, 'fCTXbHKLNVgFI', TAR_LONG);
+  const has = (...f: string[]): boolean => f.some((x) => p.flags.has(x));
+  if (has('-x', '--extract', '--get')) {
+    if (has('-P', '--absolute-names')) return ['/'];
+    const into = p.values('-C', '--directory');
+    return (into.length ? into : ['.']).map((d) => path.join(d, 'x'));
+  }
+  if (has('-c', '--create', '-r', '--append', '-u', '--update', '-A', '--concatenate', '--catenate', '--delete')) return p.values('-f', '--file').filter((f) => f !== '-');
+  return [];
+}
+
+/** What patch writes: the file it is given (in -d's folder), -o, the reject file, backups by -B, and what is in -d. */
+function patchWrites(args: string[]): string[] {
+  const p = parseOptions(args, 'BdDFiopVYzrg', PATCH_LONG);
+  const [into] = p.values('-d', '--directory').slice(-1);
+  const inDir = (f: string): string => (into !== undefined && !/^[/~$]/.test(f) ? path.join(into, f) : f);
+  return [
+    ...(into !== undefined ? [path.join(into, 'x')] : []),
+    ...p.plain.slice(0, 1),
+    ...p.values('-o', '--output', '-r', '--reject-file'),
+    ...p.values('-B', '--prefix').map((b) => `${b}x`),
+  ]
+    .filter((f) => f !== '-')
+    .map(inDir);
+}
+
 /** Files a command writes by what it is: not what a build or a test run writes on the side. */
 function writeTargets(cmd: string, args: string[]): string[] {
   const plain = args.filter((a) => !a.startsWith('-'));
@@ -343,17 +482,56 @@ function writeTargets(cmd: string, args: string[]): string[] {
     case 'rmdir':
     case 'truncate':
     case 'rm':
-    case 'mv':
     case 'unlink':
     case 'shred':
+    case 'sponge':
       return plain;
-    case 'cp':
+    case 'mv':
+      return [...plain, ...copied(cmd, args)]; // and what it moves away
     case 'install':
+      return flagSet(args).has('-d') ? plain : copied(cmd, args);
+    case 'cp':
     case 'ln':
-    case 'rsync': {
-      const t = args.findIndex((a) => a === '-t' || a === '--target-directory');
-      return t !== -1 && args[t + 1] ? [args[t + 1]!] : plain.slice(-1);
+    case 'rsync':
+    case 'ditto':
+      return [...copied(cmd, args), ...(cmd === 'rsync' ? parseOptions(args, 'T', ['--log-file', '--backup-dir', '--temp-dir', '--partial-dir']).values('--log-file', '--backup-dir', '-T', '--temp-dir', '--partial-dir').map((d) => path.join(d, 'x')) : [])];
+    case 'curl':
+      return curlWrites(args);
+    case 'wget':
+      return wgetWrites(args);
+    case 'sort':
+      return parseOptions(args, 'kotST', ['--output', '--key', '--field-separator', '--buffer-size', '--temporary-directory', '--files0-from', '--batch-size', '--parallel', '--compress-program', '--random-source']).values('-o', '--output');
+    case 'shuf':
+      return parseOptions(args, 'ino', ['--output', '--input-range', '--head-count', '--random-source']).values('-o', '--output');
+    case 'iconv':
+      return parseOptions(args, 'fto', ['--output', '--from-code', '--to-code']).values('-o', '--output');
+    case 'uniq':
+      return plainWords(args, ['-f', '-s', '-w', '--skip-fields', '--skip-chars', '--check-chars']).slice(1, 2);
+    case 'tar':
+    case 'bsdtar':
+      return tarWrites(args);
+    case 'unzip': {
+      const p = parseOptions(args, 'dP', []);
+      if (['-p', '-l', '-t', '-v', '-Z', '-z'].some((f) => p.flags.has(f))) return [];
+      return [path.join(p.values('-d').pop() ?? '.', 'x')];
     }
+    case '7z':
+    case '7za':
+    case '7zz': {
+      if (!['x', 'e'].includes(args[0] ?? '')) return [];
+      const out = args.find((a) => a.startsWith('-o'));
+      return [path.join(out ? out.slice(2) : '.', 'x')];
+    }
+    case 'patch':
+      return patchWrites(args);
+    // Each file is replaced by its archive or what it unpacks to, in its folder.
+    case 'gzip':
+    case 'gunzip':
+    case 'bzip2':
+    case 'bunzip2':
+    case 'xz':
+    case 'unxz':
+      return ['-c', '--stdout', '--to-stdout', '-t', '--test', '-l', '--list'].some((f) => flagSet(args).has(f)) ? [] : plain;
     case 'chmod':
     case 'chown':
     case 'chgrp':
@@ -410,6 +588,7 @@ function checkWrites(targets: string[], cmd: string, dir: Dir, ctx: GuardContext
   if (!ctx.writeRoots || !targets.length) return allow;
   const roots = ctx.writeRoots.map((r) => path.resolve(r));
   for (const t of targets) {
+    if (/^\/dev\/(null|stdout|stderr|tty|fd\/\d+)$/.test(t)) continue;
     if (/\$(?!\{?HOME\}?(\/|$))|`/.test(t)) return deny(`${cmd} writes to ${t}: spell out the path instead of a variable`);
     const abs = resolveIn(dir, t, ctx);
     if (abs === null) return lost(`${cmd} writes ${t}`);
@@ -423,34 +602,45 @@ function checkWrites(targets: string[], cmd: string, dir: Dir, ctx: GuardContext
   return allow;
 }
 
-/** What `ln`, `link` and `cp -l`/`cp -s` make links to, and where the link goes (undefined: here). */
-function linkedTo(cmd: string, args: string[]): { sources: string[]; at: string | undefined } | null {
+/** What `ln`, `link` and `cp -l`/`cp -s` make links to, where the link goes (undefined: here), and whether it is a symlink. */
+function linkedTo(cmd: string, args: string[]): { sources: string[]; at: string | undefined; symbolic: boolean } | null {
   const flags = flagSet(args);
   if (cmd !== 'ln' && cmd !== 'link' && !(cmd === 'cp' && ['-l', '--link', '-s', '--symbolic-link'].some((f) => flags.has(f)))) return null;
-  const t = args.findIndex((a) => a === '-t' || a === '--target-directory');
-  const plain = args.filter((a, i) => !a.startsWith('-') && (t === -1 || i !== t + 1));
-  const into = t !== -1 ? args[t + 1] : args.find((a) => a.startsWith('--target-directory='))?.slice('--target-directory='.length);
-  if (into !== undefined || plain.length === 1) return { sources: plain, at: into };
-  return { sources: plain.slice(0, -1), at: plain[plain.length - 1] };
+  const symbolic = cmd !== 'link' && ['-s', '--symbolic', '--symbolic-link'].some((f) => flags.has(f));
+  const plain = plainWords(args, COPY_VALUED.ln!);
+  const into = targetDirectory(args);
+  if (into !== undefined || plain.length === 1) return { sources: plain, at: into, symbolic };
+  return { sources: plain.slice(0, -1), at: plain[plain.length - 1], symbolic };
 }
 
 /**
  * An agent links to nothing it may not write: Write and Edit run outside the sandbox, so a write through a link to
- * `.git/config` or Claudestrator's config would land there.
+ * `.git/config` or Claudestrator's config would land there. Nor to a folder that holds the repository (`ln -s .. up`)
+ * or to anything outside where the stage writes (`ln -s ~ h`): a write or an `rm -r h/` through it lands there.
  */
 function checkLinks(cmd: string, args: string[], dir: Dir, ctx: GuardContext): Verdict {
   const link = ctx.writeRoots && linkedTo(cmd, args);
-  if (!link) return allow;
+  if (!link || !ctx.writeRoots) return allow;
   const at = link.at === undefined ? dir : resolveIn(dir, link.at, ctx);
   if (at === null) return lost(`${cmd} makes a link`);
+  const roots = ctx.writeRoots.map((r) => path.resolve(r));
+  const kept = [...(ctx.runsOutside || []), ...(ctx.protect || [])].map((p) => path.resolve(p));
   for (const s of link.sources) {
+    if (/\$(?!\{?HOME\}?(\/|$))|`/.test(s)) return deny(`${cmd} links to ${s}: spell out the path instead of a variable`);
     // A symlink's target counts from where the link is (`ln -s ../.git/config src/cfg`), a hard link's from here.
     const here = resolveIn(dir, s, ctx);
     if (here === null) return lost(`${cmd} links to ${s}`);
-    for (const abs of [here, path.resolve(at, s), path.resolve(path.dirname(at), s)]) {
+    const fromLink = [resolveIn(at, s, ctx)!, resolveIn(path.dirname(at), s, ctx)!];
+    for (const abs of [here, ...fromLink]) {
       const owned = ownedBy(abs, ctx);
       if (owned) return deny(`${cmd} would link to ${owned} (${s}): a write through the link would change it, and Claudestrator owns git`);
       if ((ctx.protect || []).some((p) => inside(abs, path.resolve(p)))) return deny(`${cmd} would link to ${abs}: Claudestrator's config and task state are not an agent's to change`);
+    }
+    // Where the link really leads: from the folder it is made in (or, made in a folder, from that folder).
+    const leads = !link.symbolic ? [here] : link.at === undefined ? [resolveIn(at, s, ctx)!] : fromLink;
+    for (const abs of leads) {
+      if (roots.some((r) => inside(r, abs)) || kept.some((p) => inside(p, abs))) return deny(`${cmd} would link to ${abs}, which holds the repository or what runs outside the sandbox: a write through the link would land there`);
+      if (!roots.some((r) => within(abs, r)) && !TEMP_DIRS().some((t) => within(abs, t))) return deny(`${cmd} would link to ${abs}, outside ${roots.join(', ') || 'what this stage writes'}: a write or an rm -r through the link would land there`);
     }
   }
   return allow;
@@ -1168,6 +1358,12 @@ async function checkGit(all: string[], cwd: Dir, ctx: GuardContext): Promise<Ver
       if (branchFlags.some((f) => GIT_BRANCH_WRITES.has(f)) || (plainWords(args, ['--sort', '--format', '--points-at']).length > 0 && !branchFlags.some((f) => GIT_BRANCH_LISTS.includes(f)))) {
         return deny('agents do not create, rename or delete branches, or set their upstream; Claudestrator owns git');
       }
+    }
+    // `git apply` writes where the patch says, under --directory, and with --unsafe-paths outside the repository too.
+    if (sub === 'apply' && flags.has('--unsafe-paths')) return deny('git apply --unsafe-paths writes outside the repository; apply the patch inside it');
+    if (sub === 'apply') {
+      const writes = checkWrites(optionValues(args, ['--directory']).map((d) => path.join(d, 'x')), 'git apply', dir, ctx);
+      if (!writes.allow) return writes;
     }
     // A refspec with a destination (`main:main`, `+sha:refs/heads/main`) writes that local ref; from stdin, any.
     if (sub === 'fetch' && (flags.has('--stdin') || [...plainWords(args, GIT_FETCH_VALUED).slice(1), ...optionValues(args, ['--refmap'])].some((r) => r.includes(':')))) {
