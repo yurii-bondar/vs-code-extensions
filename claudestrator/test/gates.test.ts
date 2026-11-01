@@ -152,5 +152,8 @@ test('gates: a check that runs out of time fails as one the agent cannot fix', a
   const repo = { name: 'api', path: 'api', baseBranch: 'main', gates: [{ name: 'slow', cmd: 'sleep 5' }] } as unknown as RepoConfig;
   const r = await runGates({ repo, dir, logDir: path.join(ws, 'logs'), force: true, timeoutMs: 300 });
   assert.equal(r.results[0]!.status, 'fail');
-  assert.equal(r.results[0]!.unfixable, 'it ran out of its 0s');
+  assert.match(r.results[0]!.unfixable ?? '', /^it ran out of its 0s/);
+  // Its own time limit, in seconds, over the default.
+  const own = { ...repo, gates: [{ name: 'slow', cmd: 'sleep 0.5', timeout: 2 }] } as RepoConfig;
+  assert.equal((await runGates({ repo: own, dir, logDir: path.join(ws, 'logs'), force: true, timeoutMs: 100 })).results[0]!.status, 'pass');
 });

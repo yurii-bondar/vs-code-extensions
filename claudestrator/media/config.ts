@@ -428,7 +428,7 @@ interface Views {
   // ---------- repos ----------
 
   const isRepoField = (f: string): f is 'name' | 'path' | 'role' | 'baseBranch' => f === 'name' || f === 'path' || f === 'role' || f === 'baseBranch';
-  const isGateField = (f: string): f is keyof GateConfig => f === 'name' || f === 'cmd' || f === 'when' || f === 'dir';
+  const isGateField = (f: string): f is 'name' | 'cmd' | 'when' | 'dir' => f === 'name' || f === 'cmd' || f === 'when' || f === 'dir';
 
   views.repos = {
     r: null,

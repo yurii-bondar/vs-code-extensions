@@ -240,7 +240,9 @@ async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = fal
       continue;
     }
     const started = Date.now();
-    const r = await runShell(gate.cmd, { cwd, timeoutMs, env: { ...withoutCredentials(getChildEnv(), keepEnv), ...PLAIN_ENV }, signal, launch });
+    // A check's own time limit (`timeout`, in seconds) over the default: an integration suite may need longer.
+    const limitMs = gate.timeout ? gate.timeout * 1000 : timeoutMs;
+    const r = await runShell(gate.cmd, { cwd, timeoutMs: limitMs, env: { ...withoutCredentials(getChildEnv(), keepEnv), ...PLAIN_ENV }, signal, launch });
     const ms = Date.now() - started;
     const log = path.join(logDir, `${slug(repo.name)}.${slug(gate.name)}.log`);
     const hint = launch && r.code !== 0 && SANDBOX_REFUSAL.test(r.output) ? `\n${SANDBOX_HINT}` : '';
@@ -252,7 +254,7 @@ async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = fal
     } else {
       const tail = tailOf(output);
       // Out of time is not an error an agent can fix by changing code (a slow suite, a hung service): it goes to you.
-      const unfixable = r.killed === 'timeout' ? `it ran out of its ${Math.round(timeoutMs / 1000)}s` : undefined;
+      const unfixable = r.killed === 'timeout' ? `it ran out of its ${Math.round(limitMs / 1000)}s (a longer one is its timeout, in seconds)` : undefined;
       results.push({ repo: repo.name, gate: gate.name, status: 'fail', log, ms, tail, ...(unfixable && { unfixable }) });
       lines.push(`FAIL ${repo.name} ${gate.name} (exit ${r.code}; cd ${repo.name}/${gate.dir ?? '.'} && ${gate.cmd}) log: ${log}\n${tail.split('\n').map((l) => `    ${l}`).join('\n')}`);
     }

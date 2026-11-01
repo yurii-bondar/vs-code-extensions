@@ -19,7 +19,7 @@ const id = T.str(1);
 const named = obj({ name: id });
 const byId = obj({ id });
 const task = obj({ taskId: id });
-const gate = obj({ name: T.str(1), cmd: T.str(1), 'dir?': T.str(), 'when?': T.str() });
+const gate = obj({ name: T.str(1), cmd: T.str(1), 'dir?': T.str(), 'when?': T.str(), 'timeout?': T.int(1, 24 * 60 * 60) });
 const addedRepo = obj({ name: T.str(1), path: T.str(1), 'role?': T.str(), 'baseBranch?': T.str(), 'stack?': T.arr(T.str()), 'gates?': T.arr(gate) });
 const composer = obj({
   'text?': T.str(),

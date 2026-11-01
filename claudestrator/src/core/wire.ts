@@ -698,6 +698,8 @@ export interface GateConfig {
   cmd: string;
   dir?: string;
   when?: string;
+  /** Its own time limit, in seconds; none: the default of 15 minutes. */
+  timeout?: number;
 }
 
 /** A repo as the page sends it back from the setup wizard or the detected list. */
