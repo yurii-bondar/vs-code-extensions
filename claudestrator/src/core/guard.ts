@@ -294,6 +294,8 @@ async function checkSimple(simple: Simple, dir: Dir, ctx: GuardContext): Promise
   const cmd = path.basename(first);
   const env = ctx.agent ? gitEnvRefusal(cmd, split.env, args) : null;
   if (env) return env;
+  // xargs and parallel add what they read from input to the command: a recursive delete of paths nobody sees.
+  if (split.fed && cmd === 'rm' && recursive(args)) return deny('rm -r of paths xargs or parallel read from input is not allowed: the guard cannot see them; name them, or use find … -exec rm -r {} +');
   const writes = checkWrites([...simple.redirects, ...writeTargets(cmd, args)], cmd, dir, ctx);
   if (!writes.allow) return writes;
   const links = checkLinks(cmd, args, dir, ctx);
@@ -509,33 +511,91 @@ function publishes(cmd: string, args: string[]): boolean {
 /** Tests that narrow what `find` matches. */
 const FIND_TESTS = new Set(['-name', '-iname', '-path', '-ipath', '-wholename', '-regex', '-iregex', '-type', '-newer', '-mtime', '-mmin', '-atime', '-ctime', '-size', '-empty', '-user', '-perm']);
 
-/** `find … -exec cmd {} ;` runs cmd; `find … -delete` is a recursive delete of what it searches. */
+/** Of a repository, what a find from its root must not match to delete: git's metadata and what keeps it a repository. */
+const GIT_NAMES = ['.git', 'config', 'HEAD', 'index', 'objects', 'refs', 'hooks', 'packed-refs'];
+
+/**
+ * `find … -exec cmd {} ;` runs cmd; `find … -delete` and `find … -exec rm -r {} +` are recursive deletes of what it
+ * searches.
+ */
 async function checkFind(args: string[], dir: Dir, ctx: GuardContext): Promise<Verdict> {
+  let deletes = args.includes('-delete') ? '-delete' : '';
   for (let i = 0; i < args.length; i++) {
     if (!['-exec', '-execdir', '-ok', '-okdir'].includes(args[i]!)) continue;
     const end = args.findIndex((a, j) => j > i && (a === ';' || a === '+' || a === '\\;'));
     const argv = args.slice(i + 1, end === -1 ? undefined : end).filter((a) => a !== '{}' && a !== '\\');
-    const [first, ...rest] = stripPrefixes(argv);
-    if (!first) continue;
-    const verdict = await checkCommand(path.basename(first), rest, dir, ctx);
+    const verdict = await checkSimple({ words: argv, redirects: [] }, dir, ctx);
     if (!verdict.allow) return verdict;
+    const [first, ...rest] = stripPrefixes(argv);
+    if (first !== undefined && path.basename(first) === 'rm' && recursive(rest)) deletes = `${args[i]} rm -r`;
   }
-  if (args.includes('-delete')) {
-    const firstTest = args.findIndex((a) => a.startsWith('-') || a === '!' || a === '(');
-    const listed = (firstTest === -1 ? args : args.slice(0, firstTest)).filter(Boolean);
-    const roots = listed.length ? listed : ['.'];
-    // Without a test (`find dir -delete`) the whole folder goes, as with `rm -r dir`. With one (`-name '*.log'`) only
-    // matches inside it do: that folder must be where `rm -r` of something inside it would be allowed.
-    const filtered = args.some((a) => FIND_TESTS.has(a));
-    if (!filtered) return checkRm(['-r', ...roots], dir, ctx);
-    for (const root of roots) {
-      const abs = resolveIn(dir, root, ctx);
-      if (abs === null) return lost(`find ${root} … -delete`);
-      const verdict = await checkRm(['-r', path.join(abs, 'x')], dir, ctx);
-      if (!verdict.allow) return deny(`find ${root} … -delete: ${verdict.reason}`);
+  if (!deletes) return allow;
+  const firstTest = args.findIndex((a) => a.startsWith('-') || a === '!' || a === '(');
+  const listed = (firstTest === -1 ? args : args.slice(0, firstTest)).filter(Boolean);
+  const roots = listed.length ? listed : ['.'];
+  // Without a test (`find dir -delete`) the whole folder goes, as with `rm -r dir`. With one (`-name '*.log'`) only
+  // matches inside it do: that folder must be where `rm -r` of something inside it would be allowed.
+  const filtered = args.some((a) => FIND_TESTS.has(a));
+  if (!filtered) return checkRm(['-r', ...roots], dir, ctx);
+  for (const root of roots) {
+    const abs = resolveIn(dir, root, ctx);
+    if (abs === null) return lost(`find ${root} … ${deletes}`);
+    const verdict = await checkRm(['-r', path.join(abs, 'x')], dir, ctx);
+    if (!verdict.allow) return deny(`find ${root} … ${deletes}: ${verdict.reason}`);
+    // rm -r of a match takes all in it: from the workspace or above a repository, the match can be a repository.
+    const holds = [ctx.workspace, ...(ctx.repoDirs || [])].some((r) => within(path.resolve(r), abs));
+    if (deletes !== '-delete' && holds && !(await ctx.isRepoRoot(abs))) {
+      return deny(`find ${root} … ${deletes} could delete a repository or the workspace (${abs} holds them): run it from inside the repository`);
+    }
+    // From a folder rm -r may not take whole (the repository's root, a folder above it) a match can be .git or what
+    // is in it (`-name config`, `! -name src`, `-type d -empty`): only names that are none of git's are deleted there.
+    if (!(await checkRm(['-r', '--', abs], dir, ctx)).allow && !sparesGit(args, root)) {
+      return deny(`find ${root} … ${deletes} could delete .git or what is in it: match by -name (not .git, config, HEAD…), without ! or -o, or run it from a folder inside the repository`);
     }
   }
   return allow;
+}
+
+/**
+ * Whether a find from root matches only by -name or -path patterns that fit nothing of git's there (`-name
+ * node_modules`, `-path '*.pyc'`), with no `!` or `-o` to turn them around.
+ */
+function sparesGit(args: string[], root: string): boolean {
+  if (args.some((a) => ['!', '-not', '-o', '-or', ',', '-regex', '-iregex', '-lname', '-ilname'].includes(a))) return false;
+  const gitPaths = GIT_NAMES.map((n) => `${root.replace(/\/+$/, '')}/.git${n === '.git' ? '' : `/${n}`}`);
+  const tests = [
+    ...optionValues(args, ['-name']).map((p) => ({ p, caseless: false, samples: GIT_NAMES })),
+    ...optionValues(args, ['-iname']).map((p) => ({ p, caseless: true, samples: GIT_NAMES })),
+    ...optionValues(args, ['-path', '-wholename']).map((p) => ({ p, caseless: false, samples: gitPaths })),
+    ...optionValues(args, ['-ipath', '-iwholename']).map((p) => ({ p, caseless: true, samples: gitPaths })),
+  ];
+  return tests.length > 0 && tests.every(({ p, caseless, samples }) => !samples.some((s) => globMatches(p, s, caseless)));
+}
+
+/** Whether a pattern of find's (`*`, `?`, `[…]`, a `\` escape; `*` also matches `/`) matches a name. */
+function globMatches(pattern: string, name: string, caseless: boolean): boolean {
+  let re = '';
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i]!;
+    const close = c === '[' ? pattern.indexOf(']', i + 2) : -1;
+    if (c === '*') re += '.*';
+    else if (c === '?') re += '.';
+    else if (close !== -1) {
+      re += `[${pattern.slice(i + 1, close).replace(/^!/, '^').replace(/[\\\]]/g, '\\$&')}]`;
+      i = close;
+    } else re += (c === '\\' ? (pattern[++i] ?? '') : c).replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+  }
+  try {
+    return new RegExp(`^${re}$`, caseless || CASELESS ? 'is' : 's').test(name);
+  } catch {
+    return true;
+  }
+}
+
+/** Whether rm's options delete folders with what is in them. */
+function recursive(args: string[]): boolean {
+  const flags = flagSet(args);
+  return flags.has('-r') || flags.has('-R') || flags.has('--recursive');
 }
 
 /**
@@ -688,7 +748,11 @@ const WRAPPERS: Record<string, { valued: string[]; positional?: number; shell?: 
   ionice: { valued: ['-c', '-n', '-p', '--class', '--classdata'] },
   timeout: { valued: ['-s', '-k', '--signal', '--kill-after'], positional: 1 },
   stdbuf: { valued: ['-i', '-o', '-e'] },
-  xargs: { valued: ['-I', '-i', '-n', '-P', '-L', '-l', '-d', '-E', '-e', '-s', '-a', '--max-args', '--max-procs', '--delimiter', '--arg-file'] },
+  // `-i`, `-e` and `-l` take their value attached, if any.
+  xargs: { valued: ['-I', '-n', '-P', '-L', '-d', '-E', '-s', '-a', '--max-args', '--max-procs', '--delimiter', '--arg-file', '--max-lines', '--max-chars', '--eof', '--process-slot-var'] },
+  parallel: {
+    valued: ['-j', '--jobs', '-S', '--sshlogin', '--sshloginfile', '--slf', '-a', '--arg-file', '--colsep', '-C', '-d', '--delimiter', '-E', '-I', '--joblog', '--results', '--res', '--tmpdir', '-n', '--max-args', '-N', '-L', '--max-lines', '--delay', '--timeout', '--memfree', '--load', '--tagstring', '--workdir', '--wd', '--basefile', '--bf', '--return', '--transferfile', '--tf', '--env', '--profile', '-J', '--halt', '--retries'],
+  },
   caffeinate: { valued: ['-t', '-w'] },
   chrt: { valued: [], positional: 1 },
   taskset: { valued: [], positional: 1 },
@@ -704,9 +768,26 @@ function stripPrefixes(argv: string[]): string[] {
   return splitPrefixes(argv).argv;
 }
 
-/** The command and the variables set for it (`GIT_DIR=x git …`, `env VAR=y …`), past keywords and wrappers. */
-function splitPrefixes(argv: string[]): { env: string[]; argv: string[] } {
+/** What xargs or parallel fill in from their input, as the guard sees it: a value nobody can check. */
+const INPUT = '$INPUT';
+
+/** The replace string an option of xargs or parallel sets (`-I {}`, `-I%`, `-i`, `--replace=X`), if it sets one. */
+function replaceString(opt: string, next: string | undefined): string | null {
+  if (opt === '-I') return next ?? null;
+  const m = opt.match(/^(?:-I(.+)|-i(.*)|--replace(?:=(.*))?)$/s);
+  return m ? m[1] || m[2] || m[3] || '{}' : null;
+}
+
+/**
+ * The command and the variables set for it (`GIT_DIR=x git …`, `env VAR=y …`), past keywords and wrappers; `fed`
+ * when xargs or parallel add arguments they read from input. What their replace strings stand for (`xargs -I{} rm
+ * {}`, parallel's `{}` and `{.}`) becomes $INPUT.
+ */
+function splitPrefixes(argv: string[]): { env: string[]; argv: string[]; fed: boolean } {
   const env: string[] = [];
+  const holes: (string | RegExp)[] = [];
+  const fill = (words: string[]): string[] => words.map((w) => holes.reduce<string>((s, h) => (typeof h === 'string' ? s.split(h).join(INPUT) : s.replace(h, INPUT)), w));
+  let fed = false;
   let i = 0;
   while (i < argv.length) {
     const a = argv[i]!;
@@ -723,6 +804,8 @@ function splitPrefixes(argv: string[]): { env: string[]; argv: string[] } {
     const wrapper = WRAPPERS[name];
     if (!wrapper) break;
     i++;
+    if (name === 'xargs' || name === 'parallel') fed = true;
+    if (name === 'parallel') holes.push(/\{[^}]*\}/g);
     let positional = wrapper.positional ?? 0;
     while (i < argv.length) {
       const opt = argv[i]!;
@@ -736,9 +819,11 @@ function splitPrefixes(argv: string[]): { env: string[]; argv: string[] } {
         const value = split[1] || argv[i + 1] || '';
         const rest = argv.slice(i + (split[1] ? 1 : 2));
         const inner = splitPrefixes([...tokenize(value), ...rest]);
-        return { env: [...env, ...inner.env], argv: inner.argv };
+        return { env: [...env, ...inner.env], argv: fill(inner.argv), fed: fed || inner.fed };
       }
-      if (wrapper.shell && wrapper.shell.includes(opt)) return { env, argv: ['sh', '-c', argv[i + 1] ?? ''] };
+      if (wrapper.shell && wrapper.shell.includes(opt)) return { env, argv: fill(['sh', '-c', argv[i + 1] ?? '']), fed };
+      const hole = name === 'xargs' || name === 'parallel' ? replaceString(opt, argv[i + 1]) : null;
+      if (hole) holes.push(hole);
       if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(opt)) {
         env.push(opt); // env VAR=value cmd
         i++;
@@ -749,7 +834,7 @@ function splitPrefixes(argv: string[]): { env: string[]; argv: string[] } {
       } else break;
     }
   }
-  return { env, argv: argv.slice(i) };
+  return { env, argv: fill(argv.slice(i)), fed };
 }
 
 /**
@@ -959,9 +1044,7 @@ function ghApiWrites(all: string[]): boolean {
 }
 
 async function checkRm(args: string[], dir: Dir, ctx: GuardContext): Promise<Verdict> {
-  const flags = flagSet(args);
-  const recursive = flags.has('-r') || flags.has('-R') || flags.has('--recursive');
-  if (!recursive) return allow;
+  if (!recursive(args)) return allow;
   const home = ctx.home ?? os.homedir();
   const ws = path.resolve(ctx.workspace);
   // Repos configured outside the workspace folder are as much the task's ground as the workspace itself.

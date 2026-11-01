@@ -126,3 +126,46 @@ test('guard: after a cd it cannot follow the folder is unknown, and a cd that ma
     assert.equal(await allowed(command), true, command);
   }
 });
+
+test('guard: rm -r of what xargs or parallel read is refused, and find … -exec rm -r is checked like the folders it deletes', async () => {
+  for (const command of [
+    'ls | xargs rm -rf',
+    'pwd | xargs rm -rf',
+    'echo ~ | xargs rm -rf',
+    'xargs -a list.txt rm -rf',
+    'ls | xargs -I{} rm -rf {}',
+    'ls | xargs -I% rm -rf build/%',
+    'ls | xargs -i rm -rf build/{}',
+    'pwd | xargs -I{} find {} -delete',
+    "ls | xargs -I{} sh -c 'rm -rf {}'",
+    'ls | parallel rm -rf',
+    'find . -mindepth 1 -maxdepth 1 -exec rm -rf {} +',
+    'find .. -exec rm -rf {} +',
+    'find /home/u -execdir rm -r {} \\;',
+    'find . -ok rm -rf {} \\;',
+    'find . -name .git -exec rm -rf {} +',
+    "find . -name '.*' -exec rm -rf {} +",
+    'find . -mindepth 1 ! -name src -exec rm -rf {} +',
+    'find .. -name api -exec rm -rf {} +',
+    'find . -name config -delete',
+    "find . -path '*/.git/*' -delete",
+    'find . -type d -empty -delete',
+  ]) {
+    assert.equal(await allowed(command, ctx({ writeRoots: undefined })), false, command);
+  }
+  for (const command of [
+    'rm -rf node_modules dist',
+    'ls | xargs rm -f',
+    'ls | xargs -n 1 echo',
+    "find . -name '*.orig' | xargs rm -f",
+    "grep -l foo -r src | xargs sed -i 's/foo/bar/'",
+    "find dist -name '*.map' -delete",
+    "find . -name '*.log' -delete",
+    "find . -name '*.tmp' -exec rm {} +",
+    'find . -name node_modules -type d -prune -exec rm -rf {} +',
+    'find . -type d -name __pycache__ -exec rm -rf {} +',
+    'find dist -exec rm -rf {} +',
+  ]) {
+    assert.equal(await allowed(command), true, command);
+  }
+});
