@@ -49,7 +49,10 @@ intellijPlatform {
             // No upper bound: a plugin that sticks to the platform API should not be cut off by the next release.
             untilBuild = provider { null }
         }
-        changeNotes = providers.gradleProperty("pluginVersion").map { "First JetBrains release ($it): the Claudestrator dashboard and task list, identical to the VS Code extension." }
+        // The release notes of this version, from scripts/release.mjs (-PchangeNotes, HTML); a build without them says
+        // what the plugin is.
+        changeNotes = providers.gradleProperty("changeNotes").filter { it.isNotBlank() }
+            .orElse(providers.gradleProperty("pluginVersion").map { "Version $it: the Claudestrator dashboard and task list, the same as in the VS Code extension." })
     }
 
     signing {
@@ -83,7 +86,7 @@ val buildExtension by tasks.registering(Exec::class) {
     description = "Builds claudestrator/ (the webview scripts and the engine's types)."
     workingDir = extensionDir.asFile
     commandLine(npm, "run", "build")
-    inputs.files(extensionDir.asFileTree.matching { include("package-lock.json", "extension.ts", "src/**", "media/**", "hook/**", "tsconfig*.json") })
+    inputs.files(extensionDir.asFileTree.matching { include("package-lock.json", "extension.ts", "src/**", "media/**", "tsconfig*.json") })
     outputs.dir(extensionDir.dir("dist/media"))
 }
 
@@ -95,7 +98,7 @@ val buildSidecar by tasks.registering(Exec::class) {
     commandLine(npm, "run", "build")
     inputs.files(sidecarDir.asFileTree.matching { include("package-lock.json", "build.mjs", "src/**") })
     inputs.dir(extensionDir.dir("dist/media"))
-    inputs.files(extensionDir.asFileTree.matching { include("src/**", "media/**", "hook/**") })
+    inputs.files(extensionDir.asFileTree.matching { include("src/**", "media/**") })
     outputs.dir(sidecarDir.dir("dist/engine"))
 }
 
@@ -105,10 +108,12 @@ tasks.prepareSandbox {
     from(sidecarDir.dir("dist/engine")) { into(pluginName.map { "$it/engine" }) }
 }
 
-// The engine reports this as the version of the dashboard (see EngineService.pluginVersion).
+// What the plugin reads of its build (see EngineService.built): the version the engine reports for the dashboard, and
+// the name of the folder the plugin is installed in, where the engine sits.
 val generateVersionFile by tasks.registering(WriteProperties::class) {
     destinationFile = layout.buildDirectory.file("generated/claudestrator.properties")
     property("version", providers.gradleProperty("pluginVersion"))
+    property("folder", providers.gradleProperty("pluginName"))
 }
 
 tasks.processResources { from(generateVersionFile) }

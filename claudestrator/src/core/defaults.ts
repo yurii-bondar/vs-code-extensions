@@ -1,6 +1,7 @@
 // What Claude Code will actually use when an agent leaves model or effort to the default: the CLI is asked
 // over its control protocol (`initialize`, `get_settings`) without sending anything to a model, so it costs nothing.
 import { spawn, type ChildProcess } from 'child_process';
+import { launch } from './git';
 import type { Agent, Effort } from './types';
 import type { Defaults, Effective, ModelInfo, Resolved } from './wire';
 
@@ -45,7 +46,8 @@ function handshake(command: string, args: string[], { cwd, env, timeoutMs = 2000
       resolve(value);
     };
     try {
-      proc = spawn(command, [...BASE, ...args], { ...(cwd !== undefined && { cwd }), ...(env !== undefined && { env }), stdio: ['pipe', 'pipe', 'ignore'] });
+      const [file, argv] = launch(command, [...BASE, ...args]);
+      proc = spawn(file, argv, { ...(cwd !== undefined && { cwd }), ...(env !== undefined && { env }), stdio: ['pipe', 'pipe', 'ignore'] });
     } catch {
       return resolve(null);
     }
@@ -53,6 +55,7 @@ function handshake(command: string, args: string[], { cwd, env, timeoutMs = 2000
     proc.on('error', () => finish(null));
     proc.on('exit', () => finish(got.s ? { applied: got.s.applied || {}, models: (got.i && got.i.models) || [], account: got.i && got.i.account } : null));
     proc.stdin!.on('error', () => {});
+    proc.stdout!.setEncoding('utf8');
     let buf = '';
     proc.stdout!.on('data', (d) => {
       buf += d;

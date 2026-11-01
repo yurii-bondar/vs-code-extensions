@@ -5,7 +5,6 @@ dist/test/**
 **/*.ts
 **/*.map
 src/**
-hook/**
 tsconfig*.json
 eslint.config.mjs
 release.config.cjs
@@ -20,3 +19,13 @@ node_modules/yaml/README.md
 node_modules/yaml/util.js
 node_modules/yaml/dist/cli.mjs
 node_modules/yaml/dist/test-events.js
+# sandbox-runtime: no Windows helper (there is no sandbox on native Windows here), no types or maps
+node_modules/@anthropic-ai/sandbox-runtime/vendor/srt-win/**
+node_modules/@anthropic-ai/sandbox-runtime/**/*.d.ts
+node_modules/@anthropic-ai/sandbox-runtime/**/*.map
+node_modules/zod/**/*.d.ts
+node_modules/zod/**/*.d.cts
+node_modules/zod/**/*.map
+node_modules/node-forge/dist/**
+node_modules/node-forge/flash/**
+node_modules/zod/src/**

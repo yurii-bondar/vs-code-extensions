@@ -10,6 +10,7 @@ import * as path from 'path';
 import * as YAML from 'yaml';
 import { CONFIG_DIR, PROMPTS_DIR, loadConfig, projectConfigFile, readProjectLayer, removeScenario, setAgentLayer, setCustomScenario, setPipeline, setScenario, withConfigRollback } from './config';
 import { validateConfigLayer } from './protocol';
+import { writeAtomic } from './files';
 import type { AgentLayer, ConfigLayer } from './config';
 import type { ScenarioStep } from './types';
 
@@ -80,17 +81,17 @@ function fileKey(rel: string): string | null {
 }
 
 /** Reads the project's agents, pipeline and scenarios, with the instruction files of its agents, into the text of a backup. */
-function createBackup({ workspace, now }: { workspace: string; now: Date }): BackupFile {
+async function createBackup({ workspace, now }: { workspace: string; now: Date }): Promise<BackupFile> {
   // readProjectLayer reads a broken file as empty; a backup must say the file is broken, not that it holds nothing.
-  const configFile = projectConfigFile(workspace);
-  if (fs.existsSync(configFile)) {
+  const text = await fs.promises.readFile(projectConfigFile(workspace), 'utf8').catch(() => null);
+  if (text !== null) {
     try {
-      YAML.parse(fs.readFileSync(configFile, 'utf8'));
+      YAML.parse(text);
     } catch (e) {
       throw new Error(`config.yaml does not parse, so it cannot be backed up: ${(e as Error).message}`);
     }
   }
-  const layer = readProjectLayer(workspace);
+  const layer = await readProjectLayer(workspace);
   const dir = configDirOf(workspace);
   const agents: Record<string, AgentLayer> = {};
   const files: Record<string, string> = {};
@@ -101,7 +102,7 @@ function createBackup({ workspace, now }: { workspace: string; now: Date }): Bac
     const abs = path.resolve(dir, own.file);
     let content: string;
     try {
-      content = fs.readFileSync(abs, 'utf8');
+      content = await fs.promises.readFile(abs, 'utf8');
     } catch {
       continue; // a file that is already missing stays as it is; a restore reports it
     }
@@ -222,15 +223,15 @@ function planRestore({ backup, known, existing }: { backup: Backup; known: Reado
 }
 
 /** The agents this workspace has now (built-in ones included); throws while its config does not load. */
-function currentAgents({ workspace, home }: { workspace: string; home?: string | undefined }): Set<string> {
-  const r = loadConfig({ workspace, home });
+async function currentAgents({ workspace, home }: { workspace: string; home?: string | undefined }): Promise<Set<string>> {
+  const r = await loadConfig({ workspace, home });
   if (!r.ok) throw new Error(`Fix the config first: ${r.errors.map((e) => e.message).join('; ')}`);
   return new Set(Object.keys(r.config.agents));
 }
 
 /** What a restore would change, for the question asked before it runs. */
-function previewRestore({ workspace, backup, home }: { workspace: string; backup: Backup; home?: string | undefined }): RestorePlan {
-  return planRestore({ backup, known: currentAgents({ workspace, home }), existing: readProjectLayer(workspace) });
+async function previewRestore({ workspace, backup, home }: { workspace: string; backup: Backup; home?: string | undefined }): Promise<RestorePlan> {
+  return planRestore({ backup, known: await currentAgents({ workspace, home }), existing: await readProjectLayer(workspace) });
 }
 
 /**
@@ -239,10 +240,10 @@ function previewRestore({ workspace, backup, home }: { workspace: string; backup
  * run is left out and reported. If the result would not resolve (code and report agents mixed, say), the config file
  * and the instruction files go back to what they were and the error is thrown: a bad config breaks every task.
  */
-function restoreBackup({ workspace, backup, home }: { workspace: string; backup: Backup; home?: string | undefined }): RestorePlan {
-  const plan = previewRestore({ workspace, backup, home });
+async function restoreBackup({ workspace, backup, home }: { workspace: string; backup: Backup; home?: string | undefined }): Promise<RestorePlan> {
+  const plan = await previewRestore({ workspace, backup, home });
   const dir = configDirOf(workspace);
-  withConfigRollback({ workspace, home }, (remember) => {
+  await withConfigRollback({ workspace, home }, async (remember) => {
     for (const name of [...plan.agents.add, ...plan.agents.replace]) {
       let def = backup.agents[name]!;
       const own = def.instructions;
@@ -250,26 +251,26 @@ function restoreBackup({ workspace, backup, home }: { workspace: string; backup:
         const key = fileKey(own.file)!;
         const abs = inside(dir, key)!;
         const content = Object.entries(backup.files).find(([rel]) => fileKey(rel) === key)![1];
-        remember(abs);
-        fs.mkdirSync(path.dirname(abs), { recursive: true });
-        fs.writeFileSync(abs, content);
+        await remember(abs);
+        await fs.promises.mkdir(path.dirname(abs), { recursive: true });
+        await writeAtomic(abs, content);
         // The config names the file the way it was written (`./prompts/a.md`), whatever OS made the backup.
         def = { ...def, instructions: { ...own, file: `./${key}` } };
       }
-      setAgentLayer(workspace, name, def);
+      await setAgentLayer(workspace, name, def);
     }
-    if (plan.pipeline) setPipeline(workspace, backup.pipeline!);
-    for (const id of [...plan.scenarios.add, ...plan.scenarios.replace]) writeScenario(workspace, id, backup.scenarios[id]!);
+    if (plan.pipeline) await setPipeline(workspace, backup.pipeline!);
+    for (const id of [...plan.scenarios.add, ...plan.scenarios.replace]) await writeScenario(workspace, id, backup.scenarios[id]!);
   });
   return plan;
 }
 
-function writeScenario(workspace: string, id: string, entry: ScenarioEntry): void {
-  if (entry === false) removeScenario(workspace, id);
-  else if (Array.isArray(entry)) setScenario(workspace, id, entry);
+async function writeScenario(workspace: string, id: string, entry: ScenarioEntry): Promise<void> {
+  if (entry === false) await removeScenario(workspace, id);
+  else if (Array.isArray(entry)) await setScenario(workspace, id, entry);
   else {
     const agents = entry.agents.map((step): ScenarioStep => (typeof step === 'string' ? { name: step } : { name: step.agent, ...(step.model && { model: step.model }), ...(step.effort && { effort: step.effort }) }));
-    setCustomScenario(workspace, id, { label: entry.label || id, description: entry.description, agents });
+    await setCustomScenario(workspace, id, { label: entry.label || id, description: entry.description, agents });
   }
 }
 

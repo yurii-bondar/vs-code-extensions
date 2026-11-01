@@ -1,5 +1,5 @@
-// What the dashboard scripts share. They are plain scripts loaded one after the other (markdown.js, app.js,
-// task.js, config.js), not modules: markdown.js sets two functions on `window`, app.js publishes the shell API on
+// What the dashboard scripts share. They are plain scripts loaded one after the other (markdown.js, stream.js, app.js,
+// task.js, config.js), not modules: markdown.js and stream.js set functions on `window`, app.js publishes the shell API on
 // `window.CS`, and the views register themselves there. The page is built from HTML strings and DOM events.
 // What the host sends comes through the types of src/core/wire.ts.
 
@@ -267,8 +267,25 @@ interface CSApi {
   boot(): Promise<void>;
 }
 
+/** The message each step's agent is writing (stream.ts). */
+interface LiveTexts {
+  /** Takes in an item pushed for a step. */
+  take(key: string, item: TranscriptItem): void;
+  /** Its text so far: '' before its first words, null when the page missed its start, undefined when it writes none. */
+  writing(key: string): string | null | undefined;
+}
+
+/** What a transcript just loaded holds of the items pushed while it was read (stream.ts). */
+interface LoadedEdge {
+  /** Whether the item is in the transcript already; each item it holds is found once. */
+  has(item: TranscriptItem): boolean;
+}
+
 interface Window {
   escapeHtml: (s: unknown) => string;
   renderMarkdown: (text: string) => string;
+  stripJsonBlock: (text: string) => string;
+  liveTexts: () => LiveTexts;
+  loadedEdge: (items: TranscriptItem[]) => LoadedEdge;
   CS: CSApi;
 }

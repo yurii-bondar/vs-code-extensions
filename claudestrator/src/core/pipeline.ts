@@ -24,6 +24,13 @@ const stageOf = (a: StageSource): PlainStage => ({ agent: a.name, output: a.outp
 /** Whether a stage works in the plan's repos (and so the task branches, commits and opens PRs). */
 const onRepos = (st: { scope: Scope }): boolean => st.scope === 'repo' || st.scope === 'repos';
 
+/** A stage works in repos before any plan stage names them: the task names its repos itself (`--repos`). */
+function reposBeforePlan(stages: readonly { scope: Scope; output: Output }[]): boolean {
+  const firstPlan = stages.findIndex((st) => st.output === 'plan');
+  const firstRepo = stages.findIndex(onRepos);
+  return firstRepo !== -1 && (firstPlan === -1 || firstRepo < firstPlan);
+}
+
 /**
  * `opts.scenario`: `deliver` (default) runs `config.pipeline`; a report scenario runs its own read-only agents; a custom
  * scenario runs its agents as a delivery or as the report they write.
@@ -93,8 +100,8 @@ function routed(plain: PlainStage[], { auto, maxRounds }: { auto?: boolean | und
   if (firstVerdict !== -1 && firstCode !== -1 && firstVerdict < firstCode) {
     warn('verdict_before_code', `"${stages[firstVerdict]!.agent}" reviews before any code is written; it reviews the existing branch`, stages[firstVerdict]!.agent);
   }
-  if (firstPlan === -1 && firstIndex(onRepos) !== -1) {
-    warn('no_plan', 'no plan stage: per-repo stages have no repos to run in unless the task names them');
+  if (reposBeforePlan(stages)) {
+    warn('no_plan', 'no plan stage before the agents that change code: they work in the repos the task names (--repos api,web), else in every configured repo, on a branch named after the ticket');
   }
 
   let reviewLoop: ReviewLoop | null = null;
@@ -171,4 +178,4 @@ function outline(pipeline: Pick<StoredPipeline, 'stages' | 'reviewLoop' | 'scena
 }
 
 export type { Chip, StageSource };
-export { buildPipeline, scenarioKind, taskPipeline, fitsScenario, onRepos, outline };
+export { buildPipeline, scenarioKind, taskPipeline, fitsScenario, onRepos, reposBeforePlan, outline };

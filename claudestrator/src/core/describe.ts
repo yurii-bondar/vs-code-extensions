@@ -1,5 +1,5 @@
 // One human line per persisted event, for the activity timeline.
-import type { OrchEvent } from './types';
+import type { Checkpoint, OrchEvent } from './types';
 
 const at = (agent: string, repo?: string): string => `${agent}${repo ? ` @ ${repo}` : ''}`;
 
@@ -13,6 +13,9 @@ const CHECKPOINT_TITLE: Record<string, string> = {
   'hook-failure': 'Commit failed',
   'confirm-push': 'Confirm push',
 };
+
+/** What a checkpoint is called where it is listed: an agent that said it cannot go on is blocked, not failed. */
+const checkpointTitle = (cp: Pick<Checkpoint, 'id' | 'blocked'>): string => (cp.id === 'agent-failure' && cp.blocked ? 'An agent is blocked' : CHECKPOINT_TITLE[cp.id] || cp.id);
 
 /** One line of the activity timeline. */
 interface Described {
@@ -46,7 +49,7 @@ function describeEvent(e: OrchEvent): Described | null {
       return { tone, icon: 'check', text: `${at(e.agent, e.repo)} finished${verdict}${e.gates === 'fail' ? ' · checks red' : e.gates === 'pass' ? ' · checks green' : ''}`, artifact: e.artifact };
     }
     case 'stage_failed':
-      return { tone: 'error', icon: 'error', text: `${at(e.agent, e.repo)} failed: ${e.error}` };
+      return { tone: 'error', icon: 'error', text: e.blocked ? e.error : `${at(e.agent, e.repo)} failed: ${e.error}` };
     case 'gates_ran':
       return { tone: e.status === 'fail' ? 'error' : e.status === 'pass' ? 'ok' : 'dim', icon: 'beaker', text: `Checks in ${e.repo || (e.repos || []).join(', ')} (attempt ${e.attempt}): ${e.status}` };
     case 'checkpoint_answered':
@@ -67,6 +70,10 @@ function describeEvent(e: OrchEvent): Described | null {
       const p = e.payload || {};
       return { tone: 'dim', icon: 'circle-small', text: `${e.agent} session ended · ${p.turns || 0} turns · $${Number(p.costUsd || 0).toFixed(2)}` };
     }
+    case 'agent_progress':
+      return null;
+    case 'pr_opened':
+      return { tone: 'ok', icon: 'git-pull-request', text: `PR opened in ${e.repo}` };
     case 'jira_comment': {
       const what = ({ plan: 'the plan', prs: 'the PR links', report: 'the report' } as Record<string, string>)[e.what] || 'a comment';
       return e.ok
@@ -85,4 +92,4 @@ function describeEvent(e: OrchEvent): Described | null {
   }
 }
 
-export { describeEvent, CHECKPOINT_TITLE };
+export { describeEvent, checkpointTitle, CHECKPOINT_TITLE };

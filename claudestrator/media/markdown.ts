@@ -3,26 +3,56 @@
 (function () {
   const esc = (s: unknown) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' } as Record<string, string>)[c]!);
 
+  /** Bold, italics and strikethrough, in escaped text. */
+  const emphasis = (s: string) =>
+    s
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/__([^_]+)__/g, '<strong>$1</strong>')
+      .replace(/(^|[^*\w])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>')
+      .replace(/(^|[^_\w])_([^_\n]+)_(?!\w)/g, '$1<em>$2</em>')
+      .replace(/~~([^~]+)~~/g, '<del>$1</del>');
+
+  /**
+   * Code spans and links become placeholders (NUL, number, NUL) as soon as they are made: no later step reads their
+   * HTML again. An autolink found inside a link's address, or an `_` of an address made into <em>, would otherwise end
+   * the href attribute early and let the text add attributes of its own (a style laying a link over the whole screen).
+   */
   function inline(text: string) {
-    const codes: string[] = [];
-    let s = text.replace(/`([^`\n]+)`/g, (_, c: string) => {
-      codes.push(c);
-      return `\u0000${codes.length - 1}\u0000`;
-    });
+    const held: string[] = [];
+    const hold = (html: string) => `\u0000${held.push(html) - 1}\u0000`;
+    // eslint-disable-next-line no-control-regex -- NUL marks the placeholders; the text brings none of its own
+    let s = String(text).replace(/\u0000/g, '');
+    s = s.replace(/`([^`\n]+)`/g, (_, c: string) => hold(`<code>${esc(c)}</code>`));
     s = esc(s);
-    s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_, label: string, url: string) => `<a href="${url}" data-href="${url}">${label}</a>`);
-    s = s.replace(/(^|[\s(])(https?:\/\/[^\s<)]+[^\s<).,;:!?])/g, (_, pre: string, url: string) => `${pre}<a href="${url}" data-href="${url}">${url}</a>`);
-    s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/__([^_]+)__/g, '<strong>$1</strong>');
-    s = s.replace(/(^|[^*\w])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>').replace(/(^|[^_\w])_([^_\n]+)_(?!\w)/g, '$1<em>$2</em>');
-    s = s.replace(/~~([^~]+)~~/g, '<del>$1</del>');
-    // eslint-disable-next-line no-control-regex -- NUL marks the placeholders of code spans
-    return s.replace(/\u0000(\d+)\u0000/g, (_, i: string) => `<code>${esc(codes[Number(i)])}</code>`);
+    // A label is one line of at most 300 characters: an unbounded one was read to the end from every `[` of a line
+    // without `]`. Nor does a label hold a `[`, or an address a `(`: from every `[` of `[a](http://[a](http://…` the
+    // address was read to the end of the line, in time growing with its square (seconds at a few hundred KB). Now each
+    // character is read as part of one label and one address at most. An address with `(` was cut at its `)` before.
+    // eslint-disable-next-line no-control-regex -- an address never takes in a placeholder
+    s = s.replace(/\[([^[\]\n]{1,300})\]\((https?:\/\/[^()\s\u0000]+)\)/g, (_, label: string, url: string) => hold(`<a href="${url}" data-href="${url}">${emphasis(label)}</a>`));
+    // eslint-disable-next-line no-control-regex -- an address never takes in a placeholder
+    s = s.replace(/(^|[\s(])(https?:\/\/[^\s<)\u0000]+[^\s<).,;:!?\u0000])/g, (_, pre: string, url: string) => `${pre}${hold(`<a href="${url}" data-href="${url}">${url}</a>`)}`);
+    s = emphasis(s);
+    // eslint-disable-next-line no-control-regex -- NUL marks the placeholders
+    const restore = (x: string): string => x.replace(/\u0000(\d+)\u0000/g, (_, i: string) => restore(held[Number(i)] ?? ''));
+    return restore(s);
   }
 
-  const isTableSep = (l: string) => /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/.test(l);
+  // Each test reads the line trimmed: `\s*` on both sides of an optional `|` took seconds on a line of spaces.
+  const isTableSep = (l: string) => /^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?$/.test(l.trim());
+  /** How deep blockquotes nest before the rest reads as plain text: a line of a thousand `>` is not a thousand frames. */
+  const MAX_QUOTE_DEPTH = 8;
+  /** A heading's text without its closing `#`s, read without a regex that backtracks over a long run of spaces. */
+  const headingText = (t: string) => {
+    let end = t.trimEnd();
+    let hashes = end.length;
+    while (hashes > 0 && end[hashes - 1] === '#') hashes--;
+    if (hashes < end.length && (hashes === 0 || /\s/.test(end[hashes - 1]!))) end = end.slice(0, hashes).trimEnd();
+    return end;
+  };
   const cells = (l: string) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
 
-  function render(src: string): string {
+  function render(src: string, depth = 0): string {
     const lines = String(src || '').replace(/\r\n?/g, '\n').split('\n');
     const out: string[] = [];
     let i = 0;
@@ -56,12 +86,12 @@
         i++;
         continue;
       }
-      const h = line!.match(/^(#{1,6})\s+(.*?)\s*#*\s*$/);
+      const h = line!.match(/^(#{1,6})\s+(.*)$/);
       if (h) {
         flush();
         closeLists();
         const level = Math.min(6, h[1]!.length + 1);
-        out.push(`<h${level}>${inline(h[2]!)}</h${level}>`);
+        out.push(`<h${level}>${inline(headingText(h[2]!))}</h${level}>`);
         i++;
         continue;
       }
@@ -77,7 +107,7 @@
         closeLists();
         const body: string[] = [];
         while (i < lines.length && /^\s*>/.test(lines[i]!)) body.push(lines[i++]!.replace(/^\s*>\s?/, ''));
-        out.push(`<blockquote>${render(body.join('\n'))}</blockquote>`);
+        out.push(`<blockquote>${depth < MAX_QUOTE_DEPTH ? render(body.join('\n'), depth + 1) : `<p>${inline(body.join(' '))}</p>`}</blockquote>`);
         continue;
       }
       if (line!.includes('|') && lines[i + 1] && isTableSep(lines[i + 1]!)) {
@@ -119,6 +149,20 @@
     return out.join('\n');
   }
 
+  /**
+   * The report without the json block at its end (the data a program read): found from its last ```json, which a
+   * regular expression tried from every blank line of a long report, in time growing with its square.
+   */
+  function stripJsonBlock(text: string): string {
+    const at = text.lastIndexOf('```json');
+    if (at === -1) return text.trim();
+    const block = text.slice(at).trimEnd();
+    const open = block.indexOf('\n');
+    const body = block.slice(0, -3);
+    return open !== -1 && block.endsWith('```') && body.length > open && /\n[ \t]*$/.test(body) ? text.slice(0, at).trim() : text.trim();
+  }
+
   window.renderMarkdown = render;
+  window.stripJsonBlock = stripJsonBlock;
   window.escapeHtml = esc;
 })();

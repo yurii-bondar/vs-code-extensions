@@ -1,25 +1,27 @@
 // The machine around the orchestrator: a usable PATH (VS Code started from the Dock does not get the
-// login shell's), where claude / node / gh live, and the health checks shown on the dashboard.
+// login shell's), where claude / gh live, and the health checks shown on the dashboard.
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { execFile } from 'child_process';
-import { exec, type ExecResult } from './git';
-import { parseFlags } from './runner';
+import { exists } from './files';
+import { exec, launch, setShim, type ExecResult } from './git';
+import { parseFlags, versionProblem } from './runner';
 
 const HOME = os.homedir();
 const isWin = process.platform === 'win32';
 
 function run(cmd: string, args: string[], timeout = 8000, env?: NodeJS.ProcessEnv): Promise<ExecResult> {
   return new Promise((resolve) => {
-    execFile(cmd, args, { timeout, env: env || process.env, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => resolve({ code: err ? (typeof err.code === 'number' ? err.code : 1) : 0, stdout: String(stdout || ''), stderr: String(stderr || '') }));
+    const [file, argv] = launch(cmd, args);
+    execFile(file, argv, { timeout, env: env || process.env, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => resolve({ code: err ? (typeof err.code === 'number' ? err.code : 1) : 0, stdout: String(stdout || ''), stderr: String(stderr || '') }));
   });
 }
 
 /** PATH as the user's login shell sets it, merged with what VS Code already has. */
 async function loginShellPath(): Promise<string> {
   if (isWin) return process.env.PATH || '';
-  const shell = process.env.SHELL || (fs.existsSync('/bin/zsh') ? '/bin/zsh' : '/bin/bash');
+  const shell = process.env.SHELL || ((await exists('/bin/zsh')) ? '/bin/zsh' : '/bin/bash');
   const marker = '__CLAUDESTRATOR_PATH__';
   const r = await run(shell, ['-lc', `printf '${marker}%s${marker}' "$PATH"`], 8000);
   const m = r.stdout.match(new RegExp(`${marker}(.*)${marker}`));
@@ -29,14 +31,14 @@ async function loginShellPath(): Promise<string> {
 }
 
 /** First executable named `name` on PATH (no shell functions or aliases: we spawn it directly). */
-function which(name: string, PATH?: string): string | null {
+async function which(name: string, PATH?: string): Promise<string | null> {
   const exts = isWin ? (process.env.PATHEXT || '.EXE;.CMD;.BAT').split(';') : [''];
   for (const dir of (PATH || '').split(path.delimiter)) {
     for (const ext of exts) {
       const file = path.join(dir, name + ext);
       try {
-        if (fs.statSync(file).isFile()) {
-          if (!isWin) fs.accessSync(file, fs.constants.X_OK);
+        if ((await fs.promises.stat(file)).isFile()) {
+          if (!isWin) await fs.promises.access(file, fs.constants.X_OK);
           return file;
         }
       } catch {
@@ -53,41 +55,72 @@ function expand(p: string | null | undefined): string | null | undefined {
   return p ? path.resolve(String(p).replace(/^~(?=$|[\\/])/, HOME)) : p;
 }
 
-/**
- * The signed-in email a `.claude.json` names, cached by the file's size and mtime: the file keeps per-project history and
- * can be megabytes, and the account is asked for several times per refresh.
- */
-const emails = new Map<string, { sig: string; email: string | undefined }>();
+/** How long what was read of a Claude Code file holds before the file is looked at again. */
+const FRESH_MS = 5000;
+const jsonFiles = new Map<string, { at: number; sig: string; value: unknown }>();
 
-function accountEmail(file: string): string | undefined {
+/**
+ * A JSON file of Claude Code's, parsed once per change and looked at no more than every FRESH_MS: `.claude.json` keeps
+ * per-project history and can be megabytes, Claude Code rewrites it all the time an agent runs, and the dashboard asks
+ * for the account and the MCP servers on every refresh. Undefined when it is not there or not JSON (being written).
+ */
+async function readJsonFresh(file: string, now: number = Date.now()): Promise<unknown> {
+  const hit = jsonFiles.get(file);
+  if (hit && now - hit.at < FRESH_MS) return hit.value;
   let sig: string;
   try {
-    const st = fs.statSync(file);
+    const st = await fs.promises.stat(file);
     sig = `${st.size}:${st.mtimeMs}`;
   } catch {
-    return undefined; // no such file
+    jsonFiles.set(file, { at: now, sig: '', value: undefined });
+    return undefined;
   }
-  const hit = emails.get(file);
-  if (hit && hit.sig === sig) return hit.email;
-  let email: string | undefined;
+  if (hit && hit.sig === sig) {
+    hit.at = now;
+    return hit.value;
+  }
+  let value: unknown;
   try {
-    const data: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
-    const acc = typeof data === 'object' && data !== null ? (data as { oauthAccount?: unknown }).oauthAccount : undefined;
-    const value = typeof acc === 'object' && acc !== null ? (acc as { emailAddress?: unknown }).emailAddress : undefined;
-    email = typeof value === 'string' ? value : undefined;
+    value = JSON.parse(await fs.promises.readFile(file, 'utf8'));
   } catch {
-    email = undefined; // being written, or not JSON
+    value = undefined;
   }
-  emails.set(file, { sig, email });
-  return email;
+  jsonFiles.set(file, { at: now, sig, value });
+  return value;
 }
 
-/** Claude Code config folders (accounts): ~/.claude and ~/.claude-*. */
-function claudeAccounts(): { dir: string; label: string; email?: string }[] {
-  const out: { dir: string; label: string; email?: string }[] = [];
+/** The signed-in email a `.claude.json` names. */
+async function accountEmail(file: string): Promise<string | undefined> {
+  const data = await readJsonFresh(file);
+  const acc = typeof data === 'object' && data !== null ? (data as { oauthAccount?: unknown }).oauthAccount : undefined;
+  const value = typeof acc === 'object' && acc !== null ? (acc as { emailAddress?: unknown }).emailAddress : undefined;
+  return typeof value === 'string' ? value : undefined;
+}
+
+interface ClaudeAccount {
+  dir: string;
+  label: string;
+  email?: string;
+}
+
+/** What a config folder is called: `.claude` is the default account, `.claude-work` is "work". */
+const accountLabel = (dir: string): string => path.basename(dir).replace(/^\.claude-?/, '') || 'default';
+
+let accounts: { at: number; list: Promise<ClaudeAccount[]> } | null = null;
+
+/** Claude Code config folders (accounts): ~/.claude and ~/.claude-*. Looked for again after FRESH_MS. */
+function claudeAccounts(now: number = Date.now()): Promise<ClaudeAccount[]> {
+  if (accounts && now - accounts.at < FRESH_MS) return accounts.list;
+  const list = findAccounts();
+  accounts = { at: now, list };
+  return list;
+}
+
+async function findAccounts(): Promise<ClaudeAccount[]> {
+  const out: ClaudeAccount[] = [];
   let names: string[] = [];
   try {
-    names = fs.readdirSync(HOME);
+    names = await fs.promises.readdir(HOME);
   } catch {
     return out;
   }
@@ -95,24 +128,24 @@ function claudeAccounts(): { dir: string; label: string; email?: string }[] {
     if (name !== '.claude' && !name.startsWith('.claude-')) continue;
     const dir = path.join(HOME, name);
     try {
-      if (!fs.statSync(dir).isDirectory()) continue;
+      if (!(await fs.promises.stat(dir)).isDirectory()) continue;
     } catch {
       continue;
     }
-    if (!['projects', '.claude.json', 'settings.json'].some((f) => fs.existsSync(path.join(dir, f)))) continue;
+    if (!(await Promise.all(['projects', '.claude.json', 'settings.json'].map((f) => exists(path.join(dir, f))))).includes(true)) continue;
     let email: string | undefined;
     for (const f of [path.join(dir, '.claude.json'), ...(name === '.claude' ? [path.join(HOME, '.claude.json')] : [])]) {
-      email = accountEmail(f);
+      email = await accountEmail(f);
       if (email !== undefined) break;
     }
-    out.push({ dir, label: name === '.claude' ? 'default' : name.replace(/^\.claude-/, ''), ...(email && { email }) });
+    out.push({ dir, label: accountLabel(dir), ...(email && { email }) });
   }
   return out;
 }
 
 /**
- * Health of everything the pipeline needs. `settings`: { claudePath, nodePath }.
- * Returns { PATH, claude: { path, version, flags }, node, git, gh, checkedAt }.
+ * Health of everything the pipeline needs. `settings`: { claudePath }.
+ * Returns { PATH, claude: { path, version, flags }, git, gh, checkedAt }.
  */
 interface ClaudeProbe {
   path: string | null | undefined;
@@ -132,35 +165,65 @@ interface Probe {
   PATH: string;
   env: NodeJS.ProcessEnv;
   claude: ClaudeProbe;
-  node: { path: string | null; ok: boolean };
   git: { ok: boolean; version: string };
   gh: GhProbe;
   checkedAt: string;
 }
 
-async function probe(settings: { claudePath?: string; nodePath?: string } = {}): Promise<Probe> {
+/**
+ * The file an npm Windows shim (`claude.cmd`) runs, absolute: `"%dp0%\\node_modules\\…\\cli.js" %*` in the shim's
+ * text, or the older `"%~dp0\\…"` form. Null when the text is not such a shim.
+ */
+function npmShimTarget(text: string, shimDir: string): string | null {
+  const m = text.match(/"%~?dp0%?\\([^"]+)"\s+%\*/i);
+  return m ? path.join(shimDir, ...m[1]!.split('\\')) : null;
+}
+
+/** Registers what a `.cmd`/`.bat` shim runs, so it can be spawned; an error message when it cannot be. */
+async function resolveShim(command: string, PATH: string): Promise<string | null> {
+  let text: string;
+  try {
+    text = await fs.promises.readFile(command, 'utf8');
+  } catch (e) {
+    return `cannot read ${command}: ${(e as Error).message}`;
+  }
+  const target = npmShimTarget(text, path.dirname(command));
+  if (!target) return `${command} is a script Claudestrator cannot start; set claudestrator.claudePath to claude.exe (the native build)`;
+  if (/\.exe$/i.test(target)) {
+    setShim(command, { file: target, args: [] });
+    return null;
+  }
+  const node = await which('node', PATH);
+  if (!node) return `${command} runs ${target} with Node.js, which is not on PATH`;
+  setShim(command, { file: node, args: [target] });
+  return null;
+}
+
+async function probe(settings: { claudePath?: string } = {}): Promise<Probe> {
   const PATH = await loginShellPath();
   const env: NodeJS.ProcessEnv = { ...process.env, PATH };
   delete env.ELECTRON_RUN_AS_NODE;
 
-  const claudePath = settings.claudePath && settings.claudePath !== 'claude' ? expand(settings.claudePath) : which('claude', PATH);
+  const claudePath = settings.claudePath && settings.claudePath !== 'claude' ? expand(settings.claudePath) : await which('claude', PATH);
   const claude: ClaudeProbe = { path: claudePath, ok: false };
-  if (claudePath && fs.existsSync(claudePath)) {
-    const v = await run(claudePath, ['--version'], 15000, env);
+  const found = claudePath && (await exists(claudePath)) ? claudePath : null;
+  const shimError = found && isWin && /\.(cmd|bat)$/i.test(found) ? await resolveShim(found, PATH) : null;
+  if (shimError) claude.error = shimError;
+  else if (found) {
+    const v = await run(found, ['--version'], 15000, env);
     claude.version = v.stdout.trim().split('\n')[0] || undefined;
-    const h = await run(claudePath, ['--help'], 15000, env);
+    const h = await run(found, ['--help'], 15000, env);
     claude.flags = [...parseFlags(h.stdout + h.stderr)];
-    claude.ok = v.code === 0;
-    if (!claude.ok) claude.error = (v.stderr || v.stdout).trim().slice(0, 300) || `exit ${v.code}`;
+    const tooOld = v.code === 0 ? versionProblem(claude.version) : null;
+    claude.ok = v.code === 0 && !tooOld;
+    if (tooOld) claude.error = tooOld;
+    else if (!claude.ok) claude.error = (v.stderr || v.stdout).trim().slice(0, 300) || `exit ${v.code}`;
   } else claude.error = claudePath ? `${claudePath} does not exist` : 'not found on PATH';
-
-  const nodePath = settings.nodePath ? expand(settings.nodePath) : which('node', PATH);
-  const node: Probe['node'] = { path: nodePath && fs.existsSync(nodePath) ? nodePath : null, ok: Boolean(nodePath && fs.existsSync(nodePath)) };
 
   const gitV = await exec('git', ['--version'], { env, timeoutMs: 8000 });
   const git = { ok: gitV.code === 0, version: gitV.stdout.trim().replace(/^git version /, '') };
 
-  const ghPath = which('gh', PATH);
+  const ghPath = await which('gh', PATH);
   const gh: GhProbe = { path: ghPath, ok: false };
   if (ghPath) {
     const v = await exec(ghPath, ['--version'], { env, timeoutMs: 8000 });
@@ -172,7 +235,7 @@ async function probe(settings: { claudePath?: string; nodePath?: string } = {}):
     if (!gh.ok) gh.error = 'not logged in (run: gh auth login)';
   } else gh.error = 'not installed (needed only to open PRs)';
 
-  return { PATH, env, claude, node, git, gh, checkedAt: new Date().toISOString() };
+  return { PATH, env, claude, git, gh, checkedAt: new Date().toISOString() };
 }
 
 /**
@@ -197,18 +260,32 @@ interface StatuslineSnapshot {
   effort?: string;
 }
 
-function statuslineSnapshot(configDir: string): StatuslineSnapshot | null {
+const snapshots = new Map<string, { at: number; value: Promise<StatuslineSnapshot | null> }>();
+
+/**
+ * The account's newest status line snapshot (ctx-man writes one per session to `<account>/statusline/`), looked for no
+ * more than every FRESH_MS: the dashboard asks for the limits on every refresh, and each look reads the whole folder.
+ */
+function statuslineSnapshot(configDir: string, now: number = Date.now()): Promise<StatuslineSnapshot | null> {
+  const hit = snapshots.get(configDir);
+  if (hit && now - hit.at < FRESH_MS) return hit.value;
+  const value = readStatusline(configDir);
+  snapshots.set(configDir, { at: now, value });
+  return value;
+}
+
+async function readStatusline(configDir: string): Promise<StatuslineSnapshot | null> {
   const dir = path.join(configDir, 'statusline');
   let newest: { name: string; mtimeMs: number } | null = null;
   let names: string[] = [];
   try {
-    names = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
+    names = (await fs.promises.readdir(dir)).filter((f) => f.endsWith('.json'));
   } catch {
     return null;
   }
   for (const name of names) {
     try {
-      const st = fs.statSync(path.join(dir, name));
+      const st = await fs.promises.stat(path.join(dir, name));
       if (!newest || st.mtimeMs > newest.mtimeMs) newest = { name, mtimeMs: st.mtimeMs };
     } catch {
       // pruned meanwhile
@@ -216,7 +293,7 @@ function statuslineSnapshot(configDir: string): StatuslineSnapshot | null {
   }
   if (!newest) return null;
   try {
-    const s = JSON.parse(fs.readFileSync(path.join(dir, newest.name), 'utf8')) as { five_hour?: RawLimit; seven_day?: RawLimit; updated_at?: number; model?: string; effort?: string };
+    const s = JSON.parse(await fs.promises.readFile(path.join(dir, newest.name), 'utf8')) as { five_hour?: RawLimit; seven_day?: RawLimit; updated_at?: number; model?: string; effort?: string };
     const lim = (l?: RawLimit): LimitSnapshot | undefined => (l && l.used_percentage != null ? { pct: Math.round(Number(l.used_percentage)), resetsAt: l.resets_at } : undefined);
     const out: StatuslineSnapshot = { fiveHour: lim(s.five_hour), sevenDay: lim(s.seven_day), at: (s.updated_at ? s.updated_at * 1000 : newest.mtimeMs), source: 'statusline', ...(s.model && { model: s.model }), ...(s.effort && { effort: s.effort }) };
     return out.fiveHour || out.sevenDay ? out : null;
@@ -225,5 +302,5 @@ function statuslineSnapshot(configDir: string): StatuslineSnapshot | null {
   }
 }
 
-export type { Probe, StatuslineSnapshot };
-export { loginShellPath, which, expand, claudeAccounts, probe, statuslineSnapshot };
+export type { ClaudeAccount, Probe, StatuslineSnapshot };
+export { loginShellPath, which, expand, accountLabel, claudeAccounts, probe, statuslineSnapshot, npmShimTarget, readJsonFresh };

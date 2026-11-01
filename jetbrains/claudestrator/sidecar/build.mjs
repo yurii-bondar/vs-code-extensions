@@ -1,8 +1,8 @@
 // Bundles the Claudestrator engine and the stdio bridge into dist/engine/, laid out like the VS Code extension
-// (dist/hook/pretooluse.js, media/, dist/media/*.js), because the engine looks for its files by that layout.
+// (media/, dist/media/*.js), because the engine looks for its files by that layout.
 // `vscode` is replaced by src/vscode-shim.ts, which hands what the engine asks of an editor to the IDE.
 import { build } from 'esbuild';
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -18,8 +18,9 @@ if (!existsSync(join(webviewJs, 'app.js'))) {
 }
 
 rmSync(out, { recursive: true, force: true });
-mkdirSync(join(out, 'dist/hook'), { recursive: true });
+mkdirSync(join(out, 'dist'), { recursive: true });
 
+const SANDBOX = '@anthropic-ai/sandbox-runtime';
 const common = { bundle: true, platform: 'node', target: 'node18', format: 'cjs', sourcemap: false, legalComments: 'none', logLevel: 'info' };
 
 await build({
@@ -27,12 +28,24 @@ await build({
   entryPoints: [join(here, 'src/main.ts')],
   outfile: join(out, 'dist/sidecar.js'),
   alias: { vscode: join(here, 'src/vscode-shim.ts') },
-  // `yaml` is the engine's only dependency; it lives in the extension's node_modules.
+  // `yaml` is bundled from the extension's node_modules. The sandbox runtime is not: the engine starts its CLI as a
+  // process of its own (checks and git hooks run in it), so it ships as files, below.
   nodePaths: [join(ext, 'node_modules')],
+  external: [SANDBOX],
 });
 
-// Claude Code runs the guard hook as a script of its own, so it is a separate, self-contained file.
-await build({ ...common, entryPoints: [join(ext, 'hook/pretooluse.ts')], outfile: join(out, 'dist/hook/pretooluse.js') });
+// The sandbox runtime and what it needs, as installed in the extension: no Windows helper (no sandbox there), and none
+// of the sources, browser builds, types and docs that come with the packages.
+const SKIP = /[\\/](vendor[\\/]srt-win|zod[\\/]src|node-forge[\\/](dist|flash))($|[\\/])|\.map$|\.d\.c?ts$|README\.md$/;
+const shipped = new Set();
+const ship = (name) => {
+  if (shipped.has(name)) return;
+  shipped.add(name);
+  const from = join(ext, 'node_modules', name);
+  cpSync(from, join(out, 'node_modules', name), { recursive: true, filter: (src) => !SKIP.test(src) });
+  for (const dep of Object.keys(JSON.parse(readFileSync(join(from, 'package.json'), 'utf8')).dependencies || {})) ship(dep);
+};
+ship(SANDBOX);
 
 cpSync(join(ext, 'media'), join(out, 'media'), { recursive: true, filter: (src) => !src.endsWith('.ts') });
 mkdirSync(join(out, 'dist/media'), { recursive: true });

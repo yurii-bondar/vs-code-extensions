@@ -1,10 +1,11 @@
 // MCP servers as Claude Code sees them: what is configured (from its config files, names only), the health
-// check (`claude mcp list`), details (`claude mcp get`, secrets masked) and a fresh sign-in (`claude mcp login`).
+// check (`claude mcp list`) and details (`claude mcp get`, secrets masked). Signing in runs in a terminal.
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { spawn, type ChildProcess } from 'child_process';
+import { exists } from './files';
 import { exec } from './git';
+import { readJsonFresh } from './env';
 import type { McpServer } from './wire';
 
 /** `~/.claude.json` as far as this module reads it. */
@@ -14,12 +15,10 @@ interface ClaudeJson {
   disabledMcpjsonServers?: string[];
 }
 
-const readJson = (file: string): ClaudeJson | null => {
-  try {
-    return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null;
-  } catch {
-    return null;
-  }
+/** One of Claude Code's config files, parsed once per change (`readJsonFresh`). */
+const readJson = async (file: string): Promise<ClaudeJson | null> => {
+  const value = await readJsonFresh(file);
+  return typeof value === 'object' && value !== null ? (value as ClaudeJson) : null;
 };
 
 /**
@@ -27,12 +26,12 @@ const readJson = (file: string): ClaudeJson | null => {
  * `configDir` is CLAUDE_CONFIG_DIR as the CLI gets it; without one Claude Code keeps its config in ~/.claude.json
  * (not ~/.claude/.claude.json, which may be a stale copy).
  */
-function configuredMcpServers(workspace: string, configDir?: string | null): McpServer[] {
+async function configuredMcpServers(workspace: string, configDir?: string | null): Promise<McpServer[]> {
   const dir = configDir;
-  const global = readJson(dir ? path.join(dir, '.claude.json') : path.join(os.homedir(), '.claude.json')) || {};
+  const global = (await readJson(dir ? path.join(dir, '.claude.json') : path.join(os.homedir(), '.claude.json'))) || {};
   const project = (global.projects && global.projects[workspace]) || {};
   const disabled = new Set(Array.isArray(project.disabledMcpServers) ? project.disabledMcpServers : []);
-  const local = readJson(path.join(workspace, '.claude', 'settings.local.json')) || {};
+  const local = (await readJson(path.join(workspace, '.claude', 'settings.local.json'))) || {};
   const disabledJson = new Set(Array.isArray(local.disabledMcpjsonServers) ? local.disabledMcpjsonServers : []);
   const out: McpServer[] = [];
   const add = (servers: ClaudeJson['mcpServers'], scope: string, isDisabled: (name: string) => boolean): void => {
@@ -44,7 +43,7 @@ function configuredMcpServers(workspace: string, configDir?: string | null): Mcp
   };
   add(global.mcpServers, 'user', (n) => disabled.has(n));
   add(project.mcpServers, 'local', (n) => disabled.has(n));
-  add((readJson(path.join(workspace, '.mcp.json')) || ({} as ClaudeJson)).mcpServers, 'project', (n) => disabledJson.has(n) || disabled.has(n));
+  add(((await readJson(path.join(workspace, '.mcp.json'))) || ({} as ClaudeJson)).mcpServers, 'project', (n) => disabledJson.has(n) || disabled.has(n));
   return out;
 }
 
@@ -99,7 +98,7 @@ function mergeMcp(configured: McpServer[], checked: McpServer[], checkOk = false
 
 /** Runs Claude Code's own health check. Takes a few seconds: each server is contacted. */
 async function checkMcpServers({ command, workspace, configDir, env }: { command: string; workspace: string; configDir?: string | null | undefined; env?: NodeJS.ProcessEnv | undefined }): Promise<{ servers: McpServer[]; checkedAt: string; error?: string }> {
-  const configured = configuredMcpServers(workspace, configDir);
+  const configured = await configuredMcpServers(workspace, configDir);
   const r = await exec(command, ['mcp', 'list'], { cwd: workspace, timeoutMs: 90000, env });
   const checked = parseMcpList(r.stdout);
   return {
@@ -111,14 +110,34 @@ async function checkMcpServers({ command, workspace, configDir, env }: { command
 
 const SECRETISH = /(token|secret|key|password|authorization|bearer|cookie)/i;
 
-/** `claude mcp get` can print env vars and headers: keep their names, mask their values. */
+const MASK = '••••';
+
+/** Secrets inside a line that is not itself a secret's: an argument, a variable, a URL, a token by its known prefix. */
+function maskInline(line: string): string {
+  return (
+    line
+      .replace(/(Bearer\s+)\S+/gi, `$1${MASK}`)
+      // --api-key glsa_…, --token=…
+      .replace(/(--?[\w-]*(?:token|secret|key|password|passwd|auth)[\w-]*)(=|\s+)(?!-)(\S+)/gi, `$1$2${MASK}`)
+      // DATABASE_PASSWORD=…, X_API_KEY=… in a list of variables
+      .replace(/\b([A-Za-z0-9_]*(?:TOKEN|SECRET|KEY|PASSWORD|PASSWD)[A-Za-z0-9_]*)=([^\s&]+)/gi, `$1=${MASK}`)
+      // postgres://admin:hunter2@db, https://user:pat@host
+      .replace(/(\w+:\/\/[^\s/:@]+):[^\s/@]+@/g, `$1:${MASK}@`)
+      // ?access_token=…, &key=…, &sig=…
+      .replace(/([?&](?:access_token|token|api_?key|key|secret|password|sig|signature|auth|code)=)[^&\s]+/gi, `$1${MASK}`)
+      // ghp_…, github_pat_…, glsa_…, sk-…, xoxb-…: tokens whatever they stand next to
+      .replace(/\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|glsa_\w{20,}|sk-[A-Za-z0-9_-]{20,}|xox[abprs]-[\w-]{10,})/g, MASK)
+  );
+}
+
+/** `claude mcp get` can print env vars, headers, arguments and URLs: keep the names, mask the values. */
 function redactMcpDetails(text: string): string {
   return text
     .split('\n')
     .map((line) => {
       const m = line.match(/^(\s*[^:=\s][^:=]*?)\s*([:=])\s*(.+)$/);
-      if (!m || !SECRETISH.test(m[1]!)) return line.replace(/(Bearer\s+)\S+/gi, '$1••••');
-      return `${m[1]}${m[2]} ••••`;
+      if (!m || !SECRETISH.test(m[1]!)) return maskInline(line);
+      return `${m[1]}${m[2]} ${MASK}`;
     })
     .join('\n');
 }
@@ -129,51 +148,38 @@ const isMcpName = (name: string): boolean => /^[A-Za-z0-9 _.:@-]{1,100}$/.test(n
 /** HTTP, SSE and claude.ai connectors sign in with OAuth; stdio servers do not. */
 const canLogin = (s: McpServer): boolean => !s.missing && (s.scope === 'claude.ai' || ['http', 'sse', 'ws'].includes(s.transport as string));
 
-/** `claude mcp login <name>`: opens the provider's sign-in page; resolves with the exit code. */
-function mcpLogin({ command, workspace, env, name, onLine, timeoutMs = 10 * 60000 }: { command: string; workspace: string; env?: NodeJS.ProcessEnv | undefined; name: string; onLine?: ((line: string) => void) | undefined; timeoutMs?: number }): { done: Promise<number>; cancel: () => boolean | undefined } {
-  let proc: ChildProcess | undefined;
-  const done = new Promise<number>((resolve) => {
-    const child = spawn(command, ['mcp', 'login', name], { cwd: workspace, ...(env !== undefined && { env }), stdio: ['ignore', 'pipe', 'pipe'] });
-    proc = child;
-    const timer = setTimeout(() => child.kill('SIGTERM'), timeoutMs);
-    for (const stream of [child.stdout!, child.stderr!]) {
-      let buf = '';
-      stream.on('data', (d) => {
-        buf += d;
-        let i: number;
-        while ((i = buf.indexOf('\n')) >= 0) {
-          const l = buf.slice(0, i).trim();
-          buf = buf.slice(i + 1);
-          if (l && onLine) onLine(l);
-        }
-      });
-    }
-    child.on('error', () => {
-      clearTimeout(timer);
-      resolve(127);
-    });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      resolve(code ?? 1);
-    });
-  });
-  return { done, cancel: () => proc && proc.kill('SIGTERM') };
-}
 
 /**
  * The account's user-scope MCP servers as an `--mcp-config` file, for agents that run without the `user` setting
  * source (which would also bring personal plugins and hooks). Written 0600: server configs can carry tokens.
  * Returns the file, or null when the account has none.
  */
-function writeUserMcpConfig(file: string, configDir?: string | null): string | null {
-  const global = readJson(configDir ? path.join(configDir, '.claude.json') : path.join(os.homedir(), '.claude.json')) || {};
-  const servers = global.mcpServers && typeof global.mcpServers === 'object' ? global.mcpServers : {};
-  if (!Object.keys(servers).length) return null;
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify({ mcpServers: servers }), { mode: 0o600 });
-  fs.chmodSync(file, 0o600);
-  return file;
+async function writeUserMcpConfig(file: string, configDir?: string | null): Promise<string | null> {
+  // `.claude.json` holds the account's history too and grows to megabytes: read it again only when it changed.
+  const source = configDir ? path.join(configDir, '.claude.json') : path.join(os.homedir(), '.claude.json');
+  const sig = await fs.promises.stat(source).then((st) => `${source}:${st.size}:${st.mtimeMs}`, () => `${source}:none`);
+  const hit = mcpConfigs.get(file);
+  if (hit && hit.sig === sig && (hit.result === null || (await exists(file)))) return hit.result;
+  let servers: Record<string, unknown> = {};
+  try {
+    const global = JSON.parse(await fs.promises.readFile(source, 'utf8')) as ClaudeJson;
+    if (global.mcpServers && typeof global.mcpServers === 'object') servers = global.mcpServers;
+  } catch {
+    // no account file, or one being rewritten: no servers this time
+  }
+  let result: string | null = null;
+  if (Object.keys(servers).length) {
+    await fs.promises.mkdir(path.dirname(file), { recursive: true });
+    await fs.promises.writeFile(file, JSON.stringify({ mcpServers: servers }), { mode: 0o600 });
+    await fs.promises.chmod(file, 0o600);
+    result = file;
+  }
+  mcpConfigs.set(file, { sig, result });
+  return result;
 }
 
+/** The last `--mcp-config` written per file: what its account file looked like then, and the result. */
+const mcpConfigs = new Map<string, { sig: string; result: string | null }>();
+
 export type { McpServer };
-export { writeUserMcpConfig, configuredMcpServers, parseMcpList, mergeMcp, checkMcpServers, redactMcpDetails, isMcpName, canLogin, mcpLogin };
+export { writeUserMcpConfig, configuredMcpServers, parseMcpList, mergeMcp, checkMcpServers, redactMcpDetails, isMcpName, canLogin };

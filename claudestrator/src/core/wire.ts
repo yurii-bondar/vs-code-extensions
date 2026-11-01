@@ -1,6 +1,7 @@
 // What the extension host and the dashboard page say to each other. The page cannot load Node modules, so this file
 // holds only types and imports only other type-only modules: the host annotates what its handlers return with these
 // types, and the page (media/*.ts) reads replies through them, so the compiler catches a field renamed on one side.
+import type { SecretFinding } from './secrets';
 import type {
   Agent,
   Answer,
@@ -28,6 +29,7 @@ import type {
   StoredPipeline,
   TaskGroup,
   TaskInstruction,
+  TaskState,
 } from './types';
 import type { Chip } from './pipeline';
 
@@ -139,7 +141,6 @@ export interface HealthReport {
   claude: { ok: boolean; version: string | undefined; path: string | null | undefined; error: string | undefined };
   git: { ok: boolean | undefined; version: string | undefined };
   gh: { ok: boolean | undefined; version: string | undefined; account: string | undefined; error: string | undefined; installed: boolean };
-  node: { ok: boolean | undefined; path: string | null | undefined };
   account: Account;
   atlassian: boolean;
   atlassianMcp: string | null;
@@ -231,6 +232,8 @@ export interface Status {
   label: string;
   tone: string;
   group: string;
+  /** Whether Resume runs it from where it is (stopped, failed, interrupted or ready). */
+  resumable: boolean;
 }
 
 export interface TaskSource {
@@ -322,6 +325,7 @@ export interface StepItem {
   turns?: number;
   sessionId?: string;
   cwd?: string;
+  configDir?: string;
   model?: string;
   effort?: string;
   ctxPct?: number;
@@ -405,6 +409,10 @@ export interface CheckpointContext {
   text: string;
   file?: string | undefined;
   repos?: { name: string; branch: string | null; base: string; files: number; dir: string }[];
+  /** Before a push: what looks like a credential in what it would publish. */
+  secrets?: (SecretFinding & { repo: string })[];
+  /** Before a push: changed files git runs as hooks, here or on your machine later. */
+  hooks?: { repo: string; file: string }[];
 }
 
 /** What the task's pipeline editor shows: its stages, from which one they can change, and the agents to add. */
@@ -507,6 +515,19 @@ export interface SetupParams {
   baseBranch?: string | undefined;
 }
 
+/** What the engine emits, as the orchestrator hands it on to the editor and the page. */
+export type EngineEvent =
+  | { name: 'changed'; data: string }
+  | { name: 'output'; data: { taskId: string; key: string; item: TranscriptItem } }
+  | { name: 'live'; data: { taskId: string; live: Live | null } }
+  | { name: 'log'; data: { level: string; message: string; taskId?: string } }
+  | { name: 'checkpoint'; data: { taskId: string; checkpoint: Checkpoint; title: string } }
+  | { name: 'finished'; data: { taskId: string; state: TaskState } }
+  | { name: 'permission'; data: PermissionRequest }
+  | { name: 'permissionDone'; data: string }
+  | { name: 'limits'; data: StoredLimits }
+  | { name: 'mcpLogin'; data: { ok: boolean; kind: string; message: string; server?: string } };
+
 /** What the host pushes to a task screen while an agent works. */
 export type TaskPush =
   | { type: 'output'; taskId: string; key: string; item: TranscriptItem }
@@ -579,6 +600,8 @@ export interface Overview {
   mcp: McpSummary;
   defaults: DefaultsView | null;
   permissions: PermissionRequest[];
+  /** Languages offered for plans, reports and PR texts. */
+  languages: string[];
 }
 
 /** An agent in the agents page, without its (long) instructions. */
@@ -675,6 +698,8 @@ export interface GateConfig {
   cmd: string;
   dir?: string;
   when?: string;
+  /** Its own time limit, in seconds; none: the default of 15 minutes. */
+  timeout?: number;
 }
 
 /** A repo as the page sends it back from the setup wizard or the detected list. */
@@ -721,6 +746,8 @@ export interface GateResult {
   log?: string;
   ms?: number | undefined;
   tail?: string;
+  /** Why the agent cannot fix this failure (the check ran out of time, its folder is not there): it goes to you. */
+  unfixable?: string;
 }
 
 export interface RepoGates {
@@ -768,6 +795,8 @@ export interface NewAgentParams {
 /** Every request the page can make: its parameters and what comes back. */
 export interface Rpc {
   boot: { params: void; result: Boot };
+  /** Which task the page shows (null: none): only its agent's output is sent. */
+  view: { params: { taskId: string | null }; result: null };
   overview: { params: void; result: Overview };
   health: { params: { refresh?: boolean }; result: HealthSummary };
   detect: { params: void; result: DetectData };
@@ -809,7 +838,8 @@ export interface Rpc {
   transcript: { params: { taskId: string; key: string }; result: TranscriptItem[] };
   run: { params: { taskId: string }; result: Void };
   stop: { params: { taskId: string }; result: Void };
-  answer: { params: { taskId: string; checkpointId: string; option: string; feedback?: string | undefined }; result: Void };
+  /** `at`: when the question the page showed was asked; another one asked since (a new plan) is not answered by it. */
+  answer: { params: { taskId: string; checkpointId: string; option: string; feedback?: string | undefined; at?: string | undefined }; result: Void };
   postReport: { params: { taskId: string }; result: CommentResult };
   retryComment: { params: { taskId: string; seq: number }; result: CommentResult };
   message: { params: { taskId: string; text: string }; result: Void };

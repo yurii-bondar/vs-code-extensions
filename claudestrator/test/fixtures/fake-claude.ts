@@ -1,16 +1,28 @@
 #!/usr/bin/env node
 // A stand-in for the Claude Code CLI in print mode with stream-json in and out. It plays each pipeline
-// role from the prompt, and before every tool call it runs the PreToolUse hook from --settings, exactly
-// as Claude Code would, so tests cover the guard end to end.
+// role from the prompt, and before every tool call it posts the call to the PreToolUse http hook from --settings,
+// as Claude Code does, so tests cover the guard end to end.
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 
-/** The slice of `--settings` the fake reads: the PreToolUse hook command. */
-interface HookSettings {
-  hooks: { PreToolUse: { hooks: { command: string }[] }[] };
+/** The PreToolUse hook of `--settings`, as far as the fake reads it. */
+interface HttpHook {
+  type: string;
+  url: string;
+  headers?: Record<string, string>;
+  allowedEnvVars?: string[];
+  timeout?: number;
+  onFailure?: string;
 }
+interface Settings {
+  hooks?: { PreToolUse?: { matcher?: string; hooks: HttpHook[] }[] };
+  sandbox?: { enabled?: boolean; network?: { allowedDomains?: string[] } };
+}
+
+/** Posts `{ url, headers, body }` from stdin and prints the answer; exits 1 on a non-2xx status. */
+const POST = `let s = ''; process.stdin.on('data', (d) => (s += d)).on('end', async () => { const r = JSON.parse(s); const res = await fetch(r.url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...r.headers }, body: JSON.stringify(r.body) }); if (!res.ok) process.exit(1); process.stdout.write(await res.text()); });`;
 
 /** What the extension sends on stdin: a user turn, or a control request. */
 interface ClientMessage {
@@ -38,7 +50,7 @@ function main(): void {
     process.exit(0);
   }
   if (args.includes('--help')) {
-    console.log('--print --output-format --input-format --verbose --include-partial-messages --append-system-prompt --model --effort --tools --mcp-config --strict-mcp-config --disallowedTools --setting-sources --settings --add-dir --name');
+    console.log('--print --output-format --input-format --verbose --include-partial-messages --append-system-prompt --model --effort --tools --mcp-config --strict-mcp-config --disallowedTools --setting-sources --settings --add-dir --name --json-schema');
     process.exit(0);
   }
   if (args[0] === 'auth' && args[1] === 'status') {
@@ -72,10 +84,38 @@ function main(): void {
     }
   }
   const log = process.env.FAKE_LOG;
-  if (log) fs.appendFileSync(log, `${JSON.stringify({ args, cwd: process.cwd() })}\n`);
+  if (log) fs.appendFileSync(log, `${JSON.stringify({ args, cwd: process.cwd(), ghToken: Boolean(process.env.GH_TOKEN || process.env.GITHUB_TOKEN), scrub: process.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB })}\n`);
 
-  const settings: HookSettings | null = argOf('--settings') ? JSON.parse(fs.readFileSync(argOf('--settings')!, 'utf8')) : null;
-  const hookCmd = settings && settings.hooks.PreToolUse[0]!.hooks[0]!.command;
+  const rawSettings = argOf('--settings');
+  const settings: Settings | null = rawSettings ? JSON.parse(rawSettings.trim().startsWith('{') ? rawSettings : fs.readFileSync(rawSettings, 'utf8')) : null;
+  const hook = settings && settings.hooks && settings.hooks.PreToolUse && settings.hooks.PreToolUse[0] ? settings.hooks.PreToolUse[0].hooks[0] : undefined;
+
+  /**
+   * Asks the hook like Claude Code: the input as the POST body, `$VAR` in a header filled only from allowedEnvVars.
+   * A hook that fails (no answer, a non-2xx status, a timeout) lets the call go on unless it says `onFailure: block`;
+   * the fake then allows it, as an allow rule of the project would.
+   */
+  function askHook(input: object): { allow: boolean; reason: string } {
+    if (!hook) return { allow: true, reason: 'no hook' };
+    // With the sandbox on, Claude Code sends the hook through the sandbox's network proxy: a host it does not allow
+    // never gets the request (the real CLI waits minutes for an approval, then gets a 403).
+    const sandboxed = settings && settings.sandbox && settings.sandbox.enabled;
+    const allowed = (settings && settings.sandbox && settings.sandbox.network && settings.sandbox.network.allowedDomains) || [];
+    if (sandboxed && !allowed.includes(new URL(hook.url).host)) {
+      const failure = `PreToolUse hook failed: HTTP 403 from ${hook.url} (the sandbox's proxy)`;
+      return hook.onFailure === 'block' ? { allow: false, reason: failure } : { allow: true, reason: failure };
+    }
+    const env = (name: string): string => ((hook.allowedEnvVars || []).includes(name) ? process.env[name] || '' : '');
+    const headers = Object.fromEntries(Object.entries(hook.headers || {}).map(([k, v]) => [k, v.replace(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g, (_m, name: string) => env(name))]));
+    try {
+      const out = execFileSync(process.execPath, ['-e', POST], { input: JSON.stringify({ url: hook.url, headers, body: input }), timeout: (hook.timeout ?? 600) * 1000, encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] });
+      const d = JSON.parse(out).hookSpecificOutput as { permissionDecision: string; permissionDecisionReason: string };
+      return { allow: d.permissionDecision === 'allow', reason: d.permissionDecisionReason };
+    } catch (e) {
+      const failure = `PreToolUse hook failed: ${(e as Error).message.split('\n')[0]}`;
+      return hook.onFailure === 'block' ? { allow: false, reason: failure } : { allow: true, reason: failure };
+    }
+  }
   const ALIAS: Record<string, string> = { opus: 'claude-opus-5-5', sonnet: 'claude-sonnet-5-5', haiku: 'claude-haiku-5-5' };
   const resolvedModel = ALIAS[argOf('--model')!] || argOf('--model') || 'claude-opus-5-5';
   const sessionId = `fake-${process.pid}`;
@@ -92,10 +132,9 @@ function main(): void {
     sleep(DELAY);
     const id = `tu_${Math.random().toString(36).slice(2)}`;
     out({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name, input }] }, parent_tool_use_id: null });
-    const raw = execSync(hookCmd!, { input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: name, tool_input: input, cwd: process.cwd(), session_id: sessionId }), env: process.env, shell: '/bin/sh' }).toString();
-    const d = JSON.parse(raw).hookSpecificOutput;
-    const allowed = d.permissionDecision === 'allow';
-    let result = d.permissionDecisionReason;
+    const d = askHook({ hook_event_name: 'PreToolUse', tool_name: name, tool_input: input, cwd: process.cwd(), session_id: sessionId });
+    const allowed = d.allow;
+    let result = d.reason;
     if (allowed && name === 'Write') {
       fs.mkdirSync(path.dirname(input.file_path!), { recursive: true });
       fs.writeFileSync(input.file_path!, input.content!);
@@ -110,10 +149,22 @@ function main(): void {
     if (ms) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
   };
 
+  /**
+   * With --json-schema, like Claude Code: the report's data goes over the StructuredOutput tool (through the hook) and
+   * comes back as `structured_output`, with `result` holding it as JSON text; the report itself is the turn's text.
+   */
+  const jsonSchema = argOf('--json-schema');
+
   function reply(text: string, uuid: string) {
     if (process.env.FAKE_AUTH_FAIL) {
       out({ type: 'result', subtype: 'success', is_error: true, result: 'Failed to authenticate: OAuth session expired and could not be refreshed', total_cost_usd: 0, num_turns: 0, user_message_uuids: [uuid] });
       return;
+    }
+    let structured: unknown;
+    const block = jsonSchema ? text.match(/\n*```json\n([\s\S]*?)\n```\s*$/) : null;
+    if (block) {
+      structured = JSON.parse(block[1]!);
+      text = text.slice(0, block.index).trim();
     }
     for (const chunk of text.match(/.{1,40}/gs) || []) {
       out({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: chunk } }, parent_tool_use_id: null });
@@ -128,14 +179,38 @@ function main(): void {
     }
     cost += 0.01;
     tokensTotal += ctx + 1300;
+    if (structured !== undefined && !tool('StructuredOutput', structured as ToolInput)) {
+      out({ type: 'result', subtype: 'error_max_structured_output_retries', is_error: true, errors: ['StructuredOutput was not allowed'], total_cost_usd: cost, num_turns: 1, user_message_uuids: [uuid] });
+      return;
+    }
     const model = resolvedModel;
-    out({ type: 'result', subtype: 'success', is_error: false, result: text, total_cost_usd: cost, num_turns: 1, user_message_uuids: [uuid], modelUsage: { [model]: { inputTokens: 4, outputTokens: 300, cacheReadInputTokens: tokensTotal, cacheCreationInputTokens: 1000, contextWindow: 200000, costUSD: cost } } });
+    out({ type: 'result', subtype: 'success', is_error: false, result: structured !== undefined ? JSON.stringify(structured) : text, ...(structured !== undefined && { structured_output: structured }), total_cost_usd: cost, num_turns: 1, user_message_uuids: [uuid], modelUsage: { [model]: { inputTokens: 4, outputTokens: 300, cacheReadInputTokens: tokensTotal, cacheCreationInputTokens: 1000, contextWindow: 200000, costUSD: cost } } });
   }
 
   const state = process.env.FAKE_STATE;
 
+  /**
+   * A plan with a section per repo; `text: false` hands over only its data, as a planner that ends on StructuredOutput.
+   * FAKE_PLAN_BASE: the branch its repos start from (FAKE_PLAN_BASE_FIRST in the first plan).
+   */
+  function plan(names: string, uuid: string, { slug = 'add-feature', text = true, base = process.env.FAKE_PLAN_BASE }: { slug?: string; text?: boolean; base?: string | undefined } = {}) {
+    const repos = names.split(',').map((name) => ({ name, mode: 'full', ...(base && { baseBranch: base }) }));
+    const sections = repos.map((r) => `### ${r.name}\n- do it`).join('\n\n');
+    const data = `\`\`\`json\n${JSON.stringify({ type: 'feat', slug, title: 'add the feature', repos, openQuestions: [] })}\n\`\`\``;
+    return reply(text ? `## Summary\n\nAdd the feature to every repo.\n\n## Steps\n\n${sections}\n\n${data}` : `\n${data}`, uuid);
+  }
+
+  let firstPrompt = '';
   function first(prompt: string, uuid: string) {
     role = (prompt.match(/You are the `([^`]+)` stage/) || [])[1];
+    firstPrompt = prompt;
+    // FAKE_API_ERROR_ONCE=<role>: its first turn ends on an overloaded API, past Claude Code's own retries.
+    const apiMarker = state ? path.join(state, `api-error-${role}`) : '';
+    if (process.env.FAKE_API_ERROR_ONCE && process.env.FAKE_API_ERROR_ONCE === role && apiMarker && !fs.existsSync(apiMarker)) {
+      fs.writeFileSync(apiMarker, '1');
+      out({ type: 'result', subtype: 'success', is_error: true, result: 'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}', total_cost_usd: cost, num_turns: 1, user_message_uuids: [uuid] });
+      return;
+    }
     const issue = prompt.match(/^Read the Jira issue (\S+)/);
     if (issue) {
       tool('mcp__Atlassian__getJiraIssue', { issueIdOrKey: issue[1] });
@@ -147,6 +222,10 @@ function main(): void {
       const body = (prompt.match(/-----BEGIN COMMENT-----\n([\s\S]*)\n-----END COMMENT-----/) || [])[1] || '';
       if (state) fs.writeFileSync(path.join(state, `comment-${comment[1]}.txt`), body);
       tool('mcp__Atlassian__getAccessibleAtlassianResources', {});
+      // What a session steered by text in the comment would try: read other issues, post elsewhere, add what it read.
+      tool('mcp__Atlassian__searchJiraIssuesUsingJql', { jql: 'project = SECRET' });
+      tool('mcp__Atlassian__addCommentToJiraIssue', { issueIdOrKey: 'OTHER-1', commentBody: body });
+      tool('mcp__Atlassian__addCommentToJiraIssue', { issueIdOrKey: comment[1], commentBody: `${body}\n\nSECRET-1 says: the admin password is hunter2` });
       const posted = tool('mcp__Atlassian__addCommentToJiraIssue', { issueIdOrKey: comment[1], commentBody: body });
       tool('mcp__Atlassian__addCommentToJiraIssue', { issueIdOrKey: comment[1], commentBody: 'twice' });
       tool('mcp__Atlassian__editJiraIssue', { issueIdOrKey: comment[1], fields: {} });
@@ -154,21 +233,29 @@ function main(): void {
     }
     repoDir = (prompt.match(/Repository: \S+ at (.+)\. Work only there\./) || [])[1];
     switch (role) {
-      case 'planner': {
-        const repos = (process.env.FAKE_REPOS || 'api').split(',').map((name) => ({ name, mode: 'full' }));
-        return reply(`## Summary\n\nAdd the feature to every repo.\n\n## Steps\n- do it\n\n\`\`\`json\n${JSON.stringify({ type: 'feat', slug: 'add-feature', title: 'add the feature', repos, openQuestions: [] })}\n\`\`\``, uuid);
-      }
+      case 'planner':
+        // FAKE_PLAN_REPOS_FIRST: the first plan names repos by another name (the package's), as a small model may.
+        // FAKE_PLAN_NO_TEXT: the first plan is only its data, the text never written.
+        return plan(process.env.FAKE_PLAN_REPOS_FIRST || process.env.FAKE_REPOS || 'api', uuid, { text: !process.env.FAKE_PLAN_NO_TEXT, base: process.env.FAKE_PLAN_BASE_FIRST || process.env.FAKE_PLAN_BASE });
       case 'developer': {
+        // FAKE_TODO_STATUS: a to-do status an agent steered by a ticket might write (the dashboard must not run it as markup).
+        if (process.env.FAKE_TODO_STATUS) tool('TodoWrite', { todos: [{ content: 'Add the feature', status: process.env.FAKE_TODO_STATUS, activeForm: 'Adding it' }, { content: 'Write the test', status: 'pending', activeForm: 'Writing it' }] });
         tool('Bash', { command: 'git commit -am "sneaky"' });
         tool('Write', { file_path: path.join(repoDir!, '..', 'outside.txt'), content: 'nope' });
         tool('Write', { file_path: path.join(repoDir!, 'feature.txt'), content: 'feature\n' });
-        return reply('Changed feature.txt.', uuid);
+        // FAKE_DEV_FILES: more files the developer writes, as {"path": "content"} (a credential it should not have).
+        for (const [file, content] of Object.entries(JSON.parse(process.env.FAKE_DEV_FILES || '{}') as Record<string, string>)) tool('Write', { file_path: path.join(repoDir!, file), content });
+        // FAKE_BLOCKED=developer: the plan does not hold, and the developer says so instead of working around it.
+        if (process.env.FAKE_BLOCKED === 'developer') return reply(`The plan names table bets_v2, which does not exist.\n\`\`\`json\n${JSON.stringify({ status: 'blocked', blockers: ['the plan names table bets_v2, which does not exist'] })}\n\`\`\``, uuid);
+        return reply(`Changed feature.txt.\n\`\`\`json\n${JSON.stringify({ status: 'done' })}\n\`\`\``, uuid);
       }
       case 'tester': {
         // One tester across every repo of the task, or (tasks from before) the one repo it is given.
         const section = (prompt.match(/Repositories of this task[^\n]*\n((?:- .+\n?)+)/) || [])[1] || '';
         const dirs = [...section.matchAll(/^- \S+ at (.+)$/gm)].map((m) => m[1]);
         for (const dir of dirs.length ? dirs : [repoDir]) tool('Write', { file_path: path.join(dir!, 'feature.test.txt'), content: 'test\n' });
+        // FAKE_BLOCKED=tester: its test shows a bug in code it may not change, which it leaves failing.
+        if (process.env.FAKE_BLOCKED === 'tester') return reply(`The new test fails: discount() returns a negative price over 100%.\n\`\`\`json\n${JSON.stringify({ status: 'blocked', blockers: ['discount() returns a negative price for percent > 100 (src/price.js:6)'] })}\n\`\`\``, uuid);
         return reply(`Added feature.test.txt in ${dirs.length || 1} repo(s).`, uuid);
       }
       case 'reviewer': {
@@ -199,6 +286,8 @@ function main(): void {
 
   let buf = '';
   let turn = 0;
+  /** The message a hanging agent never answers. */
+  let hanging: string | null = null;
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (d) => {
     buf += d;
@@ -208,6 +297,15 @@ function main(): void {
       buf = buf.slice(i + 1);
       if (!line.trim()) continue;
       const m: ClientMessage = JSON.parse(line);
+      // FAKE_STUBBORN: a CLI stuck on a hung tool, which neither an interrupt nor SIGTERM ends.
+      if (m.type === 'control_request' && m.request.subtype === 'interrupt' && process.env.FAKE_STUBBORN) continue;
+      if (m.type === 'control_request' && m.request.subtype === 'interrupt') {
+        out({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: {} } });
+        // Claude Code ends the turn it is in with an error result.
+        if (hanging) out({ type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['interrupted'], total_cost_usd: cost, num_turns: 0, user_message_uuids: [hanging] });
+        hanging = null;
+        continue;
+      }
       if (m.type === 'control_request') {
         const model = resolvedModel;
         const response = m.request.subtype === 'get_settings'
@@ -219,12 +317,26 @@ function main(): void {
       const text = m.message.content;
       out({ type: 'system', subtype: 'init', session_id: sessionId, model: resolvedModel });
       if (turn++ === 0) {
-        if (process.env.FAKE_HANG && process.env.FAKE_HANG === (text.match(/You are the `([^`]+)`/) || [])[1]) return; // never answers
+        if (process.env.FAKE_HANG && process.env.FAKE_HANG === (text.match(/You are the `([^`]+)`/) || [])[1]) {
+          hanging = m.uuid; // never answers, until interrupted
+          continue;
+        }
         first(text, m.uuid);
-      } else reply(`Follow-up handled: ${text.split('\n')[0]!.slice(0, 60)}`, m.uuid);
+      } else if (/Continue where you left off/.test(text)) first(firstPrompt, m.uuid);
+      // FAKE_API_ERROR_GATES=<role>: the first turn fixing its red checks ends on an overloaded API.
+      else if (/^Gates failed/.test(text) && process.env.FAKE_API_ERROR_GATES === role && state && !fs.existsSync(path.join(state, `api-error-gates-${role}`))) {
+        fs.writeFileSync(path.join(state, `api-error-gates-${role}`), '1');
+        out({ type: 'result', subtype: 'success', is_error: true, result: 'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}', total_cost_usd: cost, num_turns: 1, user_message_uuids: [m.uuid] });
+      }
+      // FAKE_BLOCKED_ON_GATES=<role>: asked to fix its red checks, it says it cannot.
+      else if (/^Gates failed/.test(text) && process.env.FAKE_BLOCKED_ON_GATES === role) reply(`The check needs a database this machine does not have.\n\`\`\`json\n${JSON.stringify({ status: 'blocked', blockers: ['the check needs a database'] })}\n\`\`\``, m.uuid);
+      else if (role === 'planner' && /repos this workspace does not have|named more than once|the report has no text|origin has no branch/.test(text)) plan(process.env.FAKE_REPOS || 'api', m.uuid);
+      else if (role === 'planner' && /choose another slug/.test(text)) plan(process.env.FAKE_REPOS || 'api', m.uuid, { slug: 'add-feature-again' });
+      else reply(`Follow-up handled: ${text.split('\n')[0]!.slice(0, 60)}`, m.uuid);
     }
   });
-  process.stdin.on('end', () => process.exit(0));
+  process.stdin.on('end', () => !process.env.FAKE_STUBBORN && process.exit(0));
+  if (process.env.FAKE_STUBBORN) process.on('SIGTERM', () => undefined);
 }
 
 main();

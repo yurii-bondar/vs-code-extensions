@@ -2,7 +2,7 @@
   "name": "claudestrator",
   "displayName": "Claudestrator",
   "description": "A Claude Code agent pipeline in VS Code: plan → your approval → code and tests per repo → review with fix rounds → commit → confirmed push → draft PRs. Also checks a ticket's readiness against its acceptance criteria and audits projects for bugs and bottlenecks.",
-  "version": "0.3.0",
+  "version": "0.8.0",
   "publisher": "bondevn",
   "license": "MIT",
   "author": "Yurii Bondar",
@@ -12,7 +12,7 @@
     "directory": "claudestrator"
   },
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.101.0"
   },
   "categories": [
     "AI",
@@ -29,14 +29,24 @@
   ],
   "icon": "media/icon.png",
   "main": "./dist/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Claudestrator runs agents, checks and git hooks that a workspace's config and repos define."
+    }
+  },
   "activationEvents": [
-    "onStartupFinished"
+    "workspaceContains:.claudestrator/config.yaml",
+    "workspaceContains:.orch/tasks",
+    "workspaceContains:*/.claudestrator/config.yaml"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && tsc -p tsconfig.webview.json",
+    "build": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json && tsc -p tsconfig.webview.json",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.webview.json",
     "lint": "eslint .",
     "test": "npm run build && node --test dist/test/*.test.js",
+    "test:live": "npm run build && node dist/test/live/smoke.js",
+    "eval": "npm run build && node dist/test/live/eval.js",
     "package": "npx @vscode/vsce package",
     "preview": "npm run build && node dist/test/harness/server.js",
     "vscode:prepublish": "npm run build"
@@ -168,6 +178,12 @@
         "icon": "$(pulse)"
       },
       {
+        "command": "claudestrator.showLog",
+        "title": "Show Log",
+        "category": "Claudestrator",
+        "icon": "$(output)"
+      },
+      {
         "command": "claudestrator.refresh",
         "title": "Refresh",
         "category": "Claudestrator",
@@ -228,6 +244,11 @@
           "command": "claudestrator.checkHealth",
           "when": "view == claudestrator.tasks",
           "group": "1_config@5"
+        },
+        {
+          "command": "claudestrator.showLog",
+          "when": "view == claudestrator.tasks",
+          "group": "1_config@6"
         }
       ],
       "view/item/context": [
@@ -304,11 +325,13 @@
       "properties": {
         "claudestrator.claudePath": {
           "type": "string",
+          "scope": "machine",
           "default": "",
           "markdownDescription": "Path to the Claude Code CLI. Empty: found on your login shell's `PATH` (e.g. `~/.local/bin/claude`)."
         },
         "claudestrator.claudeConfigDir": {
           "type": "string",
+          "scope": "machine",
           "default": "",
           "markdownDescription": "Claude Code account (config folder, used as `CLAUDE_CONFIG_DIR`) the agents run under, e.g. `~/.claude-alt`. Empty: your default account."
         },
@@ -353,18 +376,15 @@
           "default": "",
           "markdownDescription": "Folder that holds the repos and `.claudestrator/config.yaml`. Empty: the first workspace folder."
         },
-        "claudestrator.nodePath": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Node.js used to run the guard hook. Empty: `node` from your `PATH`, else VS Code's own runtime."
-        },
         "claudestrator.atlassian.site": {
           "type": "string",
+          "scope": "machine",
           "default": "",
           "markdownDescription": "Atlassian site for Jira and Confluence, e.g. `acme.atlassian.net`. The API token is stored in VS Code's secret storage (set it in Claudestrator → Settings)."
         },
         "claudestrator.atlassian.email": {
           "type": "string",
+          "scope": "machine",
           "default": "",
           "description": "Email of the Atlassian account the API token belongs to."
         }
@@ -372,12 +392,16 @@
     }
   },
   "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "^0.0.81",
     "yaml": "^2.5.0"
+  },
+  "overrides": {
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
     "@types/node": "^22.20.5",
-    "@types/vscode": "^1.85.0",
+    "@types/vscode": "~1.101.0",
     "eslint": "^9.39.5",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.72.1"

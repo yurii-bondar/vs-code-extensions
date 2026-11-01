@@ -22,7 +22,7 @@ class ClaudestratorConfigurable(private val project: Project) : BoundSearchableC
             group("Claude Code") {
                 row("Claude CLI path:") { textField().bindText(s::claudePath).columns(40).comment("Empty: found on your login shell's PATH, e.g. ~/.local/bin/claude.") }
                 row("Account folder:") { textField().bindText(s::claudeConfigDir).columns(40).comment("Used as CLAUDE_CONFIG_DIR, e.g. ~/.claude-alt. Empty: your default account.") }
-                row("Node.js path:") { textField().bindText(s::nodePath).columns(40).comment("Runs the engine and the guard hook. Empty: node from your PATH.") }
+                row("Node.js path:") { textField().bindText(s::nodePath).columns(40).comment("Runs the engine. Empty: node from your PATH.") }
                 row("Settings the agents load:") {
                     ClaudestratorSettings.SETTING_SOURCES.forEach { source ->
                         checkBox(source).bindSelected({ source in s.settingSources }, { on ->

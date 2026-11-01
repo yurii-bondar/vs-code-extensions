@@ -331,6 +331,7 @@ button.chip:hover, .link-chip:hover { border-color: var(--accent); text-decorati
 .perm-head .ic { color: var(--warn); }
 .perm-body { margin: 6px 0 8px; }
 .perm-body code { white-space: pre-wrap; word-break: break-all; display: block; padding: 6px 8px; }
+.perm-body .cut { margin-left: 6px; padding: 0 5px; border-radius: 3px; background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--fg); font-style: italic; white-space: nowrap; }
 .perm-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .perm-why { display: flex; gap: 6px; margin-top: 8px; }
 

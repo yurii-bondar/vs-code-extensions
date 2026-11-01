@@ -6,36 +6,24 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import * as os from 'os';
 import * as view from './core/view';
+import type { OutputPush } from './core/view';
+import { exists } from './core/files';
 import * as cfg from './core/config';
 import * as backups from './core/backup';
 import * as libraries from './core/library';
 import { buildPipeline, outline, taskPipeline, fitsScenario } from './core/pipeline';
 import { editableFrom } from './core/machine';
-import { taskRepos, taskDiff } from './core/git';
+import { taskRepos, taskDiff, launch, getChildEnv } from './core/git';
 import { findRepos, describeRepo, reposFromFolders, repoLayerOf, WORKSPACE_MAP, safeName } from './core/setup';
 import { expand } from './core/env';
 import { effectiveFor } from './core/defaults';
 import { AGENT_COLORS, OUTPUTS, EFFORTS, validateSetting } from './core/protocol';
+import { parsePageRequest, openable, SESSION_ID } from './core/requests';
 import { settings, type Orchestrator } from './orchestrator';
 import type { Engine } from './core/engine';
-import type { ComposerArgs, ConfigData, ConfigSummary, HealthSummary, NewAgentParams, PipelineEdit, Preview, ReposData, Route, Rpc, RpcHandlers, SaveGroupParams, SaveInstructionParams, SaveScenarioParams, SettingsData, SetupParams, TaskScreen } from './core/wire';
+import type { BlockedRepo, ComposerArgs, ConfigData, HostMessage, ConfigSummary, HealthSummary, NewAgentParams, PipelineEdit, Preview, ReposData, Route, Rpc, RpcHandlers, SaveGroupParams, SaveInstructionParams, SaveScenarioParams, SettingsData, SetupParams, TaskScreen } from './core/wire';
 import type { Agent, ScenarioStep, Gate, TaskState } from './core/types';
 import type { ConfigLayer, RepoLayer } from './core/config';
-
-/** A request from the page: `{ type: 'req', id, method, params }`. */
-interface PageRequest {
-  type: 'req';
-  id: number;
-  method: string;
-  params?: unknown;
-}
-
-/** What arrives from the page is untyped: only a well-formed request is answered. */
-function isPageRequest(msg: unknown): msg is PageRequest {
-  if (typeof msg !== 'object' || msg === null) return false;
-  const m = msg as Record<string, unknown>;
-  return m.type === 'req' && typeof m.id === 'number' && typeof m.method === 'string' && /^[a-zA-Z]+$/.test(m.method);
-}
 
 /** A repo as the page sends it back from the setup wizard or the detected list. */
 interface PickedRepo {
@@ -48,6 +36,14 @@ interface PickedRepo {
 
 type Handler = (params: unknown) => Promise<unknown>;
 
+/** How often streamed agent output goes to the page. */
+const OUTPUT_MS = 50;
+/**
+ * The dashboard's scripts, in the order they load: each uses what the ones before it put on the page (task.js the
+ * transcript of stream.js). The JetBrains plugin builds its page from the same files (PageHtml.kt, `SCRIPTS`), and the
+ * release script checks that it lists these, in this order.
+ */
+const PAGE_SCRIPTS = ['markdown.js', 'stream.js', 'app.js', 'task.js', 'config.js'];
 const LANGUAGES = ['English', 'Ukrainian', 'German', 'French', 'Spanish', 'Polish', 'Portuguese', 'Italian', 'Japanese', 'Chinese'];
 
 class DashboardPanel implements RpcHandlers {
@@ -59,15 +55,32 @@ class DashboardPanel implements RpcHandlers {
   disposables: vscode.Disposable[];
   panel: vscode.WebviewPanel;
   missedChange = false;
+  /** Streamed output not posted yet, and the timer that posts it. */
+  outputQueue: OutputPush[] = [];
+  outputTimer: NodeJS.Timeout | undefined;
+  /** Steps (task and key) whose text pieces went unposted while the panel was hidden: none goes until their message ends. */
+  missedText = new Set<string>();
 
   static show(context: vscode.ExtensionContext, orch: Orchestrator, route?: Route): DashboardPanel {
     if (DashboardPanel.current) {
       DashboardPanel.current.panel.reveal(DashboardPanel.current.panel.viewColumn);
-      if (route) DashboardPanel.current.post({ type: 'navigate', route });
+      if (route) DashboardPanel.current.navigate(route);
       return DashboardPanel.current;
     }
     DashboardPanel.current = new DashboardPanel(context, orch, route);
     return DashboardPanel.current;
+  }
+
+  /** Whether the page has asked where to start: before that, a screen to show is where it starts. */
+  booted = false;
+
+  /**
+   * Shows a screen. A page still loading would get the message before it listens, or go there and then to where it
+   * was opened for (two quick "Open Task" clicks ended on the first task): it starts on the latest one instead.
+   */
+  navigate(route: Route): void {
+    if (this.booted) void this.post({ type: 'navigate', route });
+    else this.initialRoute = route;
   }
 
   constructor(context: vscode.ExtensionContext, orch: Orchestrator, route?: Route) {
@@ -87,7 +100,6 @@ class DashboardPanel implements RpcHandlers {
     this.panel.webview.html = this.html(media, scripts);
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
     this.panel.onDidChangeViewState((e) => {
-      vscode.commands.executeCommand('setContext', 'claudestratorPanelFocus', e.webviewPanel.active);
       // What changed while the panel was hidden is refreshed once, as it shows again.
       if (e.webviewPanel.visible && this.missedChange) {
         this.missedChange = false;
@@ -95,15 +107,42 @@ class DashboardPanel implements RpcHandlers {
       }
     }, null, this.disposables);
     this.panel.webview.onDidReceiveMessage((msg) => this.onMessage(msg), null, this.disposables);
+    this.listen();
+  }
 
-    orch.onEngine(({ name, data: payload }) => {
-      const data = payload as Record<string, unknown>;
-      if (name === 'output') this.post({ type: 'output', ...data });
-      else if (name === 'live') this.post({ type: 'live', ...data });
-      else if (name === 'permission') this.post({ type: 'permission', request: data });
-      else if (name === 'permissionDone') this.post({ type: 'permissionDone', requestId: data });
-      else if (name === 'mcpLogin') this.post({ type: 'toast', kind: data.kind || (data.ok ? 'ok' : 'error'), text: data.message });
-      else if (name === 'log' && data.level !== 'info') this.post({ type: 'toast', kind: data.level === 'error' ? 'error' : 'warn', text: data.message, taskId: data.taskId });
+  /**
+   * What the page hears of the engine and the config: streamed output in batches, the rest as it comes. Apart from the
+   * constructor so the preview harness, which has no webview, sends the page exactly what VS Code's panel would.
+   */
+  listen(): void {
+    const orch = this.orch;
+    orch.onEngine((e) => {
+      switch (e.name) {
+        case 'output':
+          // Only the task on screen streams; a Write's whole file of another task need not cross to the page.
+          if (e.data.taskId !== this.viewing) return;
+          return this.queueOutput({ type: 'output', ...e.data });
+        case 'live':
+          return void this.post({ type: 'live', ...e.data });
+        case 'permission':
+          return void this.post({ type: 'permission', request: e.data });
+        case 'permissionDone':
+          return void this.post({ type: 'permissionDone', requestId: e.data });
+        case 'mcpLogin':
+          return void this.post({ type: 'toast', kind: e.data.kind, text: e.data.message });
+        case 'log':
+          if (e.data.level !== 'info') this.post({ type: 'toast', kind: e.data.level === 'error' ? 'error' : 'warn', text: e.data.message, taskId: e.data.taskId });
+          return;
+        case 'changed':
+        case 'checkpoint':
+        case 'finished':
+        case 'limits':
+          return; // the page reads these again on `changed`
+        default: {
+          const unhandled: never = e;
+          return unhandled;
+        }
+      }
     }, null, this.disposables);
     // A hidden panel keeps its page (retainContextWhenHidden), but reloading it on every change would be wasted work.
     orch.onDidChange(() => {
@@ -114,28 +153,56 @@ class DashboardPanel implements RpcHandlers {
     vscode.workspace.onDidChangeConfiguration((e) => e.affectsConfiguration('claudestrator') && this.post({ type: 'config' }), null, this.disposables);
   }
 
+  /**
+   * Streamed output goes to the page every OUTPUT_MS, text pieces of a step merged. A hidden panel gets no text
+   * pieces: the transcript keeps the whole text, which the page gets as the agent finishes the message.
+   */
+  queueOutput(push: OutputPush): void {
+    // Steps of different tasks may have the same key.
+    const step = `${push.taskId}\n${push.key}`;
+    if (push.item.type === 'text_delta') {
+      // Pieces missed while hidden would leave the next ones mid-sentence; the step's whole text comes next anyway.
+      if (!this.panel.visible) this.missedText.add(step);
+      if (this.missedText.has(step)) return;
+    } else if (push.item.type !== 'usage' && push.item.type !== 'user') this.missedText.delete(step); // the message ended (or a new one starts)
+    view.queueOutput(this.outputQueue, push);
+    if (!this.outputTimer) this.outputTimer = setTimeout(() => this.flushOutput(), OUTPUT_MS);
+  }
+
+  flushOutput(): void {
+    this.outputTimer = undefined;
+    const batch = this.outputQueue;
+    this.outputQueue = [];
+    for (const push of batch) this.post(push);
+  }
+
   dispose(): void {
+    clearTimeout(this.outputTimer);
     DashboardPanel.current = undefined;
-    vscode.commands.executeCommand('setContext', 'claudestratorPanelFocus', false);
     this.disposables.forEach((d) => d.dispose());
   }
 
-  post(msg: Record<string, unknown>): Thenable<boolean> {
+  post(msg: HostMessage): Thenable<boolean> {
     return this.panel.webview.postMessage(msg);
   }
 
   async onMessage(msg: unknown): Promise<void> {
-    if (!isPageRequest(msg)) return;
-    // Only the panel's own `$` handlers, never something reached through Object's prototype.
-    const name = `$${msg.method}`;
-    const fn = Object.prototype.hasOwnProperty.call(DashboardPanel.prototype, name) ? (this as unknown as Record<string, Handler | undefined>)[name] : undefined;
+    // What arrives from the page is untyped: only a known request with parameters of its shape reaches a handler.
+    const parsed = parsePageRequest(msg);
+    if (!parsed) return;
+    if (!parsed.ok) {
+      if (parsed.id !== null) this.post({ type: 'res', id: parsed.id, ok: false, error: parsed.error });
+      return;
+    }
+    const { id, method, params } = parsed.request;
+    // `implements RpcHandlers` makes sure every request has its `$` handler.
+    const handler = (this as RpcHandlers)[`$${method}`] as Handler;
     try {
-      if (!fn) throw new Error(`unknown request ${msg.method}`);
-      const data = await fn.call(this, msg.params || {});
-      this.post({ type: 'res', id: msg.id, ok: true, data });
+      const data = await handler.call(this, params ?? {});
+      this.post({ type: 'res', id, ok: true, data });
     } catch (err) {
-      const e = err as Error & { code?: string; blocked?: object };
-      this.post({ type: 'res', id: msg.id, ok: false, error: e.message || String(e), code: e.code, ...(e.blocked && { blocked: e.blocked }) });
+      const e = err as Error & { code?: string; blocked?: BlockedRepo[] };
+      this.post({ type: 'res', id, ok: false, error: e.message || String(e), code: e.code, ...(e.blocked && { blocked: e.blocked }) });
     }
   }
 
@@ -151,12 +218,24 @@ class DashboardPanel implements RpcHandlers {
 
   // ---------- overview ----------
 
-  async $boot() {
-    return { route: this.initialRoute || null, platform: process.platform, version: this.context.extension.packageJSON.version };
+  /** The route the panel was opened with, once: a reload of the page goes back to where you were, not to it. */
+  /** The task the page shows, whose agent's output it gets. */
+  viewing: string | null = null;
+
+  async $view({ taskId }: { taskId: string | null }) {
+    this.viewing = taskId;
+    return null;
   }
 
-  configSummary(): ConfigSummary {
-    const r = this.orch.config();
+  async $boot() {
+    const route = this.initialRoute || null;
+    this.initialRoute = undefined;
+    this.booted = true;
+    return { route, platform: process.platform, version: this.context.extension.packageJSON.version };
+  }
+
+  async configSummary(): Promise<ConfigSummary> {
+    const r = await this.orch.config();
     if (!r.ok) return { ok: false, errors: r.errors.map((e) => e.message), warnings: (r.warnings || []).map((w) => w.message) };
     const c = r.config;
     type Entry = [string, string, Partial<ScenarioStep>?];
@@ -190,23 +269,22 @@ class DashboardPanel implements RpcHandlers {
     };
   }
 
-  healthSummary(): HealthSummary {
+  async healthSummary(): Promise<HealthSummary> {
     const h = this.orch.health;
     if (!h) {
       // The dashboard is the first to need them: start the checks; the page refreshes when they are done.
       void this.orch.ensureReady();
       return { checking: true };
     }
-    const account = this.orch.account();
+    const account = await this.orch.account();
     return {
       checkedAt: h.checkedAt,
       claude: { ok: h.claude.ok, version: h.claude.version, path: h.claude.path, error: h.claude.error },
       git: { ok: h.git.ok, version: h.git.version },
       gh: { ok: h.gh.ok, version: h.gh.version, account: h.gh.account, error: h.gh.error, installed: Boolean(h.gh.path) },
-      node: { ok: h.node.ok, path: h.node.path },
       account,
       atlassian: Boolean(this.orch.atlassianAuth()),
-      atlassianMcp: (this.orch.mcpIntakeServer() || ({} as { server?: string })).server || null,
+      atlassianMcp: ((await this.orch.mcpIntakeServer()) || ({} as { server?: string })).server || null,
     };
   }
 
@@ -215,20 +293,21 @@ class DashboardPanel implements RpcHandlers {
     return {
       root: this.root,
       rootName: this.root ? path.basename(this.root) : null,
-      hasConfig: this.orch.hasProjectConfig(),
-      config: this.root ? this.configSummary() : null,
-      health: this.healthSummary(),
-      tasks: engine ? this.orch.list().map((entry) => view.summary(engine, entry)) : [],
-      limits: this.orch.limits(),
-      account: this.orch.account(),
-      accounts: this.orch.accounts(),
+      languages: LANGUAGES,
+      hasConfig: await this.orch.hasProjectConfig(),
+      config: this.root ? await this.configSummary() : null,
+      health: await this.healthSummary(),
+      tasks: engine ? await Promise.all((await this.orch.list()).map((entry) => view.summary(engine, entry))) : [],
+      limits: await this.orch.limits(),
+      account: await this.orch.account(),
+      accounts: await this.orch.accounts(),
       mcp: (() => {
         const list = this.orch.mcp.servers;
         const n = (st: string): number => list.filter((s) => s.state === st).length;
         return { total: list.length, connected: n('connected'), problems: n('needs_auth') + n('failed'), installed: n('installed'), checking: this.orch.mcp.checking };
       })(),
       defaults: this.orch.defaults ? { models: this.orch.defaults.models, byModel: this.orch.defaults.byModel } : null,
-      permissions: engine ? engine.pendingPermissions() : [],
+      permissions: this.orch.pendingPermissions(),
     };
   }
 
@@ -241,37 +320,40 @@ class DashboardPanel implements RpcHandlers {
   // ---------- tasks ----------
 
   async $preview(p: ComposerArgs): Promise<Preview> {
-    const r = this.engine.preview(p);
+    const r = await this.engine.preview(p);
     return r.ok && !r.empty ? { ...r, outline: outline(r.pipeline) } : r;
   }
 
   async $start(p: ComposerArgs) {
     await this.orch.ensureReady();
     if (!(this.orch.health && this.orch.health.claude.ok)) {
-      const go = await vscode.window.showWarningMessage('Claude Code CLI was not found, so agents cannot run.', { modal: true, detail: 'Install Claude Code, or set its path in Claudestrator → Settings. The task is created either way and you can run it later.' }, 'Create Task Anyway');
-      if (!go) throw Object.assign(new Error('Claude Code CLI not found'), { code: 'cancelled' });
+      const problem = (this.orch.health && this.orch.health.claude.error) || 'Claude Code CLI was not found';
+      const go = await vscode.window.showWarningMessage(`${problem}, so agents cannot run.`, { modal: true, detail: 'Install or update Claude Code, or set its path in Claudestrator → Settings. The task is created either way and you can run it later.' }, 'Create Task Anyway');
+      if (!go) throw Object.assign(new Error(problem), { code: 'cancelled' });
     }
-    const r = this.engine.start(p);
+    const r = await this.engine.start(p);
     this.engine.launch(r.taskId);
     return r;
   }
 
   async $task({ taskId }: { taskId: string }): Promise<TaskScreen> {
     const engine = this.engine;
-    const state = engine.svc.state(taskId);
+    // Deleted from the sidebar, another window or the CLI while its screen was open: the page goes home.
+    if (!(await engine.svc.exists(taskId))) throw Object.assign(new Error(`${taskId} was deleted`), { code: 'no_task' });
+    const state = await engine.svc.state(taskId);
     return {
-      ...view.detail(engine, taskId),
+      ...(await view.detail(engine, taskId)),
       ...(state.checkpoint && { checkpointContext: await engine.checkpointContext(state, state.checkpoint), checkpointFull: state.checkpoint }),
-      ticket: engine.svc.readArtifact(taskId, 'ticket.md'),
-      pipelineEdit: this.pipelineEdit(state),
+      ticket: await engine.svc.readArtifact(taskId, 'ticket.md'),
+      pipelineEdit: await this.pipelineEdit(state),
     };
   }
 
   /** What the task's pipeline editor shows: its stages, from which one they can change, and the agents to add. */
-  pipelineEdit(state: TaskState): PipelineEdit | null {
+  async pipelineEdit(state: TaskState): Promise<PipelineEdit | null> {
     const from = editableFrom(state);
     if (from === -1) return null;
-    const r = this.orch.config();
+    const r = await this.orch.config();
     const agents: Record<string, Agent> = r.ok ? r.config.agents : {};
     const stages = state.pipeline.stages.map((st) => ({ agent: st.agent, output: st.output, scope: st.scope, color: agents[st.agent] && agents[st.agent]!.color }));
     const { warnings } = taskPipeline(stages.map((st) => ({ name: st.agent, output: st.output, scope: st.scope })), { scenario: state.scenario, auto: state.auto, maxRounds: state.limits.reviewRounds });
@@ -286,21 +368,22 @@ class DashboardPanel implements RpcHandlers {
   }
 
   async $transcript({ taskId, key }: { taskId: string; key: string }) {
-    return this.engine.svc.readTranscript(taskId, key);
+    return await this.engine.svc.readTranscript(taskId, key);
   }
 
   async $run({ taskId }: { taskId: string }) {
     await this.orch.ensureReady();
-    this.engine.resume(taskId);
+    await this.engine.resume(taskId);
   }
 
   async $stop({ taskId }: { taskId: string }) {
-    await this.engine.stop(taskId);
+    // A task of a replaced engine (the workspace folder changed) still runs there.
+    await (this.orch.engineOf(taskId) ?? this.engine).stop(taskId);
   }
 
-  async $answer({ taskId, checkpointId, option, feedback }: Rpc['answer']['params']) {
+  async $answer({ taskId, checkpointId, option, feedback, at }: Rpc['answer']['params']) {
     await this.orch.ensureReady();
-    await this.engine.answer(taskId, checkpointId, option, feedback);
+    await this.engine.answer(taskId, checkpointId, option, feedback, at);
   }
 
   async $postReport({ taskId }: { taskId: string }) {
@@ -314,38 +397,50 @@ class DashboardPanel implements RpcHandlers {
   }
 
   async $message({ taskId, text }: { taskId: string; text: string }) {
-    this.engine.sendMessage(taskId, text);
+    (this.orch.engineOf(taskId) ?? this.engine).sendMessage(taskId, text);
   }
 
   async $permission({ requestId, allow, message }: Rpc['permission']['params']) {
-    if (!this.engine.permissionReply(requestId, allow, message)) throw new Error('That request is no longer waiting');
+    if (!this.orch.permissionReply(requestId, allow, message)) throw new Error('That request is no longer waiting');
   }
 
   async $openFile({ taskId, file, preview }: { taskId?: string; file: string; preview?: boolean }): Promise<unknown> {
     const abs = taskId ? this.engine.svc.artifactFile(taskId, file) : file;
-    if (!fs.existsSync(abs)) throw new Error(`${path.basename(abs)} does not exist (yet)`);
+    if (!taskId && !openable(abs, await this.openableRoots())) throw new Error(`${file} is outside the workspace and its repos; open it yourself if you need it`);
+    if (!(await exists(abs))) throw new Error(`${path.basename(abs)} does not exist (yet)`);
     const uri = vscode.Uri.file(abs);
-    if (preview && abs.endsWith('.md')) return vscode.commands.executeCommand('markdown.showPreviewToSide', uri);
+    // An agent's report that would load images from the web opens as text: the preview would fetch them.
+    if (preview && abs.endsWith('.md')) {
+      if (!view.loadsRemote(await fs.promises.readFile(abs, 'utf8').catch(() => ''))) return vscode.commands.executeCommand('markdown.showPreviewToSide', uri);
+      vscode.window.setStatusBarMessage(`${path.basename(abs)} links images on the web: opened as text, so viewing it loads none`, 8000);
+    }
     const doc = await vscode.workspace.openTextDocument(uri);
     if (abs.endsWith('.patch') || abs.endsWith('.diff')) await vscode.languages.setTextDocumentLanguage(doc, 'diff');
     await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.Beside, preview: true });
     return undefined;
   }
 
+  /** Where a path the page sends may lead: the workspace, the configured repos, and the files the config comes from. */
+  async openableRoots(): Promise<string[]> {
+    const r = await this.orch.config();
+    if (!r.ok) return [this.root];
+    return [this.root, ...Object.values(r.config.repos).map((repo) => path.resolve(this.root, repo.path)), ...r.config.sources];
+  }
+
   /** The task's current combined diff, freshly computed, in a diff-highlighted editor. */
   async $openDiff({ taskId }: { taskId: string }) {
     const engine = this.engine;
-    const state = engine.svc.state(taskId);
+    const state = await engine.svc.state(taskId);
     if (!state.repos.length) throw new Error('No repos have changes yet');
-    const r = this.orch.config();
+    const r = await this.orch.config();
     const diff = await taskDiff(taskRepos(this.root, state, r.ok ? r.config : null, state.repos.map((x) => x.name)));
-    const file = engine.svc.writeArtifact(taskId, 'diff.patch', diff.text);
-    await this.$openFile({ file });
+    await engine.svc.writeArtifact(taskId, 'diff.patch', diff.text);
+    await this.$openFile({ taskId, file: 'diff.patch' });
   }
 
   async $openRepo({ taskId, repo }: { taskId: string; repo: string }) {
-    const state = this.engine.svc.state(taskId);
-    const r = this.orch.config();
+    const state = await this.engine.svc.state(taskId);
+    const r = await this.orch.config();
     const [tr] = taskRepos(this.root, state, r.ok ? r.config : null, [repo]);
     await vscode.commands.executeCommand('revealInExplorer', vscode.Uri.file(tr!.dir));
   }
@@ -355,17 +450,12 @@ class DashboardPanel implements RpcHandlers {
   }
 
   async $deleteTask({ taskId }: { taskId: string }) {
-    const state = this.engine.svc.state(taskId);
-    const worktrees = state.gitMode === 'worktree' && state.repos.length;
-    const choice = await vscode.window.showWarningMessage(
-      `Delete task ${taskId}?`,
-      { modal: true, detail: `This removes .orch/tasks/${taskId} (its log, plan, reports and transcripts). Branches and commits in your repos stay.${worktrees ? ' Its worktrees are removed too, if they have no uncommitted work.' : ''}` },
-      'Delete'
-    );
-    if (choice !== 'Delete') return { deleted: false };
-    if (worktrees) await this.engine.cleanup(taskId, false);
-    await this.engine.remove(taskId);
-    return { deleted: true };
+    return deleteTask(this.engine, taskId);
+  }
+
+  /** A task deleted elsewhere (from the sidebar) while its screen is open: the page leaves it. */
+  taskDeleted(taskId: string): void {
+    if (this.viewing === taskId) this.navigate({ name: 'home' });
   }
 
   async $cleanup({ taskId }: { taskId: string }) {
@@ -379,23 +469,30 @@ class DashboardPanel implements RpcHandlers {
   }
 
   async $resumeTerminal({ taskId, key }: { taskId: string; key: string }) {
-    const d = view.detail(this.engine, taskId);
+    const d = await view.detail(this.engine, taskId);
     const step = d.steps.find((s) => s.key === key);
     if (!step || !step.sessionId) throw new Error('This step has no Claude session to continue');
-    const dir = this.orch.account().dir;
+    // It comes from the task log, and goes on a shell's command line.
+    if (!SESSION_ID.test(step.sessionId)) throw new Error('This step\'s session id is not one Claude Code makes');
+    // The account the step ran under keeps its session; the one chosen now may be another (ctx-man switched it).
+    const dir = step.configDir ?? this.orch.accountChoice().dir;
+    // Claude itself runs in the terminal, as for the sign-in, not a command line typed into a shell: each shell quotes
+    // differently (PowerShell reads `"C:\Program Files\…\claude.cmd" --resume` as a string and an error). An npm shim
+    // runs its target, as the agents do.
+    const [shellPath, shellArgs] = launch(this.orch.claudeCommand(), ['--resume', step.sessionId]);
     const terminal = vscode.window.createTerminal({
       name: `Claude · ${step.agent}${step.repo ? `@${step.repo}` : ''}`,
-      cwd: step.cwd && fs.existsSync(step.cwd) ? step.cwd : this.root,
-      env: { CLAUDE_CONFIG_DIR: dir || null },
+      shellPath,
+      shellArgs,
+      cwd: step.cwd && (await exists(step.cwd)) ? step.cwd : this.root,
+      env: { PATH: getChildEnv().PATH, CLAUDE_CONFIG_DIR: dir || null },
       iconPath: new vscode.ThemeIcon('sparkle'),
     });
     terminal.show();
-    const claude = (this.orch.health && this.orch.health.claude.path) || 'claude';
-    terminal.sendText(`${/\s/.test(claude) ? `"${claude}"` : claude} --resume ${step.sessionId}`);
   }
 
   async $openExternal({ url }: { url: string }) {
-    if (!/^https?:\/\//.test(url)) throw new Error('not a web link');
+    if (!view.isWebLink(url)) throw new Error('not a web link');
     await vscode.env.openExternal(vscode.Uri.parse(url));
   }
 
@@ -406,7 +503,7 @@ class DashboardPanel implements RpcHandlers {
   // ---------- MCP ----------
 
   async $accounts() {
-    return { current: this.orch.account(), accounts: this.orch.accounts() };
+    return { current: await this.orch.account(), accounts: await this.orch.accounts() };
   }
 
   async $claudeLogin() {
@@ -420,8 +517,8 @@ class DashboardPanel implements RpcHandlers {
 
   async $mcp({ refresh }: { refresh?: boolean }) {
     const stale = !this.orch.mcp.checkedAt || Date.now() - new Date(this.orch.mcp.checkedAt).getTime() > 2 * 60000;
-    if (refresh || stale) this.orch.refreshMcp();
-    const health = this.healthSummary();
+    if (refresh || stale) await this.orch.refreshMcp();
+    const health = await this.healthSummary();
     return { ...this.orch.mcpState(), account: health.checking ? undefined : health.account };
   }
 
@@ -444,9 +541,9 @@ class DashboardPanel implements RpcHandlers {
   // ---------- agents & pipeline ----------
 
   async $config(): Promise<ConfigData> {
-    const r = this.orch.config();
-    const layer = this.root ? cfg.readProjectLayer(this.root) : {};
-    const base = { root: this.root, hasConfig: this.orch.hasProjectConfig(), files: { project: this.root && cfg.projectConfigFile(this.root), user: cfg.userConfigFile() }, layer, colors: AGENT_COLORS, outputs: OUTPUTS, efforts: EFFORTS, builtins: cfg.builtinAgentNames(), languages: LANGUAGES, libraries: this.root ? libraries.listLibraries({ workspace: this.root }) : [] };
+    const r = await this.orch.config();
+    const layer: ConfigLayer = this.root ? await cfg.readProjectLayer(this.root) : {};
+    const base = { root: this.root, hasConfig: await this.orch.hasProjectConfig(), files: { project: this.root && cfg.projectConfigFile(this.root), user: cfg.userConfigFile() }, layer, colors: AGENT_COLORS, outputs: OUTPUTS, efforts: EFFORTS, builtins: cfg.builtinAgentNames(), languages: LANGUAGES, libraries: this.root ? await libraries.listLibraries({ workspace: this.root }) : [] };
     if (!r.ok) return { ...base, ok: false, errors: r.errors.map((e) => e.message), warnings: (r.warnings || []).map((w) => w.message) };
     const pipeline = buildPipeline(r.config);
     const agents = Object.values(r.config.agents).map((a) => ({
@@ -463,20 +560,20 @@ class DashboardPanel implements RpcHandlers {
   }
 
   async $updateAgent({ name, patch }: { name: string; patch: Record<string, unknown> }) {
-    cfg.updateAgentConfig(this.root, name, patch);
+    await cfg.updateAgentConfig(this.root, name, patch);
   }
 
   async $resetAgent({ name }: { name: string }) {
     const ok = await vscode.window.showWarningMessage(`Reset "${name}" to its default definition?`, { modal: true, detail: 'Removes what this workspace\'s config.yaml says about the agent (model, tools, instructions…). Its instructions file, if any, stays on disk.' }, 'Reset');
-    if (ok) cfg.resetAgentConfig(this.root, name);
+    if (ok) await cfg.resetAgentConfig(this.root, name);
   }
 
   async $setPipeline({ pipeline }: { pipeline: string[] }) {
-    cfg.setPipeline(this.root, pipeline);
+    await cfg.setPipeline(this.root, pipeline);
   }
 
   async $setScenario({ scenario, agents }: { scenario: string; agents: string[] }) {
-    cfg.setScenario(this.root, scenario, agents);
+    await cfg.setScenario(this.root, scenario, agents);
   }
 
   /**
@@ -484,27 +581,27 @@ class DashboardPanel implements RpcHandlers {
    * its label. Returns its id.
    */
   async $saveScenario({ id, label, description, agents = [] }: SaveScenarioParams) {
-    return { id: cfg.saveCustomScenario({ workspace: this.root, id, label, description, agents }) };
+    return { id: await cfg.saveCustomScenario({ workspace: this.root, id, label, description, agents }) };
   }
 
   async $deleteScenario({ id }: { id: string }) {
-    const r = this.orch.config();
+    const r = await this.orch.config();
     const label = (r.ok && r.config.custom[id] && r.config.custom[id]!.label) || ({ readiness: 'Check readiness', audit: 'Audit' } as Record<string, string>)[id] || id;
     const builtin = id === 'readiness' || id === 'audit';
     const ok = await vscode.window.showWarningMessage(`Delete the scenario "${label}"?`, { modal: true, detail: builtin ? 'It disappears from the menu. You can bring it back from the same menu.' : 'Its agents stay; only this scenario (their order, models and effort) is removed from config.yaml. Tasks already started keep running.' }, 'Delete');
     if (!ok) return { deleted: false };
-    cfg.removeScenario(this.root, id);
+    await cfg.removeScenario(this.root, id);
     return { deleted: true };
   }
 
   async $restoreScenario({ id }: { id: string }) {
-    cfg.restoreScenario(this.root, id);
+    await cfg.restoreScenario(this.root, id);
   }
 
   // ---------- task groups and instructions ----------
 
   async $saveGroup({ id, type, label, jira, instructions, defaultInstructions }: SaveGroupParams) {
-    return { id: cfg.saveGroup({ workspace: this.root, id, type, label, jira, instructions, defaultInstructions }) };
+    return { id: await cfg.saveGroup({ workspace: this.root, id, type, label, jira, instructions, defaultInstructions }) };
   }
 
   async $deleteGroup({ id }: { id: string }) {
@@ -512,7 +609,7 @@ class DashboardPanel implements RpcHandlers {
   }
 
   async $saveInstruction({ id, label, text }: SaveInstructionParams) {
-    return { id: cfg.saveInstruction({ workspace: this.root, id, label, text }) };
+    return { id: await cfg.saveInstruction({ workspace: this.root, id, label, text }) };
   }
 
   async $deleteInstruction({ id }: { id: string }) {
@@ -520,18 +617,18 @@ class DashboardPanel implements RpcHandlers {
   }
 
   private async deleteEntry(section: cfg.EntrySection, id: string, detail: string): Promise<boolean> {
-    const r = this.orch.config();
+    const r = await this.orch.config();
     const label = (r.ok && r.config[section][id] && r.config[section][id]!.label) || id;
     const ok = await vscode.window.showWarningMessage(`Delete the ${section === 'groups' ? 'group' : 'instruction'} "${label}"?`, { modal: true, detail: `It is removed from config.yaml. ${detail}` }, 'Delete');
     if (!ok) return false;
-    cfg.removeEntry(this.root, section, id);
+    await cfg.removeEntry(this.root, section, id);
     return true;
   }
 
   /** Saves the project's agents, pipeline and scenarios (with the agents' instruction files) to a file you pick. */
   async $backupConfig() {
     const now = new Date();
-    const backup = backups.createBackup({ workspace: this.root, now });
+    const backup = await backups.createBackup({ workspace: this.root, now });
     const uri = await vscode.window.showSaveDialog({
       defaultUri: vscode.Uri.file(path.join(this.root, `claudestrator-backup-${now.toISOString().slice(0, 10)}.yaml`)),
       filters: { 'Claudestrator backup': ['yaml', 'yml'] },
@@ -539,7 +636,7 @@ class DashboardPanel implements RpcHandlers {
       title: 'Save backup of agents, pipeline and scenarios',
     });
     if (!uri) return { saved: false };
-    fs.writeFileSync(uri.fsPath, backup.text);
+    await fs.promises.writeFile(uri.fsPath, backup.text);
     return { saved: true, file: uri.fsPath, agents: backup.agents, scenarios: backup.scenarios, pipeline: backup.pipeline };
   }
 
@@ -548,9 +645,9 @@ class DashboardPanel implements RpcHandlers {
     const nothing = { cancelled: true, agents: [], pipeline: false, scenarios: [], skipped: [] };
     const [uri] = (await vscode.window.showOpenDialog({ canSelectMany: false, defaultUri: vscode.Uri.file(this.root), openLabel: 'Restore', title: 'Restore from backup', filters: { 'Claudestrator backup': ['yaml', 'yml', 'json'] } })) || [];
     if (!uri) return nothing;
-    const parsed = backups.parseBackup(fs.readFileSync(uri.fsPath, 'utf8'));
+    const parsed = backups.parseBackup(await fs.promises.readFile(uri.fsPath, 'utf8'));
     if (!parsed.ok) throw new Error(parsed.error);
-    const plan = backups.previewRestore({ workspace: this.root, backup: parsed.backup });
+    const plan = await backups.previewRestore({ workspace: this.root, backup: parsed.backup });
     const count = plan.agents.add.length + plan.agents.replace.length + plan.scenarios.add.length + plan.scenarios.replace.length + (plan.pipeline ? 1 : 0);
     const left = plan.skipped.map((x) => `${x.kind === 'pipeline' ? 'the pipeline' : `${x.kind} ${x.id}`} (${x.reason})`).join('; ');
     if (!count) throw new Error(`Nothing can be restored from this backup: ${left}`);
@@ -566,7 +663,7 @@ class DashboardPanel implements RpcHandlers {
     ].filter(Boolean).join('\n\n');
     const ok = await vscode.window.showWarningMessage(`Restore ${count} item${count === 1 ? '' : 's'} from the backup?`, { modal: true, detail }, 'Restore');
     if (!ok) return nothing;
-    const done = backups.restoreBackup({ workspace: this.root, backup: parsed.backup });
+    const done = await backups.restoreBackup({ workspace: this.root, backup: parsed.backup });
     return { cancelled: false, agents: [...done.agents.add, ...done.agents.replace], pipeline: done.pipeline, scenarios: [...done.scenarios.add, ...done.scenarios.replace], skipped: done.skipped };
   }
 
@@ -578,14 +675,14 @@ class DashboardPanel implements RpcHandlers {
     const [uri] = (await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: false, defaultUri: vscode.Uri.file(this.root), openLabel: 'Use as a library', title: 'A folder of agents and scenarios (library.yaml)' })) || [];
     if (!uri) return none;
     const name = path.basename(uri.fsPath);
-    const exists = fs.existsSync(path.join(uri.fsPath, cfg.LIBRARY_FILE));
-    if (!exists) {
-      const create = await vscode.window.showInformationMessage(`${name} has no ${cfg.LIBRARY_FILE}. Start a library there?`, { modal: true, detail: `An empty ${cfg.LIBRARY_FILE} is written; move agents and scenarios into it from the Agents page, or write them as in config.yaml.` }, 'Start a library');
-      if (!create) return none;
+    const create = !(await exists(path.join(uri.fsPath, cfg.LIBRARY_FILE)));
+    if (create) {
+      const start = await vscode.window.showInformationMessage(`${name} has no ${cfg.LIBRARY_FILE}. Start a library there?`, { modal: true, detail: `An empty ${cfg.LIBRARY_FILE} is written; move agents and scenarios into it from the Agents page, or write them as in config.yaml.` }, 'Start a library');
+      if (!start) return none;
     }
     const scope = await vscode.window.showInformationMessage(`Use ${name} in…`, { modal: true, detail: 'All my projects: listed in ~/.claudestrator/config.yaml.\n\nThis project: listed in its .claudestrator/config.yaml, so teammates get it too (a folder inside the project is listed by a relative path).' }, 'All my projects', 'This project');
     if (!scope) return none;
-    const info = libraries.addLibrary({ workspace: this.root, dir: uri.fsPath, scope: scope === 'This project' ? 'project' : 'user', create: !exists });
+    const info = await libraries.addLibrary({ workspace: this.root, dir: uri.fsPath, scope: scope === 'This project' ? 'project' : 'user', create });
     return { added: info.label };
   }
 
@@ -593,7 +690,7 @@ class DashboardPanel implements RpcHandlers {
     const label = cfg.libraryLabel(file);
     const ok = await vscode.window.showWarningMessage(`Stop using the library ${label}?`, { modal: true, detail: `It is taken out of ${scope === 'user' ? '~/.claudestrator/config.yaml' : 'this project\'s config.yaml'}; the folder stays on disk. If this project still runs one of its agents, nothing changes and you are told which.` }, 'Stop using it');
     if (!ok) return { removed: false };
-    libraries.removeLibrary({ workspace: this.root, file, scope });
+    await libraries.removeLibrary({ workspace: this.root, file, scope });
     return { removed: true };
   }
 
@@ -601,52 +698,47 @@ class DashboardPanel implements RpcHandlers {
     const what = [...scenarios.map((s) => `scenario ${s}`), ...agents.map((a) => `agent ${a}`)].join(', ');
     const ok = await vscode.window.showInformationMessage(`Move ${what} to the library ${cfg.libraryLabel(library)}?`, { modal: true, detail: 'It leaves this project\'s config.yaml and is kept in the library, with its instructions file; a scenario takes along the agents of this project it runs. The project keeps using it through the library. The same names in the library are replaced.' }, 'Move');
     if (!ok) return { moved: false, agents: [], scenarios: [] };
-    return { moved: true, ...libraries.moveToLibrary({ workspace: this.root, library, agents, scenarios }) };
+    return { moved: true, ...(await libraries.moveToLibrary({ workspace: this.root, library, agents, scenarios })) };
   }
 
   async $newAgent({ name, base, description, output, model, effort }: NewAgentParams) {
-    const file = cfg.addAgent({ workspace: this.root, name, base, description, output, model, effort });
+    const file = await cfg.addAgent({ workspace: this.root, name, base, description, output, model, effort });
     await vscode.window.showTextDocument(vscode.Uri.file(file), { viewColumn: vscode.ViewColumn.Beside });
   }
 
 
   async $editInstructions({ name }: { name: string }) {
-    const r = this.orch.config();
+    const r = await this.orch.config();
     if (!r.ok) throw new Error(r.errors[0]!.message);
-    const file = cfg.ensureInstructionsFile(this.root, name, r.config.agents[name]);
+    const file = await cfg.ensureInstructionsFile(this.root, name, r.config.agents[name]);
     await vscode.window.showTextDocument(vscode.Uri.file(file), { viewColumn: vscode.ViewColumn.Beside });
   }
 
   async $setValue({ keyPath, value }: { keyPath: string[]; value: unknown }) {
     // The value itself is checked by the config validator when it is written.
     if (!Array.isArray(keyPath) || !keyPath.length || !keyPath.every((k) => typeof k === 'string' && k.length > 0)) throw new Error('invalid config path');
-    cfg.setProjectValue(this.root, keyPath, value);
+    await cfg.setProjectValue(this.root, keyPath, value);
   }
 
   async $openConfig({ which }: { which: string }) {
-    const file = which === 'user' ? cfg.userConfigFile() : cfg.projectConfigFile(this.root);
-    if (!fs.existsSync(file)) {
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, `# Claudestrator ${which === 'user' ? 'user' : 'workspace'} config. Later layers override earlier ones field by field:\n# built-in defaults → ~/.claudestrator/config.yaml → <workspace>/.claudestrator/config.yaml\n{}\n`);
-    }
-    await vscode.window.showTextDocument(vscode.Uri.file(file));
+    await openConfig(this.root, which);
   }
 
   // ---------- repos ----------
 
   async $repos(): Promise<ReposData> {
-    const r = this.orch.config();
+    const r = await this.orch.config();
     const configured = r.ok ? r.config.repos : {};
     const status = r.ok ? await this.engine.repoStatus() : [];
     const known = new Set(Object.values(configured).map((x) => path.resolve(this.root, x.path)));
-    const detected = this.root ? findRepos(this.root).filter((d) => !known.has(d.dir)) : [];
+    const detected = this.root ? (await findRepos(this.root)).filter((d) => !known.has(d.dir)) : [];
     const ctxDir = path.join(this.root, cfg.CONFIG_DIR);
     return {
       ok: r.ok,
       errors: r.ok ? [] : r.errors.map((e) => e.message),
-      repos: Object.values(configured).map((x) => ({ ...x, status: status.find((s) => s.name === x.name), suggested: describeRepo(path.resolve(this.root, x.path)).gates })),
+      repos: await Promise.all(Object.values(configured).map(async (x) => ({ ...x, status: status.find((s) => s.name === x.name), suggested: (await describeRepo(path.resolve(this.root, x.path))).gates }))),
       detected,
-      context: r.ok ? r.config.context.map((f) => ({ file: f, rel: path.relative(this.root, f), exists: fs.existsSync(f), ref: path.relative(ctxDir, f) })) : [],
+      context: r.ok ? await Promise.all(r.config.context.map(async (f) => ({ file: f, rel: path.relative(this.root, f), exists: await exists(f), ref: path.relative(ctxDir, f) }))) : [],
       baseBranch: r.ok ? r.config.baseBranch : 'main',
     };
   }
@@ -657,15 +749,15 @@ class DashboardPanel implements RpcHandlers {
       ...(layer.role && { role: layer.role }),
       ...(layer.path && layer.path !== name && { path: layer.path }),
       ...(layer.baseBranch && { baseBranch: layer.baseBranch }),
-      gates: (layer.gates || []).filter((g) => g.name && g.cmd).map((g) => ({ name: g.name, cmd: g.cmd, ...(g.dir && { dir: g.dir }), ...(g.when && { when: g.when }) })),
+      gates: (layer.gates || []).filter((g) => g.name && g.cmd).map((g) => ({ name: g.name, cmd: g.cmd, ...(g.dir && { dir: g.dir }), ...(g.when && { when: g.when }), ...(g.timeout !== undefined && { timeout: g.timeout }) })),
     };
     if (!clean.gates!.length) delete clean.gates;
-    cfg.setRepo(this.root, name, clean, oldName);
+    await cfg.setRepo(this.root, name, clean, oldName);
   }
 
   async $removeRepo({ name }: { name: string }) {
     const ok = await vscode.window.showWarningMessage(`Remove "${name}" from Claudestrator?`, { modal: true, detail: 'Only the config entry is removed; the folder and its git history stay as they are.' }, 'Remove');
-    if (ok) cfg.setRepo(this.root, name, undefined);
+    if (ok) await cfg.setRepo(this.root, name, undefined);
   }
 
   /** Folder picker anywhere on disk: picked repos, or the repos inside picked folders, ready to confirm. */
@@ -679,7 +771,7 @@ class DashboardPanel implements RpcHandlers {
       title: 'Pick a git repository, several, or a folder that contains repositories',
     });
     if (!picked || !picked.length) return null;
-    const r = this.orch.config();
+    const r = await this.orch.config();
     const existing = !forSetup && r.ok ? Object.values(r.config.repos) : [];
     return reposFromFolders(this.root, picked.map((u) => u.fsPath), { names: existing.map((x) => x.name), dirs: existing.map((x) => path.resolve(this.root, x.path)) });
   }
@@ -688,12 +780,12 @@ class DashboardPanel implements RpcHandlers {
     const [uri] = (await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, defaultUri: vscode.Uri.file(this.root || os.homedir()), openLabel: 'Use as Claudestrator workspace', title: 'The folder that holds your repos and .claudestrator/config.yaml' })) || [];
     if (!uri) return null;
     await settings().update('workspaceFolder', uri.fsPath, vscode.ConfigurationTarget.Global);
-    this.orch.rebuild();
+    await this.orch.rebuild();
     return uri.fsPath;
   }
 
   async $addDetected({ repos }: { repos: PickedRepo[] }) {
-    for (const d of repos) cfg.setRepo(this.root, safeName(d.name), repoLayerOf(d));
+    for (const d of repos) await cfg.setRepo(this.root, safeName(d.name), repoLayerOf(d));
   }
 
   async $runGates({ name, force }: { name: string; force?: boolean }) {
@@ -703,29 +795,29 @@ class DashboardPanel implements RpcHandlers {
   async $addContext() {
     const picked = await vscode.window.showOpenDialog({ canSelectMany: true, defaultUri: vscode.Uri.file(this.root), openLabel: 'Give to every agent', filters: { 'Text files': ['md', 'txt', 'yaml', 'yml', 'json'] } });
     if (!picked) return;
-    const r = this.orch.config();
+    const r = await this.orch.config();
     const current = r.ok ? r.config.context : [];
     const all = [...new Set([...current, ...picked.map((u) => u.fsPath)])].map((f) => cfg.configRelative(this.root, f));
-    cfg.setProjectValue(this.root, ['context'], all);
+    await cfg.setProjectValue(this.root, ['context'], all);
   }
 
   async $removeContext({ file }: { file: string }) {
-    const r = this.orch.config();
+    const r = await this.orch.config();
     const rest = (r.ok ? r.config.context : []).filter((f) => f !== file).map((f) => cfg.configRelative(this.root, f));
-    cfg.setProjectValue(this.root, ['context'], rest.length ? rest : undefined);
+    await cfg.setProjectValue(this.root, ['context'], rest.length ? rest : undefined);
   }
 
   async $createWorkspaceMap() {
     const file = path.join(this.root, cfg.CONFIG_DIR, 'workspace.md');
-    const r = this.orch.config();
-    if (!fs.existsSync(file)) {
-      const repos = r.ok ? Object.values(r.config.repos).map((x) => ({ name: x.name, path: x.path, ...describeRepo(path.resolve(this.root, x.path)) })) : [];
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, WORKSPACE_MAP(repos));
+    const r = await this.orch.config();
+    if (!(await exists(file))) {
+      const repos = r.ok ? await Promise.all(Object.values(r.config.repos).map(async (x) => ({ name: x.name, path: x.path, ...(await describeRepo(path.resolve(this.root, x.path))) }))) : [];
+      await fs.promises.mkdir(path.dirname(file), { recursive: true });
+      await fs.promises.writeFile(file, WORKSPACE_MAP(repos));
     }
     const current = r.ok ? r.config.context : [];
     if (!current.includes(file)) {
-      cfg.setProjectValue(this.root, ['context'], [...current, file].map((f) => cfg.configRelative(this.root, f)));
+      await cfg.setProjectValue(this.root, ['context'], [...current, file].map((f) => cfg.configRelative(this.root, f)));
     }
     await vscode.window.showTextDocument(vscode.Uri.file(file));
   }
@@ -734,7 +826,7 @@ class DashboardPanel implements RpcHandlers {
 
   async $detect() {
     if (!this.root) return { repos: [] };
-    return { root: this.root, repos: findRepos(this.root) };
+    return { root: this.root, repos: await findRepos(this.root) };
   }
 
   async $setup({ repos, language, gitMode, map, baseBranch }: SetupParams) {
@@ -746,10 +838,10 @@ class DashboardPanel implements RpcHandlers {
       ...(map && { context: ['./workspace.md'] }),
     };
     if (!Object.keys(layer.repos!).length) delete layer.repos;
-    const file = cfg.createProjectConfig(this.root, layer, ' Claudestrator workspace config. Edit it here or in the Claudestrator dashboard.\n Layers: built-in defaults → ~/.claudestrator/config.yaml → this file.');
+    const file = await cfg.createProjectConfig(this.root, layer, ' Claudestrator workspace config. Edit it here or in the Claudestrator dashboard.\n Layers: built-in defaults → ~/.claudestrator/config.yaml → this file.');
     if (map) {
       const mapFile = path.join(this.root, cfg.CONFIG_DIR, 'workspace.md');
-      if (!fs.existsSync(mapFile)) fs.writeFileSync(mapFile, WORKSPACE_MAP(repos || []));
+      if (!(await exists(mapFile))) await fs.promises.writeFile(mapFile, WORKSPACE_MAP(repos || []));
     }
     return { file };
   }
@@ -768,10 +860,10 @@ class DashboardPanel implements RpcHandlers {
       notifications: s.get<string>('notifications'),
       workspaceFolder: s.get<string>('workspaceFolder'),
       root: this.root,
-      accounts: this.orch.accounts(),
-      account: this.orch.account(),
-      atlassian: { site: s.get('atlassian.site') || '', email: s.get('atlassian.email') || '', hasToken: Boolean(this.orch.token), fromEnv: !this.orch.token && Boolean(process.env.ATLASSIAN_API_TOKEN), connected: Boolean(auth), mcp: this.orch.mcpIntakeServer() },
-      health: this.healthSummary(),
+      accounts: await this.orch.accounts(),
+      account: await this.orch.account(),
+      atlassian: { site: s.get('atlassian.site') || '', email: s.get('atlassian.email') || '', hasToken: Boolean(this.orch.token), fromEnv: !this.orch.token && Boolean(process.env.ATLASSIAN_API_TOKEN), connected: Boolean(auth), mcp: await this.orch.mcpIntakeServer() },
+      health: await this.healthSummary(),
     };
   }
 
@@ -779,7 +871,7 @@ class DashboardPanel implements RpcHandlers {
     const issues = validateSetting(key, value);
     if (issues.length) throw new Error(`invalid setting: ${issues.join('; ')}`);
     await settings().update(key, value, vscode.ConfigurationTarget.Global);
-    if (key === 'claudePath' || key === 'nodePath') await this.orch.refreshHealth();
+    if (key === 'claudePath') await this.orch.refreshHealth();
     else if (key === 'settingSources') this.orch.refreshDefaults(true);
   }
 
@@ -804,15 +896,12 @@ class DashboardPanel implements RpcHandlers {
     const webview = this.panel.webview;
     const nonce = crypto.randomBytes(16).toString('base64');
     const css = webview.asWebviewUri(vscode.Uri.joinPath(media, 'app.css'));
-    const js = webview.asWebviewUri(vscode.Uri.joinPath(scripts, 'app.js'));
-    const md = webview.asWebviewUri(vscode.Uri.joinPath(scripts, 'markdown.js'));
-    const task = webview.asWebviewUri(vscode.Uri.joinPath(scripts, 'task.js'));
-    const conf = webview.asWebviewUri(vscode.Uri.joinPath(scripts, 'config.js'));
+    const tags = PAGE_SCRIPTS.map((name) => `  <script nonce="${nonce}" src="${webview.asWebviewUri(vscode.Uri.joinPath(scripts, name))}"></script>`).join('\n');
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; img-src ${webview.cspSource} data: https:; font-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; img-src ${webview.cspSource} data:; font-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="stylesheet" href="${css}">
   <title>Claudestrator</title>
@@ -821,14 +910,44 @@ class DashboardPanel implements RpcHandlers {
   <div id="app"><div class="boot"><div class="spinner"></div></div></div>
   <div id="toasts" aria-live="polite"></div>
   <div id="modal-root"></div>
-  <script nonce="${nonce}" src="${md}"></script>
-  <script nonce="${nonce}" src="${js}"></script>
-  <script nonce="${nonce}" src="${task}"></script>
-  <script nonce="${nonce}" src="${conf}"></script>
+${tags}
 </body>
 </html>`;
   }
 }
 
+// What the dashboard and the sidebar's commands both do; a command does it without opening the dashboard.
+
+/** Deletes a task once you confirm, with its worktrees when they hold no uncommitted work. */
+async function deleteTask(engine: Engine, taskId: string): Promise<{ deleted: boolean }> {
+  const state = await engine.svc.state(taskId);
+  const worktrees = state.gitMode === 'worktree' && state.repos.length;
+  const choice = await vscode.window.showWarningMessage(
+    `Delete task ${taskId}?`,
+    { modal: true, detail: `This removes .orch/tasks/${taskId} (its log, plan, reports and transcripts). Branches and commits in your repos stay.${worktrees ? ' Its worktrees are removed too, if they have no uncommitted work.' : ''}` },
+    'Delete'
+  );
+  if (choice !== 'Delete') return { deleted: false };
+  if ((await engine.svc.runsElsewhere(taskId)) !== null) throw new Error(`${taskId} runs in another VS Code window; stop it there first`);
+  // Stopped first, and its run ended: a worktree is never removed under an agent that still works in it.
+  if (engine.isRunning(taskId)) {
+    await engine.stop(taskId);
+    await engine.settled(taskId);
+  }
+  if (worktrees) await engine.cleanup(taskId, false);
+  await engine.remove(taskId);
+  return { deleted: true };
+}
+
+/** Opens your (`user`) or the workspace's config.yaml in an editor, written first with a comment when there is none. */
+async function openConfig(root: string, which: string): Promise<void> {
+  const file = which === 'user' ? cfg.userConfigFile() : cfg.projectConfigFile(root);
+  if (!(await exists(file))) {
+    await fs.promises.mkdir(path.dirname(file), { recursive: true });
+    await fs.promises.writeFile(file, `# Claudestrator ${which === 'user' ? 'user' : 'workspace'} config. Later layers override earlier ones field by field:\n# built-in defaults → ~/.claudestrator/config.yaml → <workspace>/.claudestrator/config.yaml\n{}\n`);
+  }
+  await vscode.window.showTextDocument(vscode.Uri.file(file));
+}
+
 export type { Route };
-export { DashboardPanel };
+export { DashboardPanel, deleteTask, openConfig };

@@ -1,9 +1,7 @@
-// The extension's side of the PreToolUse hook: a local socket (Unix socket or Windows named pipe)
-// where each running agent session has a token mapped to its permission policy.
-import * as fs from 'fs';
-import * as os from 'os';
-import * as net from 'net';
-import * as path from 'path';
+// The extension's side of the guard: Claude Code POSTs every tool call of an agent to a local HTTP endpoint (a
+// PreToolUse `http` hook), with the session's token in a header, and the session's permission policy answers. No
+// process starts per tool call, and nothing but Claude Code itself has to run for the guard to work.
+import * as http from 'http';
 import * as crypto from 'crypto';
 
 /** What an agent asked to do, and the policy's answer. */
@@ -15,114 +13,130 @@ interface ToolCall {
 type Decision = { allow: boolean; reason?: string };
 type Decide = (call: ToolCall) => Promise<Decision> | Decision;
 
+/** The variable the session's token travels in; Claude Code puts it into the hook's Authorization header. */
+const TOKEN_ENV = 'CLAUDESTRATOR_HOOK_TOKEN';
+const HOOK_PATH = '/pretooluse';
+/** A Write carries the whole file; anything larger is refused rather than read into memory. */
+const MAX_BODY = 32 * 1024 * 1024;
+/** How long Claude Code waits for an answer, in seconds: an "Ask me" question waits for you. */
+const HOOK_TIMEOUT_S = 900;
+
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /**
- * A line the hook sends: `{ token, payload: { tool_name, tool_input, cwd } }`, as Claude Code hands it to the hook.
- * Null when it is not that shape: the server then denies, so a malformed call never passes as an unknown tool would.
+ * The hook's input as Claude Code sends it: `{ tool_name, tool_input, cwd, … }`. Null when it is not that shape: the
+ * server then denies, so a malformed call never passes as an unknown tool would.
  */
-function parseHookRequest(line: string): { token: string; call: ToolCall } | null {
+function parseHookRequest(body: string): ToolCall | null {
   let data: unknown;
   try {
-    data = JSON.parse(line);
+    data = JSON.parse(body);
   } catch {
     return null;
   }
-  if (!isRecord(data) || typeof data.token !== 'string' || !isRecord(data.payload)) return null;
-  const { tool_name: tool, tool_input: input, cwd } = data.payload;
+  if (!isRecord(data)) return null;
+  const { tool_name: tool, tool_input: input, cwd } = data;
   if (typeof tool !== 'string' || !tool) return null;
   if (input !== undefined && !isRecord(input)) return null;
-  return { token: data.token, call: { tool, input: input ?? {}, cwd: typeof cwd === 'string' ? cwd : '' } };
+  return { tool, input: input ?? {}, cwd: typeof cwd === 'string' ? cwd : '' };
 }
 
-class HookServer {
-  sessions: Map<string, Decide>;
-  address: string;
-  server: net.Server | null;
+/** What a PreToolUse hook answers. */
+const answer = (d: Decision): string => JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: d.allow ? 'allow' : 'deny', permissionDecisionReason: d.reason || (d.allow ? 'allowed by Claudestrator' : 'denied by Claudestrator') } });
 
-  constructor() {
-    this.sessions = new Map();
-    const id = `${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
-    const name = `claudestrator-${id}.sock`;
-    // Unix socket paths are limited to ~104 bytes; a long TMPDIR falls back to /tmp.
-    const tmp = path.join(os.tmpdir(), name).length < 100 ? os.tmpdir() : '/tmp';
-    this.address = process.platform === 'win32' ? `\\\\.\\pipe\\claudestrator-${id}` : path.join(tmp, name);
-    this.server = null;
-  }
+class HookServer {
+  sessions = new Map<string, Decide>();
+  server: http.Server | null = null;
+  /** Where Claude Code posts tool calls, once listening. */
+  url: string | null = null;
 
   listen(): Promise<void> {
     if (this.server) return Promise.resolve();
     return new Promise((resolve, reject) => {
-      this.server = net.createServer((conn) => this.onConnection(conn));
-      this.server.on('error', reject);
-      this.server.listen(this.address, () => {
-        if (process.platform !== 'win32') {
-          try {
-            fs.chmodSync(this.address, 0o600);
-          } catch {
-            // best effort: the token is the real check
-          }
-        }
+      const server = http.createServer((req, res) => void this.handle(req, res));
+      server.on('error', reject);
+      // Loopback only, on a port the system picks: nothing outside this machine can reach it.
+      server.listen(0, '127.0.0.1', () => {
+        const addr = server.address();
+        if (!addr || typeof addr === 'string') return reject(new Error('the guard server has no port'));
+        this.server = server;
+        this.url = `http://127.0.0.1:${addr.port}${HOOK_PATH}`;
         resolve();
       });
     });
   }
 
-  /** Registers a policy: `decide({ tool, input, cwd }) → Promise<{ allow, reason }>`. Returns the env for the agent. */
+  /** `127.0.0.1:<port>`: what the sandbox's network proxy must let through for the hook to arrive. */
+  host(): string {
+    if (!this.url) throw new Error('the guard server is not listening');
+    return new URL(this.url).host;
+  }
+
+  /** Registers a session's policy. Returns the env for the agent: its token, which only that session holds. */
   register(decide: Decide): { token: string; env: Record<string, string> } {
     const token = crypto.randomBytes(24).toString('hex');
     this.sessions.set(token, decide);
-    return { token, env: { CLAUDESTRATOR_HOOK_SOCKET: this.address, CLAUDESTRATOR_HOOK_TOKEN: token } };
+    return { token, env: { [TOKEN_ENV]: token } };
   }
 
   unregister(token: string): void {
     this.sessions.delete(token);
   }
 
-  onConnection(conn: net.Socket): void {
-    let buf = '';
-    conn.setEncoding('utf8');
-    conn.on('error', () => {});
-    conn.on('data', async (d) => {
-      buf += d;
-      const i = buf.indexOf('\n');
-      if (i < 0) return;
-      const line = buf.slice(0, i);
-      buf = '';
-      let reply: Decision;
-      try {
-        const request = parseHookRequest(line);
-        const decide = request && this.sessions.get(request.token);
-        if (!request) reply = { allow: false, reason: 'Claudestrator could not read the tool call' };
-        else if (!decide) reply = { allow: false, reason: 'this agent session is no longer active in Claudestrator' };
-        else reply = await decide(request.call);
-      } catch (e) {
-        reply = { allow: false, reason: `Claudestrator error: ${(e as Error).message}` };
+  /**
+   * The `hooks` part of an agent's settings: every tool call goes to this server first. A guard that cannot answer
+   * (VS Code gone, a timeout, an error) blocks the call: by default Claude Code would go on without it, and an allow
+   * rule in the repo's own settings could then let a push or an edit through.
+   */
+  settings(): { PreToolUse: { matcher: string; hooks: Record<string, unknown>[] }[] } {
+    if (!this.url) throw new Error('the guard server is not listening');
+    return {
+      PreToolUse: [{ matcher: '*', hooks: [{ type: 'http', url: this.url, headers: { Authorization: `Bearer $${TOKEN_ENV}` }, allowedEnvVars: [TOKEN_ENV], timeout: HOOK_TIMEOUT_S, onFailure: 'block' }] }],
+    };
+  }
+
+  async handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const reply = (d: Decision): void => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(answer(d));
+    };
+    if (req.method !== 'POST' || req.url !== HOOK_PATH) {
+      res.writeHead(404).end();
+      return;
+    }
+    const token = (String(req.headers.authorization || '').match(/^Bearer (\S+)$/) || [])[1];
+    const decide = token ? this.sessions.get(token) : undefined;
+    // Answered before its body is read, which is dropped unread: any local process (or a page in a browser that found
+    // the port) could otherwise have the extension host hold many large bodies at once.
+    if (!decide) {
+      res.setHeader('Connection', 'close');
+      reply({ allow: false, reason: 'this agent session is no longer active in Claudestrator' });
+      req.resume();
+      return;
+    }
+    let body = '';
+    let size = 0;
+    req.setEncoding('utf8');
+    try {
+      for await (const chunk of req) {
+        size += Buffer.byteLength(chunk as string);
+        if (size > MAX_BODY) return reply({ allow: false, reason: 'Claudestrator: the tool call is too large to check' });
+        body += chunk;
       }
-      conn.end(`${JSON.stringify(reply)}\n`);
-    });
+      const call = parseHookRequest(body);
+      if (!call) return reply({ allow: false, reason: 'Claudestrator could not read the tool call' });
+      reply(await decide(call));
+    } catch (e) {
+      if (!res.headersSent) reply({ allow: false, reason: `Claudestrator error: ${(e as Error).message}` });
+    }
   }
 
   dispose(): void {
     if (this.server) this.server.close();
     this.server = null;
-    if (process.platform !== 'win32') fs.rmSync(this.address, { force: true });
+    this.url = null;
   }
 }
 
-const quote = (s: string): string => (process.platform === 'win32' ? `"${s}"` : `'${String(s).replace(/'/g, `'\\''`)}'`);
-
-/**
- * Writes the `--settings` file every agent gets: one PreToolUse hook for all tools. `node` is a Node.js binary;
- * without one, VS Code's own runtime runs the script in Node mode.
- */
-function writeHookSettings(file: string, { node, script }: { node?: string | null | undefined; script: string }): string {
-  const runtime = node ? quote(node) : `ELECTRON_RUN_AS_NODE=1 ${quote(process.execPath)}`;
-  const settings = { hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: `${runtime} ${quote(script)}`, timeout: 900 }] }] } };
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`);
-  return file;
-}
-
 export type { Decide, Decision, ToolCall };
-export { HookServer, writeHookSettings, parseHookRequest };
+export { HookServer, parseHookRequest, HOOK_TIMEOUT_S, TOKEN_ENV };

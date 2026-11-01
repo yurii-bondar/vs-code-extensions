@@ -164,11 +164,19 @@ class EngineService(private val project: Project) : Disposable {
     /** One folder per project: the engine writes its hook and MCP files there, and two windows must not share them. */
     private fun storageDir(): Path = PathManager.getSystemDir().resolve("claudestrator").resolve(project.locationHash)
 
-    /** The plugin's folder: the jar sits in its `lib/`. (The platform's own lookup of it is internal API.) */
-    private fun pluginDir(): Path? = runCatching { Path.of(EngineService::class.java.protectionDomain.codeSource.location.toURI()).parent?.parent }.getOrNull()
+    /** What Gradle wrote into the jar (generateVersionFile in build.gradle.kts): the plugin's version and its folder's name. */
+    private val built: java.util.Properties by lazy {
+        java.util.Properties().apply { EngineService::class.java.getResourceAsStream("/claudestrator.properties")?.use { load(it) } }
+    }
 
-    /** Set by Gradle (processResources) from `pluginVersion`. */
-    private fun pluginVersion(): String = EngineService::class.java.getResourceAsStream("/claudestrator.properties")?.use { java.util.Properties().apply { load(it) }.getProperty("version") } ?: "0.0.0"
+    /**
+     * The plugin's folder, where the IDE installs plugins (a sandbox's in runIde). Not from the jar's code source, which
+     * the IDE's class loader leaves empty, so that found no folder in any IDE; the platform's lookup by id is internal API.
+     */
+    private fun pluginDir(): Path? = built.getProperty("folder")?.let { PathManager.getPluginsDir().resolve(it) }
+
+    private fun pluginVersion(): String = built.getProperty("version") ?: "0.0.0"
+
 
     /** The setting, else `node` on the PATH of the login shell (an IDE started from the Dock has a bare one). */
     private fun findNode(): String? {

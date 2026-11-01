@@ -1,10 +1,34 @@
 // Runs one pipeline agent as a Claude Code CLI session (`claude -p` with stream-json in and out).
 // The session stays open, so gate output or a report correction goes back into the same conversation.
+// The `get_settings` and `initialize` control requests are not documented: what they answer only fills in the status
+// line and the model list, and a CLI that does not answer them still runs. Everything a run depends on (hook
+// `onFailure`, `user_message_uuids`, headless denials) is documented and needs MIN_CLAUDE_VERSION.
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import * as crypto from 'crypto';
-import { getChildEnv } from './git';
+import * as fs from 'fs';
+import { getChildEnv, launch } from './git';
+import { GITHUB_TOKENS } from './settings';
 import type { TranscriptItem } from './store';
 import type { Agent } from './types';
+
+/**
+ * The oldest Claude Code the engine runs: 2.1.302 denies in -p a call nobody approved, 2.1.295 honours a hook's
+ * `onFailure: "block"` (a guard that cannot answer blocks the call), 2.1.259 names the messages a result answers.
+ */
+const MIN_CLAUDE_VERSION = '2.1.302';
+
+/** Why a Claude Code version cannot run agents (`2.1.290 (Claude Code)`), or null when it can or is not a release number. */
+function versionProblem(version: string | undefined): string | null {
+  const m = (version || '').match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!m) return null;
+  const have = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const need = MIN_CLAUDE_VERSION.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if (have[i]! > need[i]!) return null;
+    if (have[i]! < need[i]!) return `Claude Code ${m[0]} is older than ${MIN_CLAUDE_VERSION}, which Claudestrator needs to guard the agents; update it (claude update)`;
+  }
+  return null;
+}
 
 /** Tools an agent never gets in an unattended run: nobody answers them. */
 const ALWAYS_DISALLOWED = ['AskUserQuestion', 'ExitPlanMode'];
@@ -46,40 +70,79 @@ function limitsOf(info: RateLimitInfo | null | undefined): Limits | null {
   }
   return out.fiveHour || out.sevenDay ? out : null;
 }
+/** Whether two reports of an account's limits say the same of both windows: each agent session reports them again. */
+interface Windows {
+  fiveHour?: Window | undefined;
+  sevenDay?: Window | undefined;
+}
+interface Window {
+  pct: number;
+  resetsAt?: number | undefined;
+  status?: string | undefined;
+}
+function sameWindows(a: Windows | null | undefined, b: Windows | null | undefined): boolean {
+  const key = (w?: Window): string => (w ? `${w.pct}:${w.resetsAt ?? ''}:${w.status ?? ''}` : '');
+  return Boolean(a && b) && key(a!.fiveHour) === key(b!.fiveHour) && key(a!.sevenDay) === key(b!.sevenDay);
+}
+
 const STDERR_KEEP = 8000;
+/** After an interrupt, how long the CLI gets to end the turn before SIGTERM, and SIGTERM before SIGKILL. */
+const STOP_GRACE_MS = 5000;
+
+/** What a result's error subtype means, for the step's failure message. */
+const RESULT_ERRORS: Record<string, string> = {
+  error_max_structured_output_retries: 'the agent could not hand over a report that matches its schema',
+  error_max_turns: 'the agent used up its turns (maxTurns)',
+  error_max_budget_usd: "the task's budget ran out (limits.budgetUsd)",
+};
 
 /** What the runner asks of its host: the CLI to run, what it supports, and where its settings come from. */
 interface RunnerOptions {
   command(): string;
+  /** The CLI's `--version`, when known: an older CLI than MIN_CLAUDE_VERSION does not start. */
+  version?(): string | undefined;
   /** What this CLI version supports. */
   flags(): Set<string>;
   settingSources(): string[] | null;
-  /** The `--settings` file with the PreToolUse hook. */
-  hookSettings(): string;
   env(): NodeJS.ProcessEnv;
-  mcpConfig?(): string | null;
+  /** The account's MCP servers as an `--mcp-config` file, for agents run without the `user` setting source. */
+  mcpConfig?(): Promise<string | null>;
 }
 
 /** The part of an agent definition a session needs. */
-type SessionAgent = Pick<Agent, 'instructions' | 'model'> & Partial<Pick<Agent, 'effort' | 'tools' | 'disallowedTools' | 'mcp'>>;
+type SessionAgent = Pick<Agent, 'instructions' | 'model'> & Partial<Pick<Agent, 'effort' | 'tools' | 'disallowedTools' | 'mcp' | 'maxTurns'>>;
 
 interface SessionRequest {
   agent: SessionAgent;
   prompt: string;
   cwd: string;
+  /** The session's own settings (`--settings`): the guard hook and what Claude Code itself enforces. */
+  settings: Record<string, unknown>;
   additionalDirectories?: string[] | undefined;
   env?: Record<string, string> | undefined;
   name?: string | undefined;
   maxBudgetUsd?: number | undefined;
+  /** Filled in by the runner: the `--mcp-config` file, if the session gets one. */
+  mcpConfig?: string | null | undefined;
+  /** The JSON Schema of the data a turn hands over (`--json-schema`); it comes back as `TurnResult.structured`. */
+  jsonSchema?: Record<string, unknown> | undefined;
   onOutput(item: TranscriptItem): void;
-  onSession?: ((sessionId: string, model: string | undefined) => void) | undefined;
+  /** The session started: its id, model, and the account (CLAUDE_CONFIG_DIR) it runs under. */
+  onSession?: ((sessionId: string, model: string | undefined, configDir: string | undefined) => void) | undefined;
   onLimits?: ((limits: Limits & { at: number }) => void) | undefined;
+  /** Any message of the CLI, also of a subagent working for the agent: a sign the session is alive. */
+  onActivity?: (() => void) | undefined;
+  /** A problem worth a line in the log (a message from the CLI this runner could not handle). */
+  onWarn?: ((message: string) => void) | undefined;
 }
 
 /** What one turn of the agent came to. */
 interface TurnResult {
   ok: boolean;
+  /** What the agent wrote for a human in its last turn. */
   report: string;
+  /** With a JSON Schema: the data of the turn, as Claude Code checked it against the schema. */
+  structured?: unknown;
   error?: string;
   sessionId?: string;
   costUsd?: number;
@@ -125,8 +188,28 @@ interface CliMessage {
   modelUsage?: Record<string, ModelUsage>;
   is_error?: boolean;
   result?: string;
+  structured_output?: unknown;
   errors?: unknown[];
 }
+
+/** How much of a tool call's input the UI and the transcript get: a Write of a big fixture is shown in part anyway. */
+const INPUT_STRING_CHARS = 8000;
+const INPUT_DEPTH = 6;
+
+/** A tool call's input for the UI and the transcript: long strings cut, with how much was left out. The guard sees it whole. */
+function capInput(value: unknown, depth = 0): unknown {
+  if (typeof value === 'string') return value.length > INPUT_STRING_CHARS ? `${value.slice(0, INPUT_STRING_CHARS)}…+${value.length - INPUT_STRING_CHARS} chars` : value;
+  if (value === null || typeof value !== 'object') return value;
+  if (depth >= INPUT_DEPTH) return '…';
+  if (Array.isArray(value)) return value.slice(0, 200).map((v) => capInput(v, depth + 1));
+  return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, capInput(v, depth + 1)]));
+}
+
+/** The tool Claude Code adds for --json-schema: the way an agent hands its data over, not a step it chose. */
+const STRUCTURED_OUTPUT = 'StructuredOutput';
+
+/** A report without a json block at its end: with structured output the data is apart, and appended once. */
+const withoutTrailingJson = (text: string): string => text.replace(/\n*```json[^\n]*\n(?:(?!```)[\s\S])*```\s*$/, '').trim();
 
 class ClaudeRunner {
   opts: RunnerOptions;
@@ -135,12 +218,20 @@ class ClaudeRunner {
     this.opts = opts;
   }
 
-  start(req: SessionRequest): ClaudeSession {
-    return new ClaudeSession(req, this.opts);
+  async start(req: SessionRequest): Promise<ClaudeSession> {
+    const problem = versionProblem(this.opts.version && this.opts.version());
+    if (problem) throw new Error(problem);
+    // A folder that is not there fails the spawn with ENOENT, which reads like a missing CLI.
+    const folder = await fs.promises.stat(req.cwd).catch(() => null);
+    if (!folder || !folder.isDirectory()) throw new Error(`its working folder ${req.cwd} is not there`);
+    const sources = this.opts.settingSources();
+    // Without the user source, the account's own MCP servers come in explicitly.
+    const wantsMcp = req.agent.mcp !== false && this.opts.mcpConfig && (!sources || !sources.includes('user'));
+    return new ClaudeSession({ ...req, mcpConfig: wantsMcp ? await this.opts.mcpConfig!() : null }, this.opts);
   }
 }
 
-function buildArgs(req: Pick<SessionRequest, 'agent' | 'additionalDirectories' | 'maxBudgetUsd' | 'name'>, opts: RunnerOptions): string[] {
+function buildArgs(req: Pick<SessionRequest, 'agent' | 'additionalDirectories' | 'maxBudgetUsd' | 'name' | 'mcpConfig' | 'settings' | 'jsonSchema'>, opts: RunnerOptions): string[] {
   const a = req.agent;
   const has = (f: string): boolean => opts.flags().has(f);
   const args = ['-p', '--output-format', 'stream-json', '--input-format', 'stream-json', '--verbose'];
@@ -148,23 +239,26 @@ function buildArgs(req: Pick<SessionRequest, 'agent' | 'additionalDirectories' |
   if (a.instructions) args.push('--append-system-prompt', a.instructions);
   if (a.model && a.model !== 'inherit') args.push('--model', a.model);
   if (a.effort && has('--effort')) args.push('--effort', a.effort);
-  if (a.tools && has('--tools')) args.push('--tools', a.tools.join(','));
+  if (a.maxTurns && has('--max-turns')) args.push('--max-turns', String(a.maxTurns));
+  // --tools picks from the built-in set; an MCP tool an agent lists is for the guard, which allows it.
+  if (a.tools && has('--tools')) args.push('--tools', a.tools.filter((t) => !t.startsWith('mcp__')).join(','));
   const disallowed = [...ALWAYS_DISALLOWED, ...(a.disallowedTools || [])];
   args.push('--disallowedTools', disallowed.join(','));
   const sources = opts.settingSources();
   if (sources && has('--setting-sources')) args.push('--setting-sources', sources.join(','));
-  args.push('--settings', opts.hookSettings());
+  args.push('--settings', JSON.stringify(req.settings));
   if (a.mcp === false && has('--strict-mcp-config')) {
     // Strict: only servers named in --mcp-config count, and none is given. Each server's tool list would otherwise ride along in every turn.
     args.push('--strict-mcp-config');
   } else {
     // Without the user source, the account's own MCP servers come in explicitly.
-    const mcpConfig = opts.mcpConfig && (!sources || !sources.includes('user')) ? opts.mcpConfig() : null;
+    const mcpConfig = req.mcpConfig && (!sources || !sources.includes('user')) ? req.mcpConfig : null;
     if (mcpConfig && has('--mcp-config')) args.push('--mcp-config', mcpConfig);
   }
   for (const d of req.additionalDirectories || []) args.push('--add-dir', d);
   if (req.maxBudgetUsd !== undefined && has('--max-budget-usd')) args.push('--max-budget-usd', req.maxBudgetUsd.toFixed(2));
   if (req.name && has('--name')) args.push('--name', req.name);
+  if (req.jsonSchema && has('--json-schema')) args.push('--json-schema', JSON.stringify(req.jsonSchema));
   return args;
 }
 
@@ -187,8 +281,15 @@ class ClaudeSession {
   settingsRequest: string;
   /** Whether a message this session could not handle was already logged (once is enough to find the bug). */
   reportedBadMessage = false;
+  /**
+   * What the agent has written since its last tool call: its final words, the report, when the data comes structured.
+   * Text before a tool call is it thinking aloud ("I'll read that file"), as Claude Code's own `result` leaves it out.
+   */
+  turnText: string[] = [];
   closing?: boolean;
   endReason?: string;
+  /** The account (CLAUDE_CONFIG_DIR) it runs under; none: Claude Code's default. */
+  configDir: string | undefined;
 
   constructor(req: SessionRequest, opts: RunnerOptions) {
     this.req = req;
@@ -208,10 +309,22 @@ class ClaudeSession {
     const env = { ...getChildEnv(), ...opts.env(), ...req.env };
     delete env.ELECTRON_RUN_AS_NODE;
     delete env.CLAUDECODE;
-    this.proc = spawn(opts.command(), this.args, { cwd: req.cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    for (const name of GITHUB_TOKENS) delete env[name];
+    this.configDir = env.CLAUDE_CONFIG_DIR || undefined;
+    const [file, argv] = launch(opts.command(), this.args);
+    // A process group of its own: stopping the agent stops what it started too (a dev server, a watcher, MCP servers).
+    this.proc = spawn(file, argv, { cwd: req.cwd, env, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
     this.proc.on('error', (e: NodeJS.ErrnoException) => this.end(e.code === 'ENOENT' ? `Claude Code CLI not found (${opts.command()}). Set "claudestrator.claudePath" or install Claude Code.` : e.message));
-    this.proc.on('exit', (code, signal) => this.end(this.exitMessage(code, signal)));
+    this.proc.on('exit', (code, signal) => {
+      // What the agent left running in the background goes with the session.
+      this.signal('SIGTERM');
+      this.end(this.exitMessage(code, signal));
+    });
     this.proc.stdin.on('error', () => {}); // EPIPE after the process died; reported through 'exit'
+    // Decoded as a stream: a pipe may cut a line inside a multi-byte character (Cyrillic, emoji), and decoding each
+    // chunk on its own would turn both halves into U+FFFD in plans, reports and Jira comments.
+    this.proc.stdout.setEncoding('utf8');
+    this.proc.stderr.setEncoding('utf8');
     this.proc.stderr.on('data', (d) => {
       this.stderr = (this.stderr + d).slice(-STDERR_KEEP);
     });
@@ -237,7 +350,9 @@ class ClaudeSession {
           // A message we cannot handle must not kill the session, but a bug in handling it should be findable.
           if (!this.reportedBadMessage) {
             this.reportedBadMessage = true;
-            console.warn('[claudestrator] could not handle a message from Claude Code:', e);
+            const message = `could not handle a message from Claude Code: ${(e as Error).message}`;
+            if (this.req.onWarn) this.req.onWarn(message);
+            else console.warn(`[claudestrator] ${message}`);
           }
         }
       }
@@ -258,6 +373,9 @@ class ClaudeSession {
   /** `from`: 'you' (a message typed in the UI) or 'orchestrator' (gate output, report corrections). */
   send(text: string, { echo = true, from = 'you' }: { echo?: boolean; from?: string } = {}): void {
     if (this.ended || this.proc.stdin.destroyed) throw new Error('the agent session has ended');
+    // A result nobody waited for answers an earlier message (one you typed while the gates ran): the next turn is
+    // the answer to this one, never that.
+    this.results = [];
     const uuid = crypto.randomUUID();
     this.pending.add(uuid);
     if (echo) this.req.onOutput({ type: 'user', text, from });
@@ -271,10 +389,59 @@ class ClaudeSession {
     return new Promise((resolve) => (this.waiter = resolve));
   }
 
+  /**
+   * Stops the agent: an `interrupt` control request ends the turn cleanly (it comes back as a failed result and the
+   * session is saved for a resume); SIGTERM if the CLI does not, and SIGKILL as the last resort.
+   */
   async interrupt(): Promise<void> {
     this.closing = true;
-    if (!this.ended) this.proc.kill('SIGTERM');
-    setTimeout(() => !this.ended && this.proc.kill('SIGKILL'), 3000).unref();
+    if (this.ended) return;
+    try {
+      this.proc.stdin.write(`${JSON.stringify({ type: 'control_request', request_id: `cs-interrupt-${crypto.randomBytes(4).toString('hex')}`, request: { subtype: 'interrupt' } })}\n`);
+    } catch {
+      // stdin is gone; the signals below still stop it
+    }
+    this.escalate(STOP_GRACE_MS);
+  }
+
+  /**
+   * Stops the agent and waits for it, up to `graceMs`, then kills its process group at once. For a host that is about
+   * to exit (VS Code closing the window), where the timers of `interrupt` would never fire and a CLI stuck on a hung
+   * tool would be left running with everything it started.
+   */
+  async terminate(graceMs: number): Promise<void> {
+    await this.interrupt();
+    if (this.ended) return;
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, graceMs);
+      this.proc.once('exit', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+    if (!this.ended) this.signal('SIGKILL');
+  }
+
+  /** SIGTERM after `afterMs` if the CLI has not ended, SIGKILL STOP_GRACE_MS later: to its whole process group. */
+  escalate(afterMs: number): void {
+    setTimeout(() => {
+      if (this.ended) return;
+      this.signal('SIGTERM');
+      setTimeout(() => !this.ended && this.signal('SIGKILL'), STOP_GRACE_MS).unref();
+    }, afterMs).unref();
+  }
+
+  /** Signals the CLI and everything in its process group; on Windows, its process tree (taskkill /t) for a kill. */
+  signal(sig: NodeJS.Signals): void {
+    const pid = this.proc.pid;
+    if (pid === undefined) return;
+    try {
+      if (process.platform !== 'win32') process.kill(-pid, sig);
+      else if (sig === 'SIGKILL') spawn('taskkill', ['/pid', String(pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true });
+      else this.proc.kill(sig);
+    } catch {
+      // already gone
+    }
   }
 
   close(): void {
@@ -285,7 +452,7 @@ class ClaudeSession {
     } catch {
       // already closed
     }
-    setTimeout(() => !this.ended && this.proc.kill('SIGTERM'), 5000).unref();
+    this.escalate(STOP_GRACE_MS);
   }
 
   deliver(r: TurnResult): void {
@@ -325,12 +492,13 @@ class ClaudeSession {
 
   handle(m: CliMessage): void {
     const out = this.req.onOutput;
+    if (this.req.onActivity) this.req.onActivity();
     switch (m.type) {
       case 'system':
         if (m.subtype === 'init' && m.session_id) {
           this.sessionId = m.session_id;
           if (m.model) this.model = m.model;
-          if (this.req.onSession) this.req.onSession(m.session_id, m.model);
+          if (this.req.onSession) this.req.onSession(m.session_id, m.model, this.configDir);
         }
         return;
       case 'stream_event': {
@@ -364,8 +532,14 @@ class ClaudeSession {
         }
         const content = ((m.message && m.message.content) || []) as ContentBlock[];
         for (const block of content) {
-          if (block.type === 'text' && block.text) out({ type: 'text', text: block.text });
-          if (block.type === 'tool_use') out({ type: 'tool_use', id: block.id || '', name: block.name || '', input: block.input });
+          if (block.type === 'text' && block.text) {
+            this.turnText.push(block.text);
+            out({ type: 'text', text: block.text });
+          }
+          if (block.type !== 'tool_use') continue;
+          // Handing over the report's data ends the report; any other call makes what came before it thinking aloud.
+          if (block.name !== STRUCTURED_OUTPUT) this.turnText = [];
+          out({ type: 'tool_use', id: block.id || '', name: block.name || '', input: capInput(block.input) });
         }
         return;
       }
@@ -380,7 +554,9 @@ class ClaudeSession {
         return;
       }
       case 'result': {
-        const answered = m.user_message_uuids || (m.user_message_uuid ? [m.user_message_uuid] : [...this.pending]);
+        // Without the uuids a result answers at least the oldest message still open; taking it for all of them would
+        // hand the answer to a message typed mid-turn to the next turn.
+        const answered = m.user_message_uuids || (m.user_message_uuid ? [m.user_message_uuid] : [...this.pending].slice(0, 1));
         for (const u of answered) this.pending.delete(u);
         // total_cost_usd is cumulative for the session; num_turns counts this run only.
         if (typeof m.total_cost_usd === 'number') this.costUsd = m.total_cost_usd;
@@ -401,10 +577,15 @@ class ClaudeSession {
         this.emitUsage();
         const ok = m.subtype === 'success' && !m.is_error;
         const errors = Array.isArray(m.errors) ? m.errors.join('; ') : '';
+        // With structured output, `result` is the data as JSON text; the report is what the agent wrote this turn.
+        const structured = m.structured_output !== undefined && m.structured_output !== null;
+        const written = withoutTrailingJson(this.turnText.join('\n\n'));
+        this.turnText = [];
         const r: TurnResult = {
           ok,
-          report: m.subtype === 'success' ? m.result || '' : '',
-          ...(!ok && { error: m.subtype === 'success' ? `the agent reported an error${m.result ? `: ${String(m.result).slice(0, 500)}` : ''}` : `${m.subtype}${errors ? `: ${errors}` : ''}` }),
+          report: m.subtype !== 'success' ? '' : structured ? written : m.result || '',
+          ...(structured && { structured: m.structured_output }),
+          ...(!ok && { error: m.subtype === 'success' ? `the agent reported an error${m.result ? `: ${String(m.result).slice(0, 500)}` : ''}` : `${RESULT_ERRORS[m.subtype ?? ''] ?? m.subtype}${errors ? `: ${errors}` : ''}` }),
           ...this.totals(),
         };
         out({ type: 'turn_end', ok, costUsd: this.costUsd, turns: this.turns });
@@ -422,4 +603,4 @@ function parseFlags(helpText: string): Set<string> {
 }
 
 export type { CliMessage, Limit, Limits, RunnerOptions, SessionRequest, TurnResult };
-export { ClaudeRunner, ClaudeSession, buildArgs, parseFlags, limitsOf };
+export { ClaudeRunner, ClaudeSession, buildArgs, capInput, parseFlags, limitsOf, sameWindows, versionProblem, withoutTrailingJson, MIN_CLAUDE_VERSION };

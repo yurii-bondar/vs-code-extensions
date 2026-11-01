@@ -1,7 +1,7 @@
 // The task state machine. Pure: the same events always give the same state, and an illegal
 // event (a skipped approval, an extra review round, a push before it was confirmed) is rejected.
-import { CHECKPOINT_OPTIONS, JIRA_ONLY_OPTIONS, isBlocking, isInfoEvent } from './protocol';
-import { onRepos } from './pipeline';
+import { CHECKPOINT_OPTIONS, JIRA_ONLY_OPTIONS, REPO_NAME, isBlocking, isInfoEvent } from './protocol';
+import { onRepos, reposBeforePlan } from './pipeline';
 import type { Checkpoint, CheckpointId, Finding, NextMode, Output, OrchEvent, PlanRepo, Stage, Step, StepRef, TaskState, Transition } from './types';
 
 /** The event of one type: `Ev<'stopped'>`. */
@@ -54,7 +54,7 @@ function transition(state: TaskState | null, event: OrchEvent): Transition {
       if (!s.running || !sameStep(s.running, event)) return fail('not_running', `${describe(event)} is not running`);
       const step = s.running;
       s.running = null;
-      openCheckpoint(s, 'agent-failure', event.at, step, event.error);
+      openCheckpoint(s, 'agent-failure', { at: event.at, step, reason: event.error, ...(event.blocked && { blocked: true }) });
       return ok(s);
     }
     case 'checkpoint_answered':
@@ -62,11 +62,12 @@ function transition(state: TaskState | null, event: OrchEvent): Transition {
     case 'committed':
       if (s.phase !== 'finish' || s.finishStep !== 'commit') return fail('not_committing', 'nothing to commit at this point');
       s.finishStep = 'confirm';
-      openCheckpoint(s, 'confirm-push', event.at);
+      delete s.lastFailure;
+      openCheckpoint(s, 'confirm-push', { at: event.at });
       return ok(s);
     case 'commit_failed':
       if (s.phase !== 'finish' || s.finishStep !== 'commit') return fail('not_committing', 'nothing to commit at this point');
-      openCheckpoint(s, 'hook-failure', event.at, undefined, `${event.repo}: ${event.output}`);
+      openCheckpoint(s, 'hook-failure', { at: event.at, reason: `${event.repo}: ${event.output}` });
       return ok(s);
     case 'published':
       if (s.phase !== 'finish' || s.finishStep !== 'publish') return fail('push_not_confirmed', 'push was not confirmed');
@@ -143,22 +144,27 @@ function created(e: Ev<'task_created'>): TaskState {
  */
 function unknownRepos(s: TaskState, repos: PlanRepo[]): string[] {
   const names = repos.map((r) => r.name);
-  if (s.knownRepos.length === 0) return names.filter((n) => !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(n) || n.includes('..'));
+  if (s.knownRepos.length === 0) return names.filter((n) => !REPO_NAME.test(n));
   return names.filter((n) => !s.knownRepos.includes(n));
 }
 
 function intakeCompleted(s: TaskState, e: Ev<'intake_completed'>): Transition {
   if (s.phase !== 'intake') return fail('intake_done', 'intake already completed');
+  // A pipeline without a planner gets its plan from the engine: the repos the task names and a branch for the ticket.
+  if (e.plan) {
+    const unknown = unknownRepos(s, e.plan.repos);
+    if (unknown.length) return fail('unknown_repo', `unknown repos: ${unknown.join(', ')}`);
+    s.plan = e.plan;
+    s.repos = e.plan.repos.filter((r, i, all) => all.findIndex((x) => x.name === r.name) === i);
+  }
   if (e.repos) {
     const unknown = unknownRepos(s, e.repos);
     if (unknown.length) return fail('unknown_repo', `unknown repos: ${unknown.join(', ')}`);
     s.repos = e.repos;
   }
   const stages = s.pipeline.stages;
-  const firstPlan = stages.findIndex((st) => st.output === 'plan');
-  const firstRepo = stages.findIndex(onRepos);
-  if (firstRepo !== -1 && (firstPlan === -1 || firstRepo < firstPlan) && s.repos.length === 0) {
-    return fail('repos_required', `"${stages[firstRepo]!.agent}" runs per repo before any plan names repos; pass repos with intake_completed`);
+  if (reposBeforePlan(stages) && s.repos.length === 0) {
+    return fail('repos_required', `"${stages.find(onRepos)!.agent}" runs per repo before any plan names repos; pass repos with intake_completed`);
   }
   s.spec = e.spec;
   s.phase = 'stages';
@@ -173,7 +179,7 @@ function stageStarted(s: TaskState, e: Ev<'stage_started'>): Transition {
   if (!sameStep(s.next, e)) return fail('wrong_stage', `expected ${describe(s.next)}, got ${describe(e)}`);
   s.running = s.next;
   s.next = null;
-  s.feedback = null;
+  // The feedback stays with the running step until it ends: run again after a Stop or a reload, it still has it.
   return ok(s);
 }
 
@@ -181,6 +187,7 @@ function stageCompleted(s: TaskState, e: Ev<'stage_completed'>): Transition {
   if (!s.running || !sameStep(s.running, e)) return fail('not_running', `${describe(e)} is not running`);
   const step = s.running;
   const stage = s.pipeline.stages[step.stage]!;
+  delete s.lastFailure;
 
   if (stage.output === 'plan') {
     if (!e.plan) return fail('plan_meta_required', `plan stage "${step.agent}" must report the plan's JSON block`);
@@ -197,13 +204,15 @@ function stageCompleted(s: TaskState, e: Ev<'stage_completed'>): Transition {
   switch (stage.output) {
     case 'plan':
       s.plan = e.plan!;
-      s.repos = e.plan!.repos;
-      if (stage.approval) openCheckpoint(s, 'approve-plan', e.at, step);
+      // Each repo once (the engine has the planner correct a plan that names one twice): a step per repo would
+      // otherwise find its own first copy and run again and again.
+      s.repos = e.plan!.repos.filter((r, i, all) => all.findIndex((x) => x.name === r.name) === i);
+      if (stage.approval) openCheckpoint(s, 'approve-plan', { at: e.at, step });
       else advance(s, step);
       return ok(s);
     case 'code':
     case 'tests':
-      if (e.gates === 'fail') openCheckpoint(s, 'gate-failure', e.at, step);
+      if (e.gates === 'fail') openCheckpoint(s, 'gate-failure', { at: e.at, step });
       else advance(s, step);
       return ok(s);
     case 'verdict':
@@ -226,7 +235,6 @@ function checkpointAnswered(s: TaskState, e: Ev<'checkpoint_answered'>): Transit
   if (!cp) return fail('no_checkpoint', 'no checkpoint is open');
   if (cp.id !== e.id) return fail('wrong_checkpoint', `open checkpoint is "${cp.id}", not "${e.id}"`);
   if (!cp.options.includes(e.option)) return fail('invalid_option', `"${e.option}" is not an option of "${cp.id}": ${cp.options.join(', ')}`);
-
   s.answers.push({ id: e.id, option: e.option, ...(e.feedback && { feedback: e.feedback }), at: e.at });
   s.checkpoint = null;
   s.status = 'active';
@@ -303,10 +311,37 @@ function pipelineChanged(s: TaskState, e: Ev<'pipeline_changed'>): Transition {
   return ok(s);
 }
 
-function openCheckpoint(s: TaskState, id: CheckpointId, at: string, step?: Step, reason?: string): void {
+/** Failures a retry answers, and can repeat as they were: an agent's step, a commit a hook rejected. */
+const RETRIED: CheckpointId[] = ['agent-failure', 'hook-failure'];
+
+/** The words of a failure, without what differs between two runs of the same one: counts, ids, hashes. */
+function failureWords(text: string): Set<string> {
+  return new Set(text.toLowerCase().replace(/\b[0-9a-f]{7,}\b|\d+/g, ' ').split(/[^\p{L}_]+/u).filter((w) => w.length > 2));
+}
+
+/** Whether two failures read as the same one: an agent words its blocker anew each time, so most of their words. */
+function sameFailure(a: string, b: string): boolean {
+  const x = failureWords(a);
+  const y = failureWords(b);
+  if (!x.size || !y.size) return a.trim() === b.trim();
+  const both = [...x].filter((w) => y.has(w)).length;
+  return both / (x.size + y.size - both) >= 0.6;
+}
+
+interface CheckpointArgs {
+  at: string;
+  step?: Step | undefined;
+  reason?: string | undefined;
+  blocked?: boolean | undefined;
+}
+
+function openCheckpoint(s: TaskState, id: CheckpointId, { at, step, reason, blocked }: CheckpointArgs): void {
   const jira = s.source.kind === 'jira';
   const options = CHECKPOINT_OPTIONS[id].filter((o) => jira || !JIRA_ONLY_OPTIONS.includes(o));
-  s.checkpoint = { id, options, ...(step && { step }), ...(reason && { reason }), at };
+  const last = s.lastFailure;
+  const repeated = Boolean(reason && last && last.id === id && (last.step && step ? sameStep(last.step, step) : !last.step && !step) && sameFailure(last.reason, reason));
+  if (reason && RETRIED.includes(id)) s.lastFailure = { id, ...(step && { step }), reason };
+  s.checkpoint = { id, options, ...(step && { step }), ...(reason && { reason }), ...(blocked && { blocked: true }), ...(repeated && { repeated: true }), at };
   s.status = 'waiting';
 }
 
@@ -366,9 +401,9 @@ function evaluateRound(s: TaskState, at: string): void {
   const empty = s.review.verdicts.length > 0 && s.review.verdicts.every((v) => v.emptyDiff);
   s.review.emptyRounds = empty ? s.review.emptyRounds + 1 : 0;
   if (!blocking) passReview(s, false);
-  else if (s.review.emptyRounds >= MAX_EMPTY_ROUNDS) openCheckpoint(s, 'review-limit', at, undefined, `the diff was empty in ${s.review.emptyRounds} review rounds in a row: the agents changed nothing, so another fix round would not help`);
+  else if (s.review.emptyRounds >= MAX_EMPTY_ROUNDS) openCheckpoint(s, 'review-limit', { at, reason: `the diff was empty in ${s.review.emptyRounds} review rounds in a row: the agents changed nothing, so another fix round would not help` });
   else if (s.review.round < s.review.maxRounds) startFixRound(s, null);
-  else openCheckpoint(s, 'review-limit', at, undefined, `round ${s.review.round} of ${s.review.maxRounds} still has blocking findings`);
+  else openCheckpoint(s, 'review-limit', { at, reason: `round ${s.review.round} of ${s.review.maxRounds} still has blocking findings` });
 }
 
 function startFixRound(s: TaskState, feedback: string | null): void {
@@ -381,6 +416,7 @@ function startFixRound(s: TaskState, feedback: string | null): void {
   s.review.verdicts = [];
   s.review.round += 1;
   s.review.fixing = true;
+  s.review.roundFeedback = feedback;
   setNext(s, passSteps(s)[0] ?? null, 'fix', feedback);
 }
 
@@ -391,6 +427,7 @@ function passReview(s: TaskState, shipBlocking: boolean): void {
   s.review.lastVerdicts = s.review.verdicts;
   s.review.verdicts = [];
   s.review.fixing = false;
+  s.review.roundFeedback = null;
   const end = s.pipeline.reviewLoop!.end;
   setNext(s, passSteps(s).find((p) => p.stage > end) ?? null, 'initial');
 }
@@ -414,6 +451,39 @@ function finish(s: TaskState, outcome: string): void {
 // ---------- what runs next ----------
 
 /** Paths inside the task folder. Agents pass these to each other, never the contents. */
+/**
+ * What each agent session of a task spent and did, from its log. Claude Code reports a session's cost, turns and tokens
+ * as running totals, so each session counts once, at the latest total it reported: a session that never ended (VS Code
+ * closed, the host crashed) still counts what it spent up to its last turn.
+ */
+interface SessionTotals {
+  agent: string;
+  transcript: string | undefined;
+  costUsd: number;
+  turns: number;
+  tokens: number;
+}
+function sessionTotals(events: readonly OrchEvent[]): SessionTotals[] {
+  const out: SessionTotals[] = [];
+  const byId = new Map<string, SessionTotals>();
+  for (const e of events) {
+    if (e.type !== 'agent_stopped' && e.type !== 'agent_progress') continue;
+    const p = e.payload || {};
+    const now = { agent: e.agent, transcript: p.transcript, costUsd: Number(p.costUsd) || 0, turns: Number(p.turns) || 0, tokens: Number(p.tokens) || 0 };
+    const known = p.sessionId ? byId.get(p.sessionId) : undefined;
+    if (known) {
+      known.costUsd = Math.max(known.costUsd, now.costUsd);
+      known.turns = Math.max(known.turns, now.turns);
+      known.tokens = Math.max(known.tokens, now.tokens);
+      continue;
+    }
+    out.push(now);
+    if (p.sessionId) byId.set(p.sessionId, now);
+  }
+  return out;
+}
+const spentOf = (events: readonly OrchEvent[]): number => sessionTotals(events).reduce((n, x) => n + x.costUsd, 0);
+
 const TASK_FILES = { events: 'events.ndjson', ticket: 'ticket.md', ticketJson: 'ticket.json', report: 'report.md' };
 
 /** The repos a step works in: its own, or for a `repos` stage every repo of the pass (a fix round: the ones sent back). */
@@ -479,7 +549,7 @@ function nextAction(s: TaskState): NextAction {
     output,
     mode: s.nextMode,
     round: s.review.round,
-    feedback: s.feedback,
+    feedback: s.feedback ?? (s.review.fixing ? (s.review.roundFeedback ?? null) : null),
     inputs: inputsFor(s, step, output),
     artifact: artifactPath(output, step.agent, s.review.round, step.repo),
   };
@@ -510,9 +580,12 @@ function inputsFor(s: TaskState, step: Step, output: Output): string[] {
     // a stage across all repos reads every repo's.
     const repos = stepRepos(s, step);
     inputs.push(...latest((a) => a.round === s.review.round && (a.output === 'code' || a.output === 'tests') && (step.repo ? a.repo === step.repo : !a.repo || repos.includes(a.repo))));
-    if (s.nextMode === 'fix') inputs.push(...s.review.lastVerdicts.map((v) => v.artifact));
+    // A fix round's steps read the findings they fix, also one retried after it failed.
+    if (s.review.fixing) inputs.push(...s.review.lastVerdicts.map((v) => v.artifact));
   }
-  // Verdict stages get only the ticket and plan: fresh context is the point. The diff is added by the engine.
+  // Verdict stages get the ticket and plan, in a fresh session: fresh context is the point. The diff is added by the
+  // engine. A later round also gets its own review of the round before, to check its findings first.
+  if (output === 'verdict' && s.review.round > 1) inputs.push(...s.review.lastVerdicts.filter((v) => v.agent === step.agent).map((v) => v.artifact));
   return unique(inputs);
 }
 
@@ -525,5 +598,5 @@ function branchName(s: TaskState): string | null {
   return `${s.plan.type}/${key}${s.plan.slug}`;
 }
 
-export type { NextAction, RunAction };
-export { MAX_EMPTY_ROUNDS, transition, replay, canPush, passSteps, editableFrom, stepRepos, nextAction, runOf, artifactPath, branchName, sameStep, TASK_FILES };
+export type { NextAction, RunAction, SessionTotals };
+export { MAX_EMPTY_ROUNDS, sessionTotals, spentOf, transition, replay, canPush, passSteps, editableFrom, stepRepos, nextAction, runOf, artifactPath, branchName, sameStep, unknownRepos, TASK_FILES };

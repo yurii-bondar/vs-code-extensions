@@ -1,15 +1,52 @@
 // Gates: a repo's lint/typecheck/test commands, run against its changes after a code or tests stage.
 import * as fs from 'fs';
 import * as path from 'path';
-import { exec, getChildEnv, GitRepo } from './git';
+import { spawn } from 'child_process';
+import { getChildEnv, GitRepo } from './git';
+import { writeReplacing } from './files';
+import { plainLauncher, type Launcher } from './sandbox';
+import { credentialVars, GITHUB_TOKENS } from './settings';
 import type { RepoConfig } from './types';
 import type { GateResult, RepoGates } from './wire';
 
+/** What an agent reads of a failing check: its last lines, a long line cut, all of it within a few KB. The log has it all. */
 const TAIL_LINES = 40;
+const TAIL_LINE_CHARS = 400;
+const TAIL_CHARS = 6000;
+/** Output kept per gate: the end of it, which is where a failure shows. */
+const KEEP_CHARS = 4 * 1024 * 1024;
+/** How long a gate gets after SIGTERM before its process group is killed. */
+const KILL_GRACE_MS = 3000;
+/** How long output may still arrive after the shell has exited, from what it left running. */
+const DRAIN_MS = 500;
 // Gate commands print plain text: colour codes are noise in the tail an agent reads, and some tools only colour on a terminal anyway.
-const PLAIN_ENV = { NO_COLOR: '1', FORCE_COLOR: '0' };
+// CI: test runners that watch by default (react-scripts test, ng test, vitest) run once and exit, as on a CI server.
+const PLAIN_ENV = { NO_COLOR: '1', FORCE_COLOR: '0', CI: 'true' };
 const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`, 'g');
 const slug = (s: string): string => s.replace(/[^A-Za-z0-9._-]+/g, '_');
+
+/** The end of a check's output, cut to size: one line of a JSON report or minified code can be a megabyte. */
+function tailOf(output: string): string {
+  const lines = output
+    .trimEnd()
+    .split('\n')
+    .slice(-TAIL_LINES)
+    .map((l) => (l.length > TAIL_LINE_CHARS ? `${l.slice(0, TAIL_LINE_CHARS)}… (${l.length - TAIL_LINE_CHARS} more characters)` : l));
+  const tail = lines.join('\n');
+  return tail.length > TAIL_CHARS ? `…\n${tail.slice(tail.indexOf('\n', tail.length - TAIL_CHARS) + 1)}` : tail;
+}
+
+/** Why a check cannot run from `cwd` (missing, not a folder, or outside the repo), or null when it can. */
+async function cwdProblem(repoDir: string, cwd: string): Promise<string | null> {
+  try {
+    const [root, real] = await Promise.all([fs.promises.realpath(repoDir), fs.promises.realpath(cwd)]);
+    if (!(await fs.promises.stat(real)).isDirectory()) return `its dir ${path.relative(repoDir, cwd)} is not a folder`;
+    if (real !== root && !real.startsWith(root + path.sep)) return `its dir ${path.relative(repoDir, cwd)} leads out of the repo`;
+    return null;
+  } catch {
+    return `its dir ${path.relative(repoDir, cwd) || '.'} does not exist`;
+  }
+}
 
 /** Output as an agent should read it: no colour codes, and a progress line redrawn with \r keeps only its last state. */
 function plain(output: string): string {
@@ -20,16 +57,167 @@ function plain(output: string): string {
     .join('\n');
 }
 
-function shellCommand(cmd: string): [string, string[]] {
-  if (process.platform === 'win32') return ['cmd.exe', ['/d', '/s', '/c', cmd]];
-  return [fs.existsSync('/bin/bash') ? '/bin/bash' : '/bin/sh', ['-c', cmd]];
+/**
+ * The environment a gate or a git hook runs in: yours without its credentials. What runs there is code the agents
+ * wrote or changed (a test, a package.json script), which must not find a token to send somewhere.
+ */
+function withoutCredentials(env: NodeJS.ProcessEnv, keep: string[] = []): NodeJS.ProcessEnv {
+  const out = { ...env };
+  for (const name of [...credentialVars(env), ...GITHUB_TOKENS]) if (!keep.includes(name)) delete out[name];
+  return out;
+}
+
+/** What a sandboxed command that failed on a write or a read it may not do says (Go, Rust and Python in lower case). */
+const SANDBOX_REFUSAL = /operation not permitted|\bEPERM\b|read-only file system|\bEROFS\b|CONNECT tunnel failed, response 403/i;
+const SANDBOX_HINT = 'note: checks and git hooks run in the sandbox (policy.sandbox): they write only in the repo and in temp files, and reach only the package registries. What it refused is no fault of the code: a tool that writes elsewhere (a build cache) needs that folder in policy.writable, a host it needs goes in policy.network.';
+/**
+ * What a test says when the sandbox refuses it a local port (macOS): Node's `listen EPERM`, Go's `bind: operation not
+ * permitted`. No change of the agent's fixes that, so it goes to you at once.
+ */
+const LOCAL_PORT_REFUSAL = /\b(?:listen|bind)\b[^\n]{0,80}?(?:EPERM|operation not permitted)/i;
+const LOCAL_PORT_HINT = 'note: checks and git hooks run in the sandbox (policy.sandbox), which on macOS opens no local port: a test that starts a server on 127.0.0.1 needs "Local ports" in Settings → Safety (policy.localPorts).';
+
+/**
+ * The note under a sandboxed command's output (a check's, a git hook's) when the sandbox refused it something: which
+ * setting allows it, since no change to the code does. Empty when it refused nothing.
+ */
+function sandboxNote(output: string): string {
+  if (!SANDBOX_REFUSAL.test(output)) return '';
+  return `\n${LOCAL_PORT_REFUSAL.test(output) ? LOCAL_PORT_HINT : SANDBOX_HINT}`;
+}
+
+interface ShellRun {
+  code: number;
+  output: string;
+  /** Why it was killed: it ran out of time, or the task was stopped. */
+  killed?: 'timeout' | 'stopped';
+}
+
+/**
+ * Runs a gate command in a process group of its own, so a timeout or a stopped task ends everything it started
+ * (test workers, a dev server), not only the shell. stdout and stderr are kept in one text, in the order they arrive.
+ */
+interface ShellOptions {
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  timeoutMs: number;
+  signal?: AbortSignal | undefined;
+  /** How the command starts: in the sandbox, or plainly (the default). */
+  launch?: Launcher | undefined;
+  /** What it reads on stdin (a pre-push hook reads the refs it pushes). */
+  input?: string | undefined;
+}
+
+async function runShell(cmd: string, { cwd, env, timeoutMs, signal, launch = plainLauncher, input }: ShellOptions): Promise<ShellRun> {
+  let l: Awaited<ReturnType<Launcher>>;
+  try {
+    l = await launch(cmd, env);
+  } catch (e) {
+    return { code: 127, output: (e as Error).message };
+  }
+  try {
+    return await spawnShell(l, { cwd, timeoutMs, signal, input });
+  } finally {
+    await l.cleanup();
+  }
+}
+
+function spawnShell({ file: bin, args, env }: Awaited<ReturnType<Launcher>>, { cwd, timeoutMs, signal, input }: Omit<ShellOptions, 'env' | 'launch'>): Promise<ShellRun> {
+  return new Promise((resolve) => {
+    const win = process.platform === 'win32';
+    let output = '';
+    let killed: ShellRun['killed'];
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(bin, args, { cwd, env, detached: !win, stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], windowsHide: true });
+    } catch (e) {
+      return resolve({ code: 127, output: (e as Error).message });
+    }
+    if (input !== undefined && child.stdin) {
+      child.stdin.on('error', () => {}); // a hook that does not read its input
+      child.stdin.end(input);
+    }
+    const keep = (d: string): void => {
+      output += d;
+      if (output.length > 2 * KEEP_CHARS) output = output.slice(-KEEP_CHARS);
+    };
+    child.stdout!.setEncoding('utf8').on('data', keep);
+    child.stderr!.setEncoding('utf8').on('data', keep);
+    const killTree = (sig: NodeJS.Signals): void => {
+      if (child.pid === undefined) return;
+      try {
+        if (win) spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true });
+        else process.kill(-child.pid, sig);
+      } catch {
+        // already gone
+      }
+    };
+    let grace: NodeJS.Timeout | undefined;
+    const kill = (why: NonNullable<ShellRun['killed']>): void => {
+      if (killed) return;
+      killed = why;
+      killTree('SIGTERM');
+      grace = setTimeout(() => killTree('SIGKILL'), KILL_GRACE_MS);
+    };
+    const timer = setTimeout(() => kill('timeout'), timeoutMs);
+    const onAbort = (): void => kill('stopped');
+    if (signal) {
+      if (signal.aborted) onAbort();
+      else signal.addEventListener('abort', onAbort, { once: true });
+    }
+    child.on('error', (e) => keep(`${(e as NodeJS.ErrnoException).code === 'ENOENT' ? `${bin}: not found` : e.message}\n`));
+    let done = false;
+    let drain: NodeJS.Timeout | undefined;
+    const finish = (code: number | null): void => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      clearTimeout(grace);
+      clearTimeout(drain);
+      if (signal) signal.removeEventListener('abort', onAbort);
+      // The shell is gone; anything it left in its group goes too.
+      if (!win) killTree('SIGKILL');
+      const note = killed === 'timeout' ? `\nkilled after ${Math.round(timeoutMs / 1000)}s` : killed === 'stopped' ? '\nstopped with the task' : '';
+      resolve({ code: killed === 'timeout' ? 124 : killed === 'stopped' ? 130 : code ?? 1, output: output + note, ...(killed && { killed }) });
+    };
+    // The result is the shell's exit: a process it left in the background (`server &`) can hold the output open, and a
+    // passing check would wait for it until its time ran out. What is still to be read gets a moment.
+    child.on('exit', (code) => {
+      drain = setTimeout(() => finish(code), DRAIN_MS);
+    });
+    child.on('close', (code) => finish(code));
+  });
 }
 
 /**
  * Runs a repo's gates. A repo without changes is skipped, and so is a gate whose `when` prefix matches
- * no changed file (unless `force`). Logs go to `logDir`. `onGate(name)` reports progress.
+ * no changed file (unless `force`). Logs go to `logDir`. `onGate(name)` reports progress. `signal` stops the gate
+ * that runs and skips the rest.
  */
-async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = false, onGate }: { repo: RepoConfig; dir: string; logDir: string; timeoutMs?: number; force?: boolean | undefined; onGate?: ((name: string) => void) | undefined }): Promise<RepoGates> {
+interface GatesArgs {
+  repo: RepoConfig;
+  dir: string;
+  logDir: string;
+  timeoutMs?: number;
+  force?: boolean | undefined;
+  onGate?: ((name: string) => void) | undefined;
+  signal?: AbortSignal | undefined;
+  /** The sandbox the gates run in (`Engine.sandboxFor`); none: they run plainly. */
+  launch?: Launcher | undefined;
+  /** `policy.checkEnv`: credential-like variables the gates keep. */
+  keepEnv?: string[] | undefined;
+}
+
+/**
+ * Whether a changed file is what a check's `when` names, from the repo's root: that file, or a file in that folder
+ * (`src/` and `src` alike, `./src/` too), never one that only starts the same (`src-legacy/`).
+ */
+function changedUnder(file: string, when: string): boolean {
+  const w = when.replace(/\\/g, '/').replace(/^(\.\/)+/, '').replace(/\/+$/, '');
+  return w === '' || w === '.' || file === w || file.startsWith(`${w}/`);
+}
+
+async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = false, onGate, signal, launch, keepEnv }: GatesArgs): Promise<RepoGates> {
   const git = new GitRepo(dir);
   if (!(await git.isRepo())) {
     return { repo: repo.name, status: 'fail', results: [{ repo: repo.name, gate: '(repo)', status: 'fail' }], summary: `FAIL ${repo.name}: not a git repo at ${dir}` };
@@ -39,31 +227,53 @@ async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = fal
   const changed = await git.changedFiles(repo.baseBranch);
   if (changed.length === 0 && !force) return { repo: repo.name, status: 'skipped', results: [], summary: `SKIP ${repo.name}: no changes` };
 
-  fs.mkdirSync(logDir, { recursive: true });
+  await fs.promises.mkdir(logDir, { recursive: true });
+  // Logs are written by this process, outside the sandbox: a folder an agent turned into a link would lead them elsewhere.
+  for (const d of [logDir, path.dirname(logDir)]) {
+    if ((await fs.promises.lstat(d)).isSymbolicLink()) throw new Error(`${d} is a link; the checks' logs are not written through it`);
+  }
   const results: GateResult[] = [];
   const lines: string[] = [];
   for (const gate of repo.gates) {
-    if (!force && gate.when && !changed.some((f) => f.startsWith(gate.when!))) {
+    if (signal && signal.aborted) {
+      results.push({ repo: repo.name, gate: gate.name, status: 'skipped' });
+      lines.push(`SKIP ${repo.name} ${gate.name}: the task was stopped`);
+      continue;
+    }
+    if (!force && gate.when && !changed.some((f) => changedUnder(f, gate.when!))) {
       results.push({ repo: repo.name, gate: gate.name, status: 'skipped' });
       lines.push(`SKIP ${repo.name} ${gate.name}: nothing under ${gate.when}`);
       continue;
     }
     if (onGate) onGate(gate.name);
     const cwd = path.join(dir, gate.dir ?? '.');
+    // A check that cannot start is the config's to fix, not the agent's: it goes to you.
+    const problem = await cwdProblem(dir, cwd);
+    if (problem) {
+      results.push({ repo: repo.name, gate: gate.name, status: 'fail', unfixable: problem });
+      lines.push(`FAIL ${repo.name} ${gate.name}: ${problem} (fix the check in the config)`);
+      continue;
+    }
     const started = Date.now();
-    const [bin, args] = shellCommand(gate.cmd);
-    const r = await exec(bin, args, { cwd, timeoutMs, env: { ...getChildEnv(), ...PLAIN_ENV } });
+    // A check's own time limit (`timeout`, in seconds) over the default: an integration suite may need longer.
+    const limitMs = gate.timeout ? gate.timeout * 1000 : timeoutMs;
+    const r = await runShell(gate.cmd, { cwd, timeoutMs: limitMs, env: { ...withoutCredentials(getChildEnv(), keepEnv), ...PLAIN_ENV }, signal, launch });
     const ms = Date.now() - started;
     const log = path.join(logDir, `${slug(repo.name)}.${slug(gate.name)}.log`);
-    const output = plain(`${r.stdout}${r.stderr}`);
-    fs.writeFileSync(log, `$ (cd ${path.relative(dir, cwd) || '.'} && ${gate.cmd})\n${output}\nexit ${r.code}\n`);
+    const hint = launch !== undefined && r.code !== 0 ? sandboxNote(r.output) : '';
+    const localPort = hint.includes('policy.localPorts');
+    const output = plain(r.output) + hint;
+    await writeReplacing(log, `$ (cd ${path.relative(dir, cwd) || '.'} && ${gate.cmd})\n${output}\nexit ${r.code}\n`);
     if (r.code === 0) {
       results.push({ repo: repo.name, gate: gate.name, status: 'pass', log, ms });
       lines.push(`PASS ${repo.name} ${gate.name}`);
     } else {
-      results.push({ repo: repo.name, gate: gate.name, status: 'fail', log, ms, tail: output.trimEnd().split('\n').slice(-TAIL_LINES).join('\n') });
-      const tail = output.trimEnd().split('\n').slice(-TAIL_LINES).map((l) => `    ${l}`).join('\n');
-      lines.push(`FAIL ${repo.name} ${gate.name} (exit ${r.code}; cd ${repo.name}/${gate.dir ?? '.'} && ${gate.cmd}) log: ${log}\n${tail}`);
+      const tail = tailOf(output);
+      // Out of time is not an error an agent can fix by changing code (a slow suite, a hung service), nor is a local port
+      // the sandbox refuses: it goes to you.
+      const unfixable = r.killed === 'timeout' ? `it ran out of its ${Math.round(limitMs / 1000)}s (a longer one is its timeout, in seconds)` : localPort ? 'the sandbox refused a test a local port (policy.localPorts)' : undefined;
+      results.push({ repo: repo.name, gate: gate.name, status: 'fail', log, ms, tail, ...(unfixable && { unfixable }) });
+      lines.push(`FAIL ${repo.name} ${gate.name} (exit ${r.code}; cd ${repo.name}/${gate.dir ?? '.'} && ${gate.cmd}) log: ${log}\n${tail.split('\n').map((l) => `    ${l}`).join('\n')}`);
     }
   }
   const status = results.some((r) => r.status === 'fail') ? 'fail' : results.some((r) => r.status === 'pass') ? 'pass' : 'skipped';
@@ -71,4 +281,4 @@ async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = fal
 }
 
 export type { GateResult, RepoGates };
-export { plain, runGates, shellCommand };
+export { changedUnder, plain, runGates, runShell, sandboxNote, tailOf, withoutCredentials };

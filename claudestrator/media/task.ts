@@ -98,8 +98,15 @@ interface Views {
     tab: string;
     viewKey: string | null;
     follow: boolean;
-    items: TranscriptItem[];
-    liveText: string;
+    /** What the transcript as loaded holds of the items pushed around its read. */
+    edge: LoadedEdge | null;
+    /** Transcript loads started: only the latest one's reply is shown. */
+    loads: number;
+    /** Whether a transcript is on its way; pushed items wait for it in `held`. */
+    loading: boolean;
+    held: TranscriptItem[];
+    /** The message each step of the task is writing, followed from the screen's start, the step on screen or not. */
+    live: LiveTexts;
     cpKey: string | null;
     feedback: string;
     /** Audit findings shown: 'all' or one severity. */
@@ -110,8 +117,11 @@ interface Views {
     tab: 'output',
     viewKey: null,
     follow: true,
-    items: [],
-    liveText: '',
+    edge: null,
+    loads: 0,
+    loading: false,
+    held: [],
+    live: window.liveTexts(),
     cpKey: null,
     feedback: '',
     sev: 'all',
@@ -145,7 +155,7 @@ interface Views {
 
   views.task = {
     async enter(route) {
-      Object.assign(T, { taskId: route.taskId ?? '', d: null, viewKey: null, follow: true, items: [], liveText: '', cpKey: null, sev: 'all', tab: S.ui.taskTab || 'output' });
+      Object.assign(T, { taskId: route.taskId ?? '', d: null, viewKey: null, follow: true, edge: null, loading: false, held: [], live: window.liveTexts(), cpKey: null, sev: 'all', tab: S.ui.taskTab || 'output' });
       $('#view')!.innerHTML = `
         <div class="page task-page">
           <button class="back" data-action="go-home">${icon('back')}All tasks</button>
@@ -196,6 +206,12 @@ interface Views {
       try {
         d = await call('task', { taskId: T.taskId });
       } catch (e) {
+        // The task is gone (deleted elsewhere): its screen has nothing left to show.
+        if ((e as { code?: string }).code === 'no_task' && S.route.name === 'task' && S.route.taskId === T.taskId) {
+          toast(e instanceof Error ? e.message : String(e), 'warn');
+          go({ name: 'home' });
+          return;
+        }
         if (first) throw e;
         toast(e instanceof Error ? e.message : String(e), 'error');
         return;
@@ -214,17 +230,31 @@ interface Views {
     },
     async loadTranscript() {
       const key = T.viewKey;
-      T.liveText = '';
+      const n = ++T.loads;
+      T.held = [];
       if (!key) {
-        T.items = [];
+        T.loading = false;
+        T.edge = null;
         $('#transcript')!.innerHTML = emptyTranscript(T.d!);
         return;
       }
-      const items = await call('transcript', { taskId: T.taskId, key });
-      if (key !== T.viewKey) return;
-      T.items = items;
+      // What is pushed meanwhile waits: it may be in the transcript too, and would otherwise show twice, or be wiped.
+      T.loading = true;
+      let items: TranscriptItem[];
+      try {
+        items = await call('transcript', { taskId: T.taskId, key });
+      } finally {
+        if (n === T.loads) T.loading = false;
+      }
+      if (key !== T.viewKey || n !== T.loads) return;
+      T.edge = window.loadedEdge(items);
       const el = $('#transcript')!;
       el.innerHTML = items.length ? renderItems(items) : `<div class="t-empty">${icon('clock')}Waiting for the agent's first words…</div>`;
+      // The message its agent is writing, from its start (pieces are not in the transcript).
+      if (T.live.writing(key) !== undefined) drawLive(el, true);
+      const held = T.held;
+      T.held = [];
+      for (const item of held) appendItem(item);
       scrollTranscript(true);
     },
     render() {
@@ -265,7 +295,8 @@ interface Views {
           }
           return;
         }
-        if (msg.key === T.viewKey) appendItem(msg.item);
+        T.live.take(msg.key, msg.item);
+        if (msg.key === T.viewKey) showItem(msg.item);
         else if (T.follow && T.d && (!T.d.live || T.d.live.key !== msg.key)) this.load(false);
       } else if (msg.type === 'live') {
         if (T.d) {
@@ -283,8 +314,11 @@ interface Views {
         return;
       }
       if (e.target.id === 'cp-feedback') {
-        const primary = $('.checkpoint [data-kind="primary"]');
-        if (primary) primary.click();
+        const cp = T.d && T.d.checkpointFull;
+        const ui = cp ? cpUi(cp) : undefined;
+        const option = cp && ui ? submitOption(cp, ui) : undefined;
+        const btn = option !== undefined ? $(`.checkpoint [data-option="${option}"]`) : null;
+        if (btn) btn.click();
       }
     },
     actions: {
@@ -312,7 +346,7 @@ interface Views {
       answer: async (el) => {
         const option = el.dataset.option;
         const checkpointId = T.d!.checkpointFull!.id;
-        const spec = CP_UI[checkpointId]!.options[option];
+        const spec = cpUi(T.d!.checkpointFull!).options[option];
         const ta = $<HTMLTextAreaElement>('#cp-feedback');
         const feedback = ta ? ta.value.trim() : '';
         if (spec?.feedback === 'required' && !feedback) {
@@ -323,7 +357,7 @@ interface Views {
         }
         $$<HTMLButtonElement>('.checkpoint button').forEach((b) => (b.disabled = true));
         el.classList.add('busy');
-        const ok = await attempt('answer', { taskId: T.taskId, checkpointId, option, feedback: spec?.feedback ? feedback || undefined : undefined });
+        const ok = await attempt('answer', { taskId: T.taskId, checkpointId, option, feedback: spec?.feedback ? feedback || undefined : undefined, at: T.d!.checkpointFull!.at });
         $$<HTMLButtonElement>('.checkpoint button').forEach((b) => (b.disabled = false));
         el.classList.remove('busy');
         if (ok !== undefined) {
@@ -392,17 +426,46 @@ interface Views {
     inputs: {
       'cp-feedback': (el) => {
         T.feedback = el.value;
+        const hint = $('#cp-kbd');
+        const cp = T.d && T.d.checkpointFull;
+        const ui = cp ? cpUi(cp) : undefined;
+        const option = cp && ui ? submitOption(cp, ui) : undefined;
+        if (hint && ui) hint.textContent = (option !== undefined && ui.options[option]?.label) || '';
       },
     },
   };
+
+  /** A checkpoint's wording. An agent that said it cannot go on is not one that stopped early. */
+  function cpUi(cp: NonNullable<TaskScreen['checkpointFull']>): CpUi {
+    const ui = CP_UI[cp.id]!;
+    // The engine puts a note under a hook's output when the sandbox refused it something: no formatter fixes that.
+    if (cp.id === 'hook-failure' && /run in the sandbox \(policy\.sandbox\)/.test(cp.reason || '')) {
+      return { ...ui, title: 'The sandbox refused the git hook something', lead: 'The hook runs in the sandbox, like the checks, and was refused what the note under its output names. No change to the code fixes that: allow it in Settings → Safety, or change the hook, then retry the commit.' };
+    }
+    if (cp.id !== 'agent-failure') return ui;
+    const blocked = cp.blocked ? { title: "The agent can't go on", lead: 'It reported what stops it (below) and stopped there rather than work around it. A retry runs into the same thing until its cause changes: fix that first (the plan, the branch, the sandbox in Settings → Safety), or tell the agent what to do instead.' } : {};
+    return { ...ui, ...blocked };
+  }
+
+  /**
+   * What ⌘↵ in the feedback box answers: the primary option, but with words in the box the option that takes them
+   * (Request changes, not Approve plan, which would start development and drop them).
+   */
+  function submitOption(cp: { options: string[] }, ui: CpUi): string | undefined {
+    const primary = cp.options.find((o) => ui.options[o]?.kind === 'primary');
+    if (!T.feedback.trim()) return primary;
+    const takes = (o: string): boolean => Boolean(ui.options[o]?.feedback);
+    return primary !== undefined && takes(primary) ? primary : cp.options.find(takes);
+  }
 
   // ---------- header, alerts, aside ----------
 
   function headerHtml(d: TaskScreen) {
     const k = d.status.key;
-    const canResume = ['stopped', 'failed', 'interrupted', 'ready'].includes(k);
+    const canResume = d.status.resumable;
     const live = k === 'running' ? d.live : null;
-    const since = live ? (live.since ?? Date.now()) : 0;
+    // The duration is the ticker's to draw (`data-since`): in the HTML it would change the header, and close its menu, at every push.
+    const since = live ? live.since : undefined;
     return `<header class="task-header">
       <div class="th-main">
         <h1 class="th-title">${esc(d.title)}</h1>
@@ -412,7 +475,7 @@ interface Views {
           ${scenarioChip(d.scenario, d.scenarioLabel)}
           ${groupChip(d.group)}
           ${statusBadge(d.status, d.live)}
-          ${live ? `<span class="muted small">${icon('clock')}<span data-since="${since}">${dur(Date.now() - since)}</span></span>` : ''}
+          ${since ? `<span class="muted small">${icon('clock')}<span data-since="${since}"></span></span>` : ''}
           ${d.round > 1 ? `<span class="chip">${icon('refresh')}round ${d.round}/${d.maxRounds}</span>` : ''}
           ${d.cost ? `<span class="chip" title="Spent by this task's agents so far">${icon('dollar')}${money(d.cost).slice(1)}</span>` : ''}
         </div>
@@ -447,14 +510,17 @@ interface Views {
         body = `<b>Some repos are not ready, so nothing was changed.</b><ul>${e.blocked.map((b) => `<li><code>${esc(b.repo)}</code>: ${esc(b.problem)}${b.files ? `<div class="mono small muted">${b.files.map((f) => esc(f)).join('<br>')}</div>` : ''}</li>`).join('')}</ul><div class="muted small">Commit or stash that work (branch mode switches your checkout), then retry. New tasks can use worktrees instead (Settings → Git).</div>`;
       } else if (e.code === 'claude_login') {
         action = `<button class="btn sm primary" data-action="claude-login">${icon('user')}Sign in to Claude</button><button class="btn sm" data-action="open-account-menu">Switch account</button>${action}`;
-      } else if (e.code === 'atlassian_not_configured') {
-        action = `<button class="btn sm primary" data-action="nav" data-name="mcp">${icon('plug')}Sign in to Atlassian MCP</button><button class="btn sm" data-action="settings-atlassian">Use an API token</button>${action}`;
+      } else if (e.code === 'atlassian_not_configured' || e.code === 'atlassian_auth') {
+        action = `<button class="btn sm primary" data-action="nav" data-name="mcp">${icon('plug')}Sign in to Atlassian MCP</button><button class="btn sm" data-action="settings-atlassian">${e.code === 'atlassian_auth' ? 'Renew the API token' : 'Use an API token'}</button>${action}`;
       } else if (e.code === 'config_invalid') {
         action = `<button class="btn sm" data-action="open-config">Open config.yaml</button>${action}`;
       } else if (e.code === 'busy') {
         action = '';
       } else if (message.includes('\n')) body += `<pre class="log small">${esc(message.split('\n').slice(1).join('\n'))}</pre>`;
       parts.push(`<div class="banner error">${icon('alert')}<div class="grow">${body}</div><div class="banner-actions">${action}</div></div>`);
+    }
+    if (d.status.key === 'elsewhere') {
+      parts.push(`<div class="banner muted">${icon('info')}<div class="grow"><b>This task runs in another VS Code window</b> on this workspace. Its steps, decisions and output show up here as they are recorded; Stop here stops it there too.</div></div>`);
     }
     if (d.status.key === 'interrupted') {
       parts.push(`<div class="banner warn">${icon('alert')}<div class="grow"><b>This step was interrupted.</b> VS Code closed while it ran, or it runs in another tool (the claudestrator CLI or plugin). Resume here to start the step again.</div><div class="banner-actions"><button class="btn sm primary" data-action="run">${icon('play')}Resume here</button></div></div>`);
@@ -499,7 +565,7 @@ interface Views {
   function checkpointHtml(d: TaskScreen) {
     const cp = d.checkpointFull;
     if (!cp) return '';
-    const ui = CP_UI[cp.id]!;
+    const ui = cpUi(cp);
     const ctx: Partial<CheckpointContext> = d.checkpointContext ?? {};
     const stopped = d.status.key === 'stopped';
     let body = '';
@@ -507,7 +573,7 @@ interface Views {
       const plan = d.plan;
       const questions = plan ? plan.openQuestions : [];
       body = `
-        ${plan ? `<div class="plan-meta"><span class="chip">${esc(plan.type)}</span><span class="chip mono">${icon('branch')}${esc(`${plan.type}/${d.source && d.source.kind === 'jira' ? `${d.taskId}-` : ''}${plan.slug}`)}</span>${plan.repos.map((r) => `<span class="chip">${icon('repo')}${esc(r.name)}${r.mode === 'tests_only' ? ' · tests only' : ''}</span>`).join('')}</div>` : ''}
+        ${plan ? `<div class="plan-meta"><span class="chip">${esc(plan.type)}</span><span class="chip mono">${icon('branch')}${esc(`${plan.type}/${d.source && d.source.kind === 'jira' ? `${d.taskId}-` : ''}${plan.slug}`)}</span>${plan.repos.map((r) => `<span class="chip" ${r.baseBranch ? `title="The task's branch starts from ${esc(r.baseBranch)}, and its PR goes into it"` : ''}>${icon('repo')}${esc(r.name)}${r.mode === 'tests_only' ? ' · tests only' : ''}${r.baseBranch ? ` · from ${esc(r.baseBranch)}` : ''}</span>`).join('')}</div>` : ''}
         ${questions.length ? `<div class="questions"><h4>${icon('info')}Open questions <span class="muted">(the planner's default applies unless you say otherwise)</span></h4>${questions.map((q) => `<div class="q"><div>${esc(q.question)}</div><div class="muted small">Default: ${esc(q.default)}</div></div>`).join('')}</div>` : ''}
         <div class="doc-frame"><div class="markdown">${md(stripJsonBlock(ctx.text || ''))}</div></div>
         ${ctx.file ? `<button class="link small" data-action="open-artifact" data-file="${esc(ctx.file)}" data-preview="1">${icon('ext')}Open the plan in an editor</button>` : ''}`;
@@ -520,12 +586,28 @@ interface Views {
         .join('')}</div>
         <div class="row"><button class="btn sm" data-action="open-diff">${icon('file')}Review the combined diff</button></div>
         <details class="log-details"><summary>Commits</summary><pre class="log">${esc(ctx.text || '')}</pre></details>`;
+      // Read from what the push would publish: you decide, with it in front of you.
+      const secrets = ctx.secrets || [];
+      if (secrets.length) {
+        body += `<div class="banner error">${icon('alert')}<div class="grow"><b>This looks like ${secrets.length === 1 ? 'a credential' : `${secrets.length} credentials`} in what the push would publish.</b> Look before you push: a pushed secret has to be revoked, not deleted.<ul>${secrets
+          .slice(0, 20)
+          .map((f) => `<li><code>${esc(f.repo)}/${esc(f.file)}${f.line ? `:${f.line}` : ''}</code> ${esc(f.what)}${f.excerpt ? ` <span class="muted">${esc(f.excerpt)}</span>` : ''}</li>`)
+          .join('')}${secrets.length > 20 ? `<li class="muted">and ${secrets.length - 20} more</li>` : ''}</ul></div></div>`;
+      }
+      const hooks = ctx.hooks || [];
+      if (hooks.length) {
+        body += `<div class="banner warn">${icon('alert')}<div class="grow"><b>The agents changed what acts outside the sandbox.</b> Git hooks run when you use git in ${hooks.length === 1 ? 'that repo' : 'those repos'}, <code>.lfsconfig</code> says where Git LFS uploads, and every Claude Code session there takes <code>CLAUDE.md</code> as instructions: read them first.<ul>${hooks.map((h) => `<li><code>${esc(h.repo)}/${esc(h.file)}</code></li>`).join('')}</ul></div></div>`;
+      }
     } else {
       body = ctx.text ? `<pre class="log ${cp.id === 'gate-failure' || cp.id === 'hook-failure' ? 'error' : ''}">${esc(ctx.text)}</pre>` : '';
       // An agent that failed because Claude Code is signed out needs a sign-in, not a retry.
       if (cp.id === 'agent-failure' && /Failed to authenticate|OAuth (session|token) (has )?expired|Invalid API key|Please run \/login|not logged in|authentication_error/i.test(ctx.text || '')) {
         body += `<div class="banner error">${icon('user')}<div class="grow"><b>Claude Code is signed out for this account.</b> Sign in again (or switch the account), then retry the step.</div><div class="banner-actions"><button class="btn sm primary" data-action="claude-login">Sign in to Claude</button><button class="btn sm" data-action="open-account-menu">Switch account</button></div></div>`;
       }
+    }
+    if (cp.repeated) {
+      const what = cp.id === 'hook-failure' ? 'If you fixed what the hook needs meanwhile, retry; if not, the commit ends there again.' : 'If you fixed its cause meanwhile (a setting, the branch, the plan), retry; if not, a retry as it was ends there again: say what the agent should do differently.';
+      body += `<div class="banner warn">${icon('alert')}<div class="grow"><b>The same failure as the attempt before.</b> ${what}</div></div>`;
     }
     const needsFeedback = Object.keys(ui.options).some((o) => cp.options.includes(o) && ui.options[o]?.feedback);
     const buttons = cp.options
@@ -534,7 +616,7 @@ interface Views {
         return `<button class="btn ${spec.kind === 'primary' ? 'primary' : spec.kind === 'warn' ? 'warn' : spec.kind === 'ghost' ? 'ghost' : ''}" data-action="answer" data-option="${o}" data-kind="${spec.kind}" title="${esc(spec.hint || '')}">${icon(spec.icon || 'chevron')}${esc(spec.label)}</button>`;
       })
       .join('');
-    const primary = cp.options.find((o) => ui.options[o]?.kind === 'primary');
+    const keyed = submitOption(cp, ui);
     return `<section class="checkpoint card cp-${cp.id}">
       <div class="cp-head">
         <div class="cp-icon">${icon(cp.id === 'confirm-push' ? 'pr' : cp.id === 'approve-plan' ? 'eye' : 'alert')}</div>
@@ -543,11 +625,11 @@ interface Views {
       ${cp.step ? `<div class="muted small cp-step">At ${esc(stepName(cp.step))}</div>` : ''}
       <div class="cp-body">${body}</div>
       ${needsFeedback ? `<textarea id="cp-feedback" class="input autosize" rows="2" data-input="cp-feedback" placeholder="${esc(ui.placeholder || 'Feedback (optional)')}">${esc(T.feedback)}</textarea>` : ''}
-      <div class="cp-actions">${buttons}<span class="muted small kbd-hint"><kbd>⌘↵</kbd> ${esc((primary !== undefined && ui.options[primary]?.label) || '')}</span></div>
+      <div class="cp-actions">${buttons}<span class="muted small kbd-hint"><kbd>⌘↵</kbd> <span id="cp-kbd">${esc((keyed !== undefined && ui.options[keyed]?.label) || '')}</span></span></div>
     </section>`;
   }
 
-  const stripJsonBlock = (text: string) => text.replace(/\n*```json[^\n]*\n[\s\S]*?\n\s*```\s*$/, '').trim();
+  const stripJsonBlock = (text: string) => window.stripJsonBlock(text);
 
   // ---------- steps ----------
 
@@ -697,6 +779,8 @@ interface Views {
         return { ic: 'bot', title: 'Subagent', detail: esc(field(input, 'description') || '') };
       case 'TodoWrite':
         return { ic: 'list', title: 'Updated its to-do list', detail: '' };
+      case 'StructuredOutput':
+        return { ic: 'check', title: "Handed over its report's data", detail: '' };
       default:
         return { ic: 'zap', title: esc(name), detail: '' };
     }
@@ -707,14 +791,27 @@ interface Views {
     if (name === 'MultiEdit') return list(field(input, 'edits')).map((e) => diffHtml(field(e, 'old_string'), field(e, 'new_string'))).join('');
     if (name === 'Write') return `<pre class="code-pre">${esc(String(field(input, 'content') || '').split('\n').slice(0, 60).join('\n'))}${String(field(input, 'content') || '').split('\n').length > 60 ? '\n…' : ''}</pre>`;
     if (name === 'Bash') return `<pre class="code-pre">$ ${esc(field(input, 'command') || '')}</pre>`;
-    if (name === 'TodoWrite') return `<ul class="todos">${list(field(input, 'todos')).map((t) => `<li class="todo ${field(t, 'status')}">${field(t, 'status') === 'completed' ? icon('check') : field(t, 'status') === 'in_progress' ? '<span class="spinner xs"></span>' : '<span class="st-dot"></span>'}${esc(field(t, 'content') || field(t, 'activeForm') || '')}</li>`).join('')}</ul>`;
+    if (name === 'TodoWrite') return `<ul class="todos">${list(field(input, 'todos')).map(todoHtml).join('')}</ul>`;
     return `<pre class="code-pre">${esc(JSON.stringify(input, null, 2).slice(0, 3000))}</pre>`;
   }
 
+  /** One to-do of the agent's list. Its status is the agent's text: only a known one becomes a class, so it cannot add attributes. */
+  function todoHtml(t: unknown) {
+    const raw = field(t, 'status');
+    const status = raw === 'completed' || raw === 'in_progress' ? raw : 'pending';
+    const mark = status === 'completed' ? icon('check') : status === 'in_progress' ? '<span class="spinner xs"></span>' : '<span class="st-dot"></span>';
+    return `<li class="todo ${status}">${mark}${esc(field(t, 'content') || field(t, 'activeForm') || '')}</li>`;
+  }
+
+  /** Lines of an edit shown per side, as of a Write: the rest is in the file. */
+  const DIFF_LINES = 60;
   function diffHtml(a: unknown, b: unknown) {
-    const minus = String(a || '').split('\n').map((l) => `<div class="dl del">- ${esc(l)}</div>`).join('');
-    const plus = String(b || '').split('\n').map((l) => `<div class="dl add">+ ${esc(l)}</div>`).join('');
-    return `<div class="diff">${minus}${plus}</div>`;
+    const side = (text: unknown, cls: string, mark: string) => {
+      const lines = String(text || '').split('\n');
+      const shown = lines.slice(0, DIFF_LINES).map((l) => `<div class="dl ${cls}">${mark} ${esc(l)}</div>`).join('');
+      return lines.length > DIFF_LINES ? `${shown}<div class="dl muted">… ${lines.length - DIFF_LINES} more lines</div>` : shown;
+    };
+    return `<div class="diff">${side(a, 'del', '-')}${side(b, 'add', '+')}</div>`;
   }
 
   function toolHtml(item: Extract<TranscriptItem, { type: 'tool_use' }>, result: ToolResult | undefined) {
@@ -776,48 +873,71 @@ interface Views {
     return items.map((i) => itemHtml(i, ctx)).join('');
   }
 
+  /** Items the live transcript keeps on screen, as a loaded one: the oldest go, the file keeps them. */
+  const MAX_ITEMS = 1500;
   let liveTimer: ReturnType<typeof setTimeout> | null = null;
+  /** A pushed item of the step on screen: shown now, or once the transcript being loaded is. */
+  function showItem(item: TranscriptItem) {
+    if (T.loading) T.held.push(item);
+    else appendItem(item);
+  }
   function appendItem(item: TranscriptItem) {
     const el = $('#transcript');
     if (!el) return;
+    // Written before the transcript was read (on its way while it loaded): it is on screen already.
+    if (T.edge && T.edge.has(item)) return;
     const empty = $('.t-empty', el);
     if (empty) empty.remove();
     const near = el.scrollHeight - el.scrollTop - el.clientHeight < 120 || isPageBottom();
-    if (item.type === 'text_delta' || item.type === 'thinking') {
-      if (item.type === 'text_delta') T.liveText += item.text;
-      let live = $('.bubble.live', el);
-      if (!live) {
-        el.insertAdjacentHTML('beforeend', `<div class="bubble agent live"><div class="markdown"></div><span class="caret"></span></div>`);
-        live = $('.bubble.live', el);
-      }
-      if (!liveTimer) {
-        liveTimer = setTimeout(() => {
-          liveTimer = null;
-          const l = $('.bubble.live .markdown', el);
-          if (l) l.innerHTML = T.liveText ? md(T.liveText) : '<span class="muted">thinking…</span>';
-          if (near) scrollTranscript();
-        }, 80);
-      }
-      return;
+    if (item.type === 'text_delta' || item.type === 'thinking') return drawLive(el, near);
+    const row = item.type === 'tool_result' ? el.querySelector(`[data-tool="${CSS.escape(item.id)}"]`) : null;
+    if (row && item.type === 'tool_result') {
+      row.classList.remove('t-pending');
+      row.classList.add(item.isError ? 't-error' : 't-ok');
+      $('.tool-state', row)!.innerHTML = item.isError ? icon('x') : icon('check');
+      $('.tool-result', row)!.innerHTML = resultHtml(item);
+    } else {
+      el.insertAdjacentHTML('beforeend', itemHtml(item, null));
+      while (el.childElementCount > MAX_ITEMS) el.firstElementChild!.remove();
     }
-    if (item.type === 'text' || item.type === 'turn_end') {
-      const live = $('.bubble.live', el);
-      if (live) live.remove();
-      T.liveText = '';
-    }
-    T.items.push(item);
-    if (item.type === 'tool_result') {
-      const row = el.querySelector(`[data-tool="${CSS.escape(item.id)}"]`);
-      if (row) {
-        row.classList.remove('t-pending');
-        row.classList.add(item.isError ? 't-error' : 't-ok');
-        $('.tool-state', row)!.innerHTML = item.isError ? icon('x') : icon('check');
-        $('.tool-result', row)!.innerHTML = resultHtml(item);
-        return;
-      }
-    }
-    el.insertAdjacentHTML('beforeend', itemHtml(item, null));
+    settleLive(el);
     if (near) scrollTranscript();
+  }
+
+  /**
+   * After another item, the bubble of a message being written moves below it; with none being written (the item ended
+   * it, or ended the thinking that made the bubble) it goes. A "thinking…" bubble no longer stays above the tool calls
+   * that follow it, for the next turn's text to stream into.
+   */
+  function settleLive(el: HTMLElement) {
+    const live = $('.bubble.live', el);
+    if (!live) return;
+    if (T.viewKey && T.live.writing(T.viewKey) !== undefined) {
+      if (live !== el.lastElementChild) el.appendChild(live);
+    } else live.remove();
+  }
+
+  /**
+   * The bubble of the message the agent of the step on screen is writing: its text from the start, "thinking…" before
+   * its first words, "writing…" when the page came in after it started (its whole text follows).
+   */
+  function drawLive(el: HTMLElement, near: boolean) {
+    const live = $('.bubble.live', el);
+    if (!live) el.insertAdjacentHTML('beforeend', `<div class="bubble agent live"><div class="markdown"></div><span class="caret"></span></div>`);
+    else if (live !== el.lastElementChild) el.appendChild(live);
+    if (liveTimer) return;
+    const now = () => (T.viewKey ? T.live.writing(T.viewKey) : undefined);
+    // The whole message renders each time, so a long one renders less often: as much work per second at any length.
+    liveTimer = setTimeout(
+      () => {
+        liveTimer = null;
+        const l = $('.bubble.live .markdown', el);
+        const text = now();
+        if (l) l.innerHTML = text ? md(text) : `<span class="muted">${text === null ? 'writing…' : 'thinking…'}</span>`;
+        if (near) scrollTranscript();
+      },
+      Math.min(1000, Math.max(80, (now() || '').length / 20))
+    );
   }
 
   const isPageBottom = () => window.innerHeight + window.scrollY >= document.body.scrollHeight - 160;
@@ -939,7 +1059,7 @@ interface Views {
     const plan = d.plan;
     const planFile = d.files.filter((f) => f.path.startsWith('plan/')).pop();
     return `<div class="ticket">
-      ${plan ? `<div class="card plan-card"><h4>Plan</h4><div class="plan-meta"><span class="chip">${esc(plan.type)}</span>${plan.title ? `<span>${esc(plan.title)}</span>` : ''}${plan.repos.map((r) => `<span class="chip">${icon('repo')}${esc(r.name)}${r.mode === 'tests_only' ? ' · tests only' : ''}</span>`).join('')}</div>
+      ${plan ? `<div class="card plan-card"><h4>Plan</h4><div class="plan-meta"><span class="chip">${esc(plan.type)}</span>${plan.title ? `<span>${esc(plan.title)}</span>` : ''}${plan.repos.map((r) => `<span class="chip" ${r.baseBranch ? `title="The task's branch starts from ${esc(r.baseBranch)}, and its PR goes into it"` : ''}>${icon('repo')}${esc(r.name)}${r.mode === 'tests_only' ? ' · tests only' : ''}${r.baseBranch ? ` · from ${esc(r.baseBranch)}` : ''}</span>`).join('')}</div>
         ${planFile ? `<button class="link small" data-action="open-artifact" data-file="${esc(planFile.path)}" data-preview="1">${icon('ext')}Open the full plan</button>` : ''}</div>` : ''}
       ${d.ticket ? `<div class="doc-frame"><div class="markdown">${md(d.ticket)}</div></div>` : `<div class="t-empty">The ticket is written when the task starts.</div>`}
       <details class="log-details"><summary>What you typed</summary><pre class="code-pre">${esc(d.input)}</pre></details>

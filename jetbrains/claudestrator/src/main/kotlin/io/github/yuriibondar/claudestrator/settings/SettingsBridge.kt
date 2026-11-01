@@ -19,7 +19,6 @@ object SettingsBridge {
             "claudestrator.askPermissions" to s.askPermissions,
             "claudestrator.notifications" to s.notifications,
             "claudestrator.workspaceFolder" to WorkspaceSettings.get(project).workspaceFolder,
-            "claudestrator.nodePath" to s.nodePath,
             "claudestrator.atlassian.site" to s.atlassianSite,
             "claudestrator.atlassian.email" to s.atlassianEmail,
         )
@@ -36,7 +35,6 @@ object SettingsBridge {
             "claudestrator.askPermissions" -> s.askPermissions = (value as? JsonPrimitive)?.takeIf { it.isBoolean }?.asBoolean ?: s.askPermissions
             "claudestrator.notifications" -> if (text in ClaudestratorSettings.NOTIFICATIONS) s.notifications = text
             "claudestrator.workspaceFolder" -> WorkspaceSettings.get(project).workspaceFolder = text
-            "claudestrator.nodePath" -> s.nodePath = text
             "claudestrator.atlassian.site" -> s.atlassianSite = text
             "claudestrator.atlassian.email" -> s.atlassianEmail = text
         }

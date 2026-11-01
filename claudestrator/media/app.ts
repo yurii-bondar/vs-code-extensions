@@ -12,6 +12,8 @@ interface CustomDef {
 interface HomeView extends View {
   /** The scenario the last preview detected in the words, or null. */
   detected: string | null;
+  /** Whether a start is on its way to the extension. */
+  starting: boolean;
   render(): void;
   tasksHtml(tasks: Card[]): string;
   renderComposer(): void;
@@ -297,6 +299,8 @@ interface Views {
     if (current && current.leave) current.leave();
     S.route = route;
     persist();
+    // The host sends the output of the task on screen only.
+    void call('view', { taskId: (route.name === 'task' && route.taskId) || null }).catch(() => undefined);
     const v = views[route.name] || views.home;
     current = v;
     renderShell();
@@ -305,6 +309,8 @@ interface Views {
     try {
       await v.enter(route);
     } catch (e) {
+      // A screen left before it finished loading is not this one's to replace.
+      if (current !== v) return;
       $('#view')!.innerHTML = `<div class="empty-state">${icon('alert', 'big')}<h2>Something went wrong</h2><p>${esc(e instanceof Error ? e.message : String(e))}</p><button class="btn" data-action="go-home">Back to tasks</button></div>`;
     }
   }
@@ -312,16 +318,38 @@ interface Views {
   /** The HTML each region was last given, to skip a patch that would change nothing. */
   const rendered = new WeakMap<HTMLElement, string>();
 
-  /** Replaces a region's content only when it changed; keeps the focused field and its caret. */
+  /** The attributes that tell an element from its neighbours, such as a task card (`data-id`) from the others. */
+  const IDENTITY = ['key', 'action', 'id', 'name', 'tab', 'option', 'file'];
+  /**
+   * How to find an element again in a region drawn anew: by its id, else its tag and identifying attributes (a task
+   * card and its button carry the same `data-id`, not the same tag).
+   */
+  function selectorOf(a: HTMLElement): string | null {
+    if (a.id) return `#${CSS.escape(a.id)}`;
+    const attrs = IDENTITY.flatMap((k) => {
+      const v = a.dataset[k];
+      return v ? [`[data-${k}="${CSS.escape(v)}"]`] : [];
+    });
+    const name = a.getAttribute('name');
+    if (name) attrs.push(`[name="${CSS.escape(name)}"]`);
+    return attrs.length ? `${a.tagName.toLowerCase()}${attrs.join('')}` : null;
+  }
+
+  /** Durations ("2m 13s") from `data-since`: drawn by the ticker, never into a region's HTML, which would then change every second. */
+  function tick(root: ParentNode = document) {
+    for (const el of $$('[data-since]', root)) el.textContent = dur(Date.now() - Number(el.dataset.since));
+  }
+
+  /** Replaces a region's content only when it changed; keeps the focused element, its caret and the open menu. */
   function patch(name: string | HTMLElement, html: string) {
     const el = typeof name === 'string' ? $(`[data-region="${name}"]`) : name;
     if (!el) return false;
     if (rendered.get(el) === html) return false;
     const active = document.activeElement;
-    let key: string | undefined;
+    let key: string | null = null;
     let sel: [number | null, number | null] | null = null;
     if (active instanceof HTMLElement && el.contains(active)) {
-      key = active.id || active.dataset.key || active.getAttribute('name') || undefined;
+      key = selectorOf(active);
       if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
         try {
           sel = [active.selectionStart, active.selectionEnd];
@@ -330,10 +358,17 @@ interface Views {
         }
       }
     }
+    // A menu is known by the button that opens it: the same button drawn again opens it again.
+    const opener = (w: HTMLElement) => (w.querySelector('[data-action]') || w).outerHTML;
+    const open = new Set($$('.menu-wrap.open', el).map(opener));
     el.innerHTML = html;
     rendered.set(el, html);
+    tick(el);
+    if (open.size) for (const w of $$('.menu-wrap', el)) if (open.has(opener(w))) w.classList.add('open');
     if (key) {
-      const again = el.querySelector<HTMLElement>(`#${CSS.escape(key)}`) || el.querySelector<HTMLElement>(`[data-key="${CSS.escape(key)}"]`) || el.querySelector<HTMLElement>(`[name="${CSS.escape(key)}"]`);
+      // Only an element found once: focus never jumps to a look-alike.
+      const found = el.querySelectorAll<HTMLElement>(key);
+      const again = found.length === 1 ? found[0] : undefined;
       if (again) {
         again.focus();
         if (sel && (again instanceof HTMLInputElement || again instanceof HTMLTextAreaElement)) {
@@ -422,7 +457,7 @@ interface Views {
       .map((x) => `<button data-action="set-account" data-dir="${esc(x.dir)}" class="${x.current ? 'current' : ''}">${x.current ? icon('check') : '<span class="ic"></span>'}<span class="acc-row"><b>${esc(x.email || x.label)}${x.loggedIn === false ? ' <span class="badge tone-error">signed out</span>' : ''}</b><span class="muted small">${esc(x.label)} · ${esc(x.dir.replace(/^\/Users\/[^/]+/, '~'))}</span></span></button>`)
       .join('');
     return `<span class="menu-wrap acc-wrap">
-      <button class="acc-btn ${a.loggedIn === false ? 'signed-out' : ''}" data-action="eff-menu" title="${a.loggedIn === false ? 'Signed out — ' : ''}"${esc(`Claude account for agents, MCP and limits: ${who} (${a.shownDir}) — ${a.sourceText}`)}">${icon('user')}<span>${esc(who)}</span>▾</button>
+      <button class="acc-btn ${a.loggedIn === false ? 'signed-out' : ''}" data-action="eff-menu" title="${esc(`${a.loggedIn === false ? 'Signed out — ' : ''}Claude account for agents, MCP and limits: ${who} (${a.shownDir}) — ${a.sourceText}`)}">${icon('user')}<span>${esc(who)}</span>▾</button>
       <div class="menu acc-menu">
         <div class="menu-title">Claude account for agents, MCP servers and limits</div>
         ${rows}
@@ -447,8 +482,22 @@ interface Views {
     patch('global-permissions', list.length ? `<div class="perm-strip">${list.map(permissionCard).join('')}</div>` : '');
   }
 
+  /** Characters of a tool's input (other than a command or a path) a permission card shows. */
+  const PERM_INPUT = 300;
+  /** What a card leaves out of a request, set apart from what it shows. */
+  const cutMark = (n: string | number) => `<span class="cut" title="Not shown here">…+${n} chars</span>`;
+
+  /**
+   * The request as the agent made it. A long one comes cut, ending in "…+N chars" (the engine keeps 2000 characters of a
+   * command; the card 300 of other input): the mark stands apart, so what you allow is plainly not all of it.
+   */
   function permissionCard(p: PermissionRequest) {
-    const what = p.tool === 'Bash' ? `<code class="cmd">$ ${esc(field(p.input, 'command') || '')}</code>${field(p.input, 'description') ? `<div class="muted small">${esc(field(p.input, 'description'))}</div>` : ''}` : field(p.input, 'file_path') ? `<code>${esc(field(p.input, 'file_path'))}</code>` : `<code>${esc(JSON.stringify(p.input || {}).slice(0, 300))}</code>`;
+    const command = String(field(p.input, 'command') || '');
+    const cut = command.match(/…\+(\d+) chars$/);
+    const json = JSON.stringify(p.input || {});
+    const what = p.tool === 'Bash'
+      ? `<code class="cmd">$ ${esc(cut ? command.slice(0, cut.index) : command)}${cut ? cutMark(cut[1]!) : ''}</code>${field(p.input, 'description') ? `<div class="muted small">${esc(field(p.input, 'description'))}</div>` : ''}`
+      : field(p.input, 'file_path') ? `<code>${esc(field(p.input, 'file_path'))}</code>` : `<code>${esc(json.slice(0, PERM_INPUT))}${json.length > PERM_INPUT ? cutMark(json.length - PERM_INPUT) : ''}</code>`;
     return `<div class="perm-card">
       <div class="perm-head">${icon('shield')}<strong>${esc(p.agent)}${p.repo ? ` @ ${esc(p.repo)}` : ''}</strong><span class="muted">wants to use <b>${esc(p.tool)}</b> · ${esc(p.taskId)}</span></div>
       <div class="perm-body">${what}</div>
@@ -718,15 +767,14 @@ interface Views {
 
   views.home = {
     detected: null,
+    starting: false,
     async enter(route) {
-      if (route.compose !== undefined && route.compose !== '') {
-        S.draft.text = route.compose;
-        persist();
-      }
-      if (route.scenario) {
-        // Once: a reload must not pick it again over what you chose since.
-        S.draft.scenario = route.scenario;
-        S.route = { ...route, scenario: undefined };
+      if (route.compose !== undefined && route.compose !== '') S.draft.text = route.compose;
+      if (route.scenario) S.draft.scenario = route.scenario;
+      // Once: a reload must not put them back over what you typed or chose since.
+      if (route.compose !== undefined || route.scenario) {
+        const { compose: _compose, scenario: _scenario, ...rest } = route;
+        S.route = rest;
         persist();
       }
       $('#view')!.innerHTML = `
@@ -737,6 +785,7 @@ interface Views {
           <div data-region="tasks"></div>
         </div>`;
       await loadOverview();
+      if (current !== views.home) return; // you went on to another screen meanwhile
       this.renderComposer();
       this.render();
       const ta = $<HTMLTextAreaElement>('#composer-text');
@@ -751,6 +800,14 @@ interface Views {
       this.render();
       this.renderAgentsChips();
       this.renderExtras();
+    },
+    // What an agent does now, on its card: the overview is not read again for it.
+    onPush(msg) {
+      if (msg.type !== 'live' || !S.overview) return;
+      const card = S.overview.tasks.find((t) => t.taskId === msg.taskId);
+      if (!card) return;
+      card.live = msg.live;
+      this.render();
     },
     render() {
       const o = S.overview;
@@ -1014,7 +1071,7 @@ interface Views {
             <span class="muted">→</span>
             <span class="chip mono">${esc(p.taskId)}</span>
             ${p.exists ? `<span class="badge tone-warn">continues the existing task</span>` : ''}
-            ${p.scenario === 'readiness' && p.source.kind === 'text' && /\b[A-Z][A-Z0-9]+-\d+\b/.test(S.draft.text) ? `<span class="detect warn">${icon('info')}Checked against your words only: name exactly one Jira issue to read it from Jira</span>` : ''}
+            ${p.scenario === 'readiness' && p.source.kind === 'text' && /\b[A-Z][A-Z0-9_]+-\d+\b/.test(S.draft.text) ? `<span class="detect warn">${icon('info')}Checked against your words only: name exactly one Jira issue to read it from Jira</span>` : ''}
             ${p.problem ? `<span class="detect error">${icon('alert')}${esc(p.problem)}</span>` : ''}
             ${needsAtlassian ? `<span class="detect warn">${icon('alert')}Jira/Confluence is not connected. <a data-action="nav" data-name="mcp">Sign in to Atlassian MCP</a> or <a data-action="nav" data-name="settings">add a token</a></span>` : ''}
           </div>
@@ -1024,6 +1081,9 @@ interface Views {
       }, 250);
     },
     async start() {
+      // One start at a time: a second ⌘↵ while the first is on its way (the CLI is checked first, a dialog asks)
+      // would start a description twice, as two tasks.
+      if (this.starting) return;
       const text = S.draft.text.trim();
       if (!text && !S.draft.key) {
         $('#composer-text')?.focus();
@@ -1033,13 +1093,19 @@ interface Views {
       const btn = $<HTMLButtonElement>('#start-btn')!;
       btn.disabled = true;
       btn.classList.add('busy');
+      this.starting = true;
       // Only what the config still has: a group or instruction deleted elsewhere is dropped, not an error.
       const c = okConfig();
       const group = c && c.groups.some((g) => g.id === S.draft.group) ? S.draft.group : undefined;
       const instructions = S.draft.instructions.filter((id) => c && c.instructions.some((x) => x.id === id));
-      const r = await attempt('start', { text: S.draft.text, auto: S.draft.auto, no: S.draft.no, key: S.draft.key || undefined, effort: S.draft.effort, scenario: this.scenario(), group, instructions });
-      btn.disabled = false;
-      btn.classList.remove('busy');
+      let r: Awaited<ReturnType<typeof attempt<'start'>>>;
+      try {
+        r = await attempt('start', { text: S.draft.text, auto: S.draft.auto, no: S.draft.no, key: S.draft.key || undefined, effort: S.draft.effort, scenario: this.scenario(), group, instructions });
+      } finally {
+        this.starting = false;
+        btn.disabled = false;
+        btn.classList.remove('busy');
+      }
       if (!r) return;
       S.draft = { text: '', no: [], auto: false, key: '', effort: {}, scenario: 'auto', group: '', instructions: [] };
       this.detected = null;
@@ -1058,7 +1124,7 @@ interface Views {
     const live = t.status.key === 'running' && t.live;
     let cta = '';
     if (t.status.key === 'waiting') cta = `<button class="btn primary sm" data-action="open-task" data-id="${t.taskId}">${icon('bell')}${esc(t.checkpoint?.id === 'approve-plan' ? 'Review plan' : t.checkpoint?.id === 'confirm-push' ? 'Review & push' : 'Decide')}</button>`;
-    else if (['stopped', 'failed', 'interrupted', 'ready'].includes(t.status.key)) cta = `<button class="btn sm" data-action="run" data-id="${t.taskId}">${icon('play')}Resume</button>`;
+    else if (t.status.resumable) cta = `<button class="btn sm" data-action="run" data-id="${t.taskId}">${icon('play')}Resume</button>`;
     else if (t.status.key === 'running') cta = `<button class="icon-btn" data-action="stop" data-id="${t.taskId}" title="Stop">${icon('stop')}</button>`;
     const prs = Object.entries(t.prs || {});
     return `<article class="task-card tone-${t.status.tone}" data-action="open-task" data-id="${t.taskId}" tabindex="0">
@@ -1070,7 +1136,7 @@ interface Views {
           ${groupChip(t.group)}
           ${statusBadge(t.status, t.live)}
           ${t.result && t.result.kind === 'audit' ? sevCounts(t.result.counts ?? {}) : ''}
-          ${live ? `<span class="muted small" data-since="${live.since ?? Date.now()}">${dur(Date.now() - (live.since ?? Date.now()))}</span>` : ''}
+          ${live && live.since ? `<span class="muted small" data-since="${live.since}"></span>` : ''}
           ${t.branch ? `<span class="muted small">${icon('branch')}${esc(t.branch)}</span>` : ''}
           ${t.cost ? `<span class="muted small">${money(t.cost)}</span>` : ''}
           <span class="muted small">${ago(t.updatedAt)}</span>
@@ -1231,6 +1297,7 @@ interface Views {
     prefs: { language: 'English', gitMode: 'branch', map: false },
     async enter() {
       await loadOverview();
+      if (current !== views.setup) return;
       const o = S.overview;
       if (!o!.root) return go({ name: 'home' });
       if (o!.hasConfig) {
@@ -1239,6 +1306,7 @@ interface Views {
         return;
       }
       const detected = await call('detect');
+      if (current !== views.setup) return;
       this.repos = detected.repos.map((r) => ({ ...r, on: true, gates: r.gates.map((g) => ({ ...g, on: true })) }));
       this.prefs = { language: 'English', gitMode: 'branch', map: this.repos.length > 1 };
       this.render();
@@ -1280,7 +1348,7 @@ interface Views {
             <h3>How agents work</h3>
             <div class="field-row">
               <label class="field"><span>Language of plans, reviews and PR descriptions</span>
-                <select class="input" data-change="setup-lang">${['English', 'Ukrainian', 'German', 'French', 'Spanish', 'Polish'].map((l) => `<option ${l === this.prefs.language ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+                <select class="input" data-change="setup-lang">${o!.languages.map((l) => `<option ${l === this.prefs.language ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
             </div>
             <div class="radio-cards">
               <label class="radio-card ${this.prefs.gitMode === 'branch' ? 'on' : ''}"><input type="radio" name="gitmode" value="branch" data-change="setup-git" ${this.prefs.gitMode === 'branch' ? 'checked' : ''}><b>${icon('branch')}Branch in your checkout</b><span>Agents switch your repos to the task branch. Simple; your repos must be clean, one task at a time.</span></label>
@@ -1755,7 +1823,7 @@ interface Views {
       e.preventDefault();
       t.click();
     }
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.repeat) {
       if (t && (t.id === 'composer-text' || t.id === 'composer-key')) {
         e.preventDefault();
         views.home.start();
@@ -1806,6 +1874,10 @@ interface Views {
     }, 150);
   }
 
+  /** Whether the page asked the host where to start and went there; a screen sent before that waits in `early`. */
+  let booted = false;
+  let early: Route | null = null;
+
   window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
     const msg = event.data;
     switch (msg.type) {
@@ -1818,7 +1890,9 @@ interface Views {
         return;
       }
       case 'navigate':
-        go(msg.route);
+        // Before the page booted, the screen to start on: the boot's own route is older.
+        if (booted) go(msg.route);
+        else early = msg.route;
         return;
       case 'changed':
         refreshSoon();
@@ -1849,16 +1923,15 @@ interface Views {
   });
 
   // Live durations ("2m 13s") tick without re-rendering anything else.
-  setInterval(() => {
-    for (const el of $$('[data-since]')) el.textContent = dur(Date.now() - Number(el.dataset.since));
-  }, 1000);
+  setInterval(() => tick(), 1000);
 
   window.CS = { vscode, call, attempt, toast, icon, esc, md, $, $$, ago, clock, dur, money, fmtTokens, resetIn, meter, level, EFFORT_LABEL, effortTag, size, plural, stepName, OUTPUT_INFO, SCENARIO_INFO, scInfo, modelChoices, scenarioChip, groupChip, sevCounts, agentColor, S, views, pipeRowHtml, libraryBlock, libraryMove, pipeEditors, pipeDragging: () => Boolean(pipeDrag), go, patch, debounce, persist, statusBadge, miniSteps, sourceChip, outlineHtml, permissionCard, loadOverview, autosize, shake, refreshSoon, actions, changes, inputs,
     // Called by the last script to load (config.js) once every view is registered.
     boot: async () => {
       renderShell();
       const boot = await call('boot');
-      go(boot.route || S.route || { name: 'home' });
+      booted = true;
+      go(early || boot.route || S.route || { name: 'home' });
     },
   };
 })();

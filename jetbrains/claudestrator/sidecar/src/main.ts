@@ -17,17 +17,23 @@ let context: shim.ExtensionContext | undefined;
 
 const toVscodeContext = (c: shim.ExtensionContext): ConstructorParameters<typeof Orchestrator>[0] => c as unknown as ConstructorParameters<typeof Orchestrator>[0];
 
-function pushState(): void {
+let pushes = 0;
+
+/** Sends the task list and the account's state; one read while a later push started is dropped for that one. */
+async function pushState(): Promise<void> {
   if (!orch) return;
+  const n = ++pushes;
   const engine = orch.engine;
   const o = orch;
-  send({
-    type: 'state',
-    root: o.root,
-    cards: engine ? o.list().map((entry) => view.summary(engine, entry)) : [],
-    limits: o.limits(),
-    health: o.health,
-  });
+  let cards: Awaited<ReturnType<typeof view.summary>>[];
+  try {
+    cards = engine ? await Promise.all((await o.list()).map((entry) => view.summary(engine, entry))) : [];
+  } catch {
+    return; // a task deleted while it was read; the next push lists the rest
+  }
+  const limits = await o.limits();
+  if (n !== pushes) return;
+  send({ type: 'state', root: o.root, cards, limits, health: o.health });
 }
 
 /** The panel, created on first use as `extension.ts` does: `show` reveals it, or opens it on the given route. */
@@ -61,7 +67,7 @@ const calls: Record<string, (params: CallParams) => Promise<unknown>> = {
   async runTask(params) {
     const o = orch!;
     await o.ensureReady();
-    o.engine!.resume(taskId(params));
+    await o.engine!.resume(taskId(params));
   },
   async stopTask(params) {
     await orch!.engine!.stop(taskId(params));
@@ -77,9 +83,9 @@ const calls: Record<string, (params: CallParams) => Promise<unknown>> = {
   },
   async refresh() {
     const o = orch!;
-    o.rebuild();
+    await o.rebuild();
     await o.refreshHealth();
-    pushState();
+    void pushState();
   },
   async permissionReply(params) {
     if (typeof params.requestId !== 'string') throw new Error('requestId is missing');
@@ -95,14 +101,14 @@ async function start(msg: Extract<Incoming, { type: 'init' }>): Promise<void> {
   shim.setWorkspaceFolders(msg.workspaceFolders);
   context = shim.createContext({ storageDir: msg.storageDir, extensionDir: msg.extensionDir, version: msg.version });
   orch = new Orchestrator(toVscodeContext(context));
-  orch.onDidChange(pushState);
+  orch.onDidChange(() => void pushState());
   orch.onEngine(({ name, data }) => {
     if (['checkpoint', 'finished', 'log', 'permission', 'permissionDone'].includes(name)) send({ type: 'engine', name, data: forEvent(name, data) });
   });
   await orch.init();
   // The ages in the task list ("5m ago") drift; refresh them now and then.
-  setInterval(pushState, 60_000).unref();
-  pushState();
+  setInterval(() => void pushState(), 60_000).unref();
+  await pushState();
   send({ type: 'ready' });
 }
 

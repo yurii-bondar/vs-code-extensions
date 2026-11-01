@@ -73,7 +73,7 @@ interface TerminalOptions {
 }
 
 let savedFile: string | undefined;
-const settingsStore: Record<string, unknown> = { claudePath: FAKE, settingSources: ['project', 'local'], askPermissions: false, notifications: 'all', claudeConfigDir: '', workspaceFolder: '', nodePath: '', 'atlassian.site': '', 'atlassian.email': '' };
+const settingsStore: Record<string, unknown> = { claudePath: FAKE, settingSources: ['project', 'local'], askPermissions: false, notifications: 'all', claudeConfigDir: '', workspaceFolder: '', 'atlassian.site': '', 'atlassian.email': '' };
 const listeners: ((e: ConfigChange) => void)[] = [];
 class EventEmitter<T = void> {
   fns: Set<(v: T) => void>;
@@ -188,21 +188,16 @@ const broadcast = (msg: unknown) => {
   await orch.ensureReady();
   if (process.env.PREVIEW_SETUP) {
     const { createProjectConfig } = require(path.join(DIST, 'src', 'core', 'config.js')) as typeof import('../../src/core/config');
-    createProjectConfig(ws, { repos: { api: { gates: [{ name: 'lint', cmd: 'true' }] }, web: { gates: [{ name: 'flaky', cmd: 'test -f "$FAKE_STATE/ok" || { touch "$FAKE_STATE/ok"; echo "lint: 1 error in pages/index.vue"; exit 1; }' }] } } });
+    // Checks run in the sandbox, which writes only in the repo and its own temp folder: the flaky gate's mark goes there.
+    const flaky = `cs-flaky-${path.basename(ws)}`;
+    await createProjectConfig(ws, { repos: { api: { gates: [{ name: 'lint', cmd: 'true' }] }, web: { gates: [{ name: 'flaky', cmd: `test -f "\${TMPDIR:-/tmp}/${flaky}" || { touch "\${TMPDIR:-/tmp}/${flaky}"; echo "lint: 1 error in pages/index.vue"; exit 1; }` }] } } });
   }
   // A panel without a webview: same handlers, messages go to the browser over SSE.
   const panel: InstanceType<typeof DashboardPanel> = Object.create(DashboardPanel.prototype);
-  Object.assign(panel, { context, orch, initialRoute: null, disposables: [], post: (m: unknown) => broadcast(m) });
-  orch.onEngine(({ name, data: payload }) => {
-    const data = payload as Record<string, unknown>;
-    if (name === 'output') broadcast({ type: 'output', ...data });
-    else if (name === 'live') broadcast({ type: 'live', ...data });
-    else if (name === 'permission') broadcast({ type: 'permission', request: data });
-    else if (name === 'permissionDone') broadcast({ type: 'permissionDone', requestId: data });
-    else if (name === 'log' && data.level !== 'info') broadcast({ type: 'toast', kind: data.level === 'error' ? 'error' : 'warn', text: data.message, taskId: data.taskId });
-  });
-  orch.onDidChange(() => broadcast({ type: 'changed' }));
-  orch.onDidChangeConfig(() => broadcast({ type: 'config' }));
+  // The panel's own fields (Object.create skips their initializers) and a page that is always in view.
+  Object.assign(panel, { context, orch, initialRoute: null, disposables: [], panel: { visible: true }, missedChange: false, outputQueue: [], outputTimer: undefined, missedText: new Set(), viewing: null, post: (m: unknown) => broadcast(m) });
+  // What the page hears comes through the panel's own listeners: batched output, toasts, changes.
+  panel.listen();
 
   const theme = fs.readFileSync(path.join(ROOT, 'test', 'harness', 'theme-dark.css'), 'utf8');
   const page = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Claudestrator preview</title>
@@ -217,13 +212,17 @@ const broadcast = (msg: unknown) => {
   const es = new EventSource('/events');
   es.onmessage = (e) => window.dispatchEvent(new MessageEvent('message', { data: JSON.parse(e.data) }));
 </script>
-<script src="/media/markdown.js"></script><script src="/media/app.js"></script><script src="/media/task.js"></script><script src="/media/config.js"></script>
+<script src="/media/markdown.js"></script><script src="/media/stream.js"></script><script src="/media/app.js"></script><script src="/media/task.js"></script><script src="/media/config.js"></script>
 </body></html>`;
 
   http
     .createServer((req, res) => {
       if (req.url === '/') {
         res.writeHead(200, { 'content-type': 'text/html' }).end(page);
+        return;
+      }
+      if (req.url === '/favicon.ico') {
+        res.writeHead(204).end();
         return;
       }
       if (req.url === '/events') {
@@ -237,7 +236,7 @@ const broadcast = (msg: unknown) => {
         let body = '';
         req.on('data', (d: Buffer) => (body += d));
         req.on('end', () => {
-          panel.onMessage(JSON.parse(body));
+          void panel.onMessage(JSON.parse(body));
           res.writeHead(204).end();
         });
         return;

@@ -2,7 +2,7 @@
 // for what agents hand back (plan and verdict blocks) and for config layers.
 // The on-disk formats match the claudestrator CLI and plugin, so both can work on the same tasks.
 
-import type { Audit, AuditFinding, CheckpointId, Effort, Finding, GroupType, JsonObject, OrchEvent, Output, ParseResult, PlanMeta, Readiness, ReadinessValue, ReadinessVerdict, ReportSeverity, Runs, Scenario, Severity, CriterionStatus } from './types';
+import type { Audit, AuditFinding, CheckpointId, Effort, Finding, GroupType, JsonObject, OrchEvent, Output, ParseResult, PlanMeta, Readiness, ReadinessValue, ReadinessVerdict, ReportSeverity, Runs, Scenario, Severity, CriterionStatus, WorkReport } from './types';
 
 const OUTPUTS: Output[] = ['plan', 'code', 'tests', 'verdict', 'readiness', 'audit'];
 /**
@@ -27,11 +27,18 @@ const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 const RUNS: Runs[] = ['per-repo', 'all-repos'];
 const AGENT_COLORS = ['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'pink', 'cyan'];
 const AGENT_NAME = /^[a-z][a-z0-9-]*$/;
+/**
+ * A repo's name: a folder name of its own, since a worktree lives at `.orch/worktrees/<task>/<name>`. No separator and
+ * no `..`, which would put that folder (and its removal) somewhere else.
+ */
+const REPO_NAME = /^(?![.-])(?!.*\.\.)[A-Za-z0-9._-]+$/;
 const PLAN_TYPES = ['feat', 'fix', 'chore', 'refactor'];
+/** A plan's slug: the end of the branch name. */
+const SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 /** What a task group is. */
 const GROUP_TYPES: GroupType[] = ['epic', 'story', 'group'];
-/** A Jira issue key, as a group names it: `CP-123`. */
-const JIRA_KEY = /^[A-Z][A-Z0-9]+-\d+$/;
+/** A Jira issue key, as a group names it: `CP-123`, `MY_PROJ-12` (a project key may have `_`). */
+const JIRA_KEY = /^[A-Z][A-Z0-9_]+-\d+$/;
 const SEVERITIES: Severity[] = ['blocker', 'major', 'minor'];
 
 /** Where a human must decide. Ids are shared with the CLI and the plugin. */
@@ -46,7 +53,7 @@ const CHECKPOINT_OPTIONS: Record<CheckpointId, string[]> = {
 const JIRA_ONLY_OPTIONS = ['approve-post', 'push-comment'];
 
 /** Informational events: recorded for the UI and the audit trail, they never change state. */
-const INFO_EVENT_TYPES = ['agent_stopped', 'note', 'gates_ran', 'transition_rejected', 'jira_comment'] as const;
+const INFO_EVENT_TYPES = ['agent_stopped', 'agent_progress', 'pr_opened', 'note', 'gates_ran', 'transition_rejected', 'jira_comment'] as const;
 const INFO_EVENTS = new Set<string>(INFO_EVENT_TYPES);
 type InfoEvent = Extract<OrchEvent, { type: (typeof INFO_EVENT_TYPES)[number] }>;
 /** Events that record what happened without changing the task's state. */
@@ -80,11 +87,13 @@ const T = {
     !Number.isInteger(v) ? [`${at(p)}: expected a whole number, got ${kind(v)}`]
       : (v as number) < min || (v as number) > max ? [`${at(p)}: must be between ${min} and ${max}`] : [],
   pos: (): Check => (v, p) => (typeof v === 'number' && v > 0 ? [] : [`${at(p)}: expected a positive number`]),
+  nonNegative: (): Check => (v, p) => (typeof v === 'number' && v >= 0 ? [] : [`${at(p)}: expected 0 or a positive number`]),
   oneOf: (list: readonly unknown[]): Check => (v, p) => (list.includes(v) ? [] : [`${at(p)}: expected one of ${list.join(', ')}, got ${JSON.stringify(v)}`]),
   re: (re: RegExp, msg: string): Check => (v, p) => (typeof v === 'string' && re.test(v) ? [] : [`${at(p)}: ${msg}`]),
-  arr: (item: Check, min = 0): Check => (v, p) => {
+  arr: (item: Check, min = 0, max = Infinity): Check => (v, p) => {
     if (!Array.isArray(v)) return [`${at(p)}: expected a list, got ${kind(v)}`];
     if (v.length < min) return [`${at(p)}: needs at least ${min} item${min === 1 ? '' : 's'}`];
+    if (v.length > max) return [`${at(p)}: at most ${max} items, got ${v.length}`];
     return v.flatMap((x, i) => item(x, `${p}[${i}]`));
   },
   rec: (keyCheck: Check, item: Check): Check => (v, p) => {
@@ -172,7 +181,6 @@ function validateLibraryLayer(raw: unknown): string[] {
 const SETTINGS: Record<string, Check> = {
   claudePath: T.str(),
   claudeConfigDir: T.str(),
-  nodePath: T.str(),
   workspaceFolder: T.str(),
   settingSources: T.arr(T.oneOf(['user', 'project', 'local'])),
   askPermissions: T.bool(),
@@ -190,19 +198,43 @@ const entryId = T.re(SCENARIO_ID, 'ids are lowercase kebab-case and start with a
 const GROUP = T.obj({ type: T.oneOf(GROUP_TYPES), label: T.str(1, 80), 'jira?': T.re(JIRA_KEY, 'a Jira key looks like CP-123'), 'instructions?': T.str(1), 'defaultInstructions?': T.arr(entryId) });
 const INSTRUCTION = T.obj({ label: T.str(1, 80), text: T.str(1) });
 
-const GATE = T.obj({ name: T.str(1), cmd: T.str(1), 'dir?': T.str(1), 'when?': T.str(1) });
+const GATE = T.obj({ name: T.str(1), cmd: T.str(1), 'dir?': T.re(/^(?![\\/~]|[A-Za-z]:)(?!(?:.*[\\/])?\.\.(?:[\\/]|$)).+$/, 'dir is a folder of the repo, from its root (packages/web), never an absolute path, ~ or ..'), 'when?': T.re(/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[^*?[\]{}]+$/, 'when is a folder or file of the repo, from its root (src/ or package.json), without patterns'), 'timeout?': T.int(1, 24 * 60 * 60) });
+/**
+ * A repo's checks, each named once: a check writes its log under its name (gates.ts turns any run of characters other
+ * than letters, digits, `.`, `_` and `-` into `_`), and macOS and Windows take Lint and lint for one file.
+ */
+const GATES: Check = (v, p) => {
+  const issues = T.arr(GATE)(v, p);
+  if (issues.length) return issues;
+  const seen = new Map<string, string>();
+  for (const { name } of v as { name: string }[]) {
+    const log = name.replace(/[^A-Za-z0-9._-]+/g, '_').toLowerCase();
+    const other = seen.get(log);
+    if (other === undefined) seen.set(log, name);
+    else if (other === name) issues.push(`${at(p)}: two checks are named "${name}"; give each check its own name, its log file is named after it`);
+    else issues.push(`${at(p)}: the checks "${other}" and "${name}" would write one log file, which is named after the check; give them names that differ in more than case or punctuation`);
+  }
+  return issues;
+};
+/** The most entries a list of the safety policy holds. */
+const SANDBOX_LIST = 100;
+
+/** A branch name git takes as one (`main`, `release/2.x`): no leading `-`, which git would read as an option, and no `..`. */
+const BRANCH_PATTERN = /^(?!-)(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+const BRANCH = T.re(BRANCH_PATTERN, 'a branch name, e.g. main or release/2.x');
 
 const CONFIG_LAYER = T.obj({
   'agents?': T.rec(agentName, T.obj(AGENT_LAYER)),
   'pipeline?': T.arr(agentName),
   'scenarios?': scenariosLayer,
   'libraries?': T.arr(T.str(1)),
-  'limits?': T.obj({ 'reviewRounds?': T.int(0, 20), 'gateAttempts?': T.int(1, 20), 'budgetUsd?': T.pos() }),
+  'limits?': T.obj({ 'reviewRounds?': T.int(0, 20), 'gateAttempts?': T.int(1, 20), 'budgetUsd?': T.nonNegative(), 'parallelTasks?': T.int(1, 20) }),
   'language?': T.str(1),
-  'baseBranch?': T.str(1),
-  'repos?': T.rec(T.str(1), T.obj({ 'role?': T.str(1), 'path?': T.str(1), 'baseBranch?': T.str(1), 'gates?': T.arr(GATE) })),
+  'baseBranch?': BRANCH,
+  'repos?': T.rec(T.re(REPO_NAME, 'a repo name is letters, digits, ".", "_" and "-", e.g. api or web-app'), T.obj({ 'role?': T.str(1), 'path?': T.str(1), 'baseBranch?': BRANCH, 'gates?': GATES })),
   'jira?': T.obj({ 'allowedProjects?': T.arr(T.str(1)) }),
-  'policy?': T.obj({ 'protectedBranches?': T.arr(T.str(1)), 'draftPrsOnly?': T.bool(), 'forbidAiAttribution?': T.bool(), 'allowNoVerify?': T.bool() }),
+  // The sandbox's lists go to sandbox-runtime as its settings: a few entries each, never an unbounded list to validate.
+  'policy?': T.obj({ 'protectedBranches?': T.arr(T.str(1), 0, SANDBOX_LIST), 'draftPrsOnly?': T.bool(), 'forbidAiAttribution?': T.bool(), 'allowNoVerify?': T.bool(), 'sandbox?': T.bool(), 'localPorts?': T.bool(), 'network?': T.arr(T.re(/^[A-Za-z0-9*.:[\]-]+$/, 'a host name, e.g. npm.acme.corp or *.acme.corp'), 0, SANDBOX_LIST), 'writable?': T.arr(T.re(/^(~[\\/]|\/|[A-Za-z]:[\\/])(?=.*[^\\/~.\s])/, 'a folder below ~ or the filesystem root, e.g. ~/.cache/go-build'), 0, SANDBOX_LIST), 'checkEnv?': T.arr(T.re(/^[A-Za-z_][A-Za-z0-9_]*$/, 'a variable name, e.g. DATABASE_URL'), 0, SANDBOX_LIST) }),
   'git?': T.obj({ 'mode?': T.oneOf(['branch', 'worktree']) }),
   'editor?': T.str(1),
   'context?': T.arr(T.str(1)),
@@ -223,9 +255,9 @@ function dropNulls(v: unknown): unknown {
 const PLAN = T.obj(
   {
     type: T.oneOf(PLAN_TYPES),
-    slug: T.re(/^[a-z0-9]+(-[a-z0-9]+)*$/, 'slug must be kebab-case latin'),
+    slug: T.re(SLUG_PATTERN, 'slug must be kebab-case latin'),
     'title?': T.str(1, 100),
-    repos: T.arr(T.obj({ name: T.str(1), 'mode?': T.oneOf(['full', 'tests_only']) }), 1),
+    repos: T.arr(T.obj({ name: T.str(1), 'mode?': T.oneOf(['full', 'tests_only']), 'baseBranch?': BRANCH }), 1),
     'openQuestions?': T.arr(T.obj({ question: T.str(), default: T.str() }, { strict: false })),
   },
   { strict: false }
@@ -236,13 +268,16 @@ function parsePlanMeta(raw: unknown): ParseResult<PlanMeta> {
   const v = dropNulls(raw) as RawPlan;
   const issues = PLAN(v, '');
   if (issues.length) return { ok: false, issues };
+  // Each repo once: the pipeline runs a step per repo, and a repo named twice would run its step again and again.
+  const twice = [...new Set(v.repos.map((r) => r.name).filter((n, i, all) => all.indexOf(n) !== i))];
+  if (twice.length) return { ok: false, issues: [`repos: ${twice.join(', ')} ${twice.length === 1 ? 'is' : 'are'} named more than once; name each repo once`] };
   return {
     ok: true,
     value: {
       type: v.type,
       slug: v.slug,
       ...(v.title && { title: v.title }),
-      repos: v.repos.map((r) => ({ name: r.name, mode: r.mode || 'full' })),
+      repos: v.repos.map((r) => ({ name: r.name, mode: r.mode || 'full', ...(r.baseBranch && { baseBranch: r.baseBranch }) })),
       openQuestions: (v.openQuestions || []).map((q) => ({ question: q.question, default: q.default })),
     },
   };
@@ -253,7 +288,7 @@ interface RawPlan {
   type: string;
   slug: string;
   title?: string;
-  repos: { name: string; mode?: 'full' | 'tests_only' }[];
+  repos: { name: string; mode?: 'full' | 'tests_only'; baseBranch?: string }[];
   openQuestions?: { question: string; default: string }[];
 }
 interface RawVerdict {
@@ -296,6 +331,18 @@ function parseVerdict(raw: unknown): ParseResult<RawVerdict> {
     return { ok: false, issues: ['status: changes_requested exactly when there is at least one blocker or major finding'] };
   }
   return { ok: true, value: { status: v.status, summary: v.summary, findings } };
+}
+
+const WORK = T.obj({ status: T.oneOf(['done', 'blocked']), 'blockers?': T.arr(T.str()) }, { strict: false });
+
+/**
+ * A code or tests stage's status. Lenient where the others are strict: a report without one (an older CLI, an agent
+ * of your own that never says) is done, as before; only `blocked` changes what happens next.
+ */
+function parseWork(raw: unknown): WorkReport {
+  const v = dropNulls(raw) as { status?: string; blockers?: string[] };
+  if (WORK(v, '').length || v.status !== 'blocked') return { status: 'done', blockers: [] };
+  return { status: 'blocked', blockers: (v.blockers || []).map((b) => b.trim()).filter(Boolean) };
 }
 
 // ---------- report scenarios ----------
@@ -362,18 +409,24 @@ function parseAudit(raw: unknown): ParseResult<Audit> {
   return { ok: true, value: { summary: v.summary, scope: (v.scope || []).map(String), findings } };
 }
 
+export type { Check };
 export {
+  T,
   OUTPUTS,
   SCENARIOS,
   SCENARIO_OUTPUT,
   SCENARIO_ID,
   REPORT_SEVERITIES,
   CRITERION_STATUSES,
+  SEVERITIES,
+  SLUG_PATTERN,
+  BRANCH_PATTERN,
   INSTRUCTION_MODES,
   AGENT_COLORS,
   RUNS,
   EFFORTS,
   AGENT_NAME,
+  REPO_NAME,
   PLAN_TYPES,
   GROUP_TYPES,
   JIRA_KEY,
@@ -389,6 +442,7 @@ export {
   validateAgentPatch,
   parsePlanMeta,
   parseVerdict,
+  parseWork,
   parseReadiness,
   parseAudit,
   readinessVerdict,

@@ -1,28 +1,12 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { Orchestrator, settings } from './src/orchestrator';
-import { TaskTree } from './src/tree';
-import { DashboardPanel } from './src/panel';
+import { TaskTree, escapeMd } from './src/tree';
+import { DashboardPanel, deleteTask, openConfig } from './src/panel';
 import * as view from './src/core/view';
 import { CHECKPOINT_TITLE } from './src/core/describe';
 import type { Route } from './src/panel';
 import type { StoredLimits } from './src/orchestrator';
-import type { TaskState } from './src/core/types';
-
-/** The data of the engine events this file reacts to; which fields are set depends on the event. */
-interface EngineData {
-  taskId: string;
-  title: string;
-  checkpoint: { id: string };
-  state: TaskState;
-  level?: string;
-  message?: string;
-  tool: string;
-  input?: { command?: string; file_path?: string };
-  agent: string;
-  repo?: string;
-  requestId: string;
-}
 
 let orch: Orchestrator;
 
@@ -38,7 +22,7 @@ function open(context: vscode.ExtensionContext, route?: Route): DashboardPanel {
 async function pickTask(placeHolder: string, filter: (card: view.Card) => boolean = () => true): Promise<string | undefined> {
   const engine = orch.engine;
   if (!engine) return undefined;
-  const cards = orch.list().map((e) => view.summary(engine, e)).filter(filter);
+  const cards = (await Promise.all((await orch.list()).map((e) => view.summary(engine, e)))).filter(filter);
   if (!cards.length) {
     vscode.window.showInformationMessage('No matching tasks.');
     return undefined;
@@ -64,10 +48,11 @@ function updateStatus(item: vscode.StatusBarItem, tree: TaskTree): void {
   const running = tree.cards.filter((x) => x.status.group === 'running');
   const waiting = tree.cards.filter((x) => x.status.group === 'attention');
   const md = new vscode.MarkdownString(undefined, true);
-  md.isTrusted = true;
+  // Trusted for its own two links only; the live text holds repo and gate names from the config.
+  md.isTrusted = { enabledCommands: ['claudestrator.newTask', 'claudestrator.open'] };
   md.appendMarkdown('**Claudestrator**\n\n');
-  for (const x of running) md.appendMarkdown(`$(sync~spin) \`${x.taskId}\` ${(x.live && x.live.text) || 'running'}\n\n`);
-  for (const x of waiting) md.appendMarkdown(`$(bell-dot) \`${x.taskId}\` ${x.status.label}\n\n`);
+  for (const x of running) md.appendMarkdown(`$(sync~spin) \`${x.taskId}\` ${escapeMd((x.live && x.live.text) || 'running')}\n\n`);
+  for (const x of waiting) md.appendMarkdown(`$(bell-dot) \`${x.taskId}\` ${escapeMd(x.status.label)}\n\n`);
   if (!running.length && !waiting.length) md.appendMarkdown('Nothing needs you right now.\n\n');
   md.appendMarkdown('[New task](command:claudestrator.newTask) · [Dashboard](command:claudestrator.open)');
   item.tooltip = md;
@@ -84,9 +69,13 @@ const resetIn = (unix?: number): string => {
   return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
 };
 
+let limitsShown = 0;
+
 /** `5h 31% · wk 26%`, like the Claude Code status line; warning colours from 80%. */
-function updateLimits(item: vscode.StatusBarItem, o: Orchestrator): void {
-  const l = o.limits();
+async function updateLimits(item: vscode.StatusBarItem, o: Orchestrator): Promise<void> {
+  const n = ++limitsShown;
+  const l = await o.limits();
+  if (n !== limitsShown) return; // a newer update is on its way
   if (!l) return item.hide();
   const part = (label: string, w?: { pct: number }): string => (w ? `${label} ${w.pct}%` : '');
   item.text = `$(pulse) ${[part('5h', l.fiveHour), part('wk', l.sevenDay)].filter(Boolean).join(' · ')}`;
@@ -105,6 +94,13 @@ function updateLimits(item: vscode.StatusBarItem, o: Orchestrator): void {
 
 function activate(context: vscode.ExtensionContext) {
   orch = new Orchestrator(context);
+  // What the engines report, every level with its task (Claudestrator: Show Log), from before the first engine starts.
+  const log = vscode.window.createOutputChannel('Claudestrator', { log: true });
+  const write = (data: Parameters<typeof view.logLine>[0]): void => {
+    const { level, text } = view.logLine(data);
+    log[level](text);
+  };
+  context.subscriptions.push(log, orch.onEngine((e) => e.name === 'log' && write(e.data)));
   const tree = new TaskTree(orch);
   const treeView = vscode.window.createTreeView('claudestrator.tasks', { treeDataProvider: tree, showCollapseAll: false });
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
@@ -114,39 +110,50 @@ function activate(context: vscode.ExtensionContext) {
   limitsItem.command = 'claudestrator.open';
   limitsItem.name = 'Claudestrator: Claude limits';
 
-  const refresh = (): void => {
-    tree.refresh();
+  const refresh = async (): Promise<void> => {
+    await tree.refresh();
     const c = tree.counts();
     treeView.badge = c.attention ? { value: c.attention, tooltip: `${c.attention} task${c.attention === 1 ? '' : 's'} need${c.attention === 1 ? 's' : ''} you` } : undefined;
     updateStatus(status, tree);
-    updateLimits(limitsItem, orch);
+    await updateLimits(limitsItem, orch);
   };
 
-  orch.init().then(refresh, (e: Error) => vscode.window.showErrorMessage(`Claudestrator could not start: ${e.message}`));
+  orch.init().then(refresh, (e: Error) => {
+    write({ level: 'error', message: `Claudestrator could not start: ${e.stack || e.message}` });
+    void vscode.window.showErrorMessage(view.plainNotice(`Claudestrator could not start: ${e.message}`));
+  });
 
-  // Notifications: a checkpoint, a finished task, a failure, a permission prompt.
-  orch.onEngine(async ({ name, data: payload }) => {
-    const data = payload as EngineData;
+  // What an agent does now: the tree's line for its task, without reading every task again.
+  context.subscriptions.push(orch.onEngine((e) => e.name === 'live' && tree.setLive(e.data.taskId, e.data.live)));
+
+  // Notifications: a checkpoint, a finished task, a failure, a permission prompt. Their text comes from tasks, agents
+  // and tools, so it goes through plainNotice: none of it becomes a link.
+  orch.onEngine(async (e) => {
     const visible = DashboardPanel.current && DashboardPanel.current.panel.visible;
-    if (name === 'checkpoint' && notify('needsYou') && !visible) {
-      const choice = await vscode.window.showInformationMessage(`${data.taskId} needs you: ${CHECKPOINT_TITLE[data.checkpoint.id]}`, { detail: data.title }, 'Open');
-      if (choice) open(context, { name: 'task', taskId: data.taskId });
-    } else if (name === 'finished' && notify('all')) {
-      const prs = Object.values(data.state.prs || {});
-      const msg = data.state.outcome === 'published' ? `${data.taskId}: draft PRs are open.` : `${data.taskId} is done.`;
-      const choice = await vscode.window.showInformationMessage(msg, ...(prs.length ? ['Open PRs'] : []), 'Open');
+    if (e.name === 'checkpoint' && notify('needsYou') && !visible) {
+      const { taskId, checkpoint, title } = e.data;
+      const choice = await vscode.window.showInformationMessage(view.plainNotice(`${taskId} needs you: ${CHECKPOINT_TITLE[checkpoint.id]}`), { detail: title }, 'Open');
+      if (choice) open(context, { name: 'task', taskId });
+    } else if (e.name === 'finished' && notify('all')) {
+      const { taskId, state } = e.data;
+      // Only web addresses open, as on the dashboard: a PR's value is what `gh` printed.
+      const prs = Object.values(state.prs || {}).filter(view.isWebLink);
+      const msg = state.outcome === 'published' ? `${taskId}: draft PRs are open.` : `${taskId} is done.`;
+      const choice = await vscode.window.showInformationMessage(view.plainNotice(msg), ...(prs.length ? ['Open PRs'] : []), 'Open');
       if (choice === 'Open PRs') prs.forEach((u) => vscode.env.openExternal(vscode.Uri.parse(u)));
-      else if (choice) open(context, { name: 'task', taskId: data.taskId });
-    } else if (name === 'log' && data.level === 'error' && notify('all') && !visible) {
-      const choice = await vscode.window.showErrorMessage(`${data.taskId ? `${data.taskId}: ` : ''}${data.message}`, ...(data.taskId ? ['Open'] : []));
-      if (choice) open(context, { name: 'task', taskId: data.taskId });
-    } else if (name === 'permission') {
-      const what = data.tool === 'Bash' ? `run \`${String((data.input && data.input.command) || '').slice(0, 120)}\`` : data.input && data.input.file_path ? `${data.tool.toLowerCase()} ${path.basename(data.input.file_path)}` : `use ${data.tool}`;
-      const choice = await vscode.window.showWarningMessage(`${data.agent}${data.repo ? ` @ ${data.repo}` : ''} wants to ${what}`, { detail: `Task ${data.taskId}` }, 'Allow', 'Deny', 'Open');
-      if (choice === 'Allow' || choice === 'Deny') {
-        if (orch.engine) orch.engine.permissionReply(data.requestId, choice === 'Allow');
-      }
-      else if (choice === 'Open') open(context, { name: 'task', taskId: data.taskId });
+      else if (choice) open(context, { name: 'task', taskId });
+    } else if (e.name === 'log' && e.data.level === 'error' && notify('all') && !visible) {
+      const { taskId, message } = e.data;
+      const choice = await vscode.window.showErrorMessage(view.plainNotice(`${taskId ? `${taskId}: ` : ''}${message}`), ...(taskId ? ['Open'] : []));
+      if (choice && taskId) open(context, { name: 'task', taskId });
+    } else if (e.name === 'permission' && notify('needsYou') && !visible) {
+      // A question for you, like a checkpoint: the dashboard, when it shows, asks it itself.
+      const p = e.data;
+      // A command the notification cannot show whole is allowed on the dashboard, where you read all of it.
+      const { text, whole } = view.permissionNotice(p);
+      const choice = await vscode.window.showWarningMessage(text, { detail: `Task ${p.taskId}` }, ...(whole ? ['Allow'] : []), 'Deny', 'Open');
+      if ((choice === 'Allow' || choice === 'Deny') && !orch.permissionReply(p.requestId, choice === 'Allow')) void vscode.window.showInformationMessage(view.plainNotice(`${p.agent}'s question was answered already: on the dashboard, or denied when nobody answered in time.`));
+      else if (choice === 'Open') open(context, { name: 'task', taskId: p.taskId });
     }
   }, null, context.subscriptions);
 
@@ -156,7 +163,7 @@ function activate(context: vscode.ExtensionContext) {
     treeView,
     status,
     limitsItem,
-    orch.onDidChange(refresh),
+    orch.onDidChange(() => void refresh()),
     reg('claudestrator.open', () => open(context, { name: 'home' })),
     reg('claudestrator.newTask', (text) => open(context, { name: 'home', compose: typeof text === 'string' ? text : '' })),
     reg('claudestrator.checkReadiness', (text) => open(context, { name: 'home', scenario: 'readiness', compose: typeof text === 'string' ? text : '' })),
@@ -176,26 +183,36 @@ function activate(context: vscode.ExtensionContext) {
       if (taskId) open(context, { name: 'task', taskId, focus: 'checkpoint' });
     }),
     reg('claudestrator.runTask', async (arg) => {
-      const taskId = idOf(arg) || (await pickTask('Resume which task?', (c) => ['stopped', 'failed', 'interrupted', 'ready'].includes(c.status.key)));
+      const taskId = idOf(arg) || (await pickTask('Resume which task?', (c) => c.status.resumable));
       if (!taskId) return;
       await orch.ensureReady();
       try {
-        orch.engine!.resume(taskId);
+        await orch.engine!.resume(taskId);
       } catch (e) {
-        vscode.window.showErrorMessage((e as Error).message);
+        write({ level: 'error', message: (e as Error).message, taskId });
+        vscode.window.showErrorMessage(view.plainNotice((e as Error).message));
       }
     }),
     reg('claudestrator.stopTask', async (arg) => {
       const taskId = idOf(arg) || (await pickTask('Stop which task?', (c) => c.status.key === 'running'));
-      if (taskId) await orch.engine!.stop(taskId);
+      const engine = taskId && orch.engineOf(taskId);
+      if (engine) await engine.stop(taskId);
     }),
     reg('claudestrator.revealTaskFolder', (arg) => {
       const taskId = idOf(arg);
       if (taskId) vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(path.join(orch.engine!.svc.dir(taskId), 'events.ndjson')));
     }),
+    // From the sidebar, without opening the dashboard; one that shows the task leaves it.
     reg('claudestrator.deleteTask', async (arg) => {
       const taskId = idOf(arg) || (await pickTask('Delete which task?', (c) => c.status.key !== 'running'));
-      if (taskId) await open(context).$deleteTask({ taskId });
+      const engine = orch.engine;
+      if (!taskId || !engine) return;
+      try {
+        if ((await deleteTask(engine, taskId)).deleted && DashboardPanel.current) DashboardPanel.current.taskDeleted(taskId);
+      } catch (e) {
+        write({ level: 'error', message: (e as Error).message, taskId });
+        void vscode.window.showErrorMessage(view.plainNotice((e as Error).message));
+      }
     }),
     reg('claudestrator.agents', () => open(context, { name: 'agents' })),
     reg('claudestrator.repos', () => open(context, { name: 'repos' })),
@@ -203,7 +220,7 @@ function activate(context: vscode.ExtensionContext) {
     reg('claudestrator.setup', () => open(context, { name: 'setup' })),
     reg('claudestrator.openConfig', () => {
       if (!orch.root) return vscode.window.showWarningMessage('Open a folder first.');
-      return open(context).$openConfig({ which: 'project' });
+      return openConfig(orch.root, 'project');
     }),
     reg('claudestrator.checkHealth', async () => {
       const h = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Checking Claude Code, Git and GitHub CLI…' }, () => orch.refreshHealth());
@@ -211,22 +228,23 @@ function activate(context: vscode.ExtensionContext) {
       const detail = [line(h.claude.ok, 'Claude Code', h.claude.version || h.claude.error), line(h.git.ok, 'Git', h.git.version), line(h.gh.ok, 'GitHub CLI', h.gh.ok ? h.gh.account || h.gh.version : h.gh.error)].join('\n');
       vscode.window.showInformationMessage(h.claude.ok && h.git.ok ? 'Claudestrator is ready.' : 'Claudestrator needs attention.', { modal: true, detail });
     }),
+    reg('claudestrator.showLog', () => log.show()),
     reg('claudestrator.refresh', async () => {
-      orch.rebuild();
+      await orch.rebuild();
       await orch.refreshHealth();
-      refresh();
+      await refresh();
     }),
-    vscode.workspace.onDidChangeWorkspaceFolders(() => orch.rebuild()),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => void orch.rebuild()),
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration('claudestrator.workspaceFolder')) orch.rebuild();
-      if (e.affectsConfiguration('claudestrator.claudePath') || e.affectsConfiguration('claudestrator.nodePath')) orch.refreshHealth();
+      if (e.affectsConfiguration('claudestrator.workspaceFolder')) void orch.rebuild();
+      if (e.affectsConfiguration('claudestrator.claudePath')) orch.refreshHealth();
       else if (e.affectsConfiguration('claudestrator.settingSources')) orch.refreshDefaults(true);
 
     })
   );
 
   // Ages in the tree ("5m ago") drift; refresh them now and then.
-  const tick = setInterval(() => tree.cards.length && refresh(), 60000);
+  const tick = setInterval(() => tree.cards.length && void refresh(), 60000);
   context.subscriptions.push({ dispose: () => clearInterval(tick) });
 
   // For integration tests and other extensions.
@@ -235,7 +253,7 @@ function activate(context: vscode.ExtensionContext) {
 
 async function deactivate(): Promise<void> {
   // Agents are child processes of this window; stop them cleanly so their tasks resume from the same step.
-  if (orch && orch.engine) await orch.engine.stopAll();
+  if (orch) await orch.stopAll();
 }
 
 export { activate, deactivate };

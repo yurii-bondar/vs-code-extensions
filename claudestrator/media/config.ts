@@ -428,7 +428,7 @@ interface Views {
   // ---------- repos ----------
 
   const isRepoField = (f: string): f is 'name' | 'path' | 'role' | 'baseBranch' => f === 'name' || f === 'path' || f === 'role' || f === 'baseBranch';
-  const isGateField = (f: string): f is keyof GateConfig => f === 'name' || f === 'cmd' || f === 'when' || f === 'dir';
+  const isGateField = (f: string): f is 'name' | 'cmd' | 'when' | 'dir' => f === 'name' || f === 'cmd' || f === 'when' || f === 'dir';
 
   views.repos = {
     r: null,
@@ -557,11 +557,15 @@ interface Views {
         views.repos.load();
       },
       'repo-run': async (el) => {
+        const label = el.innerHTML;
         el.disabled = true;
         el.innerHTML = '<span class="spinner xs"></span>Running…';
         const name = el.dataset.repo;
         let r = await attempt('runGates', { name });
         if (r && r.status === 'skipped' && /no changes/.test(r.summary)) r = await attempt('runGates', { name, force: true });
+        // On a failure the page renders as before, which a patch skips: the button is put back here.
+        el.disabled = false;
+        el.innerHTML = label;
         if (r) views.repos.results[name] = r;
         views.repos.render();
       },
@@ -693,7 +697,8 @@ interface Views {
           <div class="field-row three">
             <label class="field"><span>Review rounds ${tag(['limits', 'reviewRounds'])}</span><input class="input" type="number" min="0" max="20" data-change="set-number" data-path="limits.reviewRounds" value="${cfg ? cfg.limits.reviewRounds : 2}"><small class="muted">fix rounds before you are asked</small></label>
             <label class="field"><span>Check attempts ${tag(['limits', 'gateAttempts'])}</span><input class="input" type="number" min="1" max="20" data-change="set-number" data-path="limits.gateAttempts" value="${cfg ? cfg.limits.gateAttempts : 3}"><small class="muted">red checks fed back to the agent</small></label>
-            <label class="field"><span>Budget per task, $ ${tag(['limits', 'budgetUsd'])}</span><input class="input" type="number" min="0" step="1" data-change="set-number" data-path="limits.budgetUsd" value="${cfg && cfg.limits.budgetUsd !== undefined ? cfg.limits.budgetUsd : ''}" placeholder="no limit"><small class="muted">the task stops when spent</small></label>
+            <label class="field"><span>Budget per task, $ ${tag(['limits', 'budgetUsd'])}</span><input class="input" type="number" min="0" step="1" data-change="set-number" data-path="limits.budgetUsd" value="${cfg && cfg.limits.budgetUsd !== undefined ? cfg.limits.budgetUsd : ''}" placeholder="no limit"><small class="muted">the task stops when spent; 0: no limit</small></label>
+            <label class="field"><span>Tasks at once ${tag(['limits', 'parallelTasks'])}</span><input class="input" type="number" min="1" max="20" step="1" data-change="set-number" data-path="limits.parallelTasks" value="${cfg && cfg.limits.parallelTasks !== undefined ? cfg.limits.parallelTasks : ''}" placeholder="no cap"><small class="muted">more wait for you to resume them</small></label>
           </div>
         </section>
 
@@ -704,12 +709,16 @@ interface Views {
         </section>
 
         <section class="card settings-card" id="sec-safety"><h3>${icon('shield')}Safety</h3>
-          <p class="muted small">Always enforced: agents never commit, push, switch branches or run destructive git/rm commands, and edit files only inside the repo of their step. Claudestrator itself never force-pushes, never merges PRs and pushes only after you confirm.</p>
+          <p class="muted small">Always enforced: agents never commit, push, switch branches or run destructive git/rm commands, edit files only inside the repo of their step (never Claudestrator's config), never read your keys and credentials, publish nothing, and change nothing through MCP servers unless an agent's tools name the tool. Claudestrator itself never force-pushes, never merges PRs and pushes only after you confirm.</p>
           <label class="check-line"><input type="checkbox" data-change="set-setting" data-key="askPermissions" ${s.askPermissions ? 'checked' : ''}><span><b>Ask me</b> before an agent edits a file or runs a command <span class="muted">(otherwise the rules above decide)</span></span></label>
           <label class="check-line"><input type="checkbox" data-change="set-bool" data-path="policy.draftPrsOnly" ${!cfg || cfg.policy.draftPrsOnly ? 'checked' : ''}><span>Open PRs as drafts only</span></label>
           <label class="check-line"><input type="checkbox" data-change="set-bool" data-path="policy.forbidAiAttribution" ${cfg && cfg.policy.forbidAiAttribution ? 'checked' : ''}><span>No AI attribution (co-author lines, "generated with") in commits and PRs</span></label>
           <label class="check-line"><input type="checkbox" data-change="set-bool" data-path="policy.allowNoVerify" ${cfg && cfg.policy.allowNoVerify ? 'checked' : ''}><span>Allow skipping git hooks (<code>--no-verify</code>)</span></label>
           <label class="field"><span>Protected branches <span class="muted">nobody commits on or pushes to directly</span></span><input class="input mono" data-change="set-list" data-path="policy.protectedBranches" value="${esc(cfg ? cfg.policy.protectedBranches.join(', ') : 'main, master')}"></label>
+          <label class="check-line"><input type="checkbox" data-change="set-bool" data-path="policy.sandbox" ${!cfg || cfg.policy.sandbox ? 'checked' : ''}><span>Run the agents' commands, the checks and git hooks in the <b>sandbox</b> <span class="muted">(writes only in the step's repos, no keys or credentials, the network below only; macOS, Linux and WSL2)</span></span></label>
+          <label class="field"><span>Hosts commands may reach <span class="muted">besides npm, PyPI, Go, crates, RubyGems, Maven, Packagist and GitHub's downloads</span></span><input class="input mono" data-change="set-list" data-path="policy.network" value="${esc(cfg ? cfg.policy.network.join(', ') : '')}" placeholder="npm.acme.corp, *.internal.example"></label>
+          <label class="field"><span>Folders commands may also write <span class="muted">build caches, comma-separated</span></span><input class="input mono" data-change="set-paths" data-path="policy.writable" value="${esc(cfg ? cfg.policy.writable.join(', ') : '')}" placeholder="~/.cache/go-build, ~/.gradle/caches"></label>
+          <label class="check-line"><input type="checkbox" data-change="set-bool" data-path="policy.localPorts" ${cfg && cfg.policy.localPorts ? 'checked' : ''}><span>Let commands open <b>local ports</b> <span class="muted">(tests that start a server on 127.0.0.1; on macOS they then also reach every service listening on this machine)</span></span></label>
         </section>
 
         <section class="card settings-card" id="sec-claude"><h3>${icon('bot')}Claude Code</h3>
@@ -801,13 +810,18 @@ interface Views {
         const raw = el.value.trim();
         const value = raw === '' ? undefined : Number(raw);
         if (value !== undefined && Number.isNaN(value)) return toast('Enter a number', 'warn');
-        if (await save('setValue', { keyPath, value: keyPath[1] === 'budgetUsd' && value === 0 ? undefined : value })) views.settings.load();
+        if (await save('setValue', { keyPath, value })) views.settings.load();
       },
       'set-bool': async (el) => {
         if (await save('setValue', { keyPath: el.dataset.path.split('.'), value: el.checked })) views.settings.load();
       },
       'set-list': async (el) => {
         const value = el.value.split(/[\s,]+/).filter(Boolean);
+        if (await save('setValue', { keyPath: el.dataset.path.split('.'), value: value.length ? value : undefined })) views.settings.load();
+      },
+      'set-paths': async (el) => {
+        // Paths may hold spaces, so only commas separate them.
+        const value = el.value.split(',').map((p) => p.trim()).filter(Boolean);
         if (await save('setValue', { keyPath: el.dataset.path.split('.'), value: value.length ? value : undefined })) views.settings.load();
       },
       'set-git': async (el) => {

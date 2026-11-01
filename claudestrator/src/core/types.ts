@@ -77,6 +77,8 @@ export interface StepRef {
 export interface PlanRepo {
   name: string;
   mode: 'full' | 'tests_only';
+  /** The branch the task's branch starts from and its PR goes into, when the work is not on the repo's base. */
+  baseBranch?: string;
 }
 
 export interface PlanMeta {
@@ -100,6 +102,15 @@ export interface Verdict {
   status: 'approved' | 'changes_requested';
   summary: string;
   findings: Finding[];
+}
+
+/**
+ * What a code or tests stage says of its own work: done, or blocked by what it cannot settle itself (a plan that does
+ * not hold, a bug in code a tester may not change). Blocked stops the step at once for you to decide.
+ */
+export interface WorkReport {
+  status: 'done' | 'blocked';
+  blockers: string[];
 }
 
 export interface Criterion {
@@ -155,6 +166,8 @@ export interface Gate {
   cmd: string;
   dir?: string;
   when?: string;
+  /** Seconds the check may run before it is stopped (1 to 86400); unset: the default of 15 minutes. */
+  timeout?: number;
 }
 
 export interface RepoConfig {
@@ -224,6 +237,8 @@ export interface Limits {
   reviewRounds: number;
   gateAttempts: number;
   budgetUsd?: number;
+  /** How many tasks may run agents at once; unset: no cap. */
+  parallelTasks?: number;
 }
 
 export interface Policy {
@@ -231,6 +246,20 @@ export interface Policy {
   draftPrsOnly: boolean;
   forbidAiAttribution: boolean;
   allowNoVerify: boolean;
+  /** Run the agents' shell commands in Claude Code's sandbox (macOS, Linux, WSL2). */
+  sandbox: boolean;
+  /** Hosts sandboxed commands may reach besides the package registries. */
+  network: string[];
+  /** Folders sandboxed commands (agents' and checks') may write besides the repo: build caches such as `~/.cache/go-build`. */
+  writable: string[];
+  /**
+   * Let sandboxed commands open local ports and reach what listens on them: a test that starts a server on 127.0.0.1.
+   * It matters on macOS, where every service listening on the machine becomes reachable; Linux's sandbox has a
+   * loopback of its own.
+   */
+  localPorts: boolean;
+  /** Variables of your environment that checks and git hooks keep although they look like credentials (a test database's URL). */
+  checkEnv: string[];
 }
 
 export interface Config {
@@ -248,9 +277,10 @@ export interface Config {
   policy: Policy;
   context: string[];
   git: { mode: GitMode };
-  editor?: string;
   groups: Record<string, TaskGroup>;
   instructions: Record<string, TaskInstruction>;
+  /** Every file the config is read from: config and library files (also where none is yet), instruction and context files. */
+  sources: string[];
 }
 
 export interface Diagnostic {
@@ -298,6 +328,13 @@ export interface Checkpoint {
   options: string[];
   step?: Step;
   reason?: string;
+  /** An agent-failure where the agent said it cannot go on, rather than one that ended without a usable report. */
+  blocked?: boolean;
+  /**
+   * The failure reads as the one the retry before it ended in: a retry as it was ends there again, unless its cause was
+   * fixed meanwhile outside the task (a setting, the branch), which no event records. A warning, never a refusal.
+   */
+  repeated?: boolean;
   at: string;
 }
 
@@ -320,6 +357,8 @@ export interface ReviewState {
   verdicts: RecordedVerdict[];
   lastVerdicts: RecordedVerdict[];
   openFindings: Finding[];
+  /** What you said for the fix round ("Priorities for the fix round"): every step of the round gets it. */
+  roundFeedback?: string | null | undefined;
 }
 
 export interface Artifact {
@@ -384,6 +423,8 @@ export interface TaskState {
   spec?: Spec;
   plan?: PlanMeta;
   outcome?: string;
+  /** The last failure a retry answered (an agent's step, a commit a hook rejected), until a step or a commit goes through. */
+  lastFailure?: { id: CheckpointId; step?: Step; reason: string };
 }
 
 // ---------- events ----------
@@ -400,6 +441,8 @@ export interface AgentStoppedPayload {
   turns?: number;
   sessionId?: string | undefined;
   cwd?: string;
+  /** The Claude Code account (config folder) the session ran under: where `claude --resume` finds it. */
+  configDir?: string | undefined;
   model?: string | undefined;
   effort?: string | undefined;
   ctxPct?: number | undefined;
@@ -429,7 +472,7 @@ export type OrchEvent = EventBase &
         model?: Record<string, string> | undefined;
         limits: Pick<Limits, 'reviewRounds' | 'gateAttempts'>;
       }
-    | { type: 'intake_completed'; spec: Spec; repos?: PlanRepo[] }
+    | { type: 'intake_completed'; spec: Spec; repos?: PlanRepo[]; plan?: PlanMeta }
     | { type: 'stage_started'; agent: string; repo?: string }
     | {
         type: 'stage_completed';
@@ -444,7 +487,7 @@ export type OrchEvent = EventBase &
         /** A verdict stage: the diff it reviewed had no changed file in any repo. */
         emptyDiff?: boolean;
       }
-    | { type: 'stage_failed'; agent: string; repo?: string; error: string }
+    | { type: 'stage_failed'; agent: string; repo?: string; error: string; blocked?: boolean }
     | { type: 'checkpoint_answered'; id: string; option: string; feedback?: string }
     | { type: 'committed'; repos: string[] }
     | { type: 'commit_failed'; repo: string; output: string }
@@ -453,6 +496,10 @@ export type OrchEvent = EventBase &
     | { type: 'resumed' }
     | { type: 'pipeline_changed'; pipeline: StoredPipeline }
     | { type: 'agent_stopped'; agent: string; payload?: AgentStoppedPayload }
+    /** A session's running totals as it goes (its id once it starts, its cost after each turn): what a session that never ends spent still counts. */
+    | { type: 'agent_progress'; agent: string; payload: AgentStoppedPayload }
+    /** A PR opened while publishing, as soon as it is there: a later repo that fails does not leave it untold. */
+    | { type: 'pr_opened'; repo: string; url: string }
     | { type: 'note'; message: string }
     | { type: 'gates_ran'; agent: string; repo?: string; repos?: string[]; status: GatesStatus; attempt: number; summary: string }
     | { type: 'transition_rejected'; event?: unknown; code: string; error: string }

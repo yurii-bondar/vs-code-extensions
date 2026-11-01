@@ -1,24 +1,27 @@
 // The extension's service: one engine per workspace root, the environment it runs in, and change events
 // for the tree, the status bar and the dashboard.
 import * as vscode from 'vscode';
-import * as fs from 'fs';
 import * as path from 'path';
 import { Engine } from './core/engine';
-import { ClaudeRunner } from './core/runner';
-import { HookServer, writeHookSettings } from './core/hookserver';
+import { exists } from './core/files';
+import { ClaudeRunner, sameWindows } from './core/runner';
+import { HookServer } from './core/hookserver';
 import { setChildEnv, getChildEnv } from './core/git';
 import { resolveDefaults } from './core/defaults';
 import * as mcp from './core/mcp';
 import { exec } from './core/git';
 import { AtlassianClient } from './core/intake';
 import * as os from 'os';
-import { probe, expand, statuslineSnapshot, claudeAccounts } from './core/env';
+import { probe, expand, accountLabel, statuslineSnapshot, claudeAccounts } from './core/env';
 import { projectConfigFile, loadConfig, type ResolveResult } from './core/config';
 import type { Defaults } from './core/defaults';
 import type { Probe, StatuslineSnapshot } from './core/env';
 import type { TaskEntry } from './core/view';
 import type { Diagnostic } from './core/types';
-import type { Account, AccountEntry, LimitWindow, StoredLimits } from './core/wire';
+import type { Account, AccountEntry, EngineEvent, LimitWindow, StoredLimits, PermissionRequest } from './core/wire';
+
+/** Which account the agents use and why: from settings and the environment, without reading a file. */
+type AccountChoice = Pick<Account, 'dir' | 'shownDir' | 'label' | 'source' | 'sourceText'>;
 
 const SECRET_KEY = 'claudestrator.atlassianToken';
 
@@ -28,7 +31,6 @@ interface Health {
   PATH?: string;
   env?: NodeJS.ProcessEnv;
   claude: Partial<Probe['claude']> & { ok: boolean };
-  node: Partial<Probe['node']>;
   git: Partial<Probe['git']>;
   gh: Partial<Probe['gh']>;
   checkedAt?: string;
@@ -56,16 +58,12 @@ interface AuthInfo {
 type ConfigResult = Extract<ResolveResult, { ok: true }> | { ok: false; errors: { message: string }[]; warnings: Diagnostic[] };
 
 /** An event of the engine, re-emitted with its name. */
-interface EngineEvent {
-  name: string;
-  data: unknown;
-}
 // What a current Claude Code accepts; used until the real `claude --help` has been read.
-const DEFAULT_FLAGS = ['--include-partial-messages', '--tools', '--setting-sources', '--max-budget-usd', '--name', '--effort', '--mcp-config', '--strict-mcp-config'];
+const DEFAULT_FLAGS = ['--include-partial-messages', '--tools', '--setting-sources', '--max-budget-usd', '--max-turns', '--json-schema', '--name', '--effort', '--mcp-config', '--strict-mcp-config'];
 
 const settings = (): vscode.WorkspaceConfiguration => vscode.workspace.getConfiguration('claudestrator');
 
-function workspaceRoot(): string | null {
+async function workspaceRoot(): Promise<string | null> {
   const folders = (vscode.workspace.workspaceFolders || []).map((f) => f.uri.fsPath);
   const configured = settings().get<string>('workspaceFolder');
   if (configured) {
@@ -73,7 +71,10 @@ function workspaceRoot(): string | null {
     return path.isAbsolute(configured) || configured.startsWith('~') ? p : folders.length ? path.resolve(folders[0]!, configured) : p;
   }
   // Prefer a folder that already has a Claudestrator config.
-  return folders.find((f) => fs.existsSync(projectConfigFile(f))) || folders[0] || null;
+  for (const f of folders) {
+    if (await exists(projectConfigFile(f))) return f;
+  }
+  return folders[0] || null;
 }
 
 class Orchestrator {
@@ -81,6 +82,8 @@ class Orchestrator {
   hooks: HookServer;
   health: Health | null;
   engine: Engine | null;
+  /** Engines replaced while their tasks ran (the workspace folder changed): kept until those end, so closing the window stops them too. */
+  retired: Engine[] = [];
   root: string | null;
   token: string | undefined;
   watchers: vscode.FileSystemWatcher[];
@@ -94,13 +97,14 @@ class Orchestrator {
   mcpLogins: Map<string, McpLogin>;
   auth: Map<string, AuthInfo>;
   claudeLoginTerminal: vscode.Terminal | null;
-  hookSettingsFile: string;
-  hookScript: string;
   lastAccount: string | null | undefined;
   configSub: vscode.Disposable | undefined;
   ready: Promise<Health> | undefined;
   defaults: Defaults | null | undefined;
   defaultsKey: string | undefined;
+  /** The health probe running now, and the defaults asked of the CLI now (by their key): one of each at a time. */
+  checking: Promise<Health> | null = null;
+  resolving: { key: string; run: Promise<Defaults | null | undefined> } | null = null;
   fireTimer: NodeJS.Timeout | null | undefined;
 
   constructor(context: vscode.ExtensionContext) {
@@ -123,35 +127,36 @@ class Orchestrator {
     /** Claude Code sign-in per account folder: `{ loggedIn, email, plan }`, from `claude auth status`. */
     this.auth = new Map();
     this.claudeLoginTerminal = null;
-    this.hookSettingsFile = path.join(context.globalStorageUri.fsPath, 'hook-settings.json');
-    this.hookScript = path.join(context.extensionPath, 'dist', 'hook', 'pretooluse.js');
   }
 
   async init(): Promise<void> {
-    this.lastAccount = this.account().dir;
+    this.lastAccount = this.accountChoice().dir;
     // ctx-man switches the account by writing these settings; follow it unless an account is chosen here.
     this.configSub = vscode.workspace.onDidChangeConfiguration((e) => {
       if (!['claudestrator.claudeConfigDir', 'terminal.integrated.env', 'claudeCode.environmentVariables'].some((k) => e.affectsConfiguration(k))) return;
-      const dir = this.account().dir;
+      const dir = this.accountChoice().dir;
       if (dir === this.lastAccount) return;
       this.lastAccount = dir;
       this.onAccountChanged();
     });
-    await this.hooks.listen();
+    // The guard's server starts with the first agent (Engine.guardListening), not with VS Code.
     this.token = await this.context.secrets.get(SECRET_KEY);
-    this.writeHookSettings(null);
     // No processes at activation: the health checks (and the model, sign-in and MCP checks after them) start the
     // first time something needs them, see ensureReady.
-    this.rebuild();
-  }
-
-  writeHookSettings(nodePath: string | null | undefined): void {
-    writeHookSettings(this.hookSettingsFile, { node: nodePath, script: this.hookScript });
+    await this.rebuild();
   }
 
   /** Runs the health checks again; ensureReady waits for this same run. */
+  /**
+   * Probes the CLI, git and gh again. A call while a probe runs gets that probe: a setting changed from the dashboard
+   * asks once from the panel and once from the settings listener.
+   */
   refreshHealth(): Promise<Health> {
-    const run = this.checkHealth();
+    if (this.checking) return this.checking;
+    const run = this.checkHealth().finally(() => {
+      if (this.checking === run) this.checking = null;
+    });
+    this.checking = run;
     this.ready = run;
     return run;
   }
@@ -159,14 +164,13 @@ class Orchestrator {
   private async checkHealth(): Promise<Health> {
     const s = settings();
     try {
-      this.health = await probe({ claudePath: s.get<string>('claudePath') as string, nodePath: s.get<string>('nodePath') as string });
+      this.health = await probe({ claudePath: s.get<string>('claudePath') as string });
       setChildEnv(this.health.env!);
-      this.writeHookSettings(this.health.node.path);
       this.refreshDefaults(true);
       this.refreshAuth();
-      if (!this.mcp.checkedAt) this.refreshMcp();
+      if (!this.mcp.checkedAt) void this.refreshMcp();
     } catch (e) {
-      this.health = { error: (e as Error).message, claude: { ok: false, error: (e as Error).message }, node: {}, git: {}, gh: {} };
+      this.health = { error: (e as Error).message, claude: { ok: false, error: (e as Error).message }, git: {}, gh: {} };
     }
     this.fire();
     return this.health;
@@ -178,11 +182,21 @@ class Orchestrator {
   }
 
   /** (Re)creates the engine for the current workspace root. Running tasks of the old one keep going. */
-  rebuild(): void {
-    const root = workspaceRoot();
+  /** Rebuilds run one after another, each with the workspace as it is when its turn comes. */
+  rebuilding: Promise<void> = Promise.resolve();
+
+  rebuild(): Promise<void> {
+    const run = this.rebuilding.then(() => this.rebuildNow());
+    this.rebuilding = run.catch(() => undefined);
+    return run;
+  }
+
+  private async rebuildNow(): Promise<void> {
+    const root = await workspaceRoot();
     if (this.engine && root === this.root) return;
     this.root = root;
     this.disposeWatchers();
+    if (this.engine && this.engine.running.size) this.retired.push(this.engine);
     if (!root) {
       this.engine = null;
       this.fire();
@@ -190,12 +204,12 @@ class Orchestrator {
     }
     const runner = new ClaudeRunner({
       command: () => (this.health && this.health.claude && this.health.claude.path) || expand(settings().get<string>('claudePath') || '') || 'claude',
+      version: () => (this.health && this.health.claude ? this.health.claude.version : undefined),
       flags: () => new Set((this.health && this.health.claude && this.health.claude.flags) || DEFAULT_FLAGS),
       settingSources: () => settings().get<string[]>('settingSources') || null,
-      hookSettings: () => this.hookSettingsFile,
-      mcpConfig: () => mcp.writeUserMcpConfig(path.join(this.context.globalStorageUri.fsPath, 'agent-mcp.json'), this.agentEnv().CLAUDE_CONFIG_DIR),
+      mcpConfig: () => mcp.writeUserMcpConfig(this.agentMcpFile(), this.agentEnv().CLAUDE_CONFIG_DIR),
       env: (): NodeJS.ProcessEnv => {
-        const dir = this.account().dir;
+        const dir = this.accountChoice().dir;
         return dir ? { CLAUDE_CONFIG_DIR: dir } : {};
       },
     });
@@ -206,12 +220,24 @@ class Orchestrator {
       atlassian: () => this.atlassian(),
       mcpIntake: () => this.mcpIntakeServer(),
       askPermissions: () => settings().get('askPermissions') === true,
+      secretFiles: () => [this.agentMcpFile()],
     });
+    const engine = this.engine;
     for (const name of ['changed', 'output', 'live', 'log', 'checkpoint', 'finished', 'permission', 'permissionDone', 'limits']) {
-      this.engine.on(name, (data: object) => {
-        this._onEngine.fire({ name, data });
-        if (name === 'limits') this.context.globalState.update(this.limitsKey(), { ...data, source: 'agents' });
-        if (['changed', 'live', 'permission', 'permissionDone', 'limits'].includes(name)) this.fire();
+      engine.on(name, (data: object) => {
+        if (name === 'changed' && engine !== this.engine && !engine.running.size) this.retired = this.retired.filter((e) => e !== engine);
+        // The engine is a plain EventEmitter; what it emits under each name is EngineEvent's.
+        this._onEngine.fire({ name, data } as EngineEvent);
+        // The same windows again (each agent session reports them) change nothing: no write, no reload of the page.
+        if (name === 'limits') {
+          const key = this.limitsKey();
+          const before = this.context.globalState.get<StoredLimits>(key);
+          if (before && before.source === 'agents' && sameWindows(before, data as StoredLimits)) return;
+          void this.context.globalState.update(key, { ...data, source: 'agents' });
+        }
+        // What an agent is doing now goes to the page and the tree as it is (`live`); reading every task again is for
+        // what changes them.
+        if (['changed', 'permission', 'permissionDone', 'limits'].includes(name)) this.fire();
       });
     }
     this.watch(root);
@@ -227,7 +253,14 @@ class Orchestrator {
     };
     // The engine announces its own appends right away; the watcher is for the others (another window, the CLI).
     const elsewhere = (uri: vscode.Uri): void => {
-      if (!(this.engine && this.engine.svc.isOwnWrite(path.basename(path.dirname(uri.fsPath))))) changed();
+      const engine = this.engine;
+      if (!engine) return changed();
+      const taskId = path.basename(path.dirname(uri.fsPath));
+      void engine.svc.isOwnWrite(taskId).then((own) => {
+        if (own) return;
+        changed();
+        void engine.changedElsewhere(taskId).catch(() => undefined);
+      }, changed);
     };
     const tasks = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(base, '.orch/tasks/*/events.ndjson'));
     tasks.onDidChange(elsewhere);
@@ -264,7 +297,7 @@ class Orchestrator {
 
   /** The config folder of the agents' account (where its status-line snapshots live). */
   accountDir(): string {
-    return this.account().shownDir;
+    return this.accountChoice().shownDir;
   }
 
   limitsKey(): string {
@@ -275,9 +308,9 @@ class Orchestrator {
    * The account's 5-hour and weekly limits: whichever is newer of what agents last reported and the account's
    * newest status-line snapshot. A window whose reset time has passed is reported as fresh (0%).
    */
-  limits(): StoredLimits | null {
+  async limits(): Promise<StoredLimits | null> {
     const stored = this.context.globalState.get<StoredLimits>(this.limitsKey());
-    const snap: StatuslineSnapshot | null = statuslineSnapshot(this.accountDir());
+    const snap: StatuslineSnapshot | null = await statuslineSnapshot(this.accountDir());
     const best = ([stored, snap].filter(Boolean) as StoredLimits[]).sort((a, b) => (b.at || 0) - (a.at || 0))[0];
     if (!best) return null;
     const now = Date.now() / 1000;
@@ -291,21 +324,30 @@ class Orchestrator {
    */
   async refreshDefaults(force?: boolean): Promise<Defaults | null | undefined> {
     if (!this.root || !this.health || !this.health.claude || !this.health.claude.ok) return this.defaults;
-    const r = this.config();
+    const r = await this.config();
     const aliases = ['inherit', ...(r.ok ? Object.values(r.config.agents).map((a) => a.model) : [])];
     const sources = settings().get<string[]>('settingSources') || null;
-    const dir = this.account().dir;
+    const dir = this.accountChoice().dir;
     const key = JSON.stringify([this.root, dir, sources, [...new Set(aliases)].sort()]);
     if (!force && key === this.defaultsKey) return this.defaults;
+    if (this.resolving && this.resolving.key === key) return this.resolving.run;
     this.defaultsKey = key;
     const env = this.agentEnv();
-    const d = await resolveDefaults({ command: this.health.claude.path as string, cwd: this.root, env, settingSources: sources, aliases });
-    if (d && key === this.defaultsKey) {
-      this.defaults = d;
-      this._onDidChangeConfig.fire();
-      this.fire();
-    }
-    return this.defaults;
+    const command = this.health.claude.path as string;
+    const root = this.root;
+    const run = (async () => {
+      const d = await resolveDefaults({ command, cwd: root, env, settingSources: sources, aliases });
+      if (d && key === this.defaultsKey) {
+        this.defaults = d;
+        this._onDidChangeConfig.fire();
+        this.fire();
+      }
+      return this.defaults;
+    })().finally(() => {
+      if (this.resolving && this.resolving.run === run) this.resolving = null;
+    });
+    this.resolving = { key, run };
+    return run;
   }
 
   /**
@@ -313,7 +355,7 @@ class Orchestrator {
    * this extension's setting, then the account ctx-man made active for VS Code terminals or the Claude Code
    * extension, then VS Code's own environment, else the default (~/.claude with ~/.claude.json).
    */
-  account(): Account {
+  accountChoice(): AccountChoice {
     const platform = ({ darwin: 'osx', win32: 'windows' } as Record<string, string>)[process.platform] || 'linux';
     const all = vscode.workspace.getConfiguration();
     const fromExtension = (all.get<{ name?: string; value?: string }[]>('claudeCode.environmentVariables') || []).find((e) => e && e.name === 'CLAUDE_CONFIG_DIR');
@@ -325,25 +367,23 @@ class Orchestrator {
     ];
     const hit = candidates.find(([, v]) => v);
     const dir = hit ? path.resolve(expand(hit[1]!)) : null;
-    const home = path.join(os.homedir(), '.claude');
-    const info: Partial<ReturnType<typeof claudeAccounts>[number]> = claudeAccounts().find((a) => a.dir === (dir || home)) || {};
-    const auth = this.auth.get(dir || home);
-    return {
-      ...(auth && { loggedIn: auth.loggedIn, ...(auth.plan && { plan: auth.plan }) }),
-      dir,
-      shownDir: dir || home,
-      label: info.label || (dir ? path.basename(dir).replace(/^\.claude-?/, '') || 'default' : 'default'),
-      ...(info.email && { email: info.email }),
-      source: hit ? hit[0] : 'default',
-      sourceText: hit ? hit[2] : 'no account chosen: the default ~/.claude',
-    };
+    const shownDir = dir || path.join(os.homedir(), '.claude');
+    return { dir, shownDir, label: accountLabel(shownDir), source: hit ? hit[0] : 'default', sourceText: hit ? hit[2] : 'no account chosen: the default ~/.claude' };
+  }
+
+  /** The account with its email (from its config files) and what `claude auth status` said about it. */
+  async account(): Promise<Account> {
+    const choice = this.accountChoice();
+    const email = (await claudeAccounts()).find((a) => a.dir === choice.shownDir)?.email;
+    const auth = this.auth.get(choice.shownDir);
+    return { ...(auth && { loggedIn: auth.loggedIn, ...(auth.plan && { plan: auth.plan }) }), ...choice, ...(email && { email }) };
   }
 
   /** Every Claude Code account on this machine, without the ones hidden in ctx-man. */
-  accounts(): AccountEntry[] {
+  async accounts(): Promise<AccountEntry[]> {
     const hidden = vscode.workspace.getConfiguration('ctxMan').get<string[]>('hiddenAccounts') || [];
-    const current = this.account().shownDir;
-    return claudeAccounts()
+    const current = this.accountChoice().shownDir;
+    return (await claudeAccounts())
       .filter((a) => a.dir === current || !hidden.some((h) => h === a.label || path.resolve(expand(h)) === a.dir))
       .map((a) => {
         const auth = this.auth.get(a.dir);
@@ -358,7 +398,7 @@ class Orchestrator {
     const base = { ...getChildEnv() };
     delete base.ELECTRON_RUN_AS_NODE;
     await Promise.all(
-      claudeAccounts().map(async (a) => {
+      (await claudeAccounts()).map(async (a) => {
         const env: NodeJS.ProcessEnv = { ...base };
         // The default account is the one without CLAUDE_CONFIG_DIR (its config is ~/.claude.json).
         if (a.dir === home) delete env.CLAUDE_CONFIG_DIR;
@@ -380,8 +420,8 @@ class Orchestrator {
   /** `claude auth login` for the agents' account, in a terminal (it opens the browser and may ask for a code). */
   claudeLogin(): void {
     if (this.claudeLoginTerminal && !this.claudeLoginTerminal.exitStatus) return this.claudeLoginTerminal.show();
-    const dir = this.account().dir;
-    const terminal = vscode.window.createTerminal({ name: `Claude sign-in · ${this.account().label}`, shellPath: this.claudeCommand(), shellArgs: ['auth', 'login'], cwd: os.homedir(), env: { PATH: getChildEnv().PATH, CLAUDE_CONFIG_DIR: dir || null }, iconPath: new vscode.ThemeIcon('account') });
+    const { dir, label } = this.accountChoice();
+    const terminal = vscode.window.createTerminal({ name: `Claude sign-in · ${label}`, shellPath: this.claudeCommand(), shellArgs: ['auth', 'login'], cwd: os.homedir(), env: { PATH: getChildEnv().PATH, CLAUDE_CONFIG_DIR: dir || null }, iconPath: new vscode.ThemeIcon('account') });
     terminal.show();
     this.claudeLoginTerminal = terminal;
     // eslint-disable-next-line prefer-const -- assigned after the closures that read it
@@ -390,9 +430,10 @@ class Orchestrator {
       clearInterval(poll);
       if (sub) sub.dispose();
       this.claudeLoginTerminal = null;
-      this.refreshAuth().then(() => {
-        const ok = this.account().loggedIn;
-        this._onEngine.fire({ name: 'mcpLogin', data: { ok, kind: ok ? 'ok' : 'info', message: ok ? `Signed in to Claude as ${this.account().email || this.account().label}` : 'The Claude sign-in did not finish' } });
+      this.refreshAuth().then(async () => {
+        const account = await this.account();
+        const ok = account.loggedIn === true;
+        this._onEngine.fire({ name: 'mcpLogin', data: { ok, kind: ok ? 'ok' : 'info', message: ok ? `Signed in to Claude as ${account.email || account.label}` : 'The Claude sign-in did not finish' } });
         if (ok) this.onAccountChanged();
       });
     };
@@ -410,13 +451,18 @@ class Orchestrator {
     this.mcp = { servers: [], checking: false, checkedAt: null, error: null };
     this.refreshAuth();
     this.refreshDefaults(true);
-    this.refreshMcp();
+    void this.refreshMcp();
     this.fire();
   }
 
   /** The environment Claude Code runs in for the agents: login-shell PATH and their account. */
+  /** The account's MCP servers for the agents (`--mcp-config`), with their tokens: the agents themselves never read it. */
+  agentMcpFile(): string {
+    return path.join(this.context.globalStorageUri.fsPath, 'agent-mcp.json');
+  }
+
   agentEnv(): NodeJS.ProcessEnv {
-    const dir = this.account().dir;
+    const dir = this.accountChoice().dir;
     const env = { ...getChildEnv() };
     if (dir) env.CLAUDE_CONFIG_DIR = dir;
     else delete env.CLAUDE_CONFIG_DIR;
@@ -431,25 +477,36 @@ class Orchestrator {
 
   // ---------- MCP ----------
 
-  /** Starts a health check unless one runs; the configured list shows at once, states arrive after a few seconds. */
-  refreshMcp(): void {
+  /**
+   * Starts a health check unless one runs. Resolves once the configured list is in (it shows at once); the states
+   * arrive after a few seconds. Never rejects: a failed check is its `error`.
+   */
+  async refreshMcp(): Promise<void> {
     if (!this.root || this.mcp.checking) return;
+    const workspace = this.root;
     // Exactly the CLAUDE_CONFIG_DIR the CLI gets (none means ~/.claude.json), so the list matches `claude mcp list`.
     const configDir = this.agentEnv().CLAUDE_CONFIG_DIR;
-    const servers = this.mcp.servers.length ? this.mcp.servers : mcp.configuredMcpServers(this.root, configDir);
-    this.mcp = { ...this.mcp, servers, checking: true };
+    this.mcp = { ...this.mcp, checking: true };
+    const servers = this.mcp.servers.length ? this.mcp.servers : await mcp.configuredMcpServers(workspace, configDir).catch(() => []);
+    this.mcp = { ...this.mcp, servers };
     this.fire();
-    mcp
-      .checkMcpServers({ command: this.claudeCommand(), workspace: this.root, configDir, env: this.agentEnv() })
-      .then((r) => (this.mcp = { ...r, checking: false, error: r.error || null }))
-      .catch((e) => (this.mcp = { servers, checking: false, checkedAt: new Date().toISOString(), error: e.message }))
-      .finally(() => this.fire());
+    void this.checkMcp({ workspace, configDir, servers });
+  }
+
+  private async checkMcp({ workspace, configDir, servers }: { workspace: string; configDir: string | undefined; servers: mcp.McpServer[] }): Promise<void> {
+    try {
+      const r = await mcp.checkMcpServers({ command: this.claudeCommand(), workspace, configDir, env: this.agentEnv() });
+      this.mcp = { ...r, checking: false, error: r.error || null };
+    } catch (e) {
+      this.mcp = { servers, checking: false, checkedAt: new Date().toISOString(), error: (e as Error).message };
+    }
+    this.fire();
   }
 
   /** A connected (or, before the first check, configured) Atlassian MCP server the intake can read Jira with. */
-  mcpIntakeServer() {
+  async mcpIntakeServer() {
     const isAtlassian = (x: mcp.McpServer): boolean => /atlassian|jira|confluence/i.test(`${x.name} ${x.target || ''}`) && !x.missing && !x.disabled;
-    const list = this.mcp.servers.length ? this.mcp.servers : this.root ? mcp.configuredMcpServers(this.root, this.agentEnv().CLAUDE_CONFIG_DIR) : [];
+    const list = this.mcp.servers.length ? this.mcp.servers : this.root ? await mcp.configuredMcpServers(this.root, this.agentEnv().CLAUDE_CONFIG_DIR) : [];
     const hit = list.find((x) => isAtlassian(x) && x.state === 'connected') || (!this.mcp.checkedAt && list.find(isAtlassian));
     return hit ? { server: hit.name, site: settings().get<string>('atlassian.site') || undefined } : null;
   }
@@ -472,7 +529,7 @@ class Orchestrator {
       open.terminal.show();
       return;
     }
-    const dir = this.account().dir;
+    const dir = this.accountChoice().dir;
     const terminal = vscode.window.createTerminal({
       name: `MCP sign-in · ${name}`,
       shellPath: this.claudeCommand(),
@@ -494,7 +551,7 @@ class Orchestrator {
       this.mcpLogins.delete(name);
       const message = code === 0 ? `${name}: signed in` : code === undefined ? `${name}: sign-in terminal closed; checking the server again` : `${name}: sign-in did not finish (exit ${code}); see the terminal`;
       this._onEngine.fire({ name: 'mcpLogin', data: { server: name, ok: code === 0, kind: code === 0 ? 'ok' : code === undefined ? 'info' : 'error', message } });
-      this.refreshMcp();
+      void this.refreshMcp();
     };
     // exitStatus is set when the process ends, even while the terminal stays open.
     const poll = setInterval(() => terminal.exitStatus && finish(terminal.exitStatus.code), 1000);
@@ -542,20 +599,45 @@ class Orchestrator {
   }
 
   /** The resolved config, or `{ ok: false, errors }`; never throws. */
-  config(): ConfigResult {
+  async config(): Promise<ConfigResult> {
     if (!this.root) return { ok: false, errors: [{ message: 'Open a folder first' }], warnings: [] };
     return loadConfig({ workspace: this.root });
   }
 
-  hasProjectConfig(): boolean {
-    return Boolean(this.root && fs.existsSync(projectConfigFile(this.root)));
+  async hasProjectConfig(): Promise<boolean> {
+    if (!this.root) return false;
+    return exists(projectConfigFile(this.root));
   }
 
   /** Every task as a list entry, guarded against a task folder vanishing mid-read. */
-  list(): TaskEntry[] {
+  /** The current engine and those replaced while their tasks ran: an agent of any of them may ask you something. */
+  engines(): Engine[] {
+    return [...(this.engine ? [this.engine] : []), ...this.retired];
+  }
+
+  /** The engine a task runs in: a replaced one while its agent still works, else the current one. */
+  engineOf(taskId: string): Engine | null {
+    return this.retired.find((e) => e.running.has(taskId)) ?? this.engine;
+  }
+
+  /** Answers a permission question of any engine's agent; false when none is waiting for it. */
+  permissionReply(requestId: string, allow: boolean, message?: string): boolean {
+    return this.engines().some((e) => e.permissionReply(requestId, allow, message));
+  }
+
+  pendingPermissions(): PermissionRequest[] {
+    return this.engines().flatMap((e) => e.pendingPermissions());
+  }
+
+  /** Stops every running agent, also those of an engine that was replaced; their tasks resume from the same step. */
+  async stopAll(): Promise<void> {
+    await Promise.all([...(this.engine ? [this.engine] : []), ...this.retired].map((e) => e.stopAll()));
+  }
+
+  async list(): Promise<TaskEntry[]> {
     if (!this.engine) return [];
     try {
-      return this.engine.svc.list();
+      return await this.engine.svc.list();
     } catch {
       return [];
     }
