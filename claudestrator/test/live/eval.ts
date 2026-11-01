@@ -2,8 +2,9 @@
 // it costs money). Each case is a small workspace with a known answer, run through the real engine: a reviewer must
 // block a planted bug and let a clean change through, a planner must name only the repo a ticket is about, an auditor
 // must find a planted vulnerability. A change to an agent's instructions, model or effort is run against them before it
-// ships. The agents run with their configured models; EVAL_MODEL and EVAL_EFFORT (haiku, low) make a cheap run, and
-// EVAL_CASES (reviewer-blocks,planner-scope) picks cases.
+// ships. The agents run with their configured models; EVAL_MODEL and EVAL_EFFORT (haiku, low) make a cheap run,
+// EVAL_CASES (reviewer-blocks,planner-scope) picks cases, and EVAL_TRIALS=3 runs each case three times: an agent's
+// answer varies from run to run, so one pass says little, and the pass rate per case is what to compare.
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -13,7 +14,7 @@ import { Engine } from '../../src/core/engine';
 import { ClaudeRunner, parseFlags } from '../../src/core/runner';
 import { HookServer } from '../../src/core/hookserver';
 import { setChildEnv } from '../../src/core/git';
-import type { Audit, TaskState } from '../../src/core/types';
+import type { Audit, CheckpointId, TaskState } from '../../src/core/types';
 
 const git = (cwd: string, ...args: string[]): string => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 
@@ -22,6 +23,8 @@ interface RepoFixture {
   role: string;
   base: Record<string, string>;
   change?: Record<string, string>;
+  /** A check that runs after code and tests stages. */
+  gate?: string;
 }
 
 interface Case {
@@ -30,8 +33,10 @@ interface Case {
   task: string;
   pipeline: string[];
   repos: Record<string, RepoFixture>;
-  /** Why the result is wrong, or null when it is right. */
-  judge(s: TaskState): string | null;
+  /** Where the task should stop for you, when that is the right answer (a blocked agent); else it runs through. */
+  expect?: CheckpointId;
+  /** Why the result is wrong, or null when it is right. `ws` is the case's workspace. */
+  judge(s: TaskState, ws: string): string | null;
 }
 
 const PRICE_BASE = {
@@ -107,6 +112,40 @@ const CASES: Case[] = [
     },
   },
   {
+    // The plan names what the repo does not have: the developer says it cannot go on, instead of inventing it.
+    name: 'developer-blocked',
+    task: 'In db/migrations/007_bets_v2.sql, rename column bets_v2.amount to stake. --auto',
+    pipeline: ['developer'],
+    expect: 'agent-failure',
+    repos: {
+      shop: { role: 'Shop backend (Node); migrations in db/migrations', base: { ...PRICE_BASE, 'db/migrations/001_init.sql': 'CREATE TABLE bets (id INTEGER PRIMARY KEY, amount INTEGER NOT NULL);\n' } },
+    },
+    judge: (s, ws) => {
+      if (!/cannot go on/.test(s.checkpoint?.reason ?? '')) return `stopped, but not as blocked: ${s.checkpoint?.reason ?? 'no reason'}`;
+      return fs.existsSync(path.join(ws, 'shop', 'db', 'migrations', '007_bets_v2.sql')) ? 'it made up the migration the task names' : null;
+    },
+  },
+  {
+    // The code under test has a bug the tester may not fix: it writes the failing test and says so.
+    name: 'tester-finds-bug',
+    task: 'Write tests for discount(cents, percent) in src/price.js: the price after a percentage discount, in whole cents. --auto',
+    pipeline: ['tester'],
+    expect: 'gate-failure',
+    repos: {
+      shop: {
+        role: 'Shop backend (Node); tests in test/, run with node --test',
+        // Committed: a stage that changes repos starts from a clean checkout.
+        base: { ...PRICE_BASE, 'src/price.js': `// Prices are in cents.\nfunction total(items) {\n  return items.reduce((sum, i) => sum + i.cents * i.qty, 0);\n}\nfunction discount(cents, percent) {\n  return Math.round(cents * percent / 100);\n}\nmodule.exports = { total, discount };\n` },
+        gate: 'node --test',
+      },
+    },
+    judge: (s, ws) => {
+      const code = fs.readFileSync(path.join(ws, 'shop', 'src', 'price.js'), 'utf8');
+      if (!/cents \* percent \/ 100/.test(code)) return 'the tester changed the code under test';
+      return fs.readdirSync(path.join(ws, 'shop')).includes('test') ? null : 'no test was written';
+    },
+  },
+  {
     name: 'auditor-finds',
     task: 'Audit the project: bugs, security, bottlenecks',
     pipeline: [],
@@ -153,10 +192,10 @@ function workspace(c: Case): string {
     path.join(ws, '.claudestrator', 'config.yaml'),
     [
       'repos:',
-      ...Object.entries(c.repos).map(([name, r]) => `  ${name}: { role: ${JSON.stringify(r.role)} }`),
+      ...Object.entries(c.repos).map(([name, r]) => `  ${name}: { role: ${JSON.stringify(r.role)}${r.gate ? `, gates: [{ name: check, cmd: ${JSON.stringify(r.gate)} }]` : ''} }`),
       ...(c.pipeline.length ? [`pipeline: [${c.pipeline.join(', ')}]`] : []),
-      ...(tune ? ['agents:', ...['planner', 'reviewer', 'auditor'].map((a) => `  ${a}: ${tune}`)] : []),
-      'limits: { budgetUsd: 5 }',
+      ...(tune ? ['agents:', ...['planner', 'developer', 'tester', 'reviewer', 'auditor'].map((a) => `  ${a}: ${tune}`)] : []),
+      'limits: { budgetUsd: 5, gateAttempts: 2 }',
       '',
     ].join('\n')
   );
@@ -172,13 +211,14 @@ async function main(): Promise<void> {
   setChildEnv(env);
   const only = (process.env.EVAL_CASES || '').split(',').filter(Boolean);
   const cases = CASES.filter((c) => !only.length || only.includes(c.name));
-  console.log(`Claude Code ${version}; ${cases.length} cases${process.env.EVAL_MODEL ? ` on ${process.env.EVAL_MODEL}` : ' on the configured models'}`);
+  const trials = Math.max(1, Number(process.env.EVAL_TRIALS) || 1);
+  console.log(`Claude Code ${version}; ${cases.length} cases × ${trials}${process.env.EVAL_MODEL ? ` on ${process.env.EVAL_MODEL}` : ' on the configured models'}`);
 
   const hooks = new HookServer();
   await hooks.listen();
   const results: { name: string; problem: string | null; usd: number }[] = [];
   try {
-    for (const c of cases) {
+    for (const c of cases.flatMap((x) => Array.from({ length: trials }, () => x))) {
       const ws = workspace(c);
       const runner = new ClaudeRunner({ command: () => claude, version: () => version, flags: () => flags, settingSources: () => ['project', 'local'], env: () => ({}) });
       const engine = new Engine({ workspace: ws, runner, hooks });
@@ -189,7 +229,16 @@ async function main(): Promise<void> {
         const s = await engine.run(taskId);
         const err = engine.lastError(taskId);
         usd = await engine.spentUsd(taskId);
-        problem = err ? `${err.code}: ${err.message}` : !s ? 'the task did not run' : s.checkpoint ? `stopped at ${s.checkpoint.id}: ${s.checkpoint.reason ?? ''}` : c.judge(s);
+        const where = s && s.checkpoint ? s.checkpoint.id : undefined;
+        problem = err
+          ? `${err.code}: ${err.message}`
+          : !s
+            ? 'the task did not run'
+            : where !== c.expect
+              ? where
+                ? `stopped at ${where}: ${s.checkpoint!.reason ?? ''}`
+                : `ran through, where it should have stopped at ${c.expect}`
+              : c.judge(s, ws);
       } catch (e) {
         problem = (e as Error).message;
       }
@@ -201,6 +250,7 @@ async function main(): Promise<void> {
     hooks.dispose();
   }
   const passed = results.filter((r) => !r.problem).length;
+  if (trials > 1) for (const c of cases) console.log(`  ${c.name}: ${results.filter((r) => r.name === c.name && !r.problem).length}/${trials}`);
   console.log(`${passed}/${results.length} passed, $${results.reduce((n, r) => n + r.usd, 0).toFixed(2)}`);
   if (passed < results.length) process.exitCode = 1;
 }
