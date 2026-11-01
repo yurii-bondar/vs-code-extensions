@@ -6,7 +6,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 
-import { Engine, commentMismatch } from '../src/core/engine';
+import { Engine, cloudIdsFor, commentMismatch } from '../src/core/engine';
 import { buildArgs } from '../src/core/runner';
 import type { EngineOptions } from '../src/core/engine';
 import type { RunnerOptions } from '../src/core/runner';
@@ -222,6 +222,11 @@ test('policy: a Jira comment session posts on its issue and the text it was give
   assert.match(commentMismatch({ issueIdOrKey: 'OTHER-1', commentBody: text }, 'PROJ-805', text)!, /no other issue/);
   assert.match(commentMismatch({ commentBody: text }, 'PROJ-805', text)!, /no other issue/, 'an issue it does not name');
   assert.match(commentMismatch({ issueIdOrKey: 'PROJ-805', commentBody: `${text}\nSECRET-1: hunter2` }, 'PROJ-805', text)!, /exactly as given/);
+  // The same key on another site the account reaches is another issue.
+  const cloud = { site: 'acme.atlassian.net', ids: new Set(cloudIdsFor(JSON.stringify([{ id: 'c-acme', url: 'https://acme.atlassian.net', name: 'acme' }, { id: 'c-client', url: 'https://clientb.atlassian.net' }]), 'https://acme.atlassian.net')) };
+  assert.deepEqual([...cloud.ids], ['c-acme']);
+  for (const cloudId of ['acme.atlassian.net', 'https://acme.atlassian.net/', 'c-acme']) assert.equal(commentMismatch({ cloudId, issueIdOrKey: 'PROJ-805', commentBody: text }, 'PROJ-805', text, cloud), null, cloudId);
+  for (const cloudId of ['clientb.atlassian.net', 'c-client', 'https://acme.atlassian.net.evil.io']) assert.match(commentMismatch({ cloudId, issueIdOrKey: 'PROJ-805', commentBody: text }, 'PROJ-805', text, cloud)!, /on acme\.atlassian\.net, no other site/, cloudId);
 });
 
 test('policy: an agent reads no dotenv file of the repos, by its Read tool or by a command', async () => {

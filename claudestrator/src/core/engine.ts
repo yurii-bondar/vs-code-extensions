@@ -75,6 +75,26 @@ const MCP_COMMENT = /^addComment/i;
 const MCP_COMMENT_LOOKUP = /^(getAccessibleAtlassianResources|atlassianUserInfo)$/;
 const JIRA_KEY = /^[A-Z][A-Z0-9_]+-\d+$/i;
 
+/** The cloud ids an Atlassian resource lookup returned for a site: `[{ id, url: "https://acme.atlassian.net" }]`. */
+function cloudIdsFor(result: string, site: string): string[] {
+  let value: unknown;
+  try {
+    value = JSON.parse(result);
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  const visit = (v: unknown, depth: number): void => {
+    if (depth > 4 || !v || typeof v !== 'object') return;
+    if (Array.isArray(v)) return v.forEach((x) => visit(x, depth + 1));
+    const o = v as { id?: unknown; url?: unknown };
+    if (typeof o.id === 'string' && typeof o.url === 'string' && hostOf(o.url) === hostOf(site)) out.push(o.id);
+    Object.values(o).forEach((x) => visit(x, depth + 1));
+  };
+  visit(value, 0);
+  return out;
+}
+
 /** The string values of a tool call's input, nested ones too. */
 const inputStrings = (v: unknown, depth = 0): string[] => (typeof v === 'string' ? [v] : depth < 4 && v && typeof v === 'object' ? Object.values(v).flatMap((x) => inputStrings(x, depth + 1)) : []);
 const squash = (s: string): string => s.replace(/\s+/g, ' ').trim();
@@ -84,10 +104,14 @@ const squash = (s: string): string => s.replace(/\s+/g, ' ').trim();
  * word. The text comes from agents' reports, which come from a ticket anyone could write: an instruction planted there
  * must not get the session to comment on another issue, or to add what it read to this one.
  */
-function commentMismatch(input: Record<string, unknown>, key: string, text: string): string | null {
+function commentMismatch(input: Record<string, unknown>, key: string, text: string, cloud?: { site: string; ids: ReadonlySet<string> }): string | null {
   const values = inputStrings(input);
   const keys = values.map((v) => v.trim()).filter((v) => JIRA_KEY.test(v));
   if (!keys.length || keys.some((k) => k.toUpperCase() !== key.toUpperCase())) return `the comment goes on ${key} and no other issue`;
+  // The same key on another site the account reaches is another issue: the cloud id names the task's site, by its
+  // address or by the id the lookup gave for it.
+  const id = typeof input.cloudId === 'string' ? input.cloudId.trim() : '';
+  if (cloud && id && hostOf(id) !== hostOf(cloud.site) && !cloud.ids.has(id)) return `the comment goes on ${key} on ${hostOf(cloud.site)}, no other site`;
   if (!values.some((v) => squash(v) === squash(text))) return 'post the comment body exactly as given, with nothing added or left out';
   return null;
 }
@@ -1698,8 +1722,11 @@ class Engine extends EventEmitter {
     const site = jira.site || via.site;
     const n = (await this.svc.events(s.taskId)).filter((e) => e.type === 'jira_comment').length + 1;
     const transcript = `comment-${n}`;
+    /** Cloud ids the lookup returned for the task's site. */
+    const siteIds = new Set<string>();
     const append = (item: TranscriptItem): void => {
       if (item.type !== 'text_delta' && item.type !== 'thinking' && item.type !== 'usage') this.svc.appendTranscript(s.taskId, transcript, { ...item, t: Date.now() });
+      if (item.type === 'tool_result' && site) for (const id of cloudIdsFor(String(item.text), site)) siteIds.add(id);
     };
     const prompt = `Add one comment to the Jira issue ${key}${site ? ` on ${site}` : ''} with the "${via.server}" MCP server's tools. The comment body is everything between the two marker lines, verbatim:\n-----BEGIN COMMENT-----\n${text}\n-----END COMMENT-----`;
     append({ type: 'prompt', text: prompt });
@@ -1709,7 +1736,7 @@ class Engine extends EventEmitter {
       if (tool === 'ToolSearch') return { allow: true };
       const action = tool.startsWith('mcp__') ? mcpAction(tool) : '';
       if (action && MCP_COMMENT.test(action) && posted === 0) {
-        const wrong = commentMismatch(input, key, text);
+        const wrong = commentMismatch(input, key, text, site ? { site, ids: siteIds } : undefined);
         if (!wrong) {
           posted += 1;
           return { allow: true };
@@ -1988,4 +2015,4 @@ function summarizeInput(tool: string, input: Record<string, unknown>): unknown {
 }
 
 export type { CheckpointContext, ComposerArgs, EngineOptions, Live, McpIntake, PermissionRequest };
-export { Engine, EngineError, stepLabel, transcriptKey, realInside, commentMismatch, CLAUDE_AUTH };
+export { Engine, EngineError, stepLabel, transcriptKey, realInside, cloudIdsFor, commentMismatch, CLAUDE_AUTH };
