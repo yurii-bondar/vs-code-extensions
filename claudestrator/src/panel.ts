@@ -52,7 +52,7 @@ class DashboardPanel implements RpcHandlers {
   /** Streamed output not posted yet, and the timer that posts it. */
   outputQueue: OutputPush[] = [];
   outputTimer: NodeJS.Timeout | undefined;
-  /** Steps whose text pieces went unposted while the panel was hidden: none goes until their whole text has. */
+  /** Steps (task and key) whose text pieces went unposted while the panel was hidden: none goes until their message ends. */
   missedText = new Set<string>();
 
   static show(context: vscode.ExtensionContext, orch: Orchestrator, route?: Route): DashboardPanel {
@@ -140,11 +140,13 @@ class DashboardPanel implements RpcHandlers {
    * pieces: the transcript keeps the whole text, which the page gets as the agent finishes the message.
    */
   queueOutput(push: OutputPush): void {
+    // Steps of different tasks may have the same key.
+    const step = `${push.taskId}\n${push.key}`;
     if (push.item.type === 'text_delta') {
       // Pieces missed while hidden would leave the next ones mid-sentence; the step's whole text comes next anyway.
-      if (!this.panel.visible) this.missedText.add(push.key);
-      if (this.missedText.has(push.key)) return;
-    } else if (push.item.type === 'text') this.missedText.delete(push.key);
+      if (!this.panel.visible) this.missedText.add(step);
+      if (this.missedText.has(step)) return;
+    } else if (push.item.type !== 'usage' && push.item.type !== 'user') this.missedText.delete(step); // the message ended (or a new one starts)
     view.queueOutput(this.outputQueue, push);
     if (!this.outputTimer) this.outputTimer = setTimeout(() => this.flushOutput(), OUTPUT_MS);
   }

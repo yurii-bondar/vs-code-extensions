@@ -105,7 +105,8 @@ interface Views {
     /** Whether a transcript is on its way; pushed items wait for it in `held`. */
     loading: boolean;
     held: TranscriptItem[];
-    liveText: string;
+    /** The message each step of the task is writing, followed from the screen's start, the step on screen or not. */
+    live: LiveTexts;
     cpKey: string | null;
     feedback: string;
     /** Audit findings shown: 'all' or one severity. */
@@ -120,7 +121,7 @@ interface Views {
     loads: 0,
     loading: false,
     held: [],
-    liveText: '',
+    live: window.liveTexts(),
     cpKey: null,
     feedback: '',
     sev: 'all',
@@ -154,7 +155,7 @@ interface Views {
 
   views.task = {
     async enter(route) {
-      Object.assign(T, { taskId: route.taskId ?? '', d: null, viewKey: null, follow: true, edge: null, loading: false, held: [], liveText: '', cpKey: null, sev: 'all', tab: S.ui.taskTab || 'output' });
+      Object.assign(T, { taskId: route.taskId ?? '', d: null, viewKey: null, follow: true, edge: null, loading: false, held: [], live: window.liveTexts(), cpKey: null, sev: 'all', tab: S.ui.taskTab || 'output' });
       $('#view')!.innerHTML = `
         <div class="page task-page">
           <button class="back" data-action="go-home">${icon('back')}All tasks</button>
@@ -230,7 +231,6 @@ interface Views {
     async loadTranscript() {
       const key = T.viewKey;
       const n = ++T.loads;
-      T.liveText = '';
       T.held = [];
       if (!key) {
         T.loading = false;
@@ -250,6 +250,8 @@ interface Views {
       T.edge = window.loadedEdge(items);
       const el = $('#transcript')!;
       el.innerHTML = items.length ? renderItems(items) : `<div class="t-empty">${icon('clock')}Waiting for the agent's first words…</div>`;
+      // The message its agent is writing, from its start (pieces are not in the transcript).
+      if (T.live.writing(key) !== undefined) drawLive(el, true);
       const held = T.held;
       T.held = [];
       for (const item of held) appendItem(item);
@@ -293,6 +295,7 @@ interface Views {
           }
           return;
         }
+        T.live.take(msg.key, msg.item);
         if (msg.key === T.viewKey) showItem(msg.item);
         else if (T.follow && T.d && (!T.d.live || T.d.live.key !== msg.key)) this.load(false);
       } else if (msg.type === 'live') {
@@ -867,31 +870,10 @@ interface Views {
     const empty = $('.t-empty', el);
     if (empty) empty.remove();
     const near = el.scrollHeight - el.scrollTop - el.clientHeight < 120 || isPageBottom();
-    if (item.type === 'text_delta' || item.type === 'thinking') {
-      if (item.type === 'text_delta') T.liveText += item.text;
-      let live = $('.bubble.live', el);
-      if (!live) {
-        el.insertAdjacentHTML('beforeend', `<div class="bubble agent live"><div class="markdown"></div><span class="caret"></span></div>`);
-        live = $('.bubble.live', el);
-      }
-      if (!liveTimer) {
-        // The whole message renders each time, so a long one renders less often: as much work per second at any length.
-        liveTimer = setTimeout(
-          () => {
-            liveTimer = null;
-            const l = $('.bubble.live .markdown', el);
-            if (l) l.innerHTML = T.liveText ? md(T.liveText) : '<span class="muted">thinking…</span>';
-            if (near) scrollTranscript();
-          },
-          Math.min(1000, Math.max(80, T.liveText.length / 20))
-        );
-      }
-      return;
-    }
+    if (item.type === 'text_delta' || item.type === 'thinking') return drawLive(el, near);
     if (item.type === 'text' || item.type === 'turn_end') {
       const live = $('.bubble.live', el);
       if (live) live.remove();
-      T.liveText = '';
     }
     if (item.type === 'tool_result') {
       const row = el.querySelector(`[data-tool="${CSS.escape(item.id)}"]`);
@@ -906,6 +888,27 @@ interface Views {
     el.insertAdjacentHTML('beforeend', itemHtml(item, null));
     while (el.childElementCount > MAX_ITEMS) el.firstElementChild!.remove();
     if (near) scrollTranscript();
+  }
+
+  /**
+   * The bubble of the message the agent of the step on screen is writing: its text from the start, "thinking…" before
+   * its first words, "writing…" when the page came in after it started (its whole text follows).
+   */
+  function drawLive(el: HTMLElement, near: boolean) {
+    if (!$('.bubble.live', el)) el.insertAdjacentHTML('beforeend', `<div class="bubble agent live"><div class="markdown"></div><span class="caret"></span></div>`);
+    if (liveTimer) return;
+    const now = () => (T.viewKey ? T.live.writing(T.viewKey) : undefined);
+    // The whole message renders each time, so a long one renders less often: as much work per second at any length.
+    liveTimer = setTimeout(
+      () => {
+        liveTimer = null;
+        const l = $('.bubble.live .markdown', el);
+        const text = now();
+        if (l) l.innerHTML = text ? md(text) : `<span class="muted">${text === null ? 'writing…' : 'thinking…'}</span>`;
+        if (near) scrollTranscript();
+      },
+      Math.min(1000, Math.max(80, (now() || '').length / 20))
+    );
   }
 
   const isPageBottom = () => window.innerHeight + window.scrollY >= document.body.scrollHeight - 160;

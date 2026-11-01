@@ -267,6 +267,14 @@ interface CSApi {
   boot(): Promise<void>;
 }
 
+/** The message each step's agent is writing (stream.ts). */
+interface LiveTexts {
+  /** Takes in an item pushed for a step. */
+  take(key: string, item: TranscriptItem): void;
+  /** Its text so far: '' before its first words, null when the page missed its start, undefined when it writes none. */
+  writing(key: string): string | null | undefined;
+}
+
 /** What a transcript just loaded holds of the items pushed while it was read (stream.ts). */
 interface LoadedEdge {
   /** Whether the item is in the transcript already; each item it holds is found once. */
@@ -277,6 +285,7 @@ interface Window {
   escapeHtml: (s: unknown) => string;
   renderMarkdown: (text: string) => string;
   stripJsonBlock: (text: string) => string;
+  liveTexts: () => LiveTexts;
   loadedEdge: (items: TranscriptItem[]) => LoadedEdge;
   CS: CSApi;
 }

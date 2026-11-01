@@ -6,7 +6,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-import type { HostMessage } from '../src/core/wire';
+import type { HostMessage, TranscriptItem } from '../src/core/wire';
 
 // panel.ts loads `vscode`: the dialogs a test answers, nothing else.
 /* eslint-disable @typescript-eslint/no-require-imports */
@@ -56,6 +56,20 @@ test('panel: a hidden panel gets no text pieces, and none of that message after 
   p.queueOutput(delta('a', 'Next '));
   await flushed();
   assert.deepEqual(posted.map((m) => (m.type === 'output' && 'text' in m.item ? [m.key, m.item.type, m.item.text] : null)), [['b', 'text_delta', 'Another step'], ['a', 'text', 'Half a sentence.'], ['a', 'text_delta', 'Next ']]);
+});
+
+test('panel: text missed while hidden holds back that step of that task only, until its message ends', async () => {
+  const { p, posted, view } = panel();
+  const of = (taskId: string, key: string, item: TranscriptItem) => ({ type: 'output' as const, taskId, key, item });
+  view.visible = false;
+  p.queueOutput(of('A', 'k', { type: 'text_delta', text: 'Half ' }));
+  view.visible = true;
+  p.queueOutput(of('A', 'k', { type: 'text_delta', text: 'a sentence' }));
+  p.queueOutput(of('B', 'k', { type: 'text_delta', text: 'Another task, the same key' }));
+  p.queueOutput(of('A', 'k', { type: 'turn_end', ok: false, costUsd: 0, turns: 1 }));
+  p.queueOutput(of('A', 'k', { type: 'text_delta', text: 'Next turn' }));
+  await flushed();
+  assert.deepEqual(posted.map((m) => (m.type === 'output' ? `${m.taskId}:${m.item.type}${'text' in m.item ? `:${m.item.text}` : ''}` : m.type)), ['B:text_delta:Another task, the same key', 'A:turn_end', 'A:text_delta:Next turn']);
 });
 
 test('panel: a folder without library.yaml becomes a library once you say so', async () => {
