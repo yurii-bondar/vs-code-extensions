@@ -323,3 +323,20 @@ test('config: a check has its own time limit in seconds, a whole number up to a 
   await config.setRepo(ws, 'api', { role: 'Backend', gates: await gates() });
   assert.match(projectText(ws), /- \{ name: e2e, cmd: npm run e2e, timeout: 3600 \} {3}# the stack is slow\n/);
 });
+
+test("config: a repo's checks are named once each, since each writes its log under its name", async () => {
+  const checks = (...names: string[]) => validateConfigLayer({ repos: { api: { gates: names.map((name) => ({ name, cmd: 'true' })) } } });
+  assert.deepEqual(checks('lint', 'test', 'unit test', 'e2e'), []);
+  assert.deepEqual(checks('lint', 'test', 'lint'), ['repos.api.gates: two checks are named "lint"; give each check its own name, its log file is named after it']);
+  assert.deepEqual(checks('Lint', 'lint'), ['repos.api.gates: the checks "Lint" and "lint" would write one log file, which is named after the check; give them names that differ in more than case or punctuation']);
+  assert.equal(checks('unit test', 'unit_test').length, 1);
+  assert.deepEqual(validateConfigLayer({ repos: { api: { gates: [{ name: 'lint', cmd: 'a' }] }, web: { gates: [{ name: 'lint', cmd: 'b' }] } } }), [], 'two repos may both have a lint');
+
+  // The dashboard refuses to write it, and a hand-written one stops the config with the reason.
+  const ws = workspace('repos:\n  api: {}\n');
+  await assert.rejects(() => config.setRepo(ws, 'api', { gates: [{ name: 'lint', cmd: 'a' }, { name: 'lint', cmd: 'b' }] }), /two checks are named "lint"/);
+  fs.writeFileSync(config.projectConfigFile(ws), 'repos:\n  api:\n    gates:\n      - { name: lint, cmd: a }\n      - { name: lint, cmd: b }\n');
+  const r = await config.loadConfig({ workspace: ws, home: tmp('cs-home-') });
+  assert.equal(r.ok, false);
+  assert.match(r.ok ? '' : r.errors[0]!.message, /project config: repos\.api\.gates: two checks are named "lint"/);
+});

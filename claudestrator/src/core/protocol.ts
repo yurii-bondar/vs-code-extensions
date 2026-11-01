@@ -199,6 +199,23 @@ const GROUP = T.obj({ type: T.oneOf(GROUP_TYPES), label: T.str(1, 80), 'jira?': 
 const INSTRUCTION = T.obj({ label: T.str(1, 80), text: T.str(1) });
 
 const GATE = T.obj({ name: T.str(1), cmd: T.str(1), 'dir?': T.str(1), 'when?': T.re(/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[^*?[\]{}]+$/, 'when is a folder or file of the repo, from its root (src/ or package.json), without patterns'), 'timeout?': T.int(1, 24 * 60 * 60) });
+/**
+ * A repo's checks, each named once: a check writes its log under its name (gates.ts turns any run of characters other
+ * than letters, digits, `.`, `_` and `-` into `_`), and macOS and Windows take Lint and lint for one file.
+ */
+const GATES: Check = (v, p) => {
+  const issues = T.arr(GATE)(v, p);
+  if (issues.length) return issues;
+  const seen = new Map<string, string>();
+  for (const { name } of v as { name: string }[]) {
+    const log = name.replace(/[^A-Za-z0-9._-]+/g, '_').toLowerCase();
+    const other = seen.get(log);
+    if (other === undefined) seen.set(log, name);
+    else if (other === name) issues.push(`${at(p)}: two checks are named "${name}"; give each check its own name, its log file is named after it`);
+    else issues.push(`${at(p)}: the checks "${other}" and "${name}" would write one log file, which is named after the check; give them names that differ in more than case or punctuation`);
+  }
+  return issues;
+};
 /** The most entries a list of the safety policy holds. */
 const SANDBOX_LIST = 100;
 
@@ -213,7 +230,7 @@ const CONFIG_LAYER = T.obj({
   'limits?': T.obj({ 'reviewRounds?': T.int(0, 20), 'gateAttempts?': T.int(1, 20), 'budgetUsd?': T.nonNegative(), 'parallelTasks?': T.int(1, 20) }),
   'language?': T.str(1),
   'baseBranch?': BRANCH,
-  'repos?': T.rec(T.re(REPO_NAME, 'a repo name is letters, digits, ".", "_" and "-", e.g. api or web-app'), T.obj({ 'role?': T.str(1), 'path?': T.str(1), 'baseBranch?': BRANCH, 'gates?': T.arr(GATE) })),
+  'repos?': T.rec(T.re(REPO_NAME, 'a repo name is letters, digits, ".", "_" and "-", e.g. api or web-app'), T.obj({ 'role?': T.str(1), 'path?': T.str(1), 'baseBranch?': BRANCH, 'gates?': GATES })),
   'jira?': T.obj({ 'allowedProjects?': T.arr(T.str(1)) }),
   // The sandbox's lists go to sandbox-runtime as its settings: a few entries each, never an unbounded list to validate.
   'policy?': T.obj({ 'protectedBranches?': T.arr(T.str(1), 0, SANDBOX_LIST), 'draftPrsOnly?': T.bool(), 'forbidAiAttribution?': T.bool(), 'allowNoVerify?': T.bool(), 'sandbox?': T.bool(), 'network?': T.arr(T.re(/^[A-Za-z0-9*.:[\]-]+$/, 'a host name, e.g. npm.acme.corp or *.acme.corp'), 0, SANDBOX_LIST), 'writable?': T.arr(T.re(/^(~[\\/]|\/|[A-Za-z]:[\\/])(?=.*[^\\/~.\s])/, 'a folder below ~ or the filesystem root, e.g. ~/.cache/go-build'), 0, SANDBOX_LIST), 'checkEnv?': T.arr(T.re(/^[A-Za-z_][A-Za-z0-9_]*$/, 'a variable name, e.g. DATABASE_URL'), 0, SANDBOX_LIST) }),
