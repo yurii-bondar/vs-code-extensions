@@ -10,7 +10,8 @@ import java.util.Base64
  * the extension), inlined so the browser needs no file access, under a policy that lets only these scripts run.
  */
 object PageHtml {
-    private val SCRIPTS = listOf("markdown.js", "app.js", "task.js", "config.js")
+    /** The VS Code page's `PAGE_SCRIPTS` (panel.ts), in its order: the release script checks the two agree. */
+    private val SCRIPTS = listOf("markdown.js", "stream.js", "app.js", "task.js", "config.js")
 
     /** `sendToEngine` is the JS that hands the string `s` to the plugin (JBCefJSQuery.inject). */
     fun build(engineDir: Path, sendToEngine: String): String {
