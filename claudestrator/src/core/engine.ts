@@ -12,7 +12,7 @@ import { nextAction, runOf, artifactPath, branchName, sameStep, editableFrom, sp
 import { parseInvocation, classifyInput, detectScenario, runIntake, renderTicket, IntakeError, extractAcceptanceCriteria, otherSite, planFromTicket, capSpec, projectAllowed } from './intake';
 import { TaskService, type DispatchResult } from './store';
 import { AS_TEXT, exec, getChildEnv, GitRepo, branchAt, taskRepos, prepareRepos, taskDiff, removeWorktrees, SLOW_GIT_MS } from './git';
-import { runGates, runShell, withoutCredentials } from './gates';
+import { runGates, runShell, sandboxNote, withoutCredentials } from './gates';
 import { guardBash, inGitMetadata, inside, outsideLabel } from './guard';
 import { buildAgentPrompt, parseStageReport, lastJsonBlock, workReport, type StageReport } from './prompt';
 import { commitSubject, prTitle, prBody } from './pr';
@@ -1567,10 +1567,11 @@ class Engine extends EventEmitter {
           // package.json script): in the sandbox, which lets git write its objects and refs, not its config or hooks.
           // Unsigned here: signing needs your keys (~/.gnupg, ~/.ssh), which the sandbox never lets anything read. The
           // commit the hooks passed is signed below, outside it.
-          const c = await runShell(`git -c commit.gpgsign=false commit -F ${shq(message)}`, { cwd: r.dir, env: withoutCredentials(getChildEnv(), config.policy.checkEnv), timeoutMs: 15 * 60000, signal: abort.signal, launch: this.sandboxFor(config, [r.dir, ...(await r.git.gitDirs())], { git: true, runsOutside: await this.runsOutside([r.dir]) }) });
+          const launch = this.sandboxFor(config, [r.dir, ...(await r.git.gitDirs())], { git: true, runsOutside: await this.runsOutside([r.dir]) });
+          const c = await runShell(`git -c commit.gpgsign=false commit -F ${shq(message)}`, { cwd: r.dir, env: withoutCredentials(getChildEnv(), config.policy.checkEnv), timeoutMs: 15 * 60000, signal: abort.signal, launch });
           if (await stopped()) return;
           if (c.code !== 0) {
-            await this.dispatch(s.taskId, { type: 'commit_failed', repo: r.name, output: c.output.trim().slice(-8000) });
+            await this.dispatch(s.taskId, { type: 'commit_failed', repo: r.name, output: `${c.output.trim().slice(-8000)}${launch ? sandboxNote(c.output) : ''}` });
             return;
           }
         }
@@ -1615,15 +1616,17 @@ class Engine extends EventEmitter {
     const lfs = await r.git.usesLfs();
     const local = (await r.git.git('rev-parse', `refs/heads/${branch}`)).stdout.trim();
     const remote = (await r.git.git('rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`)).stdout.trim() || '0'.repeat(local.length || 40);
+    const launch = this.sandboxFor(config, [r.dir, ...(await r.git.gitDirs())], { git: true, runsOutside: await this.runsOutside([r.dir]) });
     const run = await runShell(`${shq(hook)} origin ${shq(url)}`, {
       cwd: r.dir,
       env: { ...withoutCredentials(getChildEnv(), config.policy.checkEnv), ...(lfs && { GIT_LFS_SKIP_PUSH: '1' }) },
       timeoutMs: 15 * 60000,
       input: `refs/heads/${branch} ${local} refs/heads/${branch} ${remote}\n`,
       ...(signal && { signal }),
-      launch: this.sandboxFor(config, [r.dir, ...(await r.git.gitDirs())], { git: true, runsOutside: await this.runsOutside([r.dir]) }),
+      launch,
     });
-    return run.code === 0 ? null : run.output.trim().slice(-8000) || `the pre-push hook exited with ${run.code}`;
+    if (run.code === 0) return null;
+    return `${run.output.trim().slice(-8000) || `the pre-push hook exited with ${run.code}`}${launch ? sandboxNote(run.output) : ''}`;
   }
 
   async publish(s: TaskState): Promise<void> {

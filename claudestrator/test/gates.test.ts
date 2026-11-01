@@ -6,7 +6,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 
-import { runGates, runShell, tailOf } from '../src/core/gates';
+import { runGates, runShell, sandboxNote, tailOf } from '../src/core/gates';
 import { plainLauncher } from '../src/core/sandbox';
 import { setChildEnv } from '../src/core/git';
 import { workspace, harness, waitFor } from './helpers/e2e';
@@ -186,4 +186,10 @@ test('gates: a local port the sandbox refuses goes to you with the setting that 
   // Outside the sandbox the same words are the code's.
   const plain = await runGates({ repo, dir, logDir: path.join(ws, 'logs'), force: true });
   assert.ok(plain.results.every((x) => x.unfixable === undefined && !/policy\./.test(x.tail ?? '')));
+});
+
+test('gates: the note under what the sandbox refused names the setting that allows it, and nothing else gets one', () => {
+  assert.match(sandboxNote("mktemp: mkstemp failed on /var/folders/x/T/tmp.F7tN: Operation not permitted"), /^\nnote: checks and git hooks run in the sandbox .*policy\.writable/);
+  assert.match(sandboxNote('Error: listen EPERM: operation not permitted 127.0.0.1'), /policy\.localPorts/);
+  assert.equal(sandboxNote('1 failing: expected 2, got 3'), '');
 });

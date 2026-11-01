@@ -441,6 +441,10 @@ interface Views {
    */
   function cpUi(cp: NonNullable<TaskScreen['checkpointFull']>): CpUi {
     const ui = CP_UI[cp.id]!;
+    // The engine puts a note under a hook's output when the sandbox refused it something: no formatter fixes that.
+    if (cp.id === 'hook-failure' && /run in the sandbox \(policy\.sandbox\)/.test(cp.reason || '')) {
+      return { ...ui, title: 'The sandbox refused the git hook something', lead: 'The hook runs in the sandbox, like the checks, and was refused what the note under its output names. No change to the code fixes that: allow it in Settings → Safety, or change the hook, then retry the commit.' };
+    }
     if (cp.id !== 'agent-failure') return ui;
     const blocked = cp.blocked ? { title: "The agent can't go on", lead: 'It reported what stops it (below) and stopped there rather than work around it. A retry runs into the same thing until its cause changes: fix that first (the plan, the branch, the sandbox in Settings → Safety), or tell the agent what to do instead.' } : {};
     const repeated = cp.repeated ? { placeholder: 'What should the agent do differently? Needed: the last retry ended the same way', options: { ...ui.options, retry: { ...ui.options.retry!, feedback: 'required' as const } } } : {};

@@ -69,13 +69,22 @@ function withoutCredentials(env: NodeJS.ProcessEnv, keep: string[] = []): NodeJS
 
 /** What a sandboxed command that failed on a write or a read it may not do says (Go, Rust and Python in lower case). */
 const SANDBOX_REFUSAL = /operation not permitted|\bEPERM\b|read-only file system|\bEROFS\b|CONNECT tunnel failed, response 403/i;
-const SANDBOX_HINT = 'note: checks run in the sandbox (policy.sandbox): they write only in the repo and reach only the package registries. A tool that writes elsewhere (a build cache) needs that folder in policy.writable, a host it needs goes in policy.network.';
+const SANDBOX_HINT = 'note: checks and git hooks run in the sandbox (policy.sandbox): they write only in the repo and in temp files, and reach only the package registries. What it refused is no fault of the code: a tool that writes elsewhere (a build cache) needs that folder in policy.writable, a host it needs goes in policy.network.';
 /**
  * What a test says when the sandbox refuses it a local port (macOS): Node's `listen EPERM`, Go's `bind: operation not
  * permitted`. No change of the agent's fixes that, so it goes to you at once.
  */
 const LOCAL_PORT_REFUSAL = /\b(?:listen|bind)\b[^\n]{0,80}?(?:EPERM|operation not permitted)/i;
-const LOCAL_PORT_HINT = 'note: checks run in the sandbox (policy.sandbox), which on macOS opens no local port: a test that starts a server on 127.0.0.1 needs "Local ports" in Settings → Safety (policy.localPorts).';
+const LOCAL_PORT_HINT = 'note: checks and git hooks run in the sandbox (policy.sandbox), which on macOS opens no local port: a test that starts a server on 127.0.0.1 needs "Local ports" in Settings → Safety (policy.localPorts).';
+
+/**
+ * The note under a sandboxed command's output (a check's, a git hook's) when the sandbox refused it something: which
+ * setting allows it, since no change to the code does. Empty when it refused nothing.
+ */
+function sandboxNote(output: string): string {
+  if (!SANDBOX_REFUSAL.test(output)) return '';
+  return `\n${LOCAL_PORT_REFUSAL.test(output) ? LOCAL_PORT_HINT : SANDBOX_HINT}`;
+}
 
 interface ShellRun {
   code: number;
@@ -251,9 +260,8 @@ async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = fal
     const r = await runShell(gate.cmd, { cwd, timeoutMs: limitMs, env: { ...withoutCredentials(getChildEnv(), keepEnv), ...PLAIN_ENV }, signal, launch });
     const ms = Date.now() - started;
     const log = path.join(logDir, `${slug(repo.name)}.${slug(gate.name)}.log`);
-    const refused = launch !== undefined && r.code !== 0 && SANDBOX_REFUSAL.test(r.output);
-    const localPort = refused && LOCAL_PORT_REFUSAL.test(r.output);
-    const hint = refused ? `\n${localPort ? LOCAL_PORT_HINT : SANDBOX_HINT}` : '';
+    const hint = launch !== undefined && r.code !== 0 ? sandboxNote(r.output) : '';
+    const localPort = hint.includes('policy.localPorts');
     const output = plain(r.output) + hint;
     await writeReplacing(log, `$ (cd ${path.relative(dir, cwd) || '.'} && ${gate.cmd})\n${output}\nexit ${r.code}\n`);
     if (r.code === 0) {
@@ -273,4 +281,4 @@ async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = fal
 }
 
 export type { GateResult, RepoGates };
-export { changedUnder, plain, runGates, runShell, tailOf, withoutCredentials };
+export { changedUnder, plain, runGates, runShell, sandboxNote, tailOf, withoutCredentials };

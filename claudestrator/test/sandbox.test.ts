@@ -126,6 +126,7 @@ test('sandbox: a commit hook that writes the repo works; one that changes git co
     let s = await engine.run(taskId);
     assert.equal(s!.checkpoint!.id, 'hook-failure', JSON.stringify(engine.lastError(taskId)));
     assert.match(s!.checkpoint!.reason!, /Operation not permitted|Read-only file system/);
+    assert.match(s!.checkpoint!.reason!, /\nnote: checks and git hooks run in the sandbox \(policy\.sandbox\).*policy\.writable/, 'what allows it, not a formatter to run');
     assert.doesNotMatch(fs.readFileSync(path.join(api, '.git', 'config'), 'utf8'), /fsmonitor/, 'git config is not the hook\'s to change');
 
     fs.writeFileSync(path.join(api, '.git', 'hooks', 'pre-commit'), `#!/bin/sh\necho hooked > hooked.txt\necho x > ${outside}/escaped.txt || true\n`, { mode: 0o755 });
