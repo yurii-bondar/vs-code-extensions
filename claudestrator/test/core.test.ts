@@ -352,7 +352,7 @@ test('machine: a failed agent opens agent-failure and retry runs the same step',
   assert.equal(next.feedback, 'try harder');
 });
 
-test('machine: an agent that says it cannot go on is blocked; the same failure after a retry needs guidance for the next', async () => {
+test('machine: an agent that says it cannot go on is blocked; the same failure after a retry says so, and a retry stays yours to give', async () => {
   const { pipeline } = defaultPipeline();
   const blocker = (words: string): OrchEvent[] => timed([{ type: 'stage_started', agent: 'planner' }, { type: 'stage_failed', agent: 'planner', error: words, blocked: true }]);
   let s = rpl([...timed([createdEvent(pipeline), { type: 'intake_completed', spec }]), ...blocker('planner reports it cannot go on: the branch fix/plinko-config was made from main, and the Plinko code is only on origin/plinko (e5d2be7d)')]);
@@ -362,8 +362,8 @@ test('machine: an agent that says it cannot go on is blocked; the same failure a
   // Worded anew by the agent, with another hash: the same failure.
   for (const e of blocker('planner reports it cannot go on: the task branch fix/plinko-config is made from main, but the Plinko code exists only on origin/plinko (32 commits ahead, 51e252e3)')) s = passed(tr(s, { ...e, at: at(30) })).state;
   assert.equal(s.checkpoint!.repeated, true);
-  assert.equal(failed(tr(s, { type: 'checkpoint_answered', id: 'agent-failure', option: 'retry', at: at(40) })).error.code, 'guidance_required', 'a retry as it was ends there again');
-  assert.equal(failed(tr(s, { type: 'checkpoint_answered', id: 'agent-failure', option: 'retry', feedback: '  ', at: at(40) })).error.code, 'guidance_required');
+  // Its cause may be fixed outside the task (a setting, the branch), which no event records: a warning, not a refusal.
+  assert.ok(passed(tr(s, { type: 'checkpoint_answered', id: 'agent-failure', option: 'retry', at: at(40) })).state);
   s = passed(tr(s, { type: 'checkpoint_answered', id: 'agent-failure', option: 'retry', feedback: 'The branch is fast-forwarded to origin/plinko now', at: at(40) })).state;
   // Another failure is news again, and so is any after a step that went through.
   for (const e of timed([{ type: 'stage_started', agent: 'planner' }, { type: 'stage_failed', agent: 'planner', error: 'the agent ran out of turns' }])) s = passed(tr(s, { ...e, at: at(50) })).state;
@@ -372,6 +372,25 @@ test('machine: an agent that says it cannot go on is blocked; the same failure a
   s = passed(tr(s, { type: 'checkpoint_answered', id: 'agent-failure', option: 'retry', at: at(60) })).state;
   for (const e of timed([{ type: 'stage_started', agent: 'planner' }, { type: 'stage_failed', agent: 'planner', error: 'the agent ran out of turns' }])) s = passed(tr(s, { ...e, at: at(70) })).state;
   assert.equal(s.checkpoint!.repeated, true, 'the same words twice');
+});
+
+test('machine: a log replays as it was written: the same failure twice, then a retry as it was that went through', async () => {
+  // T-20261101-1841: listen EPERM twice, the sandbox opened outside the task, a retry without guidance, green checks.
+  const { pipeline } = defaultPipeline();
+  const eperm = 'developer @ api reports it cannot go on: test:unit fails with listen EPERM 127.0.0.1: the sandbox forbids local port binding';
+  const s = rpl(timed([
+    createdEvent(pipeline),
+    { type: 'intake_completed', spec },
+    { type: 'stage_started', agent: 'planner' },
+    { type: 'stage_failed', agent: 'planner', error: eperm, blocked: true },
+    { type: 'checkpoint_answered', id: 'agent-failure', option: 'retry' },
+    { type: 'stage_started', agent: 'planner' },
+    { type: 'stage_failed', agent: 'planner', error: eperm, blocked: true },
+    { type: 'checkpoint_answered', id: 'agent-failure', option: 'retry' },
+    { type: 'stage_started', agent: 'planner' },
+  ]));
+  assert.ok(s.running && s.running.agent === 'planner', 'the retry as it was replays, and its step runs');
+  assert.equal(s.lastFailure && s.lastFailure.reason, eperm);
 });
 
 test('machine: a commit a hook rejects the same way again says so, and its retry stays one click', async () => {

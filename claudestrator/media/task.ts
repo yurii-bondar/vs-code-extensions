@@ -435,10 +435,7 @@ interface Views {
     },
   };
 
-  /**
-   * A checkpoint's wording. An agent that said it cannot go on is not one that stopped early; a failure that repeats the
-   * one before it needs guidance for its retry, which would end there again as it was.
-   */
+  /** A checkpoint's wording. An agent that said it cannot go on is not one that stopped early. */
   function cpUi(cp: NonNullable<TaskScreen['checkpointFull']>): CpUi {
     const ui = CP_UI[cp.id]!;
     // The engine puts a note under a hook's output when the sandbox refused it something: no formatter fixes that.
@@ -447,8 +444,7 @@ interface Views {
     }
     if (cp.id !== 'agent-failure') return ui;
     const blocked = cp.blocked ? { title: "The agent can't go on", lead: 'It reported what stops it (below) and stopped there rather than work around it. A retry runs into the same thing until its cause changes: fix that first (the plan, the branch, the sandbox in Settings → Safety), or tell the agent what to do instead.' } : {};
-    const repeated = cp.repeated ? { placeholder: 'What should the agent do differently? Needed: the last retry ended the same way', options: { ...ui.options, retry: { ...ui.options.retry!, feedback: 'required' as const } } } : {};
-    return { ...ui, ...blocked, ...repeated };
+    return { ...ui, ...blocked };
   }
 
   /**
@@ -610,7 +606,7 @@ interface Views {
       }
     }
     if (cp.repeated) {
-      const what = cp.id === 'hook-failure' ? 'Retrying the commit as it is ends there again: fix what the hook needs first.' : 'A retry as it was ends there again: say what the agent should do differently, or fix the cause first.';
+      const what = cp.id === 'hook-failure' ? 'If you fixed what the hook needs meanwhile, retry; if not, the commit ends there again.' : 'If you fixed its cause meanwhile (a setting, the branch, the plan), retry; if not, a retry as it was ends there again: say what the agent should do differently.';
       body += `<div class="banner warn">${icon('alert')}<div class="grow"><b>The same failure as the attempt before.</b> ${what}</div></div>`;
     }
     const needsFeedback = Object.keys(ui.options).some((o) => cp.options.includes(o) && ui.options[o]?.feedback);

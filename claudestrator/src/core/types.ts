@@ -330,7 +330,10 @@ export interface Checkpoint {
   reason?: string;
   /** An agent-failure where the agent said it cannot go on, rather than one that ended without a usable report. */
   blocked?: boolean;
-  /** The failure reads as the one the retry before it ended in: a retry as it was would end there again. */
+  /**
+   * The failure reads as the one the retry before it ended in: a retry as it was ends there again, unless its cause was
+   * fixed meanwhile outside the task (a setting, the branch), which no event records. A warning, never a refusal.
+   */
   repeated?: boolean;
   at: string;
 }

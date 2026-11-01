@@ -235,11 +235,6 @@ function checkpointAnswered(s: TaskState, e: Ev<'checkpoint_answered'>): Transit
   if (!cp) return fail('no_checkpoint', 'no checkpoint is open');
   if (cp.id !== e.id) return fail('wrong_checkpoint', `open checkpoint is "${cp.id}", not "${e.id}"`);
   if (!cp.options.includes(e.option)) return fail('invalid_option', `"${e.option}" is not an option of "${cp.id}": ${cp.options.join(', ')}`);
-  // The agent can change none of what it ran into (the plan, the branch, the sandbox): the same retry ends there again.
-  if (cp.id === 'agent-failure' && cp.repeated && e.option === 'retry' && !(e.feedback && e.feedback.trim())) {
-    return fail('guidance_required', 'the step failed the same way after its last retry: say what the agent should do differently, or fix the cause first');
-  }
-
   s.answers.push({ id: e.id, option: e.option, ...(e.feedback && { feedback: e.feedback }), at: e.at });
   s.checkpoint = null;
   s.status = 'active';
