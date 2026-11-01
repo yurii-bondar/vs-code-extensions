@@ -12,23 +12,26 @@ interface SecretFinding {
   excerpt?: string;
 }
 
+// Every repetition is bounded: an added line can be a megabyte of minified code, and a pattern that may run to the end
+// of the line from each place it starts takes the square of that, in the extension host where the guard answers too.
+
 /** Patterns of credentials that are rarely anything else. */
 const PATTERNS: { what: string; re: RegExp }[] = [
   { what: 'an AWS access key', re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/ },
-  { what: 'a GitHub token', re: /\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{50,})\b/ },
-  { what: 'a Slack token', re: /\bxox[abeoprs]-[A-Za-z0-9-]{10,}/ },
-  { what: 'a private key', re: /-----BEGIN (?:[A-Z]+ )*PRIVATE KEY(?: BLOCK)?-----/ },
+  { what: 'a GitHub token', re: /\b(?:gh[pousr]_[A-Za-z0-9]{36,255}|github_pat_[A-Za-z0-9_]{50,255})\b/ },
+  { what: 'a Slack token', re: /\bxox[abeoprs]-[A-Za-z0-9-]{10,255}/ },
+  { what: 'a private key', re: /-----BEGIN (?:[A-Z]{1,20} ){0,4}PRIVATE KEY(?: BLOCK)?-----/ },
   { what: 'a Google API key', re: /\bAIza[0-9A-Za-z_-]{35}\b/ },
-  { what: 'a Stripe live key', re: /\b(?:sk|rk)_live_[0-9A-Za-z]{24,}\b/ },
+  { what: 'a Stripe live key', re: /\b(?:sk|rk)_live_[0-9A-Za-z]{24,255}\b/ },
   { what: 'an npm token', re: /\bnpm_[A-Za-z0-9]{36}\b/ },
-  { what: 'an Anthropic API key', re: /\bsk-ant-[A-Za-z0-9_-]{20,}/ },
-  { what: 'an OpenAI API key', re: /\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{40,}/ },
-  { what: 'an Atlassian API token', re: /\bATATT3[A-Za-z0-9_=-]{40,}/ },
-  { what: 'a Slack webhook', re: /https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/]{20,}/ },
+  { what: 'an Anthropic API key', re: /\bsk-ant-[A-Za-z0-9_-]{20,255}/ },
+  { what: 'an OpenAI API key', re: /\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{40,255}/ },
+  { what: 'an Atlassian API token', re: /\bATATT3[A-Za-z0-9_=-]{40,255}/ },
+  { what: 'a Slack webhook', re: /https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/]{20,255}/ },
 ];
 
 /** A password in a URL (`postgres://app:s3cret@db.prod…`), except to this machine or a placeholder host. */
-const URL_PASSWORD = /\b[a-z][a-z0-9+.-]*:\/\/[^/\s:@'"]+:([^/\s@'"]+)@([^/\s:'"?#]+)/i;
+const URL_PASSWORD = /\b[a-z][a-z0-9+.-]{0,30}:\/\/[^/\s:@'"]{1,255}:([^/\s@'"]{1,255})@([^/\s:'"?#]{1,255})/i;
 const LOCAL_HOST = /^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|host\.docker\.internal|[^.]+|.*\.(example|test|local|invalid))$/i;
 const PLACEHOLDER = /^(\$\{?\w+\}?|<[^>]*>|\*+|x+|password|pass|secret|changeme|\{\{.*\}\})$/i;
 
