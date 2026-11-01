@@ -10,7 +10,7 @@ import { exists } from './files';
 import { EFFORTS, REPO_NAME, SCENARIOS } from './protocol';
 import { buildPipeline, scenarioKind, taskPipeline, fitsScenario, onRepos, reposBeforePlan } from './pipeline';
 import { nextAction, runOf, artifactPath, branchName, sameStep, editableFrom, spentOf, stepRepos, unknownRepos, TASK_FILES, type NextAction, type RunAction } from './machine';
-import { parseInvocation, classifyInput, detectScenario, runIntake, renderTicket, IntakeError, extractAcceptanceCriteria, otherSite, planFromTicket, capSpec } from './intake';
+import { parseInvocation, classifyInput, detectScenario, runIntake, renderTicket, IntakeError, extractAcceptanceCriteria, otherSite, planFromTicket, capSpec, projectAllowed } from './intake';
 import { TaskService, type DispatchResult } from './store';
 import { AS_TEXT, exec, getChildEnv, GitRepo, branchAt, taskRepos, prepareRepos, taskDiff, removeWorktrees, SLOW_GIT_MS } from './git';
 import { runGates, runShell, withoutCredentials } from './gates';
@@ -520,7 +520,7 @@ class Engine extends EventEmitter {
     if (source.kind === 'jira') {
       const allowed = r.config.jira.allowedProjects;
       const project = source.key.split('-')[0]!;
-      if (allowed.length && !allowed.includes(project)) problem = `Jira project ${project} is not allowed here (allowed: ${allowed.join(', ')})`;
+      if (!projectAllowed(source.key, allowed)) problem = `Jira project ${project} is not allowed here (allowed: ${allowed.join(', ')})`;
     }
     if (pipeline.stages.length === 0) problem = problem || (sc.name === 'deliver' ? 'every agent is switched off' : `no agent is on for the ${sc.label || sc.name} scenario`);
     const repos = this.reposWithoutPlan(inv.repos, r.config, pipeline);
@@ -572,7 +572,7 @@ class Engine extends EventEmitter {
     if (source.kind === 'jira') {
       const allowed = config.jira.allowedProjects;
       const project = source.key.split('-')[0]!;
-      if (allowed.length && !allowed.includes(project)) throw new EngineError('project_not_allowed', `Jira project ${project} is not allowed (allowed: ${allowed.join(', ')})`);
+      if (!projectAllowed(source.key, allowed)) throw new EngineError('project_not_allowed', `Jira project ${project} is not allowed (allowed: ${allowed.join(', ')})`);
     }
     const isAuto = auto || inv.auto;
     const pipeline = buildPipeline(config, { auto: isAuto, scenario: sc.name });
@@ -761,7 +761,7 @@ class Engine extends EventEmitter {
     const via = s.source.kind !== 'text' && (!client || otherSite(s.source, client.site)) ? await this.mcpIntake() : null;
     try {
       if (via) spec = await this.intakeViaMcp(s, via);
-      else spec = await runIntake(s.taskId, s.source, { atlassian: client, allowedProjects: (await this.config()).jira.allowedProjects });
+      else spec = await this.intakeOverRest(s, client);
     } catch (e) {
       if (e instanceof IntakeError) throw new EngineError(e.code, e.code === 'atlassian_not_configured' ? 'Jira and Confluence are not reachable: sign in to an Atlassian MCP server (MCP tab), or add an API token in Settings → Jira & Confluence' : e.message);
       throw e;
@@ -855,6 +855,22 @@ class Engine extends EventEmitter {
   }
 
   /**
+   * Reads the ticket over REST with the API token. A token the site refuses (expired, revoked) does not stop the task
+   * when the account has an Atlassian MCP server: the ticket is read through it, and the log says to renew the token.
+   */
+  async intakeOverRest(s: TaskState, client: AtlassianClient | null): Promise<Spec> {
+    try {
+      return await runIntake(s.taskId, s.source, { atlassian: client, allowedProjects: (await this.config()).jira.allowedProjects });
+    } catch (e) {
+      if (!(e instanceof IntakeError) || e.code !== 'atlassian_auth') throw e;
+      const via = await this.mcpIntake().catch(() => null);
+      if (!via) throw e;
+      this.log('warn', `${e.message}; reading it through the ${via.server} MCP server instead`, s.taskId);
+      return this.intakeViaMcp(s, via);
+    }
+  }
+
+  /**
    * Reads a Jira issue or Confluence page through an Atlassian MCP server signed in with Claude Code (no API token):
    * a short read-only agent session that hands back the ticket as JSON.
    */
@@ -863,7 +879,7 @@ class Engine extends EventEmitter {
     if (src.kind === 'jira') {
       const allowed = (await this.config()).jira.allowedProjects;
       const project = src.key.split('-')[0]!;
-      if (allowed.length && !allowed.includes(project)) throw new EngineError('project_not_allowed', `Jira project ${project} is not allowed (allowed: ${allowed.join(', ')})`);
+      if (!projectAllowed(src.key, allowed)) throw new EngineError('project_not_allowed', `Jira project ${project} is not allowed (allowed: ${allowed.join(', ')})`);
     }
     const usedUp = usedUpWindow(this.limits, Date.now());
     if (usedUp) throw new EngineError('limit_reached', `reading the ticket did not start: ${usedUp}`);

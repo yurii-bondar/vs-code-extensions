@@ -9,6 +9,7 @@ import { execFileSync } from 'child_process';
 import { setChildEnv, getChildEnv } from '../src/core/git';
 import { buildArgs } from '../src/core/runner';
 import { writeUserMcpConfig } from '../src/core/mcp';
+import { AtlassianClient } from '../src/core/intake';
 import * as view from '../src/core/view';
 import { git, workspace, harness, only, runTask, previewOf, text, waitFor } from './helpers/e2e';
 import type { PermissionRequest } from '../src/core/engine';
@@ -931,6 +932,27 @@ test("engine: a task's commit left unsigned while the repo is on another branch 
     await assert.rejects(h.engine.commit(await h.engine.svc.state(taskId)), /not signed yet \(commit\.gpgsign is on\), and the repo is on main; switch back/);
     assert.doesNotMatch(execFileSync('git', ['cat-file', 'commit', 'feat/add-feature'], { cwd: api, encoding: 'utf8' }), /^gpgsig/m, 'nothing amended on main meanwhile');
     assert.equal(git(api, 'log', '-1', '--format=%s', 'main'), 'init');
+  } finally {
+    h.hooks.dispose();
+  }
+});
+
+test('engine: a refused API token does not stop the task when an Atlassian MCP server can read the ticket, and an allowed project matches in any case', async () => {
+  const ws = workspace(['api'], 'repos:\n  api: {}\npipeline: [planner]\njira: { allowedProjects: [proj] }\n');
+  const h = await harness(ws, { FAKE_REPOS: 'api' });
+  const refused = (async () => new Response('{}', { status: 401 })) as unknown as typeof globalThis.fetch;
+  h.engine.atlassian = () => new AtlassianClient({ site: 'acme.atlassian.net', email: 'dev@example.com', token: 'tok-S3CRET-805' }, { fetch: refused, sleep: async () => {} });
+  h.engine.mcpIntake = async () => ({ server: 'Atlassian', site: 'acme.atlassian.net' });
+  const warnings: string[] = [];
+  h.engine.on('log', (l: { level: string; message: string }) => l.level === 'warn' && warnings.push(l.message));
+  try {
+    const { taskId } = await h.engine.start({ text: 'PROJ-805' });
+    await h.engine.run(taskId);
+    const s = await h.engine.svc.state(taskId);
+    assert.equal(s.phase, 'done', JSON.stringify(h.engine.lastError(taskId)));
+    assert.equal(s.spec!.title, 'PROJ-805 Cap the max bet');
+    assert.ok(warnings.some((w) => /reading it through the Atlassian MCP server instead/.test(w)), warnings.join('\n'));
+    assert.ok(!warnings.some((w) => w.includes('tok-S3CRET-805')), 'never the token');
   } finally {
     h.hooks.dispose();
   }
