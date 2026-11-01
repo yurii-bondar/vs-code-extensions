@@ -580,9 +580,24 @@ const CASELESS = process.platform === 'darwin' || process.platform === 'win32';
 const fold = (p: string): string => (CASELESS ? p.toLowerCase() : p);
 const inside = (abs: string, root: string): boolean => within(fold(abs), fold(root));
 
-/** What a path of `Engine.runsOutside` is: Claude Code's or VS Code's settings, or the hooks folder git runs. */
+/**
+ * Whether a path is a CLAUDE.local.md, at any depth and in any case (with the trailing dots or spaces Windows drops):
+ * instructions the next agent's session loads, and git-ignored, so no diff shows a change.
+ */
+const localInstructions = (p: string): boolean => path.basename(p).replace(/[. ]+$/, '').toLowerCase() === 'claude.local.md';
+
+/** What a path of `Engine.runsOutside` is: Claude Code's or VS Code's settings, its local instructions, or the hooks folder git runs. */
 const outsideLabel = (p: string): string =>
-  /(^|[\\/])(\.claude|\.mcp\.json)$/i.test(p) ? "Claude Code's settings and MCP servers of the repo" : /(^|[\\/])\.vscode$/i.test(p) ? "VS Code's settings and tasks of the repo" : 'the hooks folder git runs';
+  localInstructions(p)
+    ? "Claude Code's local instructions (CLAUDE.local.md) of the repo"
+    : /(^|[\\/])(\.claude|\.mcp\.json)$/i.test(p)
+      ? "Claude Code's settings and MCP servers of the repo"
+      : /(^|[\\/])\.vscode$/i.test(p)
+        ? "VS Code's settings and tasks of the repo"
+        : 'the hooks folder git runs';
+
+/** Why an agent does not write a CLAUDE.local.md. */
+const LOCAL_INSTRUCTIONS = "CLAUDE.local.md holds instructions the next agent's session loads, and it is git-ignored, so no diff shows a change; a change there is yours to make";
 
 /** What a write there would change that is not an agent's: git metadata, or what runs outside the sandbox. Null: none. */
 function ownedBy(abs: string, ctx: GuardContext): string | null {
@@ -600,6 +615,7 @@ function checkWrites(targets: string[], cmd: string, dir: Dir, ctx: GuardContext
     if (/\$(?!\{?HOME\}?(\/|$))|`/.test(t)) return deny(`${cmd} writes to ${t}: spell out the path instead of a variable`);
     const abs = resolveIn(dir, t, ctx);
     if (abs === null) return lost(`${cmd} writes ${t}`);
+    if (localInstructions(abs)) return deny(`${cmd} writes ${abs}: ${LOCAL_INSTRUCTIONS}`);
     const owned = ownedBy(abs, ctx);
     if (owned) return deny(`${cmd} would write into ${owned} (${abs}); Claudestrator owns git`);
     if ((ctx.protect || []).some((p) => inside(abs, path.resolve(p)))) return deny(`${cmd} writes ${abs}: Claudestrator's config and task state are not an agent's to change`);
@@ -640,6 +656,7 @@ function checkLinks(cmd: string, args: string[], dir: Dir, ctx: GuardContext): V
     if (here === null) return lost(`${cmd} links to ${s}`);
     const fromLink = [resolveIn(at, s, ctx)!, resolveIn(path.dirname(at), s, ctx)!];
     for (const abs of [here, ...fromLink]) {
+      if (localInstructions(abs)) return deny(`${cmd} would link to ${abs}: ${LOCAL_INSTRUCTIONS}`);
       const owned = ownedBy(abs, ctx);
       if (owned) return deny(`${cmd} would link to ${owned} (${s}): a write through the link would change it, and Claudestrator owns git`);
       if ((ctx.protect || []).some((p) => inside(abs, path.resolve(p)))) return deny(`${cmd} would link to ${abs}: Claudestrator's config and task state are not an agent's to change`);

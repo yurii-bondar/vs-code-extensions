@@ -2,7 +2,7 @@
 import test from 'node:test';
 import * as assert from 'node:assert/strict';
 
-import { guardBash } from '../src/core/guard';
+import { guardBash, outsideLabel } from '../src/core/guard';
 import type { GuardContext } from '../src/core/guard';
 
 const policy = { protectedBranches: ['main'], draftPrsOnly: true, forbidAiAttribution: true, allowNoVerify: false, sandbox: true, network: [], writable: [], checkEnv: [] };
@@ -459,4 +459,17 @@ test('guard: commands a shell reads from a here-string, a process substitution, 
   ]) {
     assert.equal(await allowed(command), true, command);
   }
+});
+
+test('guard: no agent writes a CLAUDE.local.md, at any depth and in any case; CLAUDE.md is the repo\'s, in the diff', async () => {
+  for (const command of ['echo x > CLAUDE.local.md', 'cp /tmp/x sub/claude.local.md', 'echo x >> src/CLAUDE.LOCAL.md', 'tee -a CLAUDE.local.md', "sed -i 's/a/b/' CLAUDE.local.md", 'mv notes.md CLAUDE.local.md', 'ln -s CLAUDE.local.md notes.md']) {
+    const verdict = await guardBash(command, ctx());
+    assert.equal(verdict.allow, false, command);
+    assert.match(verdict.allow ? '' : verdict.reason, /CLAUDE\.local\.md holds instructions/, command);
+  }
+  for (const command of ['echo x >> CLAUDE.md', "sed -i 's/a/b/' src/CLAUDE.md", 'cat CLAUDE.local.md', 'grep -r foo CLAUDE.md']) {
+    assert.equal(await allowed(command), true, command);
+  }
+  assert.equal(outsideLabel('/ws/api/CLAUDE.local.md'), "Claude Code's local instructions (CLAUDE.local.md) of the repo");
+  assert.equal(outsideLabel('/ws/api/.claude'), "Claude Code's settings and MCP servers of the repo");
 });
