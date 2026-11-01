@@ -100,3 +100,14 @@ test('gates: run as on a CI server, so a test runner that watches by default run
   const repo = { name: 'api', baseBranch: 'main', gates: [{ name: 'ci', cmd: 'test "$CI" = true && test "$NO_COLOR" = 1' }] } as unknown as RepoConfig;
   assert.equal((await runGates({ repo, dir, logDir: path.join(dir, '.orch', 'gates'), force: true })).status, 'pass');
 });
+
+test('gates: a passing check that leaves a process in the background passes, and the process goes', { skip: process.platform === 'win32' }, async () => {
+  const dir = changedRepo();
+  const pidFile = path.join(dir, 'bg.pid');
+  const started = Date.now();
+  const r = await runShell(`(sleep 30 & echo $! > "${pidFile}"); echo tests passed; exit 0`, { cwd: dir, env: process.env, timeoutMs: 10000 });
+  assert.equal(r.code, 0, r.output);
+  assert.match(r.output, /tests passed/);
+  assert.ok(Date.now() - started < 5000, 'not held until its time ran out');
+  await waitFor(async () => !alive(Number(fs.readFileSync(pidFile, 'utf8'))), 5000);
+});

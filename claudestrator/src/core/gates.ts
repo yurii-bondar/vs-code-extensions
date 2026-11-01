@@ -14,6 +14,8 @@ const TAIL_LINES = 40;
 const KEEP_CHARS = 4 * 1024 * 1024;
 /** How long a gate gets after SIGTERM before its process group is killed. */
 const KILL_GRACE_MS = 3000;
+/** How long output may still arrive after the shell has exited, from what it left running. */
+const DRAIN_MS = 500;
 // Gate commands print plain text: colour codes are noise in the tail an agent reads, and some tools only colour on a terminal anyway.
 // CI: test runners that watch by default (react-scripts test, ng test, vitest) run once and exit, as on a CI server.
 const PLAIN_ENV = { NO_COLOR: '1', FORCE_COLOR: '0', CI: 'true' };
@@ -123,15 +125,26 @@ function spawnShell({ file: bin, args, env }: Awaited<ReturnType<Launcher>>, { c
       else signal.addEventListener('abort', onAbort, { once: true });
     }
     child.on('error', (e) => keep(`${(e as NodeJS.ErrnoException).code === 'ENOENT' ? `${bin}: not found` : e.message}\n`));
-    child.on('close', (code) => {
+    let done = false;
+    let drain: NodeJS.Timeout | undefined;
+    const finish = (code: number | null): void => {
+      if (done) return;
+      done = true;
       clearTimeout(timer);
       clearTimeout(grace);
+      clearTimeout(drain);
       if (signal) signal.removeEventListener('abort', onAbort);
       // The shell is gone; anything it left in its group goes too.
-      if (!win && killed) killTree('SIGKILL');
+      if (!win) killTree('SIGKILL');
       const note = killed === 'timeout' ? `\nkilled after ${Math.round(timeoutMs / 1000)}s` : killed === 'stopped' ? '\nstopped with the task' : '';
       resolve({ code: killed === 'timeout' ? 124 : killed === 'stopped' ? 130 : code ?? 1, output: output + note, ...(killed && { killed }) });
+    };
+    // The result is the shell's exit: a process it left in the background (`server &`) can hold the output open, and a
+    // passing check would wait for it until its time ran out. What is still to be read gets a moment.
+    child.on('exit', (code) => {
+      drain = setTimeout(() => finish(code), DRAIN_MS);
     });
+    child.on('close', (code) => finish(code));
   });
 }
 
