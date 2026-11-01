@@ -676,6 +676,18 @@ async function checkRm(args: string[], dir: string, ctx: GuardContext): Promise<
     if (/^(\.\/?)?\*$|^\.{1,2}\/?$|^\/\*?$|^~\/?\*?$|^\$\{?HOME\}?\/?\*?$/.test(t)) return deny(`rm -r ${t} is not allowed`);
     // A variable or command substitution could be anything; its value is not known here.
     if (/\$(?!\{?HOME\}?(\/|$))|`/.test(t)) return deny(`rm -r ${t}: spell out the path instead of a variable`);
+    // `~user`, `~+` and `~-` are other folders (a home, the current or the last one): the shell knows which.
+    if (/^~(?!\/|$)/.test(t)) return deny(`rm -r ${t}: spell out the path instead of ${t.split('/')[0]}`);
+    // A pattern (`*/`, `?*`, `[a-z]*`) matches what the shell finds: it deletes from the folder it starts in, which is
+    // checked as if its whole content went. `build/*` is fine, `*/` in the repo's root is the repo.
+    const glob = t.search(/[*?[]/);
+    if (glob !== -1) {
+      if (/\.\./.test(t.slice(glob))) return deny(`rm -r ${t}: a pattern that climbs out with .. is not allowed`);
+      const from = resolveIn(dir, t.slice(0, glob).replace(/[^/]*$/, '') || '.', ctx);
+      const verdict = await checkRm(['-r', '--', from], dir, ctx);
+      if (!verdict.allow) return deny(`rm -r ${t} deletes what is in ${from}: ${verdict.reason}`);
+      continue;
+    }
     const abs = resolveIn(dir, t.replace(/\/\*$/, ''), ctx);
     const inside = (root: string): boolean => abs === root || abs.startsWith(root + path.sep);
     const contains = (root: string): boolean => root === abs || root.startsWith(abs + path.sep);
