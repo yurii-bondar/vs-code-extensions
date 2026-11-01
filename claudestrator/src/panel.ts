@@ -317,6 +317,8 @@ class DashboardPanel implements RpcHandlers {
 
   async $task({ taskId }: { taskId: string }): Promise<TaskScreen> {
     const engine = this.engine;
+    // Deleted from the sidebar, another window or the CLI while its screen was open: the page goes home.
+    if (!(await engine.svc.exists(taskId))) throw Object.assign(new Error(`${taskId} was deleted`), { code: 'no_task' });
     const state = await engine.svc.state(taskId);
     return {
       ...(await view.detail(engine, taskId)),
@@ -443,6 +445,8 @@ class DashboardPanel implements RpcHandlers {
     }
     if (worktrees) await this.engine.cleanup(taskId, false);
     await this.engine.remove(taskId);
+    // Deleted from the sidebar while its screen is open: the page leaves it.
+    if (this.viewing === taskId) void this.post({ type: 'navigate', route: { name: 'home' } });
     return { deleted: true };
   }
 

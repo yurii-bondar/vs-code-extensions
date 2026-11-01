@@ -101,3 +101,10 @@ test('panel: the page gets the streamed output of the task it shows, and of no o
   await flushed();
   assert.deepEqual(posted.map((m) => (m as { taskId?: string }).taskId), ['B']);
 });
+
+test("panel: a deleted task's screen hears so, and goes home", async () => {
+  const { p } = panel();
+  const svc = { exists: async () => false };
+  Object.assign(p, { orch: { engine: { svc } }, viewing: 'T-1' });
+  await assert.rejects(() => p.$task({ taskId: 'T-1' }), (e: { code?: string }) => e.code === 'no_task');
+});

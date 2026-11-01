@@ -197,6 +197,12 @@ interface Views {
       try {
         d = await call('task', { taskId: T.taskId });
       } catch (e) {
+        // The task is gone (deleted elsewhere): its screen has nothing left to show.
+        if ((e as { code?: string }).code === 'no_task' && S.route.name === 'task' && S.route.taskId === T.taskId) {
+          toast(e instanceof Error ? e.message : String(e), 'warn');
+          go({ name: 'home' });
+          return;
+        }
         if (first) throw e;
         toast(e instanceof Error ? e.message : String(e), 'error');
         return;
