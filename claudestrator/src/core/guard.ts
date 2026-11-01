@@ -4,7 +4,6 @@
 // (`if`, `then`, `do`, `{`, `!`) and wrappers that run their arguments (`timeout 60`, `nice -n 5`, `env -i`, `xargs`).
 import * as os from 'os';
 import * as path from 'path';
-import { tokenize } from './intake';
 import type { Policy } from './types';
 
 type Verdict = { allow: true } | { allow: false; reason: string };
@@ -41,6 +40,136 @@ interface GuardContext {
  */
 const inGitMetadata = (p: string): boolean => p.split(/[\\/]/).some((s) => s.replace(/[. ]+$/, '').toLowerCase() === '.git');
 
+/** A character of a word, and whether a quote or a backslash made it literal (no brace expansion, no pattern). */
+interface Ch {
+  c: string;
+  q: boolean;
+}
+
+/** The most words one brace list may become: past it the word stays as written, and a command made of it is refused. */
+const MAX_EXPANSION = 1000;
+
+const ANSI_ESCAPES: Record<string, string> = { a: '\x07', b: '\b', e: '\x1b', E: '\x1b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v' };
+
+/** The text of `$'…'` from `i` (just past the opening quote) to its closing quote: `[text, index after it]`. */
+function ansiC(line: string, i: number): [string, number] {
+  let out = '';
+  while (i < line.length && line[i] !== "'") {
+    if (line[i] !== '\\') {
+      out += line[i++];
+      continue;
+    }
+    const e = line[i + 1] ?? '';
+    const hex = e === 'x' ? line.slice(i + 2).match(/^[0-9a-fA-F]{1,2}/) : e === 'u' ? line.slice(i + 2).match(/^[0-9a-fA-F]{1,4}/) : e === 'U' ? line.slice(i + 2).match(/^[0-9a-fA-F]{1,8}/) : null;
+    const oct = line.slice(i + 1).match(/^[0-7]{1,3}/);
+    if (hex) {
+      out += String.fromCodePoint(parseInt(hex[0], 16));
+      i += 2 + hex[0].length;
+    } else if (oct) {
+      out += String.fromCharCode(parseInt(oct[0], 8));
+      i += 1 + oct[0].length;
+    } else {
+      out += ANSI_ESCAPES[e] ?? e;
+      i += 2;
+    }
+  }
+  if (i >= line.length) throw new Error("unclosed $' quote");
+  return [out, i + 1];
+}
+
+/** `{a,b}` and `{1..3}` as the shell expands them, outside quotes; anything else stays as written. */
+function expandBraces(w: Ch[]): Ch[][] {
+  for (let i = 0; i < w.length; i++) {
+    if (w[i]!.q || w[i]!.c !== '{') continue;
+    let depth = 0;
+    let close = -1;
+    const commas: number[] = [];
+    for (let j = i; j < w.length; j++) {
+      const x = w[j]!;
+      if (x.q) continue;
+      if (x.c === '{') depth++;
+      else if (x.c === '}' && --depth === 0) {
+        close = j;
+        break;
+      } else if (x.c === ',' && depth === 1) commas.push(j);
+    }
+    if (close === -1) return [w];
+    const pre = w.slice(0, i);
+    const post = w.slice(close + 1);
+    let alts: Ch[][] | null = null;
+    if (commas.length) {
+      const bounds = [i, ...commas, close];
+      alts = bounds.slice(0, -1).map((b, k) => w.slice(b + 1, bounds[k + 1]));
+    } else {
+      const range = w.slice(i + 1, close).map((x) => x.c).join('').match(/^(-?\d+|[A-Za-z])\.\.(-?\d+|[A-Za-z])$/);
+      if (range) {
+        const num = /\d/.test(range[1]!);
+        const [a, b] = num ? [Number(range[1]), Number(range[2])] : [range[1]!.charCodeAt(0), range[2]!.charCodeAt(0)];
+        if (Math.abs(b - a) < MAX_EXPANSION) {
+          const step = a <= b ? 1 : -1;
+          alts = [];
+          for (let n = a; step > 0 ? n <= b : n >= b; n += step) alts.push([...(num ? String(n) : String.fromCharCode(n))].map((c) => ({ c, q: false })));
+        }
+      }
+    }
+    if (!alts) continue; // `{}`, `{x}`: as written
+    const out = alts.flatMap((alt) => expandBraces([...pre, ...alt, ...post]));
+    return out.length > MAX_EXPANSION ? [w] : out;
+  }
+  return [w];
+}
+
+/**
+ * Splits a simple command into the words the shell would run: whitespace separates; quotes ('…', "…", $'…') group and
+ * go; a backslash makes the next character literal (`\git` is git, `g\it` too); a brace list becomes a word per item
+ * (`{git,clean,-fdx}` is three). A variable's value or what a pattern matches is not known here and stays as written.
+ */
+function tokenize(line: string): string[] {
+  const words: Ch[][] = [];
+  let cur: Ch[] = [];
+  let has = false;
+  const push = (c: string, q: boolean): void => {
+    for (const ch of c) cur.push({ c: ch, q });
+    has = true;
+  };
+  for (let i = 0; i < line.length; ) {
+    const ch = line[i]!;
+    if (ch === "'") {
+      const end = line.indexOf("'", i + 1);
+      if (end === -1) throw new Error("unclosed ' quote");
+      push(line.slice(i + 1, end), true);
+      i = end + 1;
+    } else if (ch === '$' && line[i + 1] === "'") {
+      const [text, next] = ansiC(line, i + 2);
+      push(text, true);
+      i = next;
+    } else if (ch === '"') {
+      let j = i + 1;
+      let text = '';
+      for (; j < line.length && line[j] !== '"'; j++) {
+        if (line[j] === '\\' && '$`"\\\n'.includes(line[j + 1] ?? '')) text += line[++j];
+        else text += line[j];
+      }
+      if (j >= line.length) throw new Error('unclosed " quote');
+      push(text, true);
+      i = j + 1;
+    } else if (ch === '\\') {
+      push(line[i + 1] ?? '', true);
+      i += 2;
+    } else if (/\s/.test(ch)) {
+      if (has) words.push(cur);
+      cur = [];
+      has = false;
+      i++;
+    } else {
+      push(ch, false);
+      i++;
+    }
+  }
+  if (has) words.push(cur);
+  return words.flatMap(expandBraces).map((w) => w.map((x) => x.c).join(''));
+}
+
 const allow: Verdict = { allow: true };
 const deny = (reason: string): Verdict => ({ allow: false, reason });
 
@@ -61,7 +190,21 @@ async function guardBash(command: string, ctx: GuardContext): Promise<Verdict> {
     }
     const split = splitPrefixes(withoutRedirects(argv));
     const [first, ...args] = split.argv;
-    if (!first) continue;
+    // A redirection with no command (`> f`, what `x &> f` was split into before) still writes its file.
+    if (!first) {
+      const writes = checkWrites(redirectTargets(segment), 'a redirection', dir, ctx);
+      if (!writes.allow) return writes;
+      continue;
+    }
+    // One word that is a whole command (`watch "git push"`): the shell splits it again. A path with spaces in its
+    // folders (`"/Users/A B/bin/git"`) is still the command its name says.
+    if (/\s/.test(path.basename(first))) {
+      const verdict = await guardBash(split.argv.join(' '), { ...ctx, cwd: dir });
+      if (!verdict.allow) return verdict;
+      continue;
+    }
+    // A command named by what only the shell knows (`$CMD`, `$(which git)`, a pattern) cannot be checked.
+    if (ctx.agent && first !== '[' && first !== '[[' && /[$`*?[\]{}]/.test(first)) return deny(`${first} is not a command the guard can read: spell out its name`);
     const cmd = path.basename(first);
     const env = ctx.agent ? gitEnvRefusal(cmd, split.env, args) : null;
     if (env) return env;
@@ -95,6 +238,12 @@ function redirectTargets(segment: string): string[] {
       word = rest.split(/\s+/)[0];
     }
     if (word && !/^\/dev\/(null|stdout|stderr|tty)$/.test(word)) out.push(word.replace(/[;&|)]+$/, ''));
+  }
+  // `>& file` and `>&file` write file too (stdout and stderr); `>&2` is a descriptor, not a file.
+  for (const m of blanked.matchAll(/(?:^|[^<>])[0-9]?>&(?![0-9-]\s|[0-9-]$)/g)) {
+    const rest = segment.slice(m.index + m[0].length).trimStart();
+    const word = rest.split(/\s+/)[0];
+    if (word && !/^[0-9]+$|^-$/.test(word) && !/^\/dev\/(null|stdout|stderr|tty)$/.test(word)) out.push(word.replace(/[;&|)]+$/, ''));
   }
   return out;
 }
@@ -223,7 +372,12 @@ async function checkCommand(cmd: string, args: string[], dir: string, ctx: Guard
   if (SHELLS.has(cmd)) {
     // `-c`, also combined with other flags: `-lc`, `-ec`, `-xc`.
     const c = args.findIndex((a) => /^-[A-Za-z]*c[A-Za-z]*$/.test(a));
-    return c === -1 ? allow : inner(args[c + 1] ?? '');
+    if (c !== -1) return inner(args[c + 1] ?? '');
+    // Without -c and a script file a shell runs what comes on its input (`| bash`, `bash <<EOF`, `bash -s`), which the
+    // guard never sees: commands go with -c, or in a file.
+    const file = args.find((a) => !a.startsWith('-') && !a.startsWith('+'));
+    if (ctx.agent && (!file || args.includes('-s')) && !args.some((a) => a === '--version' || a === '--help')) return deny(`${cmd} reading commands from its input is not allowed: pass them with -c, or write them to a script file`);
+    return allow;
   }
   if (cmd === 'eval') return inner(args.join(' '));
   if (cmd === 'find') return checkFind(args, dir, ctx);
@@ -338,6 +492,15 @@ function simpleCommands(command: string): string[] {
       if (ch === "'") quote = null;
       continue;
     }
+    // $'…' takes backslash escapes, so `$'\''` does not end it.
+    if (quote === "$'") {
+      if (ch === '\\') current += ch + (text[++i] ?? '');
+      else {
+        current += ch;
+        if (ch === "'") quote = null;
+      }
+      continue;
+    }
     if (quote === '"') {
       if (ch === '\\') current += ch + (text[++i] ?? '');
       else if (ch === '`') open('`', true);
@@ -350,7 +513,11 @@ function simpleCommands(command: string): string[] {
       }
       continue;
     }
-    if (ch === "'" || ch === '"') {
+    if (ch === '$' && text[i + 1] === "'") {
+      quote = "$'";
+      current += "$'";
+      i++;
+    } else if (ch === "'" || ch === '"') {
       quote = ch;
       current += ch;
     } else if (ch === '\\') {
@@ -364,10 +531,14 @@ function simpleCommands(command: string): string[] {
       open(')', true);
     } else if (ch === '(') {
       open(')', false);
+    } else if ((ch === '&' && (text[i + 1] === '>' || current.endsWith('>'))) || (ch === '|' && current.endsWith('>'))) {
+      // Part of a redirection, not a separator: `&> f`, `>& f`, `>| f` write f.
+      current += ch;
     } else if (ch === ';' || ch === '\n' || ch === '|' || ch === '&' || ch === ')') {
       segments.push(current);
       current = '';
       if ((ch === '|' || ch === '&') && text[i + 1] === ch) i++;
+      else if (ch === '|' && text[i + 1] === '&') i++; // |& pipes stderr too
     } else current += ch;
   }
   segments.push(current);
@@ -378,7 +549,7 @@ function simpleCommands(command: string): string[] {
 
 /** The line with quoted text blanked out, so `echo "<<EOF"` is not taken for a heredoc. */
 function unquoted(line: string): string {
-  return line.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, (m) => ' '.repeat(m.length));
+  return line.replace(/\$'(?:[^'\\]|\\.)*'|'[^']*'|"(?:[^"\\]|\\.)*"/g, (m) => ' '.repeat(m.length));
 }
 
 /**
@@ -397,13 +568,14 @@ function withoutRedirects(argv: string[]): string[] {
 }
 
 /** Words that come before the command itself: shell keywords. */
-const KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'while', 'until', 'do', '!', '{', '}', 'time']);
+const KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'while', 'until', 'do', '!', '{', '}']);
 
 /**
  * Commands that run the command in their arguments, and the options of theirs that take a value. `positional` is how
- * many plain arguments come before the command (`timeout DURATION cmd`).
+ * many plain arguments come before the command (`timeout DURATION cmd`); `shell`, the options whose value is a
+ * command line a shell runs (`script -c 'git push'`).
  */
-const WRAPPERS: Record<string, { valued: string[]; positional?: number }> = {
+const WRAPPERS: Record<string, { valued: string[]; positional?: number; shell?: string[] }> = {
   sudo: { valued: ['-u', '-g', '-h', '-p', '-C', '-D', '-r', '-t', '-U'] },
   command: { valued: [] },
   builtin: { valued: [] },
@@ -419,6 +591,10 @@ const WRAPPERS: Record<string, { valued: string[]; positional?: number }> = {
   chrt: { valued: [], positional: 1 },
   taskset: { valued: [], positional: 1 },
   doas: { valued: ['-u', '-C'] },
+  time: { valued: ['-f', '-o', '--format', '--output'] },
+  watch: { valued: ['-n', '--interval', '-q', '--equexit'] },
+  flock: { valued: ['-w', '--wait', '--timeout', '-E', '--conflict-exit-code'], positional: 1, shell: ['-c', '--command'] },
+  script: { valued: ['-t', '-T', '-I', '-O', '-B', '-E', '--timing', '--log-io', '--log-in', '--log-out', '--echo'], positional: 1, shell: ['-c', '--command'] },
 };
 
 /** Drops what runs before the command: `VAR=value`, shell keywords, and wrappers with their options. */
@@ -441,7 +617,8 @@ function splitPrefixes(argv: string[]): { env: string[]; argv: string[] } {
       i++;
       continue;
     }
-    const wrapper = WRAPPERS[path.basename(a)];
+    const name = path.basename(a);
+    const wrapper = WRAPPERS[name];
     if (!wrapper) break;
     i++;
     let positional = wrapper.positional ?? 0;
@@ -451,6 +628,15 @@ function splitPrefixes(argv: string[]): { env: string[]; argv: string[] } {
         i++;
         break;
       }
+      // `env -S 'git push -f'` splits its value into the command and its arguments.
+      const split = name === 'env' ? opt.match(/^(?:-S|--split-string)(?:=?)(.*)$/s) : null;
+      if (split) {
+        const value = split[1] || argv[i + 1] || '';
+        const rest = argv.slice(i + (split[1] ? 1 : 2));
+        const inner = splitPrefixes([...tokenize(value), ...rest]);
+        return { env: [...env, ...inner.env], argv: inner.argv };
+      }
+      if (wrapper.shell && wrapper.shell.includes(opt)) return { env, argv: ['sh', '-c', argv[i + 1] ?? ''] };
       if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(opt)) {
         env.push(opt); // env VAR=value cmd
         i++;

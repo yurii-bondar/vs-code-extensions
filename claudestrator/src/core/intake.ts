@@ -1,30 +1,5 @@
 // Intake: what the user typed → a task source → a ticket every agent reads first.
-
-/** Splits like a shell: whitespace separates, single and double quotes group. */
 import type { PlanMeta, Source, Spec } from './types';
-
-function tokenize(line: string): string[] {
-  const tokens: string[] = [];
-  let current = '';
-  let quote: string | null = null;
-  let has = false;
-  for (const ch of line) {
-    if (quote) {
-      if (ch === quote) quote = null;
-      else current += ch;
-    } else if (ch === '"' || ch === "'") {
-      quote = ch;
-      has = true;
-    } else if (/\s/.test(ch)) {
-      if (has || current) tokens.push(current);
-      current = '';
-      has = false;
-    } else current += ch;
-  }
-  if (quote) throw new Error(`unclosed ${quote} quote`);
-  if (has || current) tokens.push(current);
-  return tokens;
-}
 
 const FLAG_RE = /(^|\s)--(auto|no|only|key|effort|scenario|repos)(?=[\s=]|$)/;
 import { SCENARIOS as SCENARIO_NAMES, SCENARIO_ID } from './protocol';
@@ -630,7 +605,6 @@ function planFromTicket(spec: Pick<Spec, 'title'>, input: string, repos: string[
 export type { Classified, Invocation };
 export {
   planFromTicket,
-  tokenize,
   parseInvocation,
   detectScenario,
   classifyInput,

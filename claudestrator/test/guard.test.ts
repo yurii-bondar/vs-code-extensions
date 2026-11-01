@@ -35,3 +35,53 @@ test('guard: no way into the keychain or a stored GitHub token', async () => {
   }
   assert.equal(await allowed('gh pr view 12 --json title'), true);
 });
+
+test('guard: a command is read as the shell runs it, whatever escapes, quotes or wrappers spell it', async () => {
+  for (const command of [
+    '\\git push -f origin main',
+    'g\\it push -f origin main',
+    "$'\\x67it' push -f origin main",
+    "echo $'\\'' ; git push -f origin main ; echo $'\\''",
+    '{git,push,-f,origin,main}',
+    'git {push,-f} origin main',
+    'rm -rf {build,/}',
+    'env -S "git push -f origin main"',
+    'env --split-string="git commit -m x"',
+    'time -p git push origin main',
+    'watch -n 1 "git push origin main"',
+    'flock /tmp/l git push origin main',
+    'flock /tmp/l -c "git push origin main"',
+    'script -q /dev/null git push origin main',
+    'script -c "git push origin main" /tmp/out',
+    'echo "git push -f origin main" | bash',
+    'bash <<EOF\ngit push -f origin main\nEOF',
+    'sh -s < cmds.txt',
+    '$CMD push',
+    '$(which git) push -f',
+    'gi? push -f',
+    'echo x &> .git/hooks/pre-commit',
+    'echo x >| .git/hooks/pre-commit',
+    'echo x >& .git/hooks/pre-commit',
+    'echo x >&.git/hooks/pre-commit',
+  ]) {
+    assert.equal(await allowed(command), false, command);
+  }
+  for (const command of [
+    'git status && git diff',
+    'echo "a\\"b" > notes.txt',
+    'ls 2>&1 | head',
+    'npm test 2>&1 |& tee /tmp/log.txt',
+    'find . -name "*.ts" -exec grep -l foo {} +',
+    'git stash show -p stash@{0}',
+    'echo {a,b}.txt',
+    '[ -f package.json ] && npm test',
+    '"/Users/A B/node_modules/.bin/eslint" src',
+    'bash scripts/build.sh',
+    'time npm test',
+    "jq '.a' package.json",
+  ]) {
+    assert.equal(await allowed(command), true, command);
+  }
+  // A path with spaces in its folders is still the command its name says.
+  assert.equal(await allowed('"/opt/x y/git" push -f origin main'), false);
+});
