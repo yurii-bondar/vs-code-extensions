@@ -5,6 +5,7 @@
 // `onFailure`, `user_message_uuids`, headless denials) is documented and needs MIN_CLAUDE_VERSION.
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import * as crypto from 'crypto';
+import * as fs from 'fs';
 import { getChildEnv, launch } from './git';
 import { GITHUB_TOKENS } from './settings';
 import type { TranscriptItem } from './store';
@@ -220,6 +221,9 @@ class ClaudeRunner {
   async start(req: SessionRequest): Promise<ClaudeSession> {
     const problem = versionProblem(this.opts.version && this.opts.version());
     if (problem) throw new Error(problem);
+    // A folder that is not there fails the spawn with ENOENT, which reads like a missing CLI.
+    const folder = await fs.promises.stat(req.cwd).catch(() => null);
+    if (!folder || !folder.isDirectory()) throw new Error(`its working folder ${req.cwd} is not there`);
     const sources = this.opts.settingSources();
     // Without the user source, the account's own MCP servers come in explicitly.
     const wantsMcp = req.agent.mcp !== false && this.opts.mcpConfig && (!sources || !sources.includes('user'));

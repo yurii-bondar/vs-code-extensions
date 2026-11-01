@@ -130,6 +130,12 @@ test('runner: a tool call reaches the UI and the transcript with its long string
   assert.ok(capped.content.length < 9000 && capped.content.endsWith('…(+492000 chars)'));
   assert.ok(capped.edits[0]!.old_string.length < 9000 && capped.edits[0]!.new_string === 'y');
 });
+
+test('runner: a working folder that is not there is said so, not taken for a missing CLI', async () => {
+  const runner = new ClaudeRunner({ command: () => FAKE, flags: () => new Set(), settingSources: () => null, env: () => ({}) });
+  await assert.rejects(runner.start({ agent: { instructions: '', model: 'inherit' }, prompt: 'x', cwd: path.join(__dirname, 'no-such-folder'), settings: {}, onOutput: () => {} }), /its working folder .*no-such-folder is not there/);
+});
+
 test("runner: a subagent's messages are a sign the session is alive, though they are not shown, and a message it cannot handle goes to the log", async () => {
   let alive = 0;
   const warnings: string[] = [];
