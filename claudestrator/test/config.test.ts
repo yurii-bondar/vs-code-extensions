@@ -201,3 +201,26 @@ test('config edits: scenarios, groups, instructions, agents and lists keep their
   assert.deepEqual(Object.keys(r.config.custom), ['quick']);
   assert.equal(r.config.agents.reviewer!.effort, 'high', 'back to the built-in effort');
 });
+
+/** The warnings a project config with `yaml` gets over a user config with `mine` (none when empty). */
+async function loosenedBy(yaml: string, mine = ''): Promise<string[]> {
+  const ws = workspace(yaml);
+  const home = tmp('cs-home-');
+  if (mine) {
+    fs.mkdirSync(path.join(home, '.claudestrator'));
+    fs.writeFileSync(config.userConfigFile(home), mine);
+  }
+  const r = passed(await config.loadConfig({ workspace: ws, home }));
+  return r.warnings.filter((w) => w.code === 'policy_loosened').map((w) => w.message);
+}
+
+test("config: a project's config that lifts the budget cap or raises the rounds and attempts says so", async () => {
+  assert.deepEqual(await loosenedBy('limits: { budgetUsd: 0, reviewRounds: 20, gateAttempts: 20 }\n'), [
+    "the project's config (.claudestrator/config.yaml) removes the $25 budget cap of a task (limits.budgetUsd: 0): a task spends without a limit",
+    "the project's config (.claudestrator/config.yaml) raises the review rounds of a task from 2 to 20 (limits.reviewRounds)",
+    "the project's config (.claudestrator/config.yaml) raises the attempts at red checks from 3 to 20 (limits.gateAttempts)",
+  ]);
+  assert.deepEqual(await loosenedBy('limits: { budgetUsd: 100 }\n', 'limits: { budgetUsd: 40 }\n'), ["the project's config (.claudestrator/config.yaml) raises the budget cap of a task from $40 to $100 (limits.budgetUsd)"], 'measured against your own cap');
+  assert.deepEqual(await loosenedBy('limits: { budgetUsd: 10, reviewRounds: 1, gateAttempts: 3 }\n'), [], 'a lower cap and fewer rounds tighten it');
+  assert.deepEqual(await loosenedBy('limits: { budgetUsd: 0, reviewRounds: 4 }\n', 'limits: { budgetUsd: 0, reviewRounds: 5 }\n'), [], 'what your config already allows is not news');
+});

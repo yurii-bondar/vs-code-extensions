@@ -896,9 +896,10 @@ async function readConfig({ workspace, home, flags }: { workspace: string; home?
 }
 
 /**
- * What the project config, and the libraries it lists, relax of the safety the layers under them (yours, your
- * libraries, the defaults) set. A repo someone else wrote can carry that file and those libraries, and the dashboard's
- * Safety switches write it too: either way it is said wherever the config's warnings show, not applied silently.
+ * What the project config, and the libraries it lists, relax of the safety and the spending limits the layers under
+ * them (yours, your libraries, the defaults) set. A repo someone else wrote can carry that file and those libraries,
+ * and the dashboard's Safety switches write it too: either way it is said wherever the config's warnings show, not
+ * applied silently.
  */
 function loosened(layers: Layer[]): Diagnostic[] {
   const project = layers.find((l) => l.name === 'project');
@@ -926,6 +927,15 @@ function loosened(layers: Layer[]): Diagnostic[] {
   const projects = project.config.jira && project.config.jira.allowedProjects;
   const allowed = under.jira.allowedProjects ?? [];
   if (projects && allowed.length && (!projects.length || projects.some((k) => !allowed.includes(k)))) out.push(projects.length ? `allows Jira projects you did not (${projects.filter((k) => !allowed.includes(k)).join(', ')})` : 'allows every Jira project, where your config allows some');
+  // What a task may spend: a library holds no limits, so only the project's config can raise them.
+  const limits = project.config.limits ?? {};
+  const cap = under.limits.budgetUsd ?? 0;
+  if (cap > 0 && limits.budgetUsd === 0) out.push(`removes the $${cap} budget cap of a task (limits.budgetUsd: 0): a task spends without a limit`);
+  else if (cap > 0 && limits.budgetUsd !== undefined && limits.budgetUsd > cap) out.push(`raises the budget cap of a task from $${cap} to $${limits.budgetUsd} (limits.budgetUsd)`);
+  const rounds = under.limits.reviewRounds ?? 2;
+  if (limits.reviewRounds !== undefined && limits.reviewRounds > rounds) out.push(`raises the review rounds of a task from ${rounds} to ${limits.reviewRounds} (limits.reviewRounds)`);
+  const attempts = under.limits.gateAttempts ?? 3;
+  if (limits.gateAttempts !== undefined && limits.gateAttempts > attempts) out.push(`raises the attempts at red checks from ${attempts} to ${limits.gateAttempts} (limits.gateAttempts)`);
   const diag = (layer: Layer, m: string): Diagnostic => ({ level: 'warning', code: 'policy_loosened', source: layer.file, message: `${layer === project ? `the project's config (${CONFIG_DIR}/${CONFIG_FILE})` : `the library "${layer.name.slice(LIBRARY_PREFIX.length)}" the project's config lists`} ${m}` });
   // Agents, from the project's config and from the libraries it lists, which can only bring agents and scenarios.
   const agents: Diagnostic[] = [];
