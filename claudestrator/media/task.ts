@@ -871,23 +871,31 @@ interface Views {
     if (empty) empty.remove();
     const near = el.scrollHeight - el.scrollTop - el.clientHeight < 120 || isPageBottom();
     if (item.type === 'text_delta' || item.type === 'thinking') return drawLive(el, near);
-    if (item.type === 'text' || item.type === 'turn_end') {
-      const live = $('.bubble.live', el);
-      if (live) live.remove();
+    const row = item.type === 'tool_result' ? el.querySelector(`[data-tool="${CSS.escape(item.id)}"]`) : null;
+    if (row && item.type === 'tool_result') {
+      row.classList.remove('t-pending');
+      row.classList.add(item.isError ? 't-error' : 't-ok');
+      $('.tool-state', row)!.innerHTML = item.isError ? icon('x') : icon('check');
+      $('.tool-result', row)!.innerHTML = resultHtml(item);
+    } else {
+      el.insertAdjacentHTML('beforeend', itemHtml(item, null));
+      while (el.childElementCount > MAX_ITEMS) el.firstElementChild!.remove();
     }
-    if (item.type === 'tool_result') {
-      const row = el.querySelector(`[data-tool="${CSS.escape(item.id)}"]`);
-      if (row) {
-        row.classList.remove('t-pending');
-        row.classList.add(item.isError ? 't-error' : 't-ok');
-        $('.tool-state', row)!.innerHTML = item.isError ? icon('x') : icon('check');
-        $('.tool-result', row)!.innerHTML = resultHtml(item);
-        return;
-      }
-    }
-    el.insertAdjacentHTML('beforeend', itemHtml(item, null));
-    while (el.childElementCount > MAX_ITEMS) el.firstElementChild!.remove();
+    settleLive(el);
     if (near) scrollTranscript();
+  }
+
+  /**
+   * After another item, the bubble of a message being written moves below it; with none being written (the item ended
+   * it, or ended the thinking that made the bubble) it goes. A "thinking…" bubble no longer stays above the tool calls
+   * that follow it, for the next turn's text to stream into.
+   */
+  function settleLive(el: HTMLElement) {
+    const live = $('.bubble.live', el);
+    if (!live) return;
+    if (T.viewKey && T.live.writing(T.viewKey) !== undefined) {
+      if (live !== el.lastElementChild) el.appendChild(live);
+    } else live.remove();
   }
 
   /**
@@ -895,7 +903,9 @@ interface Views {
    * its first words, "writing…" when the page came in after it started (its whole text follows).
    */
   function drawLive(el: HTMLElement, near: boolean) {
-    if (!$('.bubble.live', el)) el.insertAdjacentHTML('beforeend', `<div class="bubble agent live"><div class="markdown"></div><span class="caret"></span></div>`);
+    const live = $('.bubble.live', el);
+    if (!live) el.insertAdjacentHTML('beforeend', `<div class="bubble agent live"><div class="markdown"></div><span class="caret"></span></div>`);
+    else if (live !== el.lastElementChild) el.appendChild(live);
     if (liveTimer) return;
     const now = () => (T.viewKey ? T.live.writing(T.viewKey) : undefined);
     // The whole message renders each time, so a long one renders less often: as much work per second at any length.

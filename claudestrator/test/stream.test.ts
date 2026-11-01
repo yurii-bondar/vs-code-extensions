@@ -40,6 +40,14 @@ test('stream: a message the screen came in on after it started is not shown from
   live.take('a', piece('Done'));
   assert.equal(live.writing('a'), 'Done');
 
+  // The page drops the bubble of a message nobody writes any more: thinking followed by tool calls leaves none.
+  live.take('c', { type: 'thinking' });
+  live.take('c', { type: 'tool_use', id: '2', name: 'Grep', input: {} });
+  assert.equal(live.writing('c'), undefined, 'a thinking that ended in a tool call writes nothing');
+  live.take('c', { type: 'tool_result', id: '2', isError: false, text: '' });
+  live.take('c', piece('Found it'));
+  assert.equal(live.writing('c'), 'Found it', 'the next turn\'s text is a message of its own');
+
   live.take('b', { type: 'prompt', text: 'Review it' });
   live.take('b', piece('Looking'));
   assert.equal(live.writing('b'), 'Looking', 'another step, followed from its first item');
