@@ -122,3 +122,24 @@ test('runner: stopping an agent stops what it started in the background too', { 
   for (let i = 0; i < 100 && alive(pid); i++) await new Promise((r) => setTimeout(r, 50));
   assert.equal(alive(pid), false, 'it went with the agent');
 });
+
+test("runner: a subagent's messages are a sign the session is alive, though they are not shown, and a message it cannot handle goes to the log", async () => {
+  let alive = 0;
+  const warnings: string[] = [];
+  const items: TranscriptItem[] = [];
+  const opts: RunnerOptions = { command: () => FAKE, flags: () => new Set(), settingSources: () => null, env: () => ({ FAKE_STREAM: 'uuids', FAKE_STREAM_DELAY: '10' }) };
+  const s = new ClaudeSession({ agent: { model: 'sonnet', instructions: '' }, prompt: 'x', cwd: __dirname, settings: {}, onOutput: (i) => void items.push(i), onActivity: () => void alive++, onWarn: (m) => void warnings.push(m) }, opts);
+  try {
+    await s.turn();
+    const before = { alive, items: items.length };
+    s.handle({ type: 'assistant', parent_tool_use_id: 'toolu_task', message: { content: [{ type: 'tool_use', id: 'x', name: 'Read', input: {} }] } });
+    assert.equal(alive, before.alive + 1, "the subagent's work counts for the watchdog");
+    assert.equal(items.length, before.items, 'and is not shown as the agent\'s own');
+    // A tool result whose content list holds a null: handling it throws, and the log says so once.
+    s.proc.stdout.emit('data', `${JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'z', content: [null] }] } })}\n`);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0]!, /could not handle a message from Claude Code/);
+  } finally {
+    s.close();
+  }
+});

@@ -1171,6 +1171,8 @@ class Engine extends EventEmitter {
       env: this.agentEnv(hook.env, config),
       name: `claudestrator ${taskId} · ${label}`,
       ...this.progress(taskId, { agent: step.agent, transcript: key, cwd, onOutput: emitItem }),
+      onActivity: () => this.activity.set(taskId, Date.now()),
+      onWarn: (message) => this.log('warn', `${label}: ${message}`, taskId),
       // The account the session started under: switching accounts meanwhile does not move its limits to the other.
       onLimits: ((account) => (limits: EngineLimits) => {
         this.limitsBy.set(account, limits);
@@ -1404,8 +1406,11 @@ class Engine extends EventEmitter {
   /** The permission policy of an agent session: the Bash guard, writes only inside the stage's repo, then (optionally) you. */
   async decide({ taskId, step, writeRoots = [], runsOutside = [], webHosts = [], config, call, emitItem }: { taskId: string; step: Step; writeRoots?: string[]; runsOutside?: string[]; webHosts?: string[]; config: Config; call: ToolCall; emitItem: (item: TranscriptItem) => void }): Promise<Decision> {
     const { tool, input } = call;
+    // A tool call is a sign of work, also one of a subagent the agent started.
+    this.activity.set(taskId, Date.now());
     const blocked = (reason: string): Decision => {
       emitItem({ type: 'blocked', tool, reason, input: summarizeInput(tool, input) });
+      this.log('info', `${stepLabel(step)}: ${tool} blocked: ${reason}`, taskId);
       return { allow: false, reason: `Claudestrator: ${reason}` };
     };
     // A stopped task's agent is being interrupted: what it still asks for does not run.

@@ -129,6 +129,10 @@ interface SessionRequest {
   /** The session started: its id, model, and the account (CLAUDE_CONFIG_DIR) it runs under. */
   onSession?: ((sessionId: string, model: string | undefined, configDir: string | undefined) => void) | undefined;
   onLimits?: ((limits: Limits & { at: number }) => void) | undefined;
+  /** Any message of the CLI, also of a subagent working for the agent: a sign the session is alive. */
+  onActivity?: (() => void) | undefined;
+  /** A problem worth a line in the log (a message from the CLI this runner could not handle). */
+  onWarn?: ((message: string) => void) | undefined;
 }
 
 /** What one turn of the agent came to. */
@@ -331,7 +335,9 @@ class ClaudeSession {
           // A message we cannot handle must not kill the session, but a bug in handling it should be findable.
           if (!this.reportedBadMessage) {
             this.reportedBadMessage = true;
-            console.warn('[claudestrator] could not handle a message from Claude Code:', e);
+            const message = `could not handle a message from Claude Code: ${(e as Error).message}`;
+            if (this.req.onWarn) this.req.onWarn(message);
+            else console.warn(`[claudestrator] ${message}`);
           }
         }
       }
@@ -471,6 +477,7 @@ class ClaudeSession {
 
   handle(m: CliMessage): void {
     const out = this.req.onOutput;
+    if (this.req.onActivity) this.req.onActivity();
     switch (m.type) {
       case 'system':
         if (m.subtype === 'init' && m.session_id) {
