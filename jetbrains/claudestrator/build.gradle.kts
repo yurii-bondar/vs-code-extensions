@@ -108,10 +108,12 @@ tasks.prepareSandbox {
     from(sidecarDir.dir("dist/engine")) { into(pluginName.map { "$it/engine" }) }
 }
 
-// The engine reports this as the version of the dashboard (see EngineService.pluginVersion).
+// What the plugin reads of its build (see EngineService.built): the version the engine reports for the dashboard, and
+// the name of the folder the plugin is installed in, where the engine sits.
 val generateVersionFile by tasks.registering(WriteProperties::class) {
     destinationFile = layout.buildDirectory.file("generated/claudestrator.properties")
     property("version", providers.gradleProperty("pluginVersion"))
+    property("folder", providers.gradleProperty("pluginName"))
 }
 
 tasks.processResources { from(generateVersionFile) }
