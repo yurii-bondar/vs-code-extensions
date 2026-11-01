@@ -101,9 +101,27 @@ class GitRepo {
     return this.gitWith({}, ...args);
   }
 
-  /** `git(...)` with more in its environment, or text on its stdin. */
-  async gitWith({ env, input }: { env?: NodeJS.ProcessEnv; input?: string }, ...args: string[]): Promise<ExecResult> {
-    return exec('git', [...HOST_GIT, '-C', this.dir, ...args], { cwd: (await exists(this.dir)) ? this.dir : undefined, timeoutMs: 120000, ...(env && { env: { ...childEnv, ...env } }), ...(input !== undefined && { input }) });
+  /** `git(...)` with more in its environment, text on its stdin, or longer than two minutes to run. */
+  async gitWith({ env, input, timeoutMs = 120000 }: { env?: NodeJS.ProcessEnv; input?: string; timeoutMs?: number }, ...args: string[]): Promise<ExecResult> {
+    return exec('git', [...HOST_GIT, '-C', this.dir, ...args], { cwd: (await exists(this.dir)) ? this.dir : undefined, timeoutMs, ...(env && { env: { ...childEnv, ...env } }), ...(input !== undefined && { input }) });
+  }
+
+  /**
+   * Whether this checkout keeps files in Git LFS: its attributes name the lfs filter, or its pre-push hook runs git lfs.
+   * Their upload needs your credentials and the LFS server, which the sandboxed pre-push hook has neither of.
+   */
+  async usesLfs(): Promise<boolean> {
+    const attributes = await fs.promises.readFile(path.join(this.dir, '.gitattributes'), 'utf8').catch(() => '');
+    if (/filter=lfs/.test(attributes)) return true;
+    const hooks = await this.hooksDir();
+    const hook = hooks ? await fs.promises.readFile(path.join(hooks, 'pre-push'), 'utf8').catch(() => '') : '';
+    return /git[ -]lfs/.test(hook);
+  }
+
+  /** Whether HEAD carries a signature (gpg, ssh or x509): git writes it as the commit's gpgsig header. */
+  async headSigned(): Promise<boolean> {
+    const r = await this.git('cat-file', 'commit', 'HEAD');
+    return r.code === 0 && /^gpgsig(-sha256)? /m.test(r.stdout.split('\n\n')[0] ?? '');
   }
 
   /** The folder git runs this checkout's hooks from (`core.hooksPath`, else `.git/hooks`), absolute; null outside a repo. */

@@ -1313,14 +1313,26 @@ class Engine extends EventEmitter {
           await r.git.addAll();
           // The repo's commit hooks run here, and they are code the agents could change (`.husky/pre-commit`, a
           // package.json script): in the sandbox, which lets git write its objects and refs, not its config or hooks.
-          const c = await runShell(`git commit -F ${shq(message)}`, { cwd: r.dir, env: withoutCredentials(getChildEnv(), config.policy.checkEnv), timeoutMs: 15 * 60000, signal: abort.signal, launch: this.sandboxFor(config, [r.dir, ...(await r.git.gitDirs())], { git: true, runsOutside: await this.runsOutside([r.dir]) }) });
+          // Unsigned here: signing needs your keys (~/.gnupg, ~/.ssh), which the sandbox never lets anything read. The
+          // commit the hooks passed is signed below, outside it.
+          const c = await runShell(`git -c commit.gpgsign=false commit -F ${shq(message)}`, { cwd: r.dir, env: withoutCredentials(getChildEnv(), config.policy.checkEnv), timeoutMs: 15 * 60000, signal: abort.signal, launch: this.sandboxFor(config, [r.dir, ...(await r.git.gitDirs())], { git: true, runsOutside: await this.runsOutside([r.dir]) }) });
           if (await stopped()) return;
           if (c.code !== 0) {
             await this.dispatch(s.taskId, { type: 'commit_failed', repo: r.name, output: c.output.trim().slice(-8000) });
             return;
           }
         }
-        if ((await r.git.branchChanges(r.base, branch)).length) committed.push(r.name);
+        if (!(await r.git.branchChanges(r.base, branch)).length) continue;
+        // Signed as git would sign it (commit.gpgsign), with your keys, git's hooks off: the hooks ran in the sandbox.
+        // Also a commit a stopped run left unsigned.
+        if ((await r.git.git('config', '--bool', 'commit.gpgsign')).stdout.trim() === 'true' && (await r.git.branch()) === branch && !(await r.git.headSigned())) {
+          const signed = await r.git.git('commit', '--amend', '--no-edit', '--no-verify', '--allow-empty', '-S');
+          if (signed.code !== 0) {
+            await this.dispatch(s.taskId, { type: 'commit_failed', repo: r.name, output: `the commit was made, but signing it failed (commit.gpgsign is on):\n${signed.stderr.trim().slice(-8000)}` });
+            return;
+          }
+        }
+        committed.push(r.name);
       }
     } finally {
       if (this.gateRuns.get(s.taskId) === abort) this.gateRuns.delete(s.taskId);
@@ -1343,11 +1355,14 @@ class Engine extends EventEmitter {
       return null;
     }
     const url = (await r.git.git('remote', 'get-url', 'origin')).stdout.trim();
+    // Git LFS uploads with your credentials, outside the sandbox (publish does it before the push): its part of the hook
+    // is skipped here, where it could reach neither.
+    const lfs = await r.git.usesLfs();
     const local = (await r.git.git('rev-parse', `refs/heads/${branch}`)).stdout.trim();
     const remote = (await r.git.git('rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`)).stdout.trim() || '0'.repeat(local.length || 40);
     const run = await runShell(`${shq(hook)} origin ${shq(url)}`, {
       cwd: r.dir,
-      env: withoutCredentials(getChildEnv(), config.policy.checkEnv),
+      env: { ...withoutCredentials(getChildEnv(), config.policy.checkEnv), ...(lfs && { GIT_LFS_SKIP_PUSH: '1' }) },
       timeoutMs: 15 * 60000,
       input: `refs/heads/${branch} ${local} refs/heads/${branch} ${remote}\n`,
       ...(signal && { signal }),
@@ -1383,6 +1398,11 @@ class Engine extends EventEmitter {
         const refused = await this.prePush(r, branch, config, abort.signal);
         if (await stopped()) return;
         if (refused) throw new EngineError('push_failed', `${r.name}: the pre-push hook failed:\n${refused}`);
+        if (await r.git.usesLfs()) {
+          this.setLive(s.taskId, { phase: 'publishing', text: `Uploading ${r.name}'s Git LFS files` });
+          const up = await r.git.gitWith({ timeoutMs: 30 * 60000 }, 'lfs', 'push', 'origin', branch);
+          if (up.code !== 0) throw new EngineError('push_failed', `${r.name}: uploading its Git LFS files failed: ${(up.stderr || up.stdout).trim()}`);
+        }
         this.setLive(s.taskId, { phase: 'publishing', text: `Pushing ${r.name}` });
         // The hook has run, in the sandbox; git would run it again outside.
         const push = await r.git.git('push', '--no-verify', '-u', 'origin', branch);

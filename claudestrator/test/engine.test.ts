@@ -4,6 +4,7 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { execFileSync } from 'child_process';
 
 import { setChildEnv, getChildEnv } from '../src/core/git';
 import { buildArgs } from '../src/core/runner';
@@ -678,6 +679,50 @@ test('engine: a message to the agent is taken while it works, not while its chec
     assert.equal((await view.detail(h.engine, taskId)).canMessage, false, 'the box says so too');
     const s = await run;
     assert.equal(s.checkpoint && s.checkpoint.id, 'confirm-push');
+  } finally {
+    h.hooks.dispose();
+  }
+});
+
+test('engine: a commit is signed with your key where commit.gpgsign asks for it, outside the sandbox its hooks run in', { skip: process.platform === 'win32' }, async () => {
+  const ws = workspace(['api'], 'pipeline: [planner, developer]\nrepos:\n  api: {}\n');
+  const api = path.join(ws, 'api');
+  const keys = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-sign-'));
+  execFileSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', path.join(keys, 'id'), '-C', 'cs-test']);
+  git(api, 'config', 'gpg.format', 'ssh');
+  git(api, 'config', 'user.signingkey', path.join(keys, 'id'));
+  git(api, 'config', 'commit.gpgsign', 'true');
+  const h = await harness(ws, { FAKE_REPOS: 'api' });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
+    const s = await runTask(h.engine, taskId);
+    assert.equal(s.checkpoint && s.checkpoint.id, 'confirm-push', JSON.stringify(h.engine.lastError(taskId)));
+    assert.match(execFileSync('git', ['cat-file', 'commit', 'HEAD'], { cwd: api, encoding: 'utf8' }), /^gpgsig -----BEGIN SSH SIGNATURE-----/m);
+    assert.equal(git(api, 'log', '-1', '--format=%s'), 'feat: add the feature');
+  } finally {
+    h.hooks.dispose();
+  }
+});
+
+test('engine: Git LFS files are uploaded with your credentials before the push, and the sandboxed hook skips its upload', { skip: process.platform === 'win32' }, async () => {
+  const ws = workspace(['api'], 'pipeline: [planner, developer]\nrepos:\n  api: {}\n');
+  fs.writeFileSync(path.join(ws, 'api', '.gitattributes'), '*.bin filter=lfs diff=lfs merge=lfs -text\n');
+  git(path.join(ws, 'api'), 'add', '.');
+  git(path.join(ws, 'api'), 'commit', '-q', '-m', 'lfs');
+  const { remote, path: PATH } = remoteSetup(ws, '#!/bin/sh\necho "skip=${GIT_LFS_SKIP_PUSH:-no}" >> "$FAKE_STATE/pre-push.log"\n');
+  // git runs `git lfs` from PATH: a stand-in that records what it was asked.
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-lfs-'));
+  fs.writeFileSync(path.join(bin, 'git-lfs'), '#!/bin/sh\necho "$@" >> "$FAKE_STATE/lfs.log"\n', { mode: 0o755 });
+  const h = await harness(ws, { FAKE_REPOS: 'api', PATH: `${bin}${path.delimiter}${PATH}` });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
+    await runTask(h.engine, taskId);
+    await h.engine.answer(taskId, 'confirm-push', 'push');
+    const s = await waitFor(async () => (h.engine.isRunning(taskId) ? null : await h.engine.svc.state(taskId)), 60000);
+    assert.equal(s.outcome, 'published', JSON.stringify(h.engine.lastError(taskId)));
+    assert.equal(fs.readFileSync(path.join(h.state, 'pre-push.log'), 'utf8').trim(), 'skip=1');
+    assert.equal(fs.readFileSync(path.join(h.state, 'lfs.log'), 'utf8').trim(), 'push origin feat/add-feature');
+    assert.equal(git(remote, 'rev-parse', 'feat/add-feature'), git(path.join(ws, 'api'), 'rev-parse', 'feat/add-feature'));
   } finally {
     h.hooks.dispose();
   }
