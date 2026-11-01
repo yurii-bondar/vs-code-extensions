@@ -349,4 +349,13 @@ function queueOutput(queue: OutputPush[], push: OutputPush): void {
 }
 
 export type { Card, OutputPush, Status, StepItem, TaskEntry, TaskError, ViewEngine };
-export { summary, detail, stepsOf, statusOf, queueOutput, CHECKPOINT_HINT };
+/**
+ * Whether Markdown loads something from the web when shown: an image or a reference an image uses at an address
+ * (`![](https://host/?q=<the code>)`). VS Code's preview fetches them; an agent steered by a ticket could write one
+ * into a report, and opening it would send what it carries past the sandbox.
+ */
+function loadsRemote(markdown: string): boolean {
+  return /!\[[^\]\n]{0,300}\]\(\s*<?(?:https?:)?\/\//i.test(markdown) || /<(?:img|image|source|video|audio|iframe|object|embed|link)\b[^>]*\b(?:src|href|srcset|data|poster)\s*=\s*["']?\s*(?:https?:)?\/\//i.test(markdown) || (/!\[/.test(markdown) && /^\s{0,3}\[[^\]\n]+\]:\s*<?(?:https?:)?\/\//m.test(markdown));
+}
+
+export { loadsRemote, summary, detail, stepsOf, statusOf, queueOutput, CHECKPOINT_HINT };

@@ -376,7 +376,11 @@ class DashboardPanel implements RpcHandlers {
     if (!taskId && !openable(abs, await this.openableRoots())) throw new Error(`${file} is outside the workspace and its repos; open it yourself if you need it`);
     if (!(await exists(abs))) throw new Error(`${path.basename(abs)} does not exist (yet)`);
     const uri = vscode.Uri.file(abs);
-    if (preview && abs.endsWith('.md')) return vscode.commands.executeCommand('markdown.showPreviewToSide', uri);
+    // An agent's report that would load images from the web opens as text: the preview would fetch them.
+    if (preview && abs.endsWith('.md')) {
+      if (!view.loadsRemote(await fs.promises.readFile(abs, 'utf8').catch(() => ''))) return vscode.commands.executeCommand('markdown.showPreviewToSide', uri);
+      vscode.window.setStatusBarMessage(`${path.basename(abs)} links images on the web: opened as text, so viewing it loads none`, 8000);
+    }
     const doc = await vscode.workspace.openTextDocument(uri);
     if (abs.endsWith('.patch') || abs.endsWith('.diff')) await vscode.languages.setTextDocumentLanguage(doc, 'diff');
     await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.Beside, preview: true });
