@@ -38,6 +38,12 @@ type Handler = (params: unknown) => Promise<unknown>;
 
 /** How often streamed agent output goes to the page. */
 const OUTPUT_MS = 50;
+/**
+ * The dashboard's scripts, in the order they load: each uses what the ones before it put on the page (task.js the
+ * transcript of stream.js). The JetBrains plugin builds its page from the same files (PageHtml.kt, `SCRIPTS`), and the
+ * release script checks that it lists these, in this order.
+ */
+const PAGE_SCRIPTS = ['markdown.js', 'stream.js', 'app.js', 'task.js', 'config.js'];
 const LANGUAGES = ['English', 'Ukrainian', 'German', 'French', 'Spanish', 'Polish', 'Portuguese', 'Italian', 'Japanese', 'Chinese'];
 
 class DashboardPanel implements RpcHandlers {
@@ -890,11 +896,7 @@ class DashboardPanel implements RpcHandlers {
     const webview = this.panel.webview;
     const nonce = crypto.randomBytes(16).toString('base64');
     const css = webview.asWebviewUri(vscode.Uri.joinPath(media, 'app.css'));
-    const js = webview.asWebviewUri(vscode.Uri.joinPath(scripts, 'app.js'));
-    const md = webview.asWebviewUri(vscode.Uri.joinPath(scripts, 'markdown.js'));
-    const stream = webview.asWebviewUri(vscode.Uri.joinPath(scripts, 'stream.js'));
-    const task = webview.asWebviewUri(vscode.Uri.joinPath(scripts, 'task.js'));
-    const conf = webview.asWebviewUri(vscode.Uri.joinPath(scripts, 'config.js'));
+    const tags = PAGE_SCRIPTS.map((name) => `  <script nonce="${nonce}" src="${webview.asWebviewUri(vscode.Uri.joinPath(scripts, name))}"></script>`).join('\n');
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -908,11 +910,7 @@ class DashboardPanel implements RpcHandlers {
   <div id="app"><div class="boot"><div class="spinner"></div></div></div>
   <div id="toasts" aria-live="polite"></div>
   <div id="modal-root"></div>
-  <script nonce="${nonce}" src="${md}"></script>
-  <script nonce="${nonce}" src="${stream}"></script>
-  <script nonce="${nonce}" src="${js}"></script>
-  <script nonce="${nonce}" src="${task}"></script>
-  <script nonce="${nonce}" src="${conf}"></script>
+${tags}
 </body>
 </html>`;
   }
