@@ -13,7 +13,7 @@ import * as backups from './core/backup';
 import * as libraries from './core/library';
 import { buildPipeline, outline, taskPipeline, fitsScenario } from './core/pipeline';
 import { editableFrom } from './core/machine';
-import { taskRepos, taskDiff } from './core/git';
+import { taskRepos, taskDiff, launch, getChildEnv } from './core/git';
 import { findRepos, describeRepo, reposFromFolders, repoLayerOf, WORKSPACE_MAP, safeName } from './core/setup';
 import { expand } from './core/env';
 import { effectiveFor } from './core/defaults';
@@ -470,15 +470,19 @@ class DashboardPanel implements RpcHandlers {
     if (!SESSION_ID.test(step.sessionId)) throw new Error('This step\'s session id is not one Claude Code makes');
     // The account the step ran under keeps its session; the one chosen now may be another (ctx-man switched it).
     const dir = step.configDir ?? this.orch.accountChoice().dir;
+    // Claude itself runs in the terminal, as for the sign-in, not a command line typed into a shell: each shell quotes
+    // differently (PowerShell reads `"C:\Program Files\…\claude.cmd" --resume` as a string and an error). An npm shim
+    // runs its target, as the agents do.
+    const [shellPath, shellArgs] = launch(this.orch.claudeCommand(), ['--resume', step.sessionId]);
     const terminal = vscode.window.createTerminal({
       name: `Claude · ${step.agent}${step.repo ? `@${step.repo}` : ''}`,
+      shellPath,
+      shellArgs,
       cwd: step.cwd && (await exists(step.cwd)) ? step.cwd : this.root,
-      env: { CLAUDE_CONFIG_DIR: dir || null },
+      env: { PATH: getChildEnv().PATH, CLAUDE_CONFIG_DIR: dir || null },
       iconPath: new vscode.ThemeIcon('sparkle'),
     });
     terminal.show();
-    const claude = (this.orch.health && this.orch.health.claude.path) || 'claude';
-    terminal.sendText(`${/\s/.test(claude) ? `"${claude}"` : claude} --resume ${step.sessionId}`);
   }
 
   async $openExternal({ url }: { url: string }) {

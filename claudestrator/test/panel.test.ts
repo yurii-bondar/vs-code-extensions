@@ -10,7 +10,7 @@ import type { HostMessage, TranscriptItem } from '../src/core/wire';
 
 // panel.ts loads `vscode`: the dialogs a test answers, nothing else.
 /* eslint-disable @typescript-eslint/no-require-imports */
-const vscodeStub = { window: {} as Record<string, unknown>, workspace: { onDidChangeConfiguration: () => ({ dispose() {} }) }, Uri: { file: (fsPath: string) => ({ fsPath }) } };
+const vscodeStub = { window: {} as Record<string, unknown>, workspace: { onDidChangeConfiguration: () => ({ dispose() {} }) }, Uri: { file: (fsPath: string) => ({ fsPath }) }, ThemeIcon: class {} };
 const loader = Module as unknown as { _load: (request: string, ...rest: unknown[]) => unknown };
 const load = loader._load;
 loader._load = function (this: unknown, request: string, ...rest: unknown[]) {
@@ -114,6 +114,33 @@ test('panel: the page gets the streamed output of the task it shows, and of no o
   engine!({ name: 'output', data: { taskId: 'B', key: 'k', item } });
   await flushed();
   assert.deepEqual(posted.map((m) => (m as { taskId?: string }).taskId), ['B']);
+});
+
+test('panel: Continue in terminal runs Claude itself, so no shell reads a path with spaces', async () => {
+  const opened: Record<string, unknown>[] = [];
+  vscodeStub.window.createTerminal = (options: Record<string, unknown>) => (opened.push(options), { show() {} });
+  const { setShim } = await import('../src/core/git');
+  const viewModule = require('../src/core/view') as { detail: unknown };
+  const detail = viewModule.detail;
+  const session = '0b7e1d7c-3f0e-4a8e-9d2b-5c1f6a7e8d90';
+  viewModule.detail = async () => ({ steps: [{ key: 'k', agent: 'developer', repo: 'api', sessionId: session, configDir: 'C:\\Users\\me\\.claude-work' }] });
+  try {
+    for (const claude of ['C:\\Program Files\\Claude\\claude.exe', 'C:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd']) {
+      const p = Object.assign(Object.create(DashboardPanel.prototype) as InstanceType<typeof DashboardPanel>, { orch: { engine: {}, root: 'C:\\ws', claudeCommand: () => claude, accountChoice: () => ({ dir: null }) } });
+      await p.$resumeTerminal({ taskId: 'T-1', key: 'k' });
+    }
+    setShim('C:\\npm global\\claude.cmd', { file: 'C:\\Program Files\\nodejs\\node.exe', args: ['C:\\npm global\\node_modules\\@anthropic-ai\\claude-code\\cli.js'] });
+    const p = Object.assign(Object.create(DashboardPanel.prototype) as InstanceType<typeof DashboardPanel>, { orch: { engine: {}, root: 'C:\\ws', claudeCommand: () => 'C:\\npm global\\claude.cmd', accountChoice: () => ({ dir: null }) } });
+    await p.$resumeTerminal({ taskId: 'T-1', key: 'k' });
+  } finally {
+    viewModule.detail = detail;
+  }
+  assert.deepEqual(opened.map((o) => [o.shellPath, o.shellArgs]), [
+    ['C:\\Program Files\\Claude\\claude.exe', ['--resume', session]],
+    ['C:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd', ['--resume', session]],
+    ['C:\\Program Files\\nodejs\\node.exe', ['C:\\npm global\\node_modules\\@anthropic-ai\\claude-code\\cli.js', '--resume', session]],
+  ]);
+  assert.equal((opened[0]!.env as { CLAUDE_CONFIG_DIR?: string }).CLAUDE_CONFIG_DIR, 'C:\\Users\\me\\.claude-work', 'the account the step ran under');
 });
 
 test("panel: a deleted task's screen hears so, and goes home", async () => {
