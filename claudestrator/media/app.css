@@ -118,6 +118,15 @@ main { padding: 20px 24px 60px; }
 .btn.sm { padding: 3px 9px; font-size: 12px; }
 .btn.lg { padding: 9px 18px; font-size: 14px; }
 .btn.busy { pointer-events: none; opacity: 0.7; }
+/* A button with a caret that opens its options: "Fix in chat" and its model and effort. */
+.split-btn { display: inline-flex; }
+.split-btn > .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.split-btn > .split-caret { border-top-left-radius: 0; border-bottom-left-radius: 0; padding-left: 5px; padding-right: 5px; border-left: 1px solid color-mix(in srgb, var(--fg) 15%, transparent); }
+.fix-pick:not(:empty) { font-size: 11px; margin-left: 2px; }
+.fix-pick:not(:empty)::before { content: '· '; }
+.fix-menu { min-width: 250px; padding: 6px; }
+.fix-menu .menu-title { font-size: 11px; color: var(--muted); padding: 2px 4px 8px; }
+.fix-menu .field { margin-bottom: 8px; padding: 0 4px; }
 .btn.busy::after { content: ''; width: 11px; height: 11px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin 0.7s linear infinite; }
 .btn kbd { border-color: currentColor; }
 .icon-btn { border: 0; background: transparent; color: var(--muted); cursor: pointer; width: 28px; height: 28px; border-radius: var(--radius-sm); display: inline-grid; place-items: center; flex: none; }

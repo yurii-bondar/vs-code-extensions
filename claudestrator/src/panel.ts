@@ -19,10 +19,11 @@ import { expand } from './core/env';
 import { effectiveFor } from './core/defaults';
 import { AGENT_COLORS, OUTPUTS, EFFORTS, validateSetting } from './core/protocol';
 import { parsePageRequest, openable, SESSION_ID } from './core/requests';
+import { fixProblem, fixableCheckpoint, fixDirs, fixPrompt, fixArgs } from './core/fix';
 import { settings, type Orchestrator } from './orchestrator';
 import type { Engine } from './core/engine';
 import type { BlockedRepo, ComposerArgs, ConfigData, HostMessage, ConfigSummary, HealthSummary, NewAgentParams, PipelineEdit, Preview, ReposData, Route, Rpc, RpcHandlers, SaveGroupParams, SaveInstructionParams, SaveScenarioParams, SettingsData, SetupParams, TaskScreen } from './core/wire';
-import type { Agent, ScenarioStep, Gate, TaskState } from './core/types';
+import type { Agent, Effort, ScenarioStep, Gate, TaskState } from './core/types';
 import type { ConfigLayer, RepoLayer } from './core/config';
 
 /** A repo as the page sends it back from the setup wizard or the detected list. */
@@ -341,9 +342,13 @@ class DashboardPanel implements RpcHandlers {
     // Deleted from the sidebar, another window or the CLI while its screen was open: the page goes home.
     if (!(await engine.svc.exists(taskId))) throw Object.assign(new Error(`${taskId} was deleted`), { code: 'no_task' });
     const state = await engine.svc.state(taskId);
+    const detail = await view.detail(engine, taskId);
+    const context = state.checkpoint ? await engine.checkpointContext(state, state.checkpoint) : null;
+    const problem = fixProblem({ status: detail.status.key, error: detail.error, checkpoint: state.checkpoint, checkpointText: context ? context.text : '' });
     return {
-      ...(await view.detail(engine, taskId)),
-      ...(state.checkpoint && { checkpointContext: await engine.checkpointContext(state, state.checkpoint), checkpointFull: state.checkpoint }),
+      ...detail,
+      ...(state.checkpoint && context && { checkpointContext: context, checkpointFull: state.checkpoint }),
+      fix: problem ? problem.source : null,
       ticket: await engine.svc.readArtifact(taskId, 'ticket.md'),
       pipelineEdit: await this.pipelineEdit(state),
     };
@@ -486,6 +491,33 @@ class DashboardPanel implements RpcHandlers {
       shellArgs,
       cwd: step.cwd && (await exists(step.cwd)) ? step.cwd : this.root,
       env: { PATH: getChildEnv().PATH, CLAUDE_CONFIG_DIR: dir || null },
+      iconPath: new vscode.ThemeIcon('sparkle'),
+    });
+    terminal.show();
+  }
+
+  /**
+   * "Fix in chat": Claude Code in a terminal, started with the failure the task screen shows, in the repo it is in, under
+   * the agents' account, with the model and effort picked on the button. The task stays where it is: you retry it there.
+   */
+  async $fixInChat({ taskId, model, effort }: { taskId: string; model?: string | undefined; effort?: Effort | undefined }) {
+    const state = await this.engine.svc.state(taskId);
+    const detail = await view.detail(this.engine, taskId);
+    const context = fixableCheckpoint(state.checkpoint) ? await this.engine.checkpointContext(state, state.checkpoint) : null;
+    const problem = fixProblem({ status: detail.status.key, error: detail.error, checkpoint: state.checkpoint, checkpointText: context ? context.text : '' });
+    if (!problem) throw new Error(`${taskId} has no failure to fix right now`);
+    const r = await this.orch.config();
+    const repos = taskRepos(this.root, state, r.ok ? r.config : null, state.repos.map((x) => x.name)).map((x) => ({ name: x.name, dir: x.dir }));
+    const { cwd, addDirs } = fixDirs({ root: this.root, repos, problem });
+    const prompt = fixPrompt({ taskId, title: detail.title, branch: detail.branch, repos, taskDir: detail.taskDir, problem });
+    // Claude runs in the terminal itself, as for Continue in terminal: the prompt is an argument, never shell text.
+    const [shellPath, shellArgs] = launch(this.orch.claudeCommand(), fixArgs({ prompt, model, effort, addDirs }));
+    const terminal = vscode.window.createTerminal({
+      name: `Fix · ${taskId}`,
+      shellPath,
+      shellArgs,
+      cwd: (await exists(cwd)) ? cwd : this.root,
+      env: { PATH: getChildEnv().PATH, CLAUDE_CONFIG_DIR: this.orch.accountChoice().dir || null },
       iconPath: new vscode.ThemeIcon('sparkle'),
     });
     terminal.show();
