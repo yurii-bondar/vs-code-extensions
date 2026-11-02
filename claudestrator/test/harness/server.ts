@@ -16,6 +16,8 @@ import type * as vscodeApi from 'vscode';
 const DIST = path.resolve(__dirname, '..', '..');
 const ROOT = path.resolve(DIST, '..');
 const FAKE = path.join(DIST, 'test', 'fixtures', 'fake-claude.js');
+// tsc writes it without the executable bit, and agents run it as a program.
+fs.chmodSync(FAKE, 0o755);
 const PORT = Number(process.env.PREVIEW_PORT || 4780);
 
 // ---------- a throwaway workspace with two repos ----------
@@ -146,6 +148,8 @@ const vscode = {
       if (o.shellPath) {
         t.proc = spawn(o.shellPath, o.shellArgs || [], { cwd: o.cwd, env: { ...process.env, ...o.env }, stdio: 'ignore' });
         t.proc.on('exit', (code) => (t.exitStatus = { code: code ?? undefined }));
+        // A process that cannot start ends the terminal, as in VS Code, not the preview.
+        t.proc.on('error', (e) => (log('terminal', o.name, e.message), (t.exitStatus = { code: 1 })));
       }
       return t;
     },
