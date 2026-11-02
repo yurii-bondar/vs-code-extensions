@@ -144,6 +144,87 @@ test('panel: Continue in terminal runs Claude itself, so no shell reads a path w
   assert.equal((opened[0]!.env as { CLAUDE_CONFIG_DIR?: string }).CLAUDE_CONFIG_DIR, 'C:\\Users\\me\\.claude-work', 'the account the step ran under');
 });
 
+test('panel: Fix in chat opens Claude in the repo of the failure, with it as the first message, the pick and the account', async () => {
+  const opened: Record<string, unknown>[] = [];
+  vscodeStub.window.createTerminal = (options: Record<string, unknown>) => (opened.push(options), { show() {} });
+  const ws = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cs-fix-ws-')));
+  for (const r of ['api', 'web']) fs.mkdirSync(path.join(ws, r));
+  const viewModule = require('../src/core/view') as { detail: unknown };
+  const detail = viewModule.detail;
+  const lint = 'api: src/a.ts\n  12:3  warning  More than two parameters';
+  let shown: { status: { key: string }; error: unknown } = { status: { key: 'waiting' }, error: null };
+  viewModule.detail = async () => ({ ...shown, title: 'Risk thresholds', branch: 'feat/T-1-risk', taskDir: path.join(ws, '.orch', 'tasks', 'T-1') });
+  let checkpoint: { id: string; at: string } | null = { id: 'hook-failure', at: 'now' };
+  const contexts: string[] = [];
+  const engine = {
+    svc: { state: async () => ({ taskId: 'T-1', gitMode: 'branch', repos: [{ name: 'api' }, { name: 'web' }], checkpoint }) },
+    checkpointContext: async (_s: unknown, cp: { id: string }) => (contexts.push(cp.id), { format: 'log', text: lint }),
+  };
+  const p = Object.assign(Object.create(DashboardPanel.prototype) as InstanceType<typeof DashboardPanel>, {
+    orch: { engine, root: ws, claudeCommand: () => '/usr/local/bin/claude', accountChoice: () => ({ dir: '/home/me/.claude-work' }), config: async () => ({ ok: false }) },
+  });
+  try {
+    await p.$fixInChat({ taskId: 'T-1', model: 'sonnet', effort: 'high' });
+    const [o] = opened;
+    assert.equal(o!.shellPath, '/usr/local/bin/claude', 'Claude itself, no shell');
+    const args = o!.shellArgs as string[];
+    assert.match(args[0]!, /^Claudestrator task T-1 \("Risk thresholds"\) stopped: a git hook rejected the commit\./, 'the failure is the first message');
+    assert.ok(args[0]!.includes(lint) && args[0]!.includes('feat/T-1-risk'));
+    assert.deepEqual(args.slice(1), ['--model', 'sonnet', '--effort', 'high', '--add-dir', path.join(ws, 'web')]);
+    assert.equal(o!.cwd, path.join(ws, 'api'), "in the repo the hook's output names");
+    assert.equal((o!.env as { CLAUDE_CONFIG_DIR?: string }).CLAUDE_CONFIG_DIR, '/home/me/.claude-work', "the agents' account");
+    assert.equal(o!.name, 'Fix · T-1');
+
+    // The account's defaults add nothing; a repo folder that is gone leaves the chat in the workspace.
+    fs.rmSync(path.join(ws, 'api'), { recursive: true });
+    await p.$fixInChat({ taskId: 'T-1', model: 'inherit' });
+    assert.deepEqual((opened[1]!.shellArgs as string[]).slice(1), ['--add-dir', path.join(ws, 'web')]);
+    assert.equal(opened[1]!.cwd, ws);
+
+    // A failed run's error, once the task waits at no question.
+    checkpoint = null;
+    shown = { status: { key: 'failed' }, error: { code: 'wrong_branch', message: 'web is on main, not the task branch feat/T-1-risk' } };
+    await p.$fixInChat({ taskId: 'T-1' });
+    assert.match((opened[2]!.shellArgs as string[])[0]!, /stopped: the run failed\.[\s\S]*web is on main/);
+
+    // Nothing to fix: a decision, a sign-in, a task that did not fail. No terminal, and no push context read for it.
+    contexts.length = 0;
+    checkpoint = { id: 'confirm-push', at: 'now' };
+    shown = { status: { key: 'waiting' }, error: null };
+    await assert.rejects(() => p.$fixInChat({ taskId: 'T-1' }), /T-1 has no failure to fix right now/);
+    assert.deepEqual(contexts, [], "a push's context runs git in every repo: not read for nothing");
+    checkpoint = null;
+    shown = { status: { key: 'failed' }, error: { code: 'claude_login', message: 'signed out' } };
+    await assert.rejects(() => p.$fixInChat({ taskId: 'T-1' }), /no failure to fix/);
+    assert.equal(opened.length, 3);
+  } finally {
+    viewModule.detail = detail;
+  }
+});
+
+test('panel: the task screen says where its failure has a Fix in chat', async () => {
+  const viewModule = require('../src/core/view') as { detail: unknown };
+  const detail = viewModule.detail;
+  let shown: { status: { key: string }; error: unknown } = { status: { key: 'waiting' }, error: null };
+  viewModule.detail = async () => shown;
+  let checkpoint: { id: string; at: string } | null = { id: 'gate-failure', at: 'now' };
+  const engine = {
+    svc: { exists: async () => true, state: async () => ({ checkpoint }), readArtifact: async () => '' },
+    checkpointContext: async () => ({ format: 'log', text: 'lint: 1 error' }),
+  };
+  const p = Object.assign(Object.create(DashboardPanel.prototype) as InstanceType<typeof DashboardPanel>, { orch: { engine }, pipelineEdit: async () => null });
+  try {
+    assert.equal((await p.$task({ taskId: 'T-1' })).fix, 'checkpoint');
+    checkpoint = { id: 'approve-plan', at: 'now' };
+    assert.equal((await p.$task({ taskId: 'T-1' })).fix, null, 'a decision');
+    checkpoint = null;
+    shown = { status: { key: 'failed' }, error: { message: 'api is on main' } };
+    assert.equal((await p.$task({ taskId: 'T-1' })).fix, 'error');
+  } finally {
+    viewModule.detail = detail;
+  }
+});
+
 test('panel: the sidebar deletes a task and opens config.yaml without a dashboard', async () => {
   const { deleteTask, openConfig } = await import('../src/panel');
   const done: string[] = [];

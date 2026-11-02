@@ -15,7 +15,7 @@ interface Views {
 }
 
 (function () {
-  const { call, attempt, toast, icon, esc, md, $, $$, ago, clock, dur, money, size, plural, stepName, agentColor, S, views, go, patch, persist, statusBadge, sourceChip, permissionCard, autosize, shake, fmtTokens, meter, level, effortTag, scenarioChip, groupChip, sevCounts, SCENARIO_INFO, pipeRowHtml, pipeEditors, pipeDragging } = window.CS;
+  const { call, attempt, toast, icon, esc, md, $, $$, ago, clock, dur, money, size, plural, stepName, agentColor, S, views, go, patch, persist, statusBadge, sourceChip, permissionCard, autosize, shake, fmtTokens, meter, level, effortTag, scenarioChip, groupChip, sevCounts, SCENARIO_INFO, pipeRowHtml, pipeEditors, pipeDragging, modelChoices, EFFORT_LABEL } = window.CS;
 
   type ReadinessResult = Extract<TaskResult, { kind: 'readiness' }>;
   type AuditResult = Extract<TaskResult, { kind: 'audit' }>;
@@ -139,6 +139,38 @@ interface Views {
   /** A field of untyped JSON, such as the input of a tool call. */
   const field = (v: unknown, key: string): unknown => (typeof v === 'object' && v !== null ? (v as Record<string, unknown>)[key] : undefined);
   const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+
+  const FIX_EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
+  const fixModel = () => S.ui.fixModel || 'inherit';
+  const fixEffort = () => FIX_EFFORTS.find((e) => e === S.ui.fixEffort);
+  /** What the button says it runs with: nothing for the account's defaults. */
+  const fixPick = () => [fixModel() === 'inherit' ? '' : fixModel(), fixEffort() || ''].filter(Boolean).join(' · ');
+
+  /**
+   * "Fix in chat": opens Claude Code with the failure shown next to it. The caret picks the model and effort it runs
+   * with; the pick is remembered for the next failure. `size` matches the buttons next to it (`sm` in a banner).
+   */
+  function fixButton(size: 'sm' | '') {
+    const model = fixModel();
+    const effort = fixEffort() || '';
+    const btn = size ? `btn ${size}` : 'btn';
+    const models = modelChoices(S.overview && S.overview.defaults);
+    if (!models.some(([v]) => v === model)) models.push([model, model]);
+    return `<span class="menu-wrap fix-wrap">
+      <span class="split-btn"><button class="${btn}" data-action="fix-in-chat" title="Open Claude Code in a terminal with this failure, in the repo it is in, to find and fix its cause. Then retry here.">${icon('sparkles')}Fix in chat<span class="fix-pick muted">${esc(fixPick())}</span></button><button class="${btn} split-caret" data-action="eff-menu" title="Model and effort for the fix" aria-label="Model and effort">▾</button></span>
+      <div class="menu fix-menu">
+        <div class="menu-title">Claude Code fixes it with</div>
+        <label class="field"><span>Model</span><select class="input" data-change="fix-model">${models.map(([v, l]) => `<option value="${esc(v)}" ${v === model ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
+        <label class="field"><span>Effort</span><select class="input" data-change="fix-effort"><option value="" ${effort ? '' : 'selected'}>${esc(EFFORT_LABEL['']!)}</option>${FIX_EFFORTS.map((e) => `<option value="${e}" ${e === effort ? 'selected' : ''}>${esc(EFFORT_LABEL[e]!)}</option>`).join('')}</select></label>
+        <button data-action="fix-in-chat">${icon('terminal')}Open the chat</button>
+      </div>
+    </span>`;
+  }
+
+  /** The pick changed: every Fix button says so, without drawing the checkpoint again (that would drop what you typed). */
+  const showFixPick = () => {
+    for (const el of $$('.fix-pick')) el.textContent = fixPick();
+  };
 
   const colors = () => Object.fromEntries(((S.overview && S.overview.config && S.overview.config.ok && S.overview.config.agents) || []).map((a) => [a.name, a.color]));
 
@@ -413,6 +445,12 @@ interface Views {
         persist();
         views.task.render();
       },
+      'fix-in-chat': async (el) => {
+        el.closest('.menu-wrap')?.classList.remove('open');
+        const effort = fixEffort();
+        const r = await attempt('fixInChat', { taskId: T.taskId, model: fixModel(), ...(effort && { effort }) });
+        if (r !== undefined) toast('Claude Code opened in a terminal with this failure. Retry here once it is fixed.', 'ok');
+      },
       'fix-gaps': () => {
         const r = T.d!.result;
         if (r && r.kind === 'readiness') go({ name: 'home', scenario: 'deliver', compose: fixGapsText(T.d!, r) });
@@ -421,6 +459,18 @@ interface Views {
         const r = T.d!.result;
         const f = r && r.kind === 'audit' ? r.findings[Number(el.dataset.i)] : undefined;
         if (f) go({ name: 'home', scenario: 'deliver', compose: fixFindingText(f) });
+      },
+    },
+    changes: {
+      'fix-model': (el) => {
+        S.ui.fixModel = el.value;
+        persist();
+        showFixPick();
+      },
+      'fix-effort': (el) => {
+        S.ui.fixEffort = el.value;
+        persist();
+        showFixPick();
       },
     },
     inputs: {
@@ -517,6 +567,7 @@ interface Views {
       } else if (e.code === 'busy') {
         action = '';
       } else if (message.includes('\n')) body += `<pre class="log small">${esc(message.split('\n').slice(1).join('\n'))}</pre>`;
+      if (d.fix === 'error') action = `${fixButton('sm')}${action}`;
       parts.push(`<div class="banner error">${icon('alert')}<div class="grow">${body}</div><div class="banner-actions">${action}</div></div>`);
     }
     if (d.status.key === 'elsewhere') {
@@ -625,7 +676,7 @@ interface Views {
       ${cp.step ? `<div class="muted small cp-step">At ${esc(stepName(cp.step))}</div>` : ''}
       <div class="cp-body">${body}</div>
       ${needsFeedback ? `<textarea id="cp-feedback" class="input autosize" rows="2" data-input="cp-feedback" placeholder="${esc(ui.placeholder || 'Feedback (optional)')}">${esc(T.feedback)}</textarea>` : ''}
-      <div class="cp-actions">${buttons}<span class="muted small kbd-hint"><kbd>⌘↵</kbd> <span id="cp-kbd">${esc((keyed !== undefined && ui.options[keyed]?.label) || '')}</span></span></div>
+      <div class="cp-actions">${buttons}${d.fix === 'checkpoint' ? fixButton('') : ''}<span class="muted small kbd-hint"><kbd>⌘↵</kbd> <span id="cp-kbd">${esc((keyed !== undefined && ui.options[keyed]?.label) || '')}</span></span></div>
     </section>`;
   }
 

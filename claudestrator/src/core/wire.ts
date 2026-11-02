@@ -423,9 +423,14 @@ export interface PipelineEdit {
   warnings: string[];
 }
 
+/** Where the task screen shows a failure Claude Code can be asked to fix: the question it waits at, or its last run's error. */
+export type FixSource = 'checkpoint' | 'error';
+
 export type TaskScreen = TaskDetail & {
   checkpointContext?: CheckpointContext;
   checkpointFull?: Checkpoint;
+  /** Where the screen shows a failure Claude Code can be asked to fix ("Fix in chat"), or null. */
+  fix: FixSource | null;
   ticket: string;
   pipelineEdit: PipelineEdit | null;
 };
@@ -850,6 +855,7 @@ export interface Rpc {
   deleteTask: { params: { taskId: string }; result: { deleted: boolean } };
   cleanup: { params: { taskId: string }; result: WorktreeResult[] };
   resumeTerminal: { params: { taskId: string; key: string }; result: Void };
+  fixInChat: { params: { taskId: string; model?: string | undefined; effort?: Effort | undefined }; result: Void };
   openExternal: { params: { url: string }; result: Void };
   copy: { params: { text: string }; result: Void };
   preview: { params: ComposerArgs; result: Preview };

@@ -1,3 +1,9 @@
+## [0.3.0](https://github.com/yurii-bondar/vs-code-extensions/compare/jetbrains-claudestrator-v0.2.0...jetbrains-claudestrator-v0.3.0) (2026-11-02)
+
+### Features
+
+* **claudestrator:** Fix in chat opens Claude Code with the failure the task screen shows ([60e7388](https://github.com/yurii-bondar/vs-code-extensions/commit/60e73888c084ea4d78d2fec90e72511ff85a5a14))
+
 ## [0.2.0](https://github.com/yurii-bondar/vs-code-extensions/compare/jetbrains-claudestrator-v0.1.8...jetbrains-claudestrator-v0.2.0) (2026-11-01)
 
 ### Features

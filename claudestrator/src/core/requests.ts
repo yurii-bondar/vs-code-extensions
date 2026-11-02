@@ -2,6 +2,7 @@
 // handler only ever sees the shape `Rpc` promises it.
 import * as path from 'path';
 import { T, EFFORTS, GROUP_TYPES, OUTPUTS, type Check } from './protocol';
+import { MODEL_ID } from './fix';
 import type { Rpc } from './wire';
 
 /** A request from the page, checked: its id, its method and parameters of the shape that method takes. */
@@ -88,6 +89,7 @@ const PARAMS: { [M in keyof Rpc]: Check } = {
   deleteTask: task,
   cleanup: task,
   resumeTerminal: obj({ taskId: id, key: id }),
+  fixInChat: obj({ taskId: id, 'model?': T.re(MODEL_ID, 'a model alias or id, e.g. opus'), 'effort?': T.oneOf(EFFORTS) }),
   // Only web links leave the editor: never a command: or file: URI.
   openExternal: obj({ url: T.re(/^https?:\/\//i, 'only http(s) links open outside the editor') }),
   copy: obj({ text: T.str() }),
