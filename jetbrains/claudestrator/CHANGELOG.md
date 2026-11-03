@@ -1,3 +1,9 @@
+## [0.5.0](https://github.com/yurii-bondar/vs-code-extensions/compare/jetbrains-claudestrator-v0.4.3...jetbrains-claudestrator-v0.5.0) (2026-11-03)
+
+### Features
+
+* **claudestrator:** Settings → Safety takes the variables checks and git hooks still get (policy.checkEnv) ([a72d31f](https://github.com/yurii-bondar/vs-code-extensions/commit/a72d31f80035cb4c1205a681a03978b778b6224e))
+
 ## [0.4.3](https://github.com/yurii-bondar/vs-code-extensions/compare/jetbrains-claudestrator-v0.4.2...jetbrains-claudestrator-v0.4.3) (2026-11-03)
 
 ### Bug Fixes
