@@ -48,7 +48,7 @@ const CHECKPOINT_OPTIONS: Record<CheckpointId, string[]> = {
   'gate-failure': ['retry', 'continue', 'stop'],
   'agent-failure': ['retry', 'stop'],
   'review-limit': ['continue', 'retry', 'stop'],
-  'protected-changes': ['apply', 'skip', 'stop'],
+  'protected-changes': ['apply', 'retry', 'skip', 'stop'],
   'hook-failure': ['retry', 'stop'],
   'confirm-push': ['push', 'push-comment', 'local'],
 };

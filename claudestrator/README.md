@@ -233,9 +233,9 @@ VS Code settings (`claudestrator.*`):
 
 No agent writes a repo's `.claude/`, `.mcp.json` or `.vscode/`: their hooks, permissions, MCP servers and tasks run outside the sandbox, with your credentials, and the next agent's session loads them. A task that needs a change there (a rule in `.claude/rules/`, a server in `.mcp.json`) gets it through you:
 
-1. The agent makes the change with its Write or Edit tool, as its prompt tells it. Claudestrator refuses the write, keeps the file as the agent wrote it in the task folder (`proposed/r<round>/<repo>/<file>`), and the agent goes on with the rest.
+1. The agent makes the change with its Write or Edit tool, as its prompt tells it (a file as it is on another branch: `git show <ref>:<path>`, then Write). Claudestrator refuses the write, keeps the file as the agent wrote it in the task folder (`proposed/r<round>/<repo>/<file>`), and the agent goes on with the rest. A step that fails keeps them too, for when it ends well. A shell command that writes there (`cp`, `echo >`) is refused with that way to do it; one the sandbox refuses instead (`git apply`) is noted from its output, without its content.
 2. When the step ends, the task stops at **Settings changes to apply**, after the checks: each file as written and as it is now, and a warning on the ones that can run code (anything but a rule of `.claude/rules/`).
-3. **Apply the changes** writes them into the task's checkout of the repo (never through a link, never outside the repo), and the task goes on: the review reads them in the diff, and the question before the push names them. **Leave them out** goes on without them.
+3. **Apply the changes** writes them into the task's checkout of the repo (never through a link, never outside the repo), and the task goes on: the review reads them in the diff, and the question before the push names them. **Let the agent write them** runs the step again, told to make what it tried with a command with its file tools. **Leave them out** goes on without them.
 
 A review's blocking findings about these files go to you too, not into a fix round no agent could do: make the change yourself, then ask for one more round to have it reviewed again. With other findings besides, the fix round goes only to the repos of those.
 

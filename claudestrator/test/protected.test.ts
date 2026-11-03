@@ -4,7 +4,8 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
 
-import { applyEdit, contentAfter, humanFinding, isInstructionsOnly, isProtectedFile } from '../src/core/protected';
+import { applyEdit, contentAfter, humanFinding, isInstructionsOnly, isProtectedFile, refusedSettings } from '../src/core/protected';
+import { guardBash } from '../src/core/guard';
 import { transition } from '../src/core/machine';
 import { buildPipeline } from '../src/core/pipeline';
 import * as config from '../src/core/config';
@@ -37,6 +38,24 @@ test('protected: an Edit as Claude Code applies it, and refuses what it would re
   assert.equal(contentAfter('MultiEdit', { edits: [{ old_string: 'a', new_string: 'b' }, { old_string: 'b c', new_string: 'd' }] }, 'a c'), 'd');
   assert.equal(contentAfter('MultiEdit', { edits: [{ old_string: 'a', new_string: 'b' }, { old_string: 'zz', new_string: 'd' }] }, 'a c'), null, 'one edit that does not apply: none does');
   assert.equal(contentAfter('NotebookEdit', {}, 'x'), null);
+});
+
+test('protected: the settings files a command the sandbox refused names, as it names them', () => {
+  assert.deepEqual(refusedSettings('error: unable to create file .claude/rules/forms.md: Operation not permitted\nerror: patch failed'), ['.claude/rules/forms.md']);
+  assert.deepEqual(refusedSettings("Error: EPERM: operation not permitted, open '/ws/api/.mcp.json'"), ['/ws/api/.mcp.json']);
+  assert.deepEqual(refusedSettings('cp: .vscode/tasks.json: Read-only file system'), ['.vscode/tasks.json']);
+  assert.deepEqual(refusedSettings('wrote .claude/rules/forms.md\nsrc/a.ts: Operation not permitted'), [], 'a refusal on another line, of another file');
+  assert.deepEqual(refusedSettings('cat: .claude/x.md: No such file or directory'), [], 'not a refusal');
+});
+
+test('guard: a command that writes the settings tells the agent the way that works', async () => {
+  const policy = { protectedBranches: ['main'], draftPrsOnly: true, forbidAiAttribution: false, allowNoVerify: false, sandbox: true, localPorts: false, network: [], writable: [], checkEnv: [], protectedChanges: 'ask' as const };
+  const api = '/ws/api';
+  const ctx = { policy, cwd: api, workspace: '/ws', agent: true, writeRoots: [api], runsOutside: [`${api}/.claude`, `${api}/.mcp.json`, `${api}/.husky/_`], branchOf: async () => 'feat/x', isRepoRoot: async () => true, readFile: async () => null };
+  const settings = await guardBash('cp /tmp/forms.md .claude/rules/forms.md', ctx);
+  assert.ok(!settings.allow && /use the Write or Edit tool instead/.test(settings.reason), JSON.stringify(settings));
+  const hooks = await guardBash('echo x > .husky/_/pre-commit', ctx);
+  assert.ok(!hooks.allow && !/Write or Edit/.test(hooks.reason), 'the hooks folder has no such way');
 });
 
 // ---------- the state machine ----------
@@ -75,7 +94,7 @@ test('machine: a step that changed the settings stops for you before the next on
     apply({ type: 'stage_started', agent: 'developer', repo: 'web' });
     s = apply({ type: 'stage_completed', agent: 'developer', repo: 'web', artifact: 'reports/r1/developer-web.md', gates: 'pass', protectedChanges: [RULE] });
     assert.equal(s.checkpoint!.id, 'protected-changes');
-    assert.deepEqual(s.checkpoint!.options, ['apply', 'skip', 'stop']);
+    assert.deepEqual(s.checkpoint!.options, ['apply', 'retry', 'skip', 'stop']);
     assert.deepEqual(s.checkpoint!.step, { stage: 1, agent: 'developer', repo: 'web' });
     assert.deepEqual(s.proposed, [RULE]);
     s = apply({ type: 'checkpoint_answered', id: 'protected-changes', option });
@@ -99,6 +118,24 @@ test('machine: red checks first, then the settings changes of the same step', ()
   retry({ type: 'stage_started', agent: 'developer', repo: 'api' });
   s = retry({ type: 'stage_completed', agent: 'developer', repo: 'api', artifact: 'reports/r1/developer-api.md', gates: 'pass', protectedChanges: [{ ...RULE, repo: 'api', artifact: 'proposed/r1/api/.claude/rules/forms.md#2' }] });
   assert.deepEqual(s.proposed!.map((c) => c.artifact), ['proposed/r1/api/.claude/rules/forms.md#2']);
+});
+
+test('machine: what a failed step kept waits for the retry, and a try with a command does not replace a written change', () => {
+  const apply = task();
+  apply({ type: 'stage_started', agent: 'developer', repo: 'api' });
+  let s = apply({ type: 'stage_failed', agent: 'developer', repo: 'api', error: 'blocked', blocked: true, protectedChanges: [{ ...RULE, repo: 'api' }] });
+  assert.equal(s.checkpoint!.id, 'agent-failure');
+  assert.deepEqual(s.proposed!.map((c) => c.file), ['.claude/rules/forms.md'], 'kept, not lost');
+  apply({ type: 'checkpoint_answered', id: 'agent-failure', option: 'retry' });
+  apply({ type: 'stage_started', agent: 'developer', repo: 'api' });
+  s = apply({ type: 'stage_completed', agent: 'developer', repo: 'api', artifact: 'reports/r1/developer-api.md', gates: 'pass', protectedChanges: [{ repo: 'api', file: '.claude/rules/forms.md' }, { repo: 'api', file: '.mcp.json' }] });
+  assert.equal(s.checkpoint!.id, 'protected-changes', 'they come up when the step ends well');
+  assert.deepEqual(s.proposed!.map((c) => [c.file, c.artifact ?? null]), [['.claude/rules/forms.md', 'proposed/r1/web/.claude/rules/forms.md'], ['.mcp.json', null]]);
+  // Retry: the step runs again to write what it tried with a command; what it kept still waits.
+  s = apply({ type: 'checkpoint_answered', id: 'protected-changes', option: 'retry' });
+  assert.deepEqual(s.next, { stage: 1, agent: 'developer', repo: 'api' });
+  assert.equal(s.nextMode, 'retry');
+  assert.equal(s.proposed!.length, 2);
 });
 
 /** The task through its first review, with these findings. */
@@ -205,6 +242,29 @@ test('engine: policy.protectedChanges rules applies a rule at once and asks abou
     assert.equal((await o.engine.svc.state(taskId)).checkpoint!.id, 'protected-changes', 'the question stays open');
   } finally {
     o.hooks.dispose();
+  }
+});
+
+test('engine: a change tried with a command the sandbox refused comes up without content; a retry is told to use the file tools', { skip: process.platform === 'win32' }, async () => {
+  const ws = workspace(['api'], 'repos:\n  api: {}\n');
+  const shell = [{ command: 'git apply forms.patch', output: 'error: unable to create file .claude/rules/forms.md: Operation not permitted' }];
+  const h = await harness(ws, { FAKE_REPOS: 'api', FAKE_DEV_SHELL: JSON.stringify(shell), FAKE_DEV_FILES: JSON.stringify({ '.mcp.json': '{}\n' }) });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
+    let s = await runTask(h.engine, taskId);
+    assert.equal(s.checkpoint!.id, 'protected-changes', JSON.stringify(h.engine.lastError(taskId)));
+    const ctx = await h.engine.checkpointContext(s, s.checkpoint);
+    assert.deepEqual(ctx.protectedChanges!.map((c) => [c.file, c.after]), [['.mcp.json', '{}\n'], ['.claude/rules/forms.md', null]]);
+    await h.engine.answer(taskId, 'protected-changes', 'retry');
+    s = await waitFor(async () => {
+      const st = await h.engine.svc.state(taskId);
+      return !h.engine.isRunning(taskId) && st.checkpoint ? st : null;
+    }, 60000);
+    const prompts = h.outputs.filter((o) => o.item.type === 'prompt').map((o) => String((o.item as { text?: unknown }).text));
+    assert.ok(prompts.some((p) => /Your last attempt changed api\/\.claude\/rules\/forms\.md with a shell command, which the sandbox refused/.test(p)), 'the retry heard what to do differently');
+    assert.equal(s.checkpoint!.id, 'protected-changes', 'the kept change still waits');
+  } finally {
+    h.hooks.dispose();
   }
 });
 

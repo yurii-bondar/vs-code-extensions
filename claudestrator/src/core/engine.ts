@@ -9,7 +9,7 @@ import { exists, ownTemp, ownTempRoot } from './files';
 import { EFFORTS, REPO_NAME, SCENARIOS } from './protocol';
 import { buildPipeline, scenarioKind, taskPipeline, fitsScenario, onRepos, reposBeforePlan } from './pipeline';
 import { nextAction, runOf, artifactPath, branchName, sameStep, editableFrom, spentOf, stepRepos, unknownRepos, onlyHumanFindings, TASK_FILES, type NextAction, type RunAction } from './machine';
-import { contentAfter, isInstructionsOnly, isProtectedFile } from './protected';
+import { contentAfter, isInstructionsOnly, isProtectedFile, refusedSettings } from './protected';
 import { parseInvocation, classifyInput, detectScenario, runIntake, renderTicket, IntakeError, extractAcceptanceCriteria, otherSite, planFromTicket, capSpec, projectAllowed } from './intake';
 import { TaskService, type DispatchResult } from './store';
 import { AS_TEXT, exec, getChildEnv, GitRepo, branchAt, taskRepos, prepareRepos, taskDiff, removeWorktrees, SLOW_GIT_MS } from './git';
@@ -1091,6 +1091,9 @@ class Engine extends EventEmitter {
       const e = events[i]!;
       if (e.type === 'stage_failed' && sameStep(e, step)) return e.error;
       if (e.type === 'gates_ran' && e.agent === step.agent && (e.repo ?? undefined) === step.repo) return e.status === 'fail' ? `Checks were still red after ${e.attempt} attempt${e.attempt === 1 ? '' : 's'}:\n${e.summary}` : null;
+      // Run again after it tried to change the settings with a command: what to do differently.
+      const tried = e.type === 'stage_completed' && sameStep(e, step) ? (e.protectedChanges ?? []).filter((c) => !c.artifact) : [];
+      if (tried.length) return `Your last attempt changed ${tried.map((c) => `${c.repo}/${c.file}`).join(', ')} with a shell command, which the sandbox refused, so nothing of it was kept. Make those changes with the Write or Edit tool: Claudestrator refuses the write, keeps the change and puts it to the user.`;
       // An attempt that ended well (its checks too): what failed before it is not this retry's.
       if (e.type === 'stage_completed' && sameStep(e, step) && e.gates !== 'fail') return null;
     }
@@ -1168,10 +1171,20 @@ class Engine extends EventEmitter {
       seq = started.length ? started[started.length - 1]!.seq! : 0;
     }
     const key = transcriptKey(seq, step);
+    // What the agent changed of the repos' settings, by repo and file: with its file tools (refused there, the content
+    // kept), or with a command the sandbox refused (the content not known). Kept for you when the step ends, well or not.
+    const proposals = new Map<string, Proposal>();
+    const tried = new Map<string, ProtectedChange>();
+    const kept = async (): Promise<ProtectedChange[]> => {
+      if (!proposals.size && !tried.size) return [];
+      const written = await this.keepProposals({ taskId, agent: step.agent, round: s.review.round, mode: config.policy.protectedChanges, proposals: [...proposals.values()] });
+      return [...written, ...[...tried].filter(([k]) => !proposals.has(k)).map(([, c]) => c)];
+    };
     /** Ends the step for you to decide; `blocked`: the agent said it cannot go on, rather than ended without a report. */
     const fail = async (error: string, { blocked = false }: { blocked?: boolean } = {}) => {
       const usedUpNow = usedUpWindow(this.limits, Date.now());
-      return await this.dispatch(taskId, { type: 'stage_failed', agent: step.agent, ...(step.repo && { repo: step.repo }), error: usedUpNow ? `${error} (${usedUpNow})` : error, ...(blocked && { blocked: true }) });
+      const protectedChanges = await kept();
+      return await this.dispatch(taskId, { type: 'stage_failed', agent: step.agent, ...(step.repo && { repo: step.repo }), error: usedUpNow ? `${error} (${usedUpNow})` : error, ...(blocked && { blocked: true }), ...(protectedChanges.length && { protectedChanges }) });
     };
 
     if (!agent || !agent.enabled) {
@@ -1203,9 +1216,7 @@ class Engine extends EventEmitter {
     if (gated) await this.ensureSandbox(config);
     const runsOutside = await this.runsOutside(writeRoots);
     const webHosts = await this.webHosts(state, config);
-    // What the agent wrote of the repos' settings with its file tools, by file, as it would read after its writes: refused
-    // there, and kept for you when the step ends.
-    const proposals = new Map<string, Proposal>();
+    // The file tools' changes, as each file would read after them.
     const workDirs = stage.scope === 'repo' ? [{ name: step.repo as string, dir: repoDir as string }] : workRepos;
     const propose = async (outside: string, abs: string, tool: string, input: Record<string, unknown>): Promise<boolean> => {
       const repo = workDirs.find((r) => path.dirname(outside) === r.dir);
@@ -1220,6 +1231,15 @@ class Engine extends EventEmitter {
       if (content === null) return false;
       proposals.set(key, { repo: repo.name, dir: repo.dir, file, content });
       return true;
+    };
+    /** A failed command's output that names a settings file the sandbox refused (`git apply`, `cp` into `.claude/`). */
+    const noteRefused = (output: string): void => {
+      for (const named of refusedSettings(output)) {
+        const abs = path.resolve(cwd, named);
+        const repo = workDirs.find((r) => inside(abs, r.dir));
+        const file = repo && path.relative(repo.dir, abs).split(path.sep).join('/');
+        if (repo && file && isProtectedFile(file)) tried.set(`${repo.name}/${file}`, { repo: repo.name, file });
+      }
     };
     await this.guardListening();
     const hook = this.hooks.register((call) => this.decide({ taskId, step, writeRoots, runsOutside, webHosts, config, call, emitItem, propose }));
@@ -1236,7 +1256,15 @@ class Engine extends EventEmitter {
       additionalDirectories: await filterAsync([...new Set(writeRoots)], async (d) => !(await realInside(cwd, d))),
       env: this.agentEnv(hook.env, config),
       name: `claudestrator ${taskId} · ${label}`,
-      ...this.progress(taskId, { agent: step.agent, transcript: key, cwd, onOutput: emitItem }),
+      ...this.progress(taskId, {
+        agent: step.agent,
+        transcript: key,
+        cwd,
+        onOutput: (item) => {
+          emitItem(item);
+          if (item.type === 'tool_result' && item.isError) noteRefused(item.text);
+        },
+      }),
       onActivity: () => this.activity.set(taskId, Date.now()),
       onWarn: (message) => this.log('warn', `${label}: ${message}`, taskId),
       // The account the session started under: switching accounts meanwhile does not move its limits to the other.
@@ -1403,7 +1431,7 @@ class Engine extends EventEmitter {
       }
       if (!parsed.ok) return void (await fail(`report still invalid after ${REPORT_RETRIES} corrections: ${parsed.error}`));
 
-      const protectedChanges = proposals.size ? await this.keepProposals({ taskId, agent: step.agent, round: state.review.round, mode: config.policy.protectedChanges, proposals: [...proposals.values()] }) : [];
+      const protectedChanges = await kept();
       const artifact = artifactPath(stage.output, step.agent, state.review.round, step.repo);
       // The artifact reads as before: the report, then its data as a json block (structured output comes apart).
       const text = t.structured !== undefined ? `${t.report}\n\n\`\`\`json\n${JSON.stringify(t.structured, null, 2)}\n\`\`\`` : t.report;
@@ -1936,14 +1964,16 @@ class Engine extends EventEmitter {
   async applyProposed(s: TaskState): Promise<void> {
     const config = await this.config();
     if (config.policy.protectedChanges === 'off') throw new EngineError('protected_off', "Claudestrator does not apply changes to the repos' settings (Settings → Safety): make them yourself, then continue");
-    for (const c of s.proposed ?? []) {
+    // One tried with a command has no content to write: it stays yours to make.
+    const written = (s.proposed ?? []).filter((c): c is ProtectedChange & { artifact: string } => Boolean(c.artifact));
+    for (const c of written) {
       const repo = taskRepos(this.workspace, s, config, [c.repo])[0];
       if (!repo) throw new EngineError('protected_repo', `${c.repo} is not a repo of this task`);
       const content = await fs.promises.readFile(this.svc.artifactFile(s.taskId, c.artifact), 'utf8').catch(() => null);
       if (content === null) throw new EngineError('protected_missing', `the change to ${c.repo}/${c.file} is no longer in the task folder (${c.artifact})`);
       await this.writeProtected(repo.dir, c.file, content);
     }
-    const files = (s.proposed ?? []).map((c) => `${c.repo}/${c.file}`);
+    const files = written.map((c) => `${c.repo}/${c.file}`);
     if (files.length) await this.svc.record(s.taskId, { type: 'note', message: `Applied ${files.join(', ')}, as you confirmed` });
   }
 
@@ -2048,7 +2078,7 @@ class Engine extends EventEmitter {
           (s.proposed ?? []).map(async (c) => {
             const repo = taskRepos(this.workspace, s, config, [c.repo])[0];
             const before = repo ? await fs.promises.readFile(path.join(repo.dir, ...c.file.split('/')), 'utf8').catch(() => null) : null;
-            return { repo: c.repo, file: c.file, before, after: await read(c.artifact), instructionsOnly: isInstructionsOnly(c.file) };
+            return { repo: c.repo, file: c.file, before, after: c.artifact ? await read(c.artifact) : null, instructionsOnly: isInstructionsOnly(c.file) };
           })
         );
         return { format: 'markdown', text: '', protectedChanges: changes, canApply: config.policy.protectedChanges !== 'off' };

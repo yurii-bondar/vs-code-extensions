@@ -30,6 +30,24 @@ function humanFinding(f: Pick<Finding, 'file'>): boolean {
   return parts.some((p, i) => /^\.(claude|vscode)$/i.test(p) && i < parts.length - 1) || /^(\.mcp\.json|CLAUDE\.local\.md)$/i.test(parts[parts.length - 1] ?? '');
 }
 
+/** What a command the sandbox refused a write says (EPERM, a read-only file system), one line at a time. */
+const REFUSED = /operation not permitted|\bEPERM\b|read-only file system|\bEROFS\b/i;
+/** A path to a settings file in that line: `.claude/rules/forms.md`, `/repo/.mcp.json`, `'.vscode/tasks.json'`. */
+const SETTINGS_IN_TEXT = /(?:^|[\s'"`(=:])((?:[\w.@+~-]*\/)*(?:\.claude\/[\w.@+-]+(?:\/[\w.@+-]+)*|\.vscode\/[\w.@+-]+(?:\/[\w.@+-]+)*|\.mcp\.json))/g;
+
+/**
+ * The settings files a failed command says it was refused, as it names them (relative or absolute): what an agent tried
+ * to change with a shell command (`git apply`, `cp`) instead of its file tools, whose content is then not known.
+ */
+function refusedSettings(output: string): string[] {
+  const found = new Set<string>();
+  for (const line of output.split('\n')) {
+    if (!REFUSED.test(line)) continue;
+    for (const m of line.matchAll(SETTINGS_IN_TEXT)) found.add(m[1]!);
+  }
+  return [...found];
+}
+
 interface EditInput {
   old_string: string;
   new_string: string;
@@ -76,4 +94,4 @@ function contentAfter(tool: string, input: Record<string, unknown>, now: string 
   return null;
 }
 
-export { PROTECTED_MODES, applyEdit, contentAfter, humanFinding, isInstructionsOnly, isProtectedFile, plainPath };
+export { PROTECTED_MODES, applyEdit, contentAfter, humanFinding, isInstructionsOnly, isProtectedFile, plainPath, refusedSettings };

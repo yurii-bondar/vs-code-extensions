@@ -55,6 +55,8 @@ function transition(state: TaskState | null, event: OrchEvent): Transition {
       if (!s.running || !sameStep(s.running, event)) return fail('not_running', `${describe(event)} is not running`);
       const step = s.running;
       s.running = null;
+      // What it changed of the settings before it failed is not lost: it comes up when the step ends well.
+      if (event.protectedChanges && event.protectedChanges.length) s.proposed = mergeProposed(s.proposed ?? [], event.protectedChanges);
       openCheckpoint(s, 'agent-failure', { at: event.at, step, reason: event.error, ...(event.blocked && { blocked: true }) });
       return ok(s);
     }
@@ -271,9 +273,13 @@ function checkpointAnswered(s: TaskState, e: Ev<'checkpoint_answered'>): Transit
       } else passReview(s, true);
       break;
     case 'protected-changes':
-      // Applied (the engine wrote them before it answered) or left: either way they are no longer waiting.
-      delete s.proposed;
-      advance(s, cp.step!);
+      // The step again, to make what it tried with a command with its file tools: what it kept waits on.
+      if (e.option === 'retry') setNext(s, cp.step!, 'retry', feedback);
+      else {
+        // Applied (the engine wrote them before it answered) or left: either way they are no longer waiting.
+        delete s.proposed;
+        advance(s, cp.step!);
+      }
       break;
     case 'hook-failure':
       s.finishStep = 'commit';
@@ -393,11 +399,15 @@ function setNext(s: TaskState, step: Step | null, mode: NextMode, feedback: stri
   if (!step) enterFinish(s);
 }
 
-/** The same file of the same repo once: a later change to it replaces the earlier one. */
+/**
+ * The same file of the same repo once: a later change to it replaces the earlier one, but a try with a command (no
+ * content) does not replace a change with its content.
+ */
 function mergeProposed(was: ProtectedChange[], now: ProtectedChange[]): ProtectedChange[] {
   const key = (c: ProtectedChange): string => `${c.repo}\u0000${c.file}`;
-  const later = new Set(now.map(key));
-  return [...was.filter((c) => !later.has(key(c))), ...now];
+  const kept = new Map(was.map((c) => [key(c), c]));
+  for (const c of now) if (c.artifact || !kept.get(key(c))?.artifact) kept.set(key(c), c);
+  return [...kept.values()];
 }
 
 /** After a code or tests step: its changes to the repos' settings go to you first, then the task moves on. */

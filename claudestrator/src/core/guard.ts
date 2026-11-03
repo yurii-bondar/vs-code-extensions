@@ -606,6 +606,15 @@ function ownedBy(abs: string, ctx: GuardContext): string | null {
   return root ? `${outsideLabel(root)}, which run outside the sandbox` : null;
 }
 
+/**
+ * For an agent's command that writes the repo's Claude Code or VS Code settings: the way that works. Its Write or Edit
+ * tool is refused too, but Claudestrator keeps that change and puts it to the user; a command's is lost.
+ */
+function settingsWay(abs: string, ctx: GuardContext): string {
+  const root = ctx.agent ? (ctx.runsOutside || []).find((h) => inside(abs, path.resolve(h))) : undefined;
+  return root && /^\.(claude|mcp\.json|vscode)$/i.test(path.basename(root)) ? '. To change it, use the Write or Edit tool instead: Claudestrator keeps that change and puts it to the user when your step ends' : '';
+}
+
 /** An agent writes only where its stage works (or a temp folder), and never into git metadata. */
 function checkWrites(targets: string[], cmd: string, dir: Dir, ctx: GuardContext): Verdict {
   if (!ctx.writeRoots || !targets.length) return allow;
@@ -617,7 +626,7 @@ function checkWrites(targets: string[], cmd: string, dir: Dir, ctx: GuardContext
     if (abs === null) return lost(`${cmd} writes ${t}`);
     if (localInstructions(abs)) return deny(`${cmd} writes ${abs}: ${LOCAL_INSTRUCTIONS}`);
     const owned = ownedBy(abs, ctx);
-    if (owned) return deny(`${cmd} would write into ${owned} (${abs}); Claudestrator owns git`);
+    if (owned) return deny(`${cmd} would write into ${owned} (${abs}); Claudestrator owns git${settingsWay(abs, ctx)}`);
     if ((ctx.protect || []).some((p) => inside(abs, path.resolve(p)))) return deny(`${cmd} writes ${abs}: Claudestrator's config and task state are not an agent's to change`);
     if (TEMP_DIRS().some((tmp) => within(abs, tmp))) continue;
     if (roots.some((root) => within(abs, root))) continue;
