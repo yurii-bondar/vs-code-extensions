@@ -482,6 +482,16 @@ class Engine extends EventEmitter {
     return filterAsync(named, async (r) => (await new GitRepo(taskRepos(this.workspace, state, config, [r.name])[0]!.checkout).originHas(r.baseBranch!)) === false);
   }
 
+  /**
+   * The plan's repos with the group's base branch for each one the plan names none for and whose origin has it: the
+   * tasks of an epic start from its branch, and their PRs go into it.
+   */
+  async withGroupBase(state: TaskState, config: Config, repos: PlanRepo[]): Promise<PlanRepo[]> {
+    const base = state.group && state.group.baseBranch;
+    if (!base) return repos;
+    return Promise.all(repos.map(async (r) => (r.baseBranch || !(await new GitRepo(taskRepos(this.workspace, state, config, [r.name])[0]!.checkout).originHas(base)) ? r : { ...r, baseBranch: base })));
+  }
+
   /** Whether a step of the task has worked in its repos already (so they are on its branch). */
   async workedOnRepos(s: TaskState): Promise<boolean> {
     const onBranch = (agent: string): boolean => s.pipeline.stages.some((st) => st.agent === agent && onRepos(st));
@@ -495,6 +505,7 @@ class Engine extends EventEmitter {
     const r = this.reposWithoutPlan(parseInvocation(s.input).repos, config, s.pipeline);
     if (!r.ok) throw new EngineError('repos_required', r.error);
     const plan = planFromTicket(spec, s.source.kind === 'text' ? s.source.text : s.input, r.repos);
+    plan.repos = await this.withGroupBase(s, config, plan.repos);
     for (let n = 2; (await this.branchTaken(s, config, branchName({ ...s, plan })!, r.repos)).length; n++) plan.slug = `${planFromTicket(spec, '', []).slug}-${n}`;
     return plan;
   }
@@ -1332,6 +1343,8 @@ class Engine extends EventEmitter {
         // A base the planner names is one origin has: the branch starts from it, and the PR goes into it.
         const noBase = await this.basesMissing(state, config, r.plan.repos);
         if (noBase.length) return { ok: false, error: `origin has no branch ${noBase.map((x) => `${x.baseBranch} (in ${x.name})`).join(', ')}; name a branch origin has as baseBranch, or leave it out to start from the repo's base` };
+        // A repo the plan names no base for starts from the group's branch, where origin has it.
+        if (!state.plan || !(await this.workedOnRepos(state))) r.plan.repos = await this.withGroupBase(state, config, r.plan.repos);
         // A plan after the task has worked in its repos (a second planner, one in the review loop) keeps the branch that
         // work is on: a new slug would leave the work behind on the old one, uncommitted. So does each repo's base, which
         // that branch was made from.

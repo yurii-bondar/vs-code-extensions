@@ -108,6 +108,8 @@ function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, 
     // agent that ran it itself would report a blocker the checks do not have.
     if (checkEnv?.length) lines.push(`${checkEnv.join(', ')} reach Claudestrator's checks and git hooks only (policy.checkEnv), never your shell, which gets none of the user's credentials. A test that needs one (an integration suite and its database's URL) runs in those checks after your step, and their result is the one that counts: do not run it yourself, and a variable missing from your shell is no blocker.`);
   }
+  // Where the group's tasks start: the planner leaves baseBranch out for those repos, or names another on purpose.
+  if (next.output === 'plan' && state.group && state.group.baseBranch) lines.push(`Tasks of "${state.group.label}" start from ${state.group.baseBranch} in each repo where origin has that branch, and their PRs go into it: Claudestrator sets it as baseBranch of a repo your plan names none for. Name another only when this task must start elsewhere.`);
   // A later review round checks the findings of the one before first, so rounds converge instead of moving on.
   if (next.output === 'verdict' && next.round > 1) {
     lines.push('', `This is review round ${next.round}: the previous round's review is among the inputs. Check first that each of its blocker and major findings is fixed, and report again any that is not. Raise a new blocker or major finding only for what the fixes broke or what truly blocks the change, not for what the earlier round could have raised.`);

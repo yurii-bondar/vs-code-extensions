@@ -488,6 +488,7 @@ export interface SaveGroupParams {
   jira?: string | undefined;
   instructions?: string | undefined;
   defaultInstructions?: string[] | undefined;
+  baseBranch?: string | undefined;
 }
 
 export interface SaveInstructionParams {

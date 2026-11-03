@@ -195,7 +195,6 @@ function validateSetting(key: string, value: unknown): string[] {
 
 /** Ids of groups and instructions in config.yaml, made from their names. */
 const entryId = T.re(SCENARIO_ID, 'ids are lowercase kebab-case and start with a letter');
-const GROUP = T.obj({ type: T.oneOf(GROUP_TYPES), label: T.str(1, 80), 'jira?': T.re(JIRA_KEY, 'a Jira key looks like CP-123'), 'instructions?': T.str(1), 'defaultInstructions?': T.arr(entryId) });
 const INSTRUCTION = T.obj({ label: T.str(1, 80), text: T.str(1) });
 
 const GATE = T.obj({ name: T.str(1), cmd: T.str(1), 'dir?': T.re(/^(?![\\/~]|[A-Za-z]:)(?!(?:.*[\\/])?\.\.(?:[\\/]|$)).+$/, 'dir is a folder of the repo, from its root (packages/web), never an absolute path, ~ or ..'), 'when?': T.re(/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[^*?[\]{}]+$/, 'when is a folder or file of the repo, from its root (src/ or package.json), without patterns'), 'timeout?': T.int(1, 24 * 60 * 60) });
@@ -221,6 +220,7 @@ const SANDBOX_LIST = 100;
 
 /** A branch name git takes as one (`main`, `release/2.x`): no leading `-`, which git would read as an option, and no `..`. */
 const BRANCH_PATTERN = /^(?!-)(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+const GROUP = T.obj({ type: T.oneOf(GROUP_TYPES), label: T.str(1, 80), 'jira?': T.re(JIRA_KEY, 'a Jira key looks like CP-123'), 'instructions?': T.str(1), 'defaultInstructions?': T.arr(entryId), 'baseBranch?': T.re(BRANCH_PATTERN, 'a branch name, e.g. feat/provably-fair') });
 const BRANCH = T.re(BRANCH_PATTERN, 'a branch name, e.g. main or release/2.x');
 
 const CONFIG_LAYER = T.obj({
