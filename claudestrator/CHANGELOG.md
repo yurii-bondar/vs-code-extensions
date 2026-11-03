@@ -1,3 +1,11 @@
+## [0.12.0](https://github.com/yurii-bondar/vs-code-extensions/compare/claudestrator-v0.11.2...claudestrator-v0.12.0) (2026-11-03)
+
+### Features
+
+* **claudestrator:** a group's tasks start from its base branch in each repo whose origin has it ([40cffd9](https://github.com/yurii-bondar/vs-code-extensions/commit/40cffd997a5e3fe8e693da519e4441831fb09100))
+* **claudestrator:** a settings change tried with a command, or kept by a step that failed, still comes to you ([bb503de](https://github.com/yurii-bondar/vs-code-extensions/commit/bb503de1828f5a90932a901b5ef490f0f3fa63dc))
+* **claudestrator:** an agent's change to a repo's Claude Code or VS Code settings is kept and put to you to apply ([6fbda1f](https://github.com/yurii-bondar/vs-code-extensions/commit/6fbda1f4b830a5f9815085921e10f4d2cd9af1e5))
+
 ## [0.11.2](https://github.com/yurii-bondar/vs-code-extensions/compare/claudestrator-v0.11.1...claudestrator-v0.11.2) (2026-11-03)
 
 ### Bug Fixes
