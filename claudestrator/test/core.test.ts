@@ -17,9 +17,9 @@ import { parseHookRequest } from '../src/core/hookserver';
 import { plain } from '../src/core/gates';
 import { parseInvocation, storageToText, classifyInput, extractAcceptanceCriteria, adfToText, detectScenario } from '../src/core/intake';
 import { TaskService } from '../src/core/store';
-import { stepsOf, summary, queueOutput } from '../src/core/view';
+import { stepsOf, summary, queueOutput, sectionsOf } from '../src/core/view';
 import type { OutputPush } from '../src/core/view';
-import type { ViewEngine } from '../src/core/view';
+import type { Card, ViewEngine } from '../src/core/view';
 import { buildArgs, limitsOf, sameWindows } from '../src/core/runner';
 import { Engine } from '../src/core/engine';
 import { resolveDefaults, effectiveFor, modelName } from '../src/core/defaults';
@@ -28,7 +28,7 @@ import { findRepos, reposFromFolders, repoLayerOf } from '../src/core/setup';
 import { execFileSync } from 'child_process';
 import { parseReadiness, parseAudit, parsePlanMeta, validateSetting, validateConfigLayer } from '../src/core/protocol';
 import { renderReport, jiraText } from '../src/core/report';
-import type { Agent, Config, EventBody, EventOf, OrchEvent, Output, PlanMeta, PlanRepo, Source, Spec, StoredPipeline, TaskState } from '../src/core/types';
+import type { Agent, Config, EventBody, TaskGroup, EventOf, OrchEvent, Output, PlanMeta, PlanRepo, Source, Spec, StoredPipeline, TaskState } from '../src/core/types';
 import type { GuardContext, GuardVerdict } from '../src/core/guard';
 import type { NextAction, RunAction } from '../src/core/machine';
 import type { ConfigLayer, Layer } from '../src/core/config';
@@ -1631,6 +1631,27 @@ test('view: a task whose log does not replay gets a whole card, so the list and 
   assert.match(card.error!.message!, /log cannot be read: event #1 \(stage_started\) does not replay/);
   assert.deepEqual([card.mini, card.repos, card.progress], [[], [], { done: 0, total: 0 }], 'what the list and the tree read is there');
   assert.ok(!Number.isNaN(Date.parse(card.updatedAt)));
+});
+
+test('view: the sidebar sections tasks by epic, story, group, then the ungrouped ones, with the tasks that need you first', () => {
+  const epic: TaskGroup = { id: 'e1', type: 'epic', label: 'Ante Bet', jira: 'CP-1122' };
+  const story: TaskGroup = { id: 's1', type: 'story', label: 'Round state' };
+  const group: TaskGroup = { id: 'g1', type: 'group', label: 'Docs' };
+  const card = (taskId: string, status: string, g?: TaskGroup): Card => ({ taskId, status: { group: status }, ...(g && { group: g }) }) as unknown as Card;
+  // newest first, as the store lists them
+  const cards = [card('T1', 'done'), card('T2', 'done', group), card('T3', 'done', story), card('T4', 'attention', epic), card('T5', 'done', epic), card('T6', 'running', epic), card('T7', 'running')];
+  const sections = sectionsOf(cards);
+  assert.deepEqual(
+    sections.map((s) => [s.kind, s.label, s.jira, s.cards.map((c) => c.taskId)]),
+    [
+      ['epic', 'Ante Bet', 'CP-1122', ['T4', 'T6', 'T5']],
+      ['story', 'Round state', undefined, ['T3']],
+      ['group', 'Docs', undefined, ['T2']],
+      ['ungrouped', 'Ungrouped', undefined, ['T7', 'T1']],
+    ]
+  );
+  assert.deepEqual(sectionsOf(cards).map((s) => s.key), ['epic:e1', 'story:s1', 'group:g1', 'ungrouped'], 'keys stay the same across refreshes');
+  assert.deepEqual(sectionsOf([]), []);
 });
 
 test('config: what the project config relaxes of your safety policy is said, not applied silently', async () => {

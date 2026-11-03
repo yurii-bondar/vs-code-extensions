@@ -70,6 +70,28 @@
         }
       ]
     },
+    "colors": [
+      {
+        "id": "claudestrator.epicForeground",
+        "description": "Epic headers in the Claudestrator tasks view.",
+        "defaults": { "dark": "#C586F7", "light": "#8250DF", "highContrast": "#D7A6FF", "highContrastLight": "#6A2FBF" }
+      },
+      {
+        "id": "claudestrator.storyForeground",
+        "description": "Story headers in the Claudestrator tasks view.",
+        "defaults": { "dark": "#73C991", "light": "#1A7F37", "highContrast": "#89E0A5", "highContrastLight": "#116329" }
+      },
+      {
+        "id": "claudestrator.groupForeground",
+        "description": "Custom group headers in the Claudestrator tasks view.",
+        "defaults": { "dark": "#3D8BFF", "light": "#0058D6", "highContrast": "#6AA8FF", "highContrastLight": "#0046AD" }
+      },
+      {
+        "id": "claudestrator.ungroupedForeground",
+        "description": "The Ungrouped header in the Claudestrator tasks view.",
+        "defaults": { "dark": "#40E0D0", "light": "#0E8A7E", "highContrast": "#6FF0E2", "highContrastLight": "#0A6B62" }
+      }
+    ],
     "viewsWelcome": [
       {
         "view": "claudestrator.tasks",
