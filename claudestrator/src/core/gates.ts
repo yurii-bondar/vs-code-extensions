@@ -82,7 +82,7 @@ const LOCAL_PORT_HINT = 'note: checks and git hooks run in the sandbox (policy.s
  * ~/.docker/config.json), the daemon's socket out of reach, Testcontainers finding no container runtime.
  */
 const DOCKER_REFUSAL = /\.docker[\\/]config\.json|docker\.sock\b|\bdocker daemon\b|\bcontainer runtime\b/i;
-const DOCKER_HINT = 'note: checks and git hooks run in the sandbox (policy.sandbox), which gives them no Docker, and no setting does: Docker would let them out of it. A test that starts its database or Redis in a container needs them started by you, outside the sandbox, on 127.0.0.1; "Local ports" in Settings → Safety (policy.localPorts) so the test reaches them; and their URLs in the environment VS Code starts with, named in policy.checkEnv when a URL carries a password (a .env file is out of the sandbox\'s reach).';
+const DOCKER_HINT = 'note: checks and git hooks run in the sandbox (policy.sandbox), which gives them no Docker, and no setting does: Docker would let them out of it. No change of the code fixes that. A test that starts its database or Redis in a container needs, from you: 1) those services started outside the sandbox, on 127.0.0.1, with a test database of its own (the tests may wipe it); 2) "Let commands open local ports" in Settings → Safety (policy.localPorts), so the test reaches them; 3) their URLs exported in your login shell (~/.zprofile), then VS Code quit and opened again, since it reads that environment only when it starts (a .env file is out of the sandbox\'s reach); 4) those variables named in "Variables checks and git hooks still get" in Settings → Safety (policy.checkEnv) when a URL carries a password.';
 
 /** What the sandbox refused a command, by what it said: Docker, a local port, or something else (a folder, a host). */
 type SandboxRefusal = 'docker' | 'localPort' | 'other';
@@ -290,7 +290,7 @@ async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = fal
       const tail = tailOf(output);
       // Out of time is not an error an agent can fix by changing code (a slow suite, a hung service), nor is a local port
       // or Docker the sandbox refuses: it goes to you.
-      const unfixable = r.killed === 'timeout' ? `it ran out of its ${Math.round(limitMs / 1000)}s (a longer one is its timeout, in seconds)` : refused === 'localPort' ? 'the sandbox refused a test a local port (policy.localPorts)' : refused === 'docker' ? 'the sandbox gives a test no Docker: start the services it needs yourself (policy.localPorts, policy.checkEnv)' : undefined;
+      const unfixable = r.killed === 'timeout' ? `it ran out of its ${Math.round(limitMs / 1000)}s (a longer one is its timeout, in seconds)` : refused === 'localPort' ? 'the sandbox refused a test a local port (policy.localPorts)' : refused === 'docker' ? 'the sandbox gives a test no Docker: start the services it needs yourself (Settings → Safety: local ports, variables checks get)' : undefined;
       results.push({ repo: repo.name, gate: gate.name, status: 'fail', log, ms, tail, ...(unfixable && { unfixable }) });
       lines.push(`FAIL ${repo.name} ${gate.name} (exit ${r.code}; cd ${repo.name}/${gate.dir ?? '.'} && ${gate.cmd}) log: ${log}\n${tail.split('\n').map((l) => `    ${l}`).join('\n')}`);
     }

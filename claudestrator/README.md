@@ -228,6 +228,17 @@ VS Code settings (`claudestrator.*`):
 
 `claudePath`, `claudeConfigDir` and `atlassian.*` are read from your user (or remote machine) settings only: a repo's `.vscode/settings.json` cannot send your token to another host or run another CLI.
 
+### Integration tests with a database
+
+Checks run in the sandbox, which has no Docker and gets none of your credentials, so a suite that starts Postgres or Redis in a container (Testcontainers, `docker compose`) fails there. No change of the code fixes that: such a check comes to you at once, with these steps.
+
+1. Start the services yourself, outside the sandbox, on `127.0.0.1`, with a test database and Redis db of their own: the tests may wipe them.
+2. Settings → Safety: turn on **Let commands open local ports** (`policy.localPorts`). On macOS the sandbox otherwise reaches no local port, and with it, every service on your machine.
+3. Export the URLs in your login shell (`~/.zprofile`: `export TEST_DATABASE_URL=postgres://app:pw@127.0.0.1:5434/app_test`), then quit VS Code and open it again: it reads that environment only when it starts, and a window reload is not enough. A `.env` file does not work, since the sandbox does not read it.
+4. Settings → Safety: name those variables in **Variables checks and git hooks still get** (`policy.checkEnv`). A URL with a password (`postgres://u:pw@…`, `redis://:pw@…`) counts as a credential, and the checks get it only when it is named there. The agents' shells never get it: the checks run the suite after their step, and their result is the one that counts.
+
+Then retry the step.
+
 ## Requirements
 
 - Claude Code CLI 2.1.302 or newer, logged in (`claude --version`; `claude update`). Older versions do not honour what guards the agents, so they do not start.
