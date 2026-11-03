@@ -1,3 +1,9 @@
+## [0.10.3](https://github.com/yurii-bondar/vs-code-extensions/compare/claudestrator-v0.10.2...claudestrator-v0.10.3) (2026-11-03)
+
+### Bug Fixes
+
+* **claudestrator:** a check that wants Docker in the sandbox goes to you with how to give it its services ([0eb7fd3](https://github.com/yurii-bondar/vs-code-extensions/commit/0eb7fd3f6c39a97c97cf9b2af37b3248f1f65ed1))
+
 ## [0.10.2](https://github.com/yurii-bondar/vs-code-extensions/compare/claudestrator-v0.10.1...claudestrator-v0.10.2) (2026-11-03)
 
 ### Bug Fixes
