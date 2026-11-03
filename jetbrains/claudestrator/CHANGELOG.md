@@ -1,3 +1,9 @@
+## [0.4.2](https://github.com/yurii-bondar/vs-code-extensions/compare/jetbrains-claudestrator-v0.4.1...jetbrains-claudestrator-v0.4.2) (2026-11-03)
+
+### Bug Fixes
+
+* **claudestrator:** a code or tests stage hands its report over in its status ([65d7407](https://github.com/yurii-bondar/vs-code-extensions/commit/65d740708bff855946558d661c5de0833dc99745))
+
 ## [0.4.1](https://github.com/yurii-bondar/vs-code-extensions/compare/jetbrains-claudestrator-v0.4.0...jetbrains-claudestrator-v0.4.1) (2026-11-03)
 
 ### Bug Fixes
