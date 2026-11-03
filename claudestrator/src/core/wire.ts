@@ -413,6 +413,12 @@ export interface CheckpointContext {
   secrets?: (SecretFinding & { repo: string })[];
   /** Before a push: changed files git runs as hooks, here or on your machine later. */
   hooks?: { repo: string; file: string }[];
+  /** Changes agents made to the repos' settings, kept for you: the file as it is now (null: not there yet) and as written. */
+  protectedChanges?: { repo: string; file: string; before: string | null; after: string; instructionsOnly: boolean }[];
+  /** Whether Claudestrator applies them when you say so (`policy.protectedChanges` is not `off`). */
+  canApply?: boolean;
+  /** A review whose blocking findings are all about files no agent changes: those files. */
+  humanFiles?: string[];
 }
 
 /** What the task's pipeline editor shows: its stages, from which one they can change, and the agents to add. */

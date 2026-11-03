@@ -374,6 +374,11 @@ button.chip:hover, .link-chip:hover { border-color: var(--accent); text-decorati
 .push-table { display: flex; flex-direction: column; gap: 6px; }
 .push-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 8px 10px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); }
 .push-row b { display: inline-flex; gap: 6px; align-items: center; min-width: 120px; }
+.protected-change { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; margin-top: 8px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); }
+.protected-change .row { gap: 8px; align-items: center; flex-wrap: wrap; }
+.protected-change b { display: inline-flex; gap: 6px; align-items: center; }
+.protected-change pre.log { max-height: 320px; overflow: auto; }
+.chip.warn { border-color: var(--warn); color: var(--warn); }
 .log-details { margin-top: 10px; }
 .log-details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 pre.log, .code-pre { font-family: var(--mono); font-size: 12px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; margin: 6px 0 0; padding: 10px 12px; border-radius: 8px; background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.1)); max-height: 420px; overflow: auto; }

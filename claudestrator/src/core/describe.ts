@@ -10,6 +10,7 @@ const CHECKPOINT_TITLE: Record<string, string> = {
   'gate-failure': 'Checks are red',
   'agent-failure': 'An agent failed',
   'review-limit': 'Review rounds used up',
+  'protected-changes': 'Settings changes to apply',
   'hook-failure': 'Commit failed',
   'confirm-push': 'Confirm push',
 };

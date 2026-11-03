@@ -1,6 +1,6 @@
 // UI models built from a task's state and events: cards for lists, a step timeline, the activity feed.
 import * as path from 'path';
-import { transition, passSteps, sameStep, branchName, spentOf, MAX_EMPTY_ROUNDS } from './machine';
+import { transition, passSteps, sameStep, branchName, spentOf, onlyHumanFindings, MAX_EMPTY_ROUNDS } from './machine';
 import { onRepos } from './pipeline';
 import { describeEvent, checkpointTitle } from './describe';
 import { transcriptKey } from './engine';
@@ -45,9 +45,12 @@ const CHECKPOINT_HINT: Record<string, string> = {
   'gate-failure': 'The repo checks stayed red after the agent tried to fix them.',
   'agent-failure': 'An agent stopped before finishing its report.',
   'review-limit': 'The reviewer still has blocking findings after the last fix round.',
+  'protected-changes': "An agent changed the repo's Claude Code or VS Code settings, which no agent writes. Read the change, then apply it or leave it.",
   'hook-failure': 'A git hook rejected the commit.',
   'confirm-push': 'Everything is committed locally. Push the branches and open draft PRs?',
 };
+
+const HUMAN_FINDINGS_HINT = "The blocking findings are about the repo's Claude Code or VS Code settings, which no agent changes: make the change yourself, then retry for another review.";
 
 const EMPTY_DIFF_HINT = 'The last review rounds saw an empty diff: the agents changed nothing, so more fix rounds would not help. Add guidance and retry, ship as it is, or stop.';
 
@@ -55,6 +58,7 @@ const EMPTY_DIFF_HINT = 'The last review rounds saw an empty diff: the agents ch
 function hintOf(state: TaskState): string | undefined {
   const cp = state.checkpoint!;
   if (cp.id === 'review-limit' && state.review.emptyRounds >= MAX_EMPTY_ROUNDS) return EMPTY_DIFF_HINT;
+  if (cp.id === 'review-limit' && onlyHumanFindings(state.review.verdicts)) return HUMAN_FINDINGS_HINT;
   if (cp.id === 'agent-failure' && cp.blocked) return 'An agent reported it cannot go on, and why.';
   const hint = CHECKPOINT_HINT[cp.id];
   return cp.repeated && hint ? `${hint} It failed the same way as the attempt before.` : hint;
