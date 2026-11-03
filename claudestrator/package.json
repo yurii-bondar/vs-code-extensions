@@ -2,7 +2,7 @@
   "name": "claudestrator",
   "displayName": "Claudestrator",
   "description": "A Claude Code agent pipeline in VS Code: plan → your approval → code and tests per repo → review with fix rounds → commit → confirmed push → draft PRs. Also checks a ticket's readiness against its acceptance criteria and audits projects for bugs and bottlenecks.",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "publisher": "bondevn",
   "license": "MIT",
   "author": "Yurii Bondar",
@@ -74,22 +74,42 @@
       {
         "id": "claudestrator.epicForeground",
         "description": "Epic headers in the Claudestrator tasks view.",
-        "defaults": { "dark": "#C586F7", "light": "#8250DF", "highContrast": "#D7A6FF", "highContrastLight": "#6A2FBF" }
+        "defaults": {
+          "dark": "#C586F7",
+          "light": "#8250DF",
+          "highContrast": "#D7A6FF",
+          "highContrastLight": "#6A2FBF"
+        }
       },
       {
         "id": "claudestrator.storyForeground",
         "description": "Story headers in the Claudestrator tasks view.",
-        "defaults": { "dark": "#73C991", "light": "#1A7F37", "highContrast": "#89E0A5", "highContrastLight": "#116329" }
+        "defaults": {
+          "dark": "#73C991",
+          "light": "#1A7F37",
+          "highContrast": "#89E0A5",
+          "highContrastLight": "#116329"
+        }
       },
       {
         "id": "claudestrator.groupForeground",
         "description": "Custom group headers in the Claudestrator tasks view.",
-        "defaults": { "dark": "#3D8BFF", "light": "#0058D6", "highContrast": "#6AA8FF", "highContrastLight": "#0046AD" }
+        "defaults": {
+          "dark": "#3D8BFF",
+          "light": "#0058D6",
+          "highContrast": "#6AA8FF",
+          "highContrastLight": "#0046AD"
+        }
       },
       {
         "id": "claudestrator.ungroupedForeground",
         "description": "The Ungrouped header in the Claudestrator tasks view.",
-        "defaults": { "dark": "#40E0D0", "light": "#0E8A7E", "highContrast": "#6FF0E2", "highContrastLight": "#0A6B62" }
+        "defaults": {
+          "dark": "#40E0D0",
+          "light": "#0E8A7E",
+          "highContrast": "#6FF0E2",
+          "highContrastLight": "#0A6B62"
+        }
       }
     ],
     "viewsWelcome": [

@@ -1,3 +1,9 @@
+## [0.10.0](https://github.com/yurii-bondar/vs-code-extensions/compare/claudestrator-v0.9.0...claudestrator-v0.10.0) (2026-11-03)
+
+### Features
+
+* **claudestrator:** the tasks view groups tasks by epic, story and group ([013ffd2](https://github.com/yurii-bondar/vs-code-extensions/commit/013ffd25b2f5a0b4f08285163f975ebc742b0830))
+
 ## [0.9.0](https://github.com/yurii-bondar/vs-code-extensions/compare/claudestrator-v0.8.0...claudestrator-v0.9.0) (2026-11-02)
 
 ### Features
