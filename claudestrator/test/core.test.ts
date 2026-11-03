@@ -315,6 +315,19 @@ test('machine: the review of a later round reads the one before it, to check its
   assert.match(prompt, /review round 2: the previous round's review is among the inputs\. Check first that each of its blocker and major findings is fixed/);
 });
 
+test('prompt: a code stage is told to write its report and then hand over its status, never the status alone', () => {
+  const s = reviewedRounds([false], 3);
+  const dev = runOf(nx(s));
+  assert.equal(dev.output, 'code');
+  const prompt = buildAgentPrompt({ state: s, next: dev, taskDir: '/ws/.orch/tasks/T-1', language: 'English' });
+  assert.match(prompt, /Write your report as the text of your final message, then hand over its status/);
+  assert.match(prompt, /The status does not replace the report/);
+  // The status comes after the report, so nothing may follow the report but it.
+  assert.doesNotMatch(prompt, /nothing may follow it\./);
+  assert.match(prompt, /nothing may follow it but the json or the status asked for above/);
+  assert.match(failed(parseStageReport('code', '', { status: 'done' })).error, /write the report as the text of your final message, then hand over the data again/);
+});
+
 test('machine: two review rounds in a row with an empty diff stop the loop before the round limit', async () => {
   // The limit would allow five rounds; the agents changed nothing twice, so a third fix round is not started.
   const s = reviewedRounds([true, true], 5);
