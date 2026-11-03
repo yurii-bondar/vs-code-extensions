@@ -720,6 +720,9 @@ interface Views {
           <label class="field"><span>Folders commands may also write <span class="muted">build caches, comma-separated</span></span><input class="input mono" data-change="set-paths" data-path="policy.writable" value="${esc(cfg ? cfg.policy.writable.join(', ') : '')}" placeholder="~/.cache/go-build, ~/.gradle/caches"></label>
           <label class="check-line"><input type="checkbox" data-change="set-bool" data-path="policy.localPorts" ${cfg && cfg.policy.localPorts ? 'checked' : ''}><span>Let commands open <b>local ports</b> <span class="muted">(tests that start a server on 127.0.0.1; on macOS they then also reach every service listening on this machine)</span></span></label>
           <label class="field"><span>Variables checks and git hooks still get <span class="muted">ones that look like credentials and are taken from them otherwise: a test database's URL with its password</span></span><input class="input mono" data-change="set-list" data-path="policy.checkEnv" value="${esc(cfg ? cfg.policy.checkEnv.join(', ') : '')}" placeholder="TEST_DATABASE_URL, TEST_REDIS_URL"></label>
+          <label class="field"><span>Changes agents make to a repo's Claude Code and VS Code settings <span class="muted">(.claude/, .mcp.json, .vscode/: no agent writes them, their hooks and servers run outside the sandbox)</span></span><select class="input" data-change="set-value" data-path="policy.protectedChanges">${(
+            [['', 'Show them to me, and apply them when I say so'], ['rules', 'Apply rules for agents (.claude/rules/*.md) at once, ask about the rest'], ['off', 'Only show them: I make them myself']] as const
+          ).map(([v, label]) => `<option value="${v}" ${(cfg ? cfg.policy.protectedChanges : 'ask') === (v || 'ask') ? 'selected' : ''}>${esc(label)}</option>`).join('')}</select></label>
         </section>
 
         <section class="card settings-card" id="sec-claude"><h3>${icon('bot')}Claude Code</h3>

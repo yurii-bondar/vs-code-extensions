@@ -4,6 +4,7 @@
 
 import type { Audit, AuditFinding, CheckpointId, Effort, Finding, GroupType, JsonObject, OrchEvent, Output, ParseResult, PlanMeta, Readiness, ReadinessValue, ReadinessVerdict, ReportSeverity, Runs, Scenario, Severity, CriterionStatus, WorkReport } from './types';
 
+import { PROTECTED_MODES } from './protected';
 const OUTPUTS: Output[] = ['plan', 'code', 'tests', 'verdict', 'readiness', 'audit'];
 /**
  * What a task is for. `deliver` runs the pipeline to draft PRs; the others run read-only agents and end with a report:
@@ -47,6 +48,7 @@ const CHECKPOINT_OPTIONS: Record<CheckpointId, string[]> = {
   'gate-failure': ['retry', 'continue', 'stop'],
   'agent-failure': ['retry', 'stop'],
   'review-limit': ['continue', 'retry', 'stop'],
+  'protected-changes': ['apply', 'retry', 'skip', 'stop'],
   'hook-failure': ['retry', 'stop'],
   'confirm-push': ['push', 'push-comment', 'local'],
 };
@@ -234,7 +236,7 @@ const CONFIG_LAYER = T.obj({
   'repos?': T.rec(T.re(REPO_NAME, 'a repo name is letters, digits, ".", "_" and "-", e.g. api or web-app'), T.obj({ 'role?': T.str(1), 'path?': T.str(1), 'baseBranch?': BRANCH, 'gates?': GATES })),
   'jira?': T.obj({ 'allowedProjects?': T.arr(T.str(1)) }),
   // The sandbox's lists go to sandbox-runtime as its settings: a few entries each, never an unbounded list to validate.
-  'policy?': T.obj({ 'protectedBranches?': T.arr(T.str(1), 0, SANDBOX_LIST), 'draftPrsOnly?': T.bool(), 'forbidAiAttribution?': T.bool(), 'allowNoVerify?': T.bool(), 'sandbox?': T.bool(), 'localPorts?': T.bool(), 'network?': T.arr(T.re(/^[A-Za-z0-9*.:[\]-]+$/, 'a host name, e.g. npm.acme.corp or *.acme.corp'), 0, SANDBOX_LIST), 'writable?': T.arr(T.re(/^(~[\\/]|\/|[A-Za-z]:[\\/])(?=.*[^\\/~.\s])/, 'a folder below ~ or the filesystem root, e.g. ~/.cache/go-build'), 0, SANDBOX_LIST), 'checkEnv?': T.arr(T.re(/^[A-Za-z_][A-Za-z0-9_]*$/, 'a variable name, e.g. DATABASE_URL'), 0, SANDBOX_LIST) }),
+  'policy?': T.obj({ 'protectedBranches?': T.arr(T.str(1), 0, SANDBOX_LIST), 'draftPrsOnly?': T.bool(), 'forbidAiAttribution?': T.bool(), 'allowNoVerify?': T.bool(), 'sandbox?': T.bool(), 'localPorts?': T.bool(), 'network?': T.arr(T.re(/^[A-Za-z0-9*.:[\]-]+$/, 'a host name, e.g. npm.acme.corp or *.acme.corp'), 0, SANDBOX_LIST), 'writable?': T.arr(T.re(/^(~[\\/]|\/|[A-Za-z]:[\\/])(?=.*[^\\/~.\s])/, 'a folder below ~ or the filesystem root, e.g. ~/.cache/go-build'), 0, SANDBOX_LIST), 'checkEnv?': T.arr(T.re(/^[A-Za-z_][A-Za-z0-9_]*$/, 'a variable name, e.g. DATABASE_URL'), 0, SANDBOX_LIST), 'protectedChanges?': T.oneOf(PROTECTED_MODES) }),
   'git?': T.obj({ 'mode?': T.oneOf(['branch', 'worktree']) }),
   'editor?': T.str(1),
   'context?': T.arr(T.str(1)),

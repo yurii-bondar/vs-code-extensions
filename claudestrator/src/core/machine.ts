@@ -2,7 +2,8 @@
 // event (a skipped approval, an extra review round, a push before it was confirmed) is rejected.
 import { CHECKPOINT_OPTIONS, JIRA_ONLY_OPTIONS, REPO_NAME, isBlocking, isInfoEvent } from './protocol';
 import { onRepos, reposBeforePlan } from './pipeline';
-import type { Checkpoint, CheckpointId, Finding, NextMode, Output, OrchEvent, PlanRepo, Stage, Step, StepRef, TaskState, Transition } from './types';
+import { humanFinding } from './protected';
+import type { Checkpoint, CheckpointId, Finding, NextMode, Output, OrchEvent, PlanRepo, ProtectedChange, RecordedVerdict, Stage, Step, StepRef, TaskState, Transition } from './types';
 
 /** The event of one type: `Ev<'stopped'>`. */
 type Ev<T extends OrchEvent['type']> = Extract<OrchEvent, { type: T }>;
@@ -54,6 +55,8 @@ function transition(state: TaskState | null, event: OrchEvent): Transition {
       if (!s.running || !sameStep(s.running, event)) return fail('not_running', `${describe(event)} is not running`);
       const step = s.running;
       s.running = null;
+      // What it changed of the settings before it failed is not lost: it comes up when the step ends well.
+      if (event.protectedChanges && event.protectedChanges.length) s.proposed = mergeProposed(s.proposed ?? [], event.protectedChanges);
       openCheckpoint(s, 'agent-failure', { at: event.at, step, reason: event.error, ...(event.blocked && { blocked: true }) });
       return ok(s);
     }
@@ -212,8 +215,9 @@ function stageCompleted(s: TaskState, e: Ev<'stage_completed'>): Transition {
       return ok(s);
     case 'code':
     case 'tests':
+      if (e.protectedChanges && e.protectedChanges.length) s.proposed = mergeProposed(s.proposed ?? [], e.protectedChanges);
       if (e.gates === 'fail') openCheckpoint(s, 'gate-failure', { at: e.at, step });
-      else advance(s, step);
+      else afterWork(s, step, e.at);
       return ok(s);
     case 'verdict':
       s.review.verdicts.push({ agent: step.agent, artifact: e.artifact, status: e.verdict!.status, findings: e.verdict!.findings, ...(e.emptyDiff && { emptyDiff: true }) });
@@ -256,7 +260,7 @@ function checkpointAnswered(s: TaskState, e: Ev<'checkpoint_answered'>): Transit
       if (e.option === 'retry') setNext(s, cp.step!, 'retry', feedback);
       else {
         s.gateFailures.push(cp.step!);
-        advance(s, cp.step!);
+        afterWork(s, cp.step!, e.at);
       }
       break;
     case 'agent-failure':
@@ -267,6 +271,15 @@ function checkpointAnswered(s: TaskState, e: Ev<'checkpoint_answered'>): Transit
         s.review.maxRounds += 1;
         startFixRound(s, feedback);
       } else passReview(s, true);
+      break;
+    case 'protected-changes':
+      // The step again, to make what it tried with a command with its file tools: what it kept waits on.
+      if (e.option === 'retry') setNext(s, cp.step!, 'retry', feedback);
+      else {
+        // Applied (the engine wrote them before it answered) or left: either way they are no longer waiting.
+        delete s.proposed;
+        advance(s, cp.step!);
+      }
       break;
     case 'hook-failure':
       s.finishStep = 'commit';
@@ -386,6 +399,23 @@ function setNext(s: TaskState, step: Step | null, mode: NextMode, feedback: stri
   if (!step) enterFinish(s);
 }
 
+/**
+ * The same file of the same repo once: a later change to it replaces the earlier one, but a try with a command (no
+ * content) does not replace a change with its content.
+ */
+function mergeProposed(was: ProtectedChange[], now: ProtectedChange[]): ProtectedChange[] {
+  const key = (c: ProtectedChange): string => `${c.repo}\u0000${c.file}`;
+  const kept = new Map(was.map((c) => [key(c), c]));
+  for (const c of now) if (c.artifact || !kept.get(key(c))?.artifact) kept.set(key(c), c);
+  return [...kept.values()];
+}
+
+/** After a code or tests step: its changes to the repos' settings go to you first, then the task moves on. */
+function afterWork(s: TaskState, step: Step, at: string): void {
+  if (s.proposed && s.proposed.length) openCheckpoint(s, 'protected-changes', { at, step });
+  else advance(s, step);
+}
+
 function advance(s: TaskState, from: Step): void {
   const pass = passSteps(s);
   const i = pass.findIndex((p) => p.stage === from.stage && sameStep(p, from));
@@ -396,18 +426,31 @@ function advance(s: TaskState, from: Step): void {
 /** Review rounds in a row with an empty diff after which the loop stops: another fix round would change nothing either. */
 const MAX_EMPTY_ROUNDS = 2;
 
+/**
+ * The files of the blocking findings when each is about a file no agent changes (the repos' Claude Code or VS Code
+ * settings), else null: a fix round would change none of them.
+ */
+function onlyHumanFindings(verdicts: readonly RecordedVerdict[]): string[] | null {
+  const blocking = verdicts.flatMap((v) => v.findings).filter(isBlocking);
+  if (!blocking.length || !blocking.every(humanFinding)) return null;
+  return [...new Set(blocking.map((f) => (f.repo ? `${f.repo}/${f.file}` : f.file!)))];
+}
+
 function evaluateRound(s: TaskState, at: string): void {
   const blocking = s.review.verdicts.some((v) => v.status === 'changes_requested');
   const empty = s.review.verdicts.length > 0 && s.review.verdicts.every((v) => v.emptyDiff);
   s.review.emptyRounds = empty ? s.review.emptyRounds + 1 : 0;
+  const yours = blocking ? onlyHumanFindings(s.review.verdicts) : null;
   if (!blocking) passReview(s, false);
+  else if (yours) openCheckpoint(s, 'review-limit', { at, reason: `the blocking findings are about the repos' Claude Code or VS Code settings (${yours.join(', ')}), which no agent changes: make the change yourself, then retry for another review` });
   else if (s.review.emptyRounds >= MAX_EMPTY_ROUNDS) openCheckpoint(s, 'review-limit', { at, reason: `the diff was empty in ${s.review.emptyRounds} review rounds in a row: the agents changed nothing, so another fix round would not help` });
   else if (s.review.round < s.review.maxRounds) startFixRound(s, null);
   else openCheckpoint(s, 'review-limit', { at, reason: `round ${s.review.round} of ${s.review.maxRounds} still has blocking findings` });
 }
 
 function startFixRound(s: TaskState, feedback: string | null): void {
-  const findings = s.review.verdicts.flatMap((v) => v.findings).filter(isBlocking);
+  // A finding about a file no agent changes is yours: it sends no repo back (with only those, the review runs again).
+  const findings = s.review.verdicts.flatMap((v) => v.findings).filter((f) => isBlocking(f) && !humanFinding(f));
   const names = s.repos.map((r) => r.name);
   const targeted = findings.map((f) => f.repo);
   // A finding without a repo, or with one outside the plan, sends every repo back.
@@ -599,4 +642,4 @@ function branchName(s: TaskState): string | null {
 }
 
 export type { NextAction, RunAction, SessionTotals };
-export { MAX_EMPTY_ROUNDS, sessionTotals, spentOf, transition, replay, canPush, passSteps, editableFrom, stepRepos, nextAction, runOf, artifactPath, branchName, sameStep, unknownRepos, TASK_FILES };
+export { MAX_EMPTY_ROUNDS, onlyHumanFindings, sessionTotals, spentOf, transition, replay, canPush, passSteps, editableFrom, stepRepos, nextAction, runOf, artifactPath, branchName, sameStep, unknownRepos, TASK_FILES };

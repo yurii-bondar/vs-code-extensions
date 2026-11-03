@@ -73,6 +73,17 @@ interface Views {
       },
       placeholder: 'Priorities for the fix round (optional)',
     },
+    'protected-changes': {
+      title: "Apply the agent's changes to the repo's settings?",
+      lead: "No agent writes Claude Code's or VS Code's settings (.claude/, .mcp.json, .vscode/): their hooks, permissions, MCP servers and tasks run outside the sandbox. The agent's changes to them are below. Applied, they go into the task's branch, where the review and the question before the push show them.",
+      options: {
+        apply: { label: 'Apply the changes', kind: 'primary', icon: 'check' },
+        retry: { label: 'Let the agent write them', kind: 'secondary', icon: 'refresh', feedback: 'optional', hint: 'Runs the step again, to make what it tried with a command with its file tools.' },
+        skip: { label: 'Leave them out', kind: 'secondary', icon: 'x', hint: 'The task goes on without them; make them yourself if they are needed.' },
+        stop: { label: 'Stop task', kind: 'ghost', icon: 'stop' },
+      },
+      placeholder: 'For a retry (optional), e.g. "take .claude/rules/forms.md as it is on origin/feat/provably-fair"',
+    },
     'hook-failure': {
       title: 'A git hook rejected the commit',
       lead: 'Fix what the hook complains about (for example run the formatter in that repo), then retry.',
@@ -629,7 +640,10 @@ interface Views {
         <div class="doc-frame"><div class="markdown">${md(stripJsonBlock(ctx.text || ''))}</div></div>
         ${ctx.file ? `<button class="link small" data-action="open-artifact" data-file="${esc(ctx.file)}" data-preview="1">${icon('ext')}Open the plan in an editor</button>` : ''}`;
     } else if (cp.id === 'review-limit') {
-      body = `<div class="doc-frame"><div class="markdown">${md(stripJsonBlock(ctx.text || ''))}</div></div>`;
+      const yours = ctx.humanFiles || [];
+      body = `${yours.length ? `<div class="banner warn">${icon('user')}<div class="grow"><b>These findings are yours to settle.</b> They are about the repo's Claude Code or VS Code settings, which no agent changes, so another fix round would not touch them. Make the change yourself, then choose "One more fix round" for another review, or accept and continue.<ul>${yours.map((f) => `<li><code>${esc(f)}</code></li>`).join('')}</ul></div></div>` : ''}<div class="doc-frame"><div class="markdown">${md(stripJsonBlock(ctx.text || ''))}</div></div>`;
+    } else if (cp.id === 'protected-changes') {
+      body = protectedChangesHtml(ctx);
     } else if (cp.id === 'confirm-push') {
       const repos = ctx.repos || [];
       body = `<div class="push-table">${repos
@@ -647,7 +661,7 @@ interface Views {
       }
       const hooks = ctx.hooks || [];
       if (hooks.length) {
-        body += `<div class="banner warn">${icon('alert')}<div class="grow"><b>The agents changed what acts outside the sandbox.</b> Git hooks run when you use git in ${hooks.length === 1 ? 'that repo' : 'those repos'}, <code>.lfsconfig</code> says where Git LFS uploads, and every Claude Code session there takes <code>CLAUDE.md</code> as instructions: read them first.<ul>${hooks.map((h) => `<li><code>${esc(h.repo)}/${esc(h.file)}</code></li>`).join('')}</ul></div></div>`;
+        body += `<div class="banner warn">${icon('alert')}<div class="grow"><b>The agents changed what acts outside the sandbox.</b> Git hooks run when you use git in ${hooks.length === 1 ? 'that repo' : 'those repos'}, <code>.lfsconfig</code> says where Git LFS uploads, every Claude Code session there takes <code>CLAUDE.md</code> as instructions, and Claude Code's and VS Code's settings (<code>.claude/</code>, <code>.mcp.json</code>, <code>.vscode/</code>) run hooks, MCP servers and tasks: read them first.<ul>${hooks.map((h) => `<li><code>${esc(h.repo)}/${esc(h.file)}</code></li>`).join('')}</ul></div></div>`;
       }
     } else {
       body = ctx.text ? `<pre class="log ${cp.id === 'gate-failure' || cp.id === 'hook-failure' ? 'error' : ''}">${esc(ctx.text)}</pre>` : '';
@@ -661,7 +675,9 @@ interface Views {
       body += `<div class="banner warn">${icon('alert')}<div class="grow"><b>The same failure as the attempt before.</b> ${what}</div></div>`;
     }
     const needsFeedback = Object.keys(ui.options).some((o) => cp.options.includes(o) && ui.options[o]?.feedback);
+    // Applying is off in Settings → Safety: what is left is to go on without the changes, or to stop.
     const buttons = cp.options
+      .filter((o) => !(cp.id === 'protected-changes' && o === 'apply' && ctx.canApply === false))
       .map((o) => {
         const spec: CpOption = ui.options[o] || { label: o, kind: 'secondary', icon: 'chevron' };
         return `<button class="btn ${spec.kind === 'primary' ? 'primary' : spec.kind === 'warn' ? 'warn' : spec.kind === 'ghost' ? 'ghost' : ''}" data-action="answer" data-option="${o}" data-kind="${spec.kind}" title="${esc(spec.hint || '')}">${icon(spec.icon || 'chevron')}${esc(spec.label)}</button>`;
@@ -678,6 +694,31 @@ interface Views {
       ${needsFeedback ? `<textarea id="cp-feedback" class="input autosize" rows="2" data-input="cp-feedback" placeholder="${esc(ui.placeholder || 'Feedback (optional)')}">${esc(T.feedback)}</textarea>` : ''}
       <div class="cp-actions">${buttons}${d.fix === 'checkpoint' ? fixButton('') : ''}<span class="muted small kbd-hint"><kbd>⌘↵</kbd> <span id="cp-kbd">${esc((keyed !== undefined && ui.options[keyed]?.label) || '')}</span></span></div>
     </section>`;
+  }
+
+  /** The changes an agent made to the repo's settings: each file as written, and as it is now. */
+  function protectedChangesHtml(ctx: Partial<CheckpointContext>): string {
+    const changes = ctx.protectedChanges || [];
+    const cap = (text: string) => (text.length > 30000 ? `${text.slice(0, 30000)}\n… (${text.length - 30000} more characters)` : text);
+    const runs = changes.filter((c) => !c.instructionsOnly);
+    const warn = runs.length
+      ? `<div class="banner error">${icon('alert')}<div class="grow"><b>${runs.length === 1 ? 'This file' : `${runs.length} of these files`} can run code or change what agents may do</b>, outside the sandbox, with your credentials: a hook, a permission, an MCP server, a task. Read ${runs.length === 1 ? 'it' : 'them'} line by line before you apply.</div></div>`
+      : '';
+    const blind = changes.filter((c) => c.after === null);
+    const tried = blind.length
+      ? `<div class="banner warn">${icon('info')}<div class="grow"><b>The agent tried ${blind.length === 1 ? 'one of these' : `${blind.length} of these`} with a shell command</b>, which the sandbox refused, so ${blind.length === 1 ? 'its' : 'their'} content is not known and applying leaves ${blind.length === 1 ? 'it' : 'them'} out. Let the agent write ${blind.length === 1 ? 'it' : 'them'} with its file tools, or make ${blind.length === 1 ? 'it' : 'them'} yourself.</div></div>`
+      : '';
+    const off = ctx.canApply === false ? `<div class="banner warn">${icon('info')}<div class="grow">Claudestrator does not apply these (Settings → Safety). Make the changes yourself if they are needed, then leave them out here to go on.</div></div>` : '';
+    const files = changes
+      .map(
+        (c) => `<div class="protected-change">
+          <div class="row"><b>${icon('file')}<code>${esc(c.repo)}/${esc(c.file)}</code></b><span class="chip">${c.before === null ? 'new file' : 'changed'}</span>${c.instructionsOnly ? '<span class="chip">instructions for agents</span>' : '<span class="chip warn">runs outside the sandbox</span>'}</div>
+          ${c.after === null ? '<div class="muted small">Tried with a shell command, which the sandbox refused: the content is not known.</div>' : `<details open><summary>As the agent wrote it</summary><pre class="log">${esc(cap(c.after))}</pre></details>`}
+          ${c.before !== null ? `<details><summary>As it is now</summary><pre class="log">${esc(cap(c.before))}</pre></details>` : ''}
+        </div>`
+      )
+      .join('');
+    return `${warn}${tried}${off}${files}`;
   }
 
   const stripJsonBlock = (text: string) => window.stripJsonBlock(text);

@@ -5,7 +5,7 @@ import * as assert from 'node:assert/strict';
 import { guardBash, outsideLabel } from '../src/core/guard';
 import type { GuardContext } from '../src/core/guard';
 
-const policy = { protectedBranches: ['main'], draftPrsOnly: true, forbidAiAttribution: true, allowNoVerify: false, sandbox: true, localPorts: false, network: [], writable: [], checkEnv: [] };
+const policy = { protectedBranches: ['main'], draftPrsOnly: true, forbidAiAttribution: true, allowNoVerify: false, sandbox: true, localPorts: false, network: [], writable: [], checkEnv: [], protectedChanges: 'ask' as const };
 /** An agent working in /ws/api, the root of its repository. */
 const ctx = (extra: Partial<GuardContext> = {}): GuardContext => ({ policy, cwd: '/ws/api', workspace: '/ws', home: '/home/u', agent: true, task: { taskId: 'T', canPush: false }, writeRoots: ['/ws/api'], branchOf: async () => 'feat/x', isRepoRoot: async (d) => d === '/ws/api', readFile: async () => null, ...extra });
 const allowed = async (command: string, c = ctx()): Promise<boolean> => (await guardBash(command, c)).allow;

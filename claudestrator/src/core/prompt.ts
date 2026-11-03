@@ -59,6 +59,9 @@ interface PromptArgs {
   checkEnv?: string[] | undefined;
 }
 
+/** The files of a repo agents never write, as a prompt names them. */
+const SETTINGS_FILES = "A repo's Claude Code and VS Code settings (.claude/, .mcp.json, .vscode/)";
+
 function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, diffPath, prsPath, rerun, repos, failed, redChecks, sandboxed, checkEnv }: PromptArgs): string {
   const inputs = next.inputs.map((p) => path.resolve(taskDir, p));
   if (diffPath) inputs.push(diffPath);
@@ -106,8 +109,13 @@ function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, 
     if (sandboxed) lines.push("Your shell commands run in Claudestrator's sandbox. A command it refuses (EPERM, Operation not permitted) is a blocker for the user, who widens it in Claudestrator's Settings → Safety, not in Claude Code's settings: policy.writable for a folder to write, policy.network for a host to reach, policy.localPorts for a local port to open (a test that starts a server on 127.0.0.1). Name the one it needs. Docker is never in it, and no setting lets it in: a test that needs a database or Redis in a container needs the user to start them outside the sandbox, turn on \"Let commands open local ports\" (policy.localPorts) and name their URLs' variables in \"Variables checks and git hooks still get\" (policy.checkEnv), both in Settings → Safety, so say that instead of asking for Docker.");
     // Its shell never gets the user's credentials, so a test that needs one fails there and passes in the checks: an
     // agent that ran it itself would report a blocker the checks do not have.
+    // A blocked write there is no blocker: the engine keeps the change for the user, who applies it.
+    lines.push(`${SETTINGS_FILES} are not yours to write: their hooks, permissions, MCP servers and tasks act outside the sandbox. When your part needs a change to one, make it with the Write or Edit tool all the same: Claudestrator refuses the write, keeps the change and puts it to the user when your step ends. Make it no other way (a shell command, git apply), it is no blocker, and name the file in your report. A file that should be as it is on another branch: read it with git show <ref>:<path>, then Write it.`);
     if (checkEnv?.length) lines.push(`${checkEnv.join(', ')} reach Claudestrator's checks and git hooks only (policy.checkEnv), never your shell, which gets none of the user's credentials. A test that needs one (an integration suite and its database's URL) runs in those checks after your step, and their result is the one that counts: do not run it yourself, and a variable missing from your shell is no blocker.`);
   }
+  if (next.output === 'plan') lines.push(`${SETTINGS_FILES} are not an agent's to write: a change the task needs there goes to the user to apply. Say in the plan which of those files change, and how.`);
+  // A finding there goes to the user, not into a fix round: only its file says so.
+  if (next.output === 'verdict') lines.push(`${SETTINGS_FILES} are not an agent's to write: a finding about one goes to the user. Give such a finding its file.`);
   // A later review round checks the findings of the one before first, so rounds converge instead of moving on.
   if (next.output === 'verdict' && next.round > 1) {
     lines.push('', `This is review round ${next.round}: the previous round's review is among the inputs. Check first that each of its blocker and major findings is fixed, and report again any that is not. Raise a new blocker or major finding only for what the fixes broke or what truly blocks the change, not for what the earlier round could have raised.`);
