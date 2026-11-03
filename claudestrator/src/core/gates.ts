@@ -78,12 +78,31 @@ const LOCAL_PORT_REFUSAL = /\b(?:listen|bind)\b[^\n]{0,80}?(?:EPERM|operation no
 const LOCAL_PORT_HINT = 'note: checks and git hooks run in the sandbox (policy.sandbox), which on macOS opens no local port: a test that starts a server on 127.0.0.1 needs "Local ports" in Settings → Safety (policy.localPorts).';
 
 /**
+ * What a command that wanted Docker says in the sandbox, which gives it none: its config read refused (EPERM on
+ * ~/.docker/config.json), the daemon's socket out of reach, Testcontainers finding no container runtime.
+ */
+const DOCKER_REFUSAL = /\.docker[\\/]config\.json|docker\.sock\b|\bdocker daemon\b|\bcontainer runtime\b/i;
+const DOCKER_HINT = 'note: checks and git hooks run in the sandbox (policy.sandbox), which gives them no Docker, and no setting does: Docker would let them out of it. A test that starts its database or Redis in a container needs them started by you, outside the sandbox, on 127.0.0.1; "Local ports" in Settings → Safety (policy.localPorts) so the test reaches them; and their URLs in the environment VS Code starts with, named in policy.checkEnv when a URL carries a password (a .env file is out of the sandbox\'s reach).';
+
+/** What the sandbox refused a command, by what it said: Docker, a local port, or something else (a folder, a host). */
+type SandboxRefusal = 'docker' | 'localPort' | 'other';
+
+function sandboxRefusal(output: string): SandboxRefusal | null {
+  // Docker's own words carry no EPERM when it finds no socket.
+  if (DOCKER_REFUSAL.test(output)) return 'docker';
+  if (!SANDBOX_REFUSAL.test(output)) return null;
+  return LOCAL_PORT_REFUSAL.test(output) ? 'localPort' : 'other';
+}
+
+const SANDBOX_HINTS: Record<SandboxRefusal, string> = { docker: DOCKER_HINT, localPort: LOCAL_PORT_HINT, other: SANDBOX_HINT };
+
+/**
  * The note under a sandboxed command's output (a check's, a git hook's) when the sandbox refused it something: which
  * setting allows it, since no change to the code does. Empty when it refused nothing.
  */
 function sandboxNote(output: string): string {
-  if (!SANDBOX_REFUSAL.test(output)) return '';
-  return `\n${LOCAL_PORT_REFUSAL.test(output) ? LOCAL_PORT_HINT : SANDBOX_HINT}`;
+  const refused = sandboxRefusal(output);
+  return refused ? `\n${SANDBOX_HINTS[refused]}` : '';
 }
 
 interface ShellRun {
@@ -260,8 +279,8 @@ async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = fal
     const r = await runShell(gate.cmd, { cwd, timeoutMs: limitMs, env: { ...withoutCredentials(getChildEnv(), keepEnv), ...PLAIN_ENV }, signal, launch });
     const ms = Date.now() - started;
     const log = path.join(logDir, `${slug(repo.name)}.${slug(gate.name)}.log`);
-    const hint = launch !== undefined && r.code !== 0 ? sandboxNote(r.output) : '';
-    const localPort = hint.includes('policy.localPorts');
+    const refused = launch !== undefined && r.code !== 0 ? sandboxRefusal(r.output) : null;
+    const hint = refused ? `\n${SANDBOX_HINTS[refused]}` : '';
     const output = plain(r.output) + hint;
     await writeReplacing(log, `$ (cd ${path.relative(dir, cwd) || '.'} && ${gate.cmd})\n${output}\nexit ${r.code}\n`);
     if (r.code === 0) {
@@ -270,8 +289,8 @@ async function runGates({ repo, dir, logDir, timeoutMs = 15 * 60000, force = fal
     } else {
       const tail = tailOf(output);
       // Out of time is not an error an agent can fix by changing code (a slow suite, a hung service), nor is a local port
-      // the sandbox refuses: it goes to you.
-      const unfixable = r.killed === 'timeout' ? `it ran out of its ${Math.round(limitMs / 1000)}s (a longer one is its timeout, in seconds)` : localPort ? 'the sandbox refused a test a local port (policy.localPorts)' : undefined;
+      // or Docker the sandbox refuses: it goes to you.
+      const unfixable = r.killed === 'timeout' ? `it ran out of its ${Math.round(limitMs / 1000)}s (a longer one is its timeout, in seconds)` : refused === 'localPort' ? 'the sandbox refused a test a local port (policy.localPorts)' : refused === 'docker' ? 'the sandbox gives a test no Docker: start the services it needs yourself (policy.localPorts, policy.checkEnv)' : undefined;
       results.push({ repo: repo.name, gate: gate.name, status: 'fail', log, ms, tail, ...(unfixable && { unfixable }) });
       lines.push(`FAIL ${repo.name} ${gate.name} (exit ${r.code}; cd ${repo.name}/${gate.dir ?? '.'} && ${gate.cmd}) log: ${log}\n${tail.split('\n').map((l) => `    ${l}`).join('\n')}`);
     }

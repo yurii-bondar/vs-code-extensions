@@ -193,3 +193,21 @@ test('gates: the note under what the sandbox refused names the setting that allo
   assert.match(sandboxNote('Error: listen EPERM: operation not permitted 127.0.0.1'), /policy\.localPorts/);
   assert.equal(sandboxNote('1 failing: expected 2, got 3'), '');
 });
+
+test('gates: Docker the sandbox refuses goes to you with how to give the test its services; the agent gets nothing to fix', { skip: process.platform === 'win32' }, async () => {
+  for (const says of [
+    "Error: EPERM: operation not permitted, open '/Users/me/.docker/config.json'",
+    'Cannot connect to the Docker daemon at unix:///Users/me/.docker/run/docker.sock. Is the docker daemon running?',
+    'Error: Could not find a working container runtime strategy',
+  ]) assert.match(sandboxNote(says), /no Docker.*policy\.localPorts.*policy\.checkEnv/, says);
+  const ws = workspace(['api'], 'repos:\n  api: {}\n');
+  const dir = path.join(ws, 'api');
+  fs.writeFileSync(path.join(dir, 'x.txt'), 'x\n');
+  const repo = { name: 'api', path: 'api', baseBranch: 'main', gates: [{ name: 'it', cmd: "echo 'Error: Could not find a working container runtime strategy' >&2; exit 1" }] } as unknown as RepoConfig;
+  const [it] = (await runGates({ repo, dir, logDir: path.join(ws, 'logs'), force: true, launch: plainLauncher })).results;
+  assert.match(it!.unfixable ?? '', /no Docker/);
+  assert.doesNotMatch(it!.tail ?? '', /policy\.writable/);
+  // Outside the sandbox the same words are the code's (Docker not running).
+  const [plain] = (await runGates({ repo, dir, logDir: path.join(ws, 'logs'), force: true })).results;
+  assert.equal(plain!.unfixable, undefined);
+});
