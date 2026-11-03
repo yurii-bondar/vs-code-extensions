@@ -1,3 +1,9 @@
+## [0.10.1](https://github.com/yurii-bondar/vs-code-extensions/compare/claudestrator-v0.10.0...claudestrator-v0.10.1) (2026-11-03)
+
+### Bug Fixes
+
+* **claudestrator:** a code or tests stage writes its report, then hands over its status ([f5b4291](https://github.com/yurii-bondar/vs-code-extensions/commit/f5b4291588ae2a31c076f7f47cb0e7c7764c5da7))
+
 ## [0.10.0](https://github.com/yurii-bondar/vs-code-extensions/compare/claudestrator-v0.9.0...claudestrator-v0.10.0) (2026-11-03)
 
 ### Features

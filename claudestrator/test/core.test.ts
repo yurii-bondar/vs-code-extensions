@@ -9,7 +9,7 @@ import { buildPipeline, outline, taskPipeline } from '../src/core/pipeline';
 import * as config from '../src/core/config';
 import * as backups from '../src/core/backup';
 import * as libraries from '../src/core/library';
-import { buildAgentPrompt, parseStageReport, reportLanguage } from '../src/core/prompt';
+import { buildAgentPrompt, parseStageReport, reportLanguage, workReport, workTurn } from '../src/core/prompt';
 import { guardBash } from '../src/core/guard';
 import { readJsonFresh } from '../src/core/env';
 import { GitRepo, exec } from '../src/core/git';
@@ -315,17 +315,33 @@ test('machine: the review of a later round reads the one before it, to check its
   assert.match(prompt, /review round 2: the previous round's review is among the inputs\. Check first that each of its blocker and major findings is fixed/);
 });
 
-test('prompt: a code stage is told to write its report and then hand over its status, never the status alone', () => {
+test('prompt: a code stage hands its report over with its status, in the structured output when it has the tool', () => {
   const s = reviewedRounds([false], 3);
   const dev = runOf(nx(s));
   assert.equal(dev.output, 'code');
   const prompt = buildAgentPrompt({ state: s, next: dev, taskDir: '/ws/.orch/tasks/T-1', language: 'English' });
-  assert.match(prompt, /Write your report as the text of your final message, then hand over its status/);
-  assert.match(prompt, /The status does not replace the report/);
+  assert.match(prompt, /that is your structured output, with the whole report in its `report` field/);
+  assert.match(prompt, /Else write the report as the text of your final message and end it with the status as a fenced ```json block/);
   // The status comes after the report, so nothing may follow the report but it.
   assert.doesNotMatch(prompt, /nothing may follow it\./);
   assert.match(prompt, /nothing may follow it but the json or the status asked for above/);
-  assert.match(failed(parseStageReport('code', '', { status: 'done' })).error, /write the report as the text of your final message, then hand over the data again/);
+  // A status alone (what agents sent before the report was part of it) goes back, saying where the report goes.
+  assert.match(failed(parseStageReport('code', '', { status: 'done' })).error, /only its status: hand over the status again with the whole report in its `report` field/);
+});
+
+test('prompt: the report a code or tests stage hands over in its status is its report, and the data keeps the status', () => {
+  const only = workTurn('code', { report: '', structured: { status: 'done', report: '## Report\nAdded a migration.' } });
+  assert.deepEqual([only.report, only.structured], ['## Report\nAdded a migration.', { status: 'done' }]);
+  assert.ok(parseStageReport('code', only.report, only.structured).ok);
+  assert.deepEqual(workReport(only.report, only.structured), { status: 'done', blockers: [] });
+  const both = workTurn('tests', { report: 'Wrote the tests.', structured: { status: 'blocked', blockers: ['a bug'], report: 'Same, shorter.' } });
+  assert.deepEqual([both.report, both.structured], ['Wrote the tests.', { status: 'blocked', blockers: ['a bug'] }], 'the text it wrote comes first');
+  const none = workTurn('code', { report: '', structured: { status: 'done' } });
+  assert.ok(!parseStageReport('code', none.report, none.structured).ok, 'still no report: sent back');
+  const plan = { report: 'The plan.', structured: { type: 'feat', report: 'x' } };
+  assert.equal(workTurn('plan', plan), plan, "another stage's turn is as it was");
+  const old = { report: 'Done.\n```json\n{"status": "done"}\n```' };
+  assert.equal(workTurn('code', old), old, 'a CLI without --json-schema: as it was');
 });
 
 test('machine: two review rounds in a row with an empty diff stop the loop before the round limit', async () => {
