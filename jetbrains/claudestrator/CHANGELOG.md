@@ -1,3 +1,9 @@
+## [0.4.0](https://github.com/yurii-bondar/vs-code-extensions/compare/jetbrains-claudestrator-v0.3.0...jetbrains-claudestrator-v0.4.0) (2026-11-03)
+
+### Features
+
+* **claudestrator:** the tasks view groups tasks by epic, story and group ([013ffd2](https://github.com/yurii-bondar/vs-code-extensions/commit/013ffd25b2f5a0b4f08285163f975ebc742b0830))
+
 ## [0.3.0](https://github.com/yurii-bondar/vs-code-extensions/compare/jetbrains-claudestrator-v0.2.0...jetbrains-claudestrator-v0.3.0) (2026-11-02)
 
 ### Features
