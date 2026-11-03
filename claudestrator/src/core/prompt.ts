@@ -55,9 +55,11 @@ interface PromptArgs {
   repos?: PromptRepo[] | undefined;
   /** The stage's shell commands run in Claudestrator's sandbox (`policy.sandbox`), which only you widen. */
   sandboxed?: boolean | undefined;
+  /** `policy.checkEnv`: credential-like variables the checks and git hooks get, and the agent's shell never does. */
+  checkEnv?: string[] | undefined;
 }
 
-function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, diffPath, prsPath, rerun, repos, failed, redChecks, sandboxed }: PromptArgs): string {
+function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, diffPath, prsPath, rerun, repos, failed, redChecks, sandboxed, checkEnv }: PromptArgs): string {
   const inputs = next.inputs.map((p) => path.resolve(taskDir, p));
   if (diffPath) inputs.push(diffPath);
   if (prsPath) inputs.push(prsPath);
@@ -102,6 +104,9 @@ function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, 
     );
     // Claude Code tells it to name Claude Code's sandbox settings, which never reach the checks and git hooks: Claudestrator's do.
     if (sandboxed) lines.push("Your shell commands run in Claudestrator's sandbox. A command it refuses (EPERM, Operation not permitted) is a blocker for the user, who widens it in Claudestrator's Settings → Safety, not in Claude Code's settings: policy.writable for a folder to write, policy.network for a host to reach, policy.localPorts for a local port to open (a test that starts a server on 127.0.0.1). Name the one it needs. Docker is never in it, and no setting lets it in: a test that needs a database or Redis in a container needs the user to start them outside the sandbox, with policy.localPorts and their URLs named in policy.checkEnv, so say that instead of asking for Docker.");
+    // Its shell never gets the user's credentials, so a test that needs one fails there and passes in the checks: an
+    // agent that ran it itself would report a blocker the checks do not have.
+    if (checkEnv?.length) lines.push(`${checkEnv.join(', ')} reach Claudestrator's checks and git hooks only (policy.checkEnv), never your shell, which gets none of the user's credentials. A test that needs one (an integration suite and its database's URL) runs in those checks after your step, and their result is the one that counts: do not run it yourself, and a variable missing from your shell is no blocker.`);
   }
   // A later review round checks the findings of the one before first, so rounds converge instead of moving on.
   if (next.output === 'verdict' && next.round > 1) {

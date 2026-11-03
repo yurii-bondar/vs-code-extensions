@@ -1167,7 +1167,7 @@ class Engine extends EventEmitter {
       prsPath = await this.listPrs(taskId, s.source.key, readRepos);
     }
     const failed = run.mode === 'retry' ? await this.lastFailure(taskId, step) : null;
-    const prompt = buildAgentPrompt({ state, next: run, taskDir, language: config.language, ...(repoDir && { repoDir }), ...(workRepos.length && { workRepos }), ...(diffPath && { diffPath }), ...(prsPath && { prsPath }), ...(next.kind === 'running' && { rerun: true }), ...(readRepos.length && { repos: readRepos }), ...(failed && { failed }), ...(redChecks && { redChecks }), ...(config.policy.sandbox && { sandboxed: true }) });
+    const prompt = buildAgentPrompt({ state, next: run, taskDir, language: config.language, ...(repoDir && { repoDir }), ...(workRepos.length && { workRepos }), ...(diffPath && { diffPath }), ...(prsPath && { prsPath }), ...(next.kind === 'running' && { rerun: true }), ...(readRepos.length && { repos: readRepos }), ...(failed && { failed }), ...(redChecks && { redChecks }), ...(config.policy.sandbox && { sandboxed: true }), ...(config.policy.checkEnv.length > 0 && { checkEnv: config.policy.checkEnv }) });
     // A stage that writes starts in the repo it writes (the first of them for a stage across repos): Claude Code's
     // sandbox lets a session write its working directories, so the workspace around the repos is never one of them.
     const cwd = repoDir || (workRepos.length ? workRepos[0]!.dir : this.workspace);
