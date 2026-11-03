@@ -117,6 +117,10 @@ test('prompt: text in the ticket or the repos is material, not instructions', as
   assert.doesNotMatch(prompt, /policy\.localPorts/, 'no sandbox, nothing to say');
   const sandboxed = buildAgentPrompt({ state, next, taskDir: '/ws/.orch/tasks/T-1', language: 'English', repoDir: '/ws/api', sandboxed: true });
   assert.match(sandboxed, /not in Claude Code's settings: policy\.writable .* policy\.network .* policy\.localPorts for a local port/);
+  // A variable only the checks get: the agent leaves the test that needs it to them instead of reporting it missing.
+  assert.doesNotMatch(prompt, /policy\.checkEnv\), never your shell/, 'no checkEnv, nothing to say');
+  const withEnv = buildAgentPrompt({ state, next, taskDir: '/ws/.orch/tasks/T-1', language: 'English', repoDir: '/ws/api', checkEnv: ['TEST_DATABASE_URL', 'TEST_REDIS_URL'] });
+  assert.match(withEnv, /TEST_DATABASE_URL, TEST_REDIS_URL reach Claudestrator's checks and git hooks only \(policy\.checkEnv\), never your shell.*no blocker/);
 });
 
 test('settings: a workspace cannot point the Atlassian token or the Claude Code CLI somewhere else', async () => {
