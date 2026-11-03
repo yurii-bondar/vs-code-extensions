@@ -90,7 +90,8 @@ const CREDENTIAL_WORD = /^(TOKENS?|SECRETS?|PASSWORD|PASSWD|PASS|PWD|PASSPHRASE|
 const CREDENTIAL_END = /(TOKEN|SECRET|PASSWORD|PASSWD)$/;
 /** Names with such a word that hold none: the shell's folders, a desktop's or a terminal's session. */
 const NOT_CREDENTIALS = new Set(['PWD', 'OLDPWD', 'XDG_SESSION_ID', 'XDG_SESSION_TYPE', 'XDG_SESSION_CLASS', 'XDG_SESSION_DESKTOP', 'DBUS_SESSION_BUS_ADDRESS', 'SESSION_MANAGER', 'TERM_SESSION_ID', 'ITERM_SESSION_ID', 'TOKENIZERS_PARALLELISM']);
-const URL_PASSWORD = /:\/\/[^/\s:@]+:[^/\s@]+@/;
+/** A password in a URL, with a user name or without one (`redis://:p@…`, Redis's own form). */
+const URL_PASSWORD = /:\/\/[^/\s:@]*:[^/\s@]+@/;
 /** A value that is a token by its shape: GitHub, Slack, OpenAI, Anthropic, AWS, Stripe and npm keys. */
 const TOKEN_VALUE = /^(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|xox[abprs]-[\w-]{10,}|sk-(ant-)?[\w-]{20,}|AKIA[0-9A-Z]{16}|[sr]k_live_\w{10,}|npm_[A-Za-z0-9]{30,})$/;
 

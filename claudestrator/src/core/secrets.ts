@@ -30,8 +30,8 @@ const PATTERNS: { what: string; re: RegExp }[] = [
   { what: 'a Slack webhook', re: /https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/]{20,255}/ },
 ];
 
-/** A password in a URL (`postgres://app:s3cret@db.prod…`), except to this machine or a placeholder host. */
-const URL_PASSWORD = /\b[a-z][a-z0-9+.-]{0,30}:\/\/[^/\s:@'"]{1,255}:([^/\s@'"]{1,255})@([^/\s:'"?#]{1,255})/i;
+/** A password in a URL (`postgres://app:s3cret@db.prod…`, `redis://:s3cret@…`), except to this machine or a placeholder host. */
+const URL_PASSWORD = /\b[a-z][a-z0-9+.-]{0,30}:\/\/[^/\s:@'"]{0,255}:([^/\s@'"]{1,255})@([^/\s:'"?#]{1,255})/i;
 const LOCAL_HOST = /^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|host\.docker\.internal|[^.]+|.*\.(example|test|local|invalid))$/i;
 const PLACEHOLDER = /^(\$\{?\w+\}?|<[^>]*>|\*+|x+|password|pass|secret|changeme|\{\{.*\}\})$/i;
 

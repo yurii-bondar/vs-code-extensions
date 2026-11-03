@@ -121,8 +121,8 @@ function maskInline(line: string): string {
       .replace(/(--?[\w-]*(?:token|secret|key|password|passwd|auth)[\w-]*)(=|\s+)(?!-)(\S+)/gi, `$1$2${MASK}`)
       // DATABASE_PASSWORD=…, X_API_KEY=… in a list of variables
       .replace(/\b([A-Za-z0-9_]*(?:TOKEN|SECRET|KEY|PASSWORD|PASSWD)[A-Za-z0-9_]*)=([^\s&]+)/gi, `$1=${MASK}`)
-      // postgres://admin:hunter2@db, https://user:pat@host
-      .replace(/(\w+:\/\/[^\s/:@]+):[^\s/@]+@/g, `$1:${MASK}@`)
+      // postgres://admin:hunter2@db, https://user:pat@host, redis://:hunter2@cache
+      .replace(/(\w+:\/\/[^\s/:@]*):[^\s/@]+@/g, `$1:${MASK}@`)
       // ?access_token=…, &key=…, &sig=…
       .replace(/([?&](?:access_token|token|api_?key|key|secret|password|sig|signature|auth|code)=)[^&\s]+/gi, `$1${MASK}`)
       // ghp_…, github_pat_…, glsa_…, sk-…, xoxb-…: tokens whatever they stand next to
