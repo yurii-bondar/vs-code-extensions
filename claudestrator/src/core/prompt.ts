@@ -7,6 +7,9 @@ import type { Audit, GroupType, NextMode, Output, ParseResult, PlanMeta, Readine
 /** Outputs whose report ends with a JSON block a program validates. */
 const JSON_OUTPUTS = new Set(['plan', 'verdict', 'readiness', 'audit']);
 
+/** Outputs of a stage that changes code; it hands over a status and its report (`workTurn`). */
+const WORK_OUTPUTS = new Set<Output>(['code', 'tests']);
+
 /** Outputs only other agents read (and the next review round), so they stay in English: it costs fewer tokens than most languages. */
 const AGENT_ONLY_OUTPUTS = new Set<Output>(['code', 'tests', 'verdict']);
 
@@ -95,7 +98,7 @@ function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, 
   if (JSON_OUTPUTS.has(next.output)) lines.push('Write your report for a human, then hand over the json your instructions describe: as your structured output when you have the StructuredOutput tool, else as a fenced ```json block at the end. A program validates it. The report is the text of your final message: the json carries its data and does not replace it.');
   if (next.output === 'code' || next.output === 'tests') {
     lines.push(
-      'Write your report as the text of your final message, then hand over its status: {"status": "done"} when your part is done; {"status": "blocked", "blockers": ["<one line each>"]} when you cannot go on (the plan does not hold, a test shows a bug in code that is not yours to change, something only the user can decide), and stop there rather than work around it. As your structured output when you have the StructuredOutput tool, else as a fenced ```json block at the end. The status does not replace the report: a reply with only the status is sent back.'
+      'Hand over your status with your report: {"status": "done"} when your part is done; {"status": "blocked", "blockers": ["<one line each>"]} when you cannot go on (the plan does not hold, a test shows a bug in code that is not yours to change, something only the user can decide), and stop there rather than work around it. When you have the StructuredOutput tool, that is your structured output, with the whole report in its `report` field. Else write the report as the text of your final message and end it with the status as a fenced ```json block.'
     );
     // Claude Code tells it to name Claude Code's sandbox settings, which never reach the checks and git hooks: Claudestrator's do.
     if (sandboxed) lines.push("Your shell commands run in Claudestrator's sandbox. A command it refuses (EPERM, Operation not permitted) is a blocker for the user, who widens it in Claudestrator's Settings → Safety, not in Claude Code's settings: policy.writable for a folder to write, policy.network for a host to reach, policy.localPorts for a local port to open (a test that starts a server on 127.0.0.1). Name the one it needs.");
@@ -155,7 +158,7 @@ function planProseProblem(prose: string, plan: PlanMeta): string | null {
  */
 function parseStageReport(output: Output, text: string, structured?: unknown): StageReport {
   const prose = proseOf(text, structured !== undefined);
-  const noText = output !== 'verdict' && !prose ? 'the report has no text, only its data: write the report as the text of your final message, then hand over the data again (it does not replace the report)' : null;
+  const noText = output === 'verdict' || prose ? null : WORK_OUTPUTS.has(output) ? 'the report has no text, only its status: hand over the status again with the whole report in its `report` field' : 'the report has no text, only its data: write the report as the text of your final message, then hand over the data again (it does not replace the report)';
   // Every problem at once: each one sent back alone would cost the agent a turn of its own.
   const rejected = (problem?: string): StageReport => ({ ok: false, error: [noText, problem].filter(Boolean).join('; also, ') });
   if (!JSON_OUTPUTS.has(output)) return noText ? rejected() : { ok: true };
@@ -169,6 +172,18 @@ function parseStageReport(output: Output, text: string, structured?: unknown): S
   return { ok: true, [output]: parsed.value } as StageReport;
 }
 
+/**
+ * A code or tests stage's turn as the engine reads it: the report in its structured output's `report` field is the
+ * report when the agent wrote no text (Claude Code ends the turn on the StructuredOutput call), and the data keeps only
+ * the status. A turn of another stage, or one without structured output, is as it was.
+ */
+function workTurn<T extends { report: string; structured?: unknown }>(output: Output, turn: T): T {
+  const data = turn.structured;
+  if (!WORK_OUTPUTS.has(output) || typeof data !== 'object' || data === null || Array.isArray(data)) return turn;
+  const { report, ...status } = data as Record<string, unknown>;
+  return { ...turn, report: turn.report.trim() || (typeof report === 'string' ? report : ''), structured: status };
+}
+
 /** What a code or tests stage says of its work: from its structured output, else its report's json block; done without either. */
 function workReport(text: string, structured?: unknown): WorkReport {
   if (structured !== undefined) return parseWork(structured);
@@ -177,4 +192,4 @@ function workReport(text: string, structured?: unknown): WorkReport {
 }
 
 export type { StageReport };
-export { buildAgentPrompt, lastJsonBlock, parseStageReport, reportLanguage, workReport };
+export { buildAgentPrompt, lastJsonBlock, parseStageReport, reportLanguage, workReport, workTurn };

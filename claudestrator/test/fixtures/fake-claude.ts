@@ -247,6 +247,8 @@ function main(): void {
         for (const [file, content] of Object.entries(JSON.parse(process.env.FAKE_DEV_FILES || '{}') as Record<string, string>)) tool('Write', { file_path: path.join(repoDir!, file), content });
         // FAKE_BLOCKED=developer: the plan does not hold, and the developer says so instead of working around it.
         if (process.env.FAKE_BLOCKED === 'developer') return reply(`The plan names table bets_v2, which does not exist.\n\`\`\`json\n${JSON.stringify({ status: 'blocked', blockers: ['the plan names table bets_v2, which does not exist'] })}\n\`\`\``, uuid);
+        // FAKE_DEV_NO_TEXT: no text at all, the report only in the status it hands over (as agents end on StructuredOutput).
+        if (process.env.FAKE_DEV_NO_TEXT) return reply(`\n\`\`\`json\n${JSON.stringify({ status: 'done', report: '## Developer report\nChanged feature.txt.' })}\n\`\`\``, uuid);
         return reply(`Changed feature.txt.\n\`\`\`json\n${JSON.stringify({ status: 'done' })}\n\`\`\``, uuid);
       }
       case 'tester': {

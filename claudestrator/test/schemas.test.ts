@@ -58,8 +58,9 @@ test('schemas: every report schema accepts what its checker accepts and rejects 
   // Code and tests stages say done or blocked; their checker is lenient (no status: done), the schema is not.
   for (const output of ['code', 'tests'] as const) {
     const schema = REPORT_SCHEMAS[output]!;
-    assert.ok(valid(schema, { status: 'done' }) && valid(schema, { status: 'blocked', blockers: ['no such table'] }));
-    for (const b of [{ status: 'stuck' }, {}, { status: 'blocked', blockers: [''] }]) assert.ok(!valid(schema, b), `${output}: ${JSON.stringify(b)}`);
+    assert.ok(valid(schema, { status: 'done', report: 'r' }) && valid(schema, { status: 'blocked', blockers: ['no such table'], report: 'r' }));
+    // The report is part of the data: Claude Code sends back a call without it, as agents made before.
+    for (const b of [{ status: 'done' }, { status: 'done', report: '' }, { status: 'stuck', report: 'r' }, {}, { status: 'blocked', blockers: [''], report: 'r' }]) assert.ok(!valid(schema, b), `${output}: ${JSON.stringify(b)}`);
     assert.deepEqual(workReport('', { status: 'blocked', blockers: ['no such table'] }), { status: 'blocked', blockers: ['no such table'] });
     assert.deepEqual(workReport('Changed a.ts.'), { status: 'done', blockers: [] }, 'a report without one is done, as before');
     assert.deepEqual(workReport('x\n```json\n{"status": "blocked", "blockers": ["b"]}\n```'), { status: 'blocked', blockers: ['b'] }, 'from a json block without --json-schema');
@@ -108,7 +109,7 @@ test('schemas: report stages hand their data over as structured output, and the 
     };
     assert.deepEqual(JSON.parse(schemaOf('planner')!).required, ['type', 'slug', 'repos']);
     assert.deepEqual(JSON.parse(schemaOf('reviewer')!).required, ['status', 'summary', 'findings']);
-    assert.deepEqual(JSON.parse(schemaOf('developer')!).required, ['status'], 'a code stage hands over its status');
+    assert.deepEqual(JSON.parse(schemaOf('developer')!).required, ['status', 'report'], 'a code stage hands over its status with its report');
     assert.equal(s.plan!.slug, 'add-feature');
     const plan = await h.engine.svc.readArtifact(taskId, 'plan/planner.md');
     assert.match(plan, /^## Summary[\s\S]*\n```json\n\{\n {2}"type": "feat",/, 'the report, then its data as a json block');
@@ -117,6 +118,20 @@ test('schemas: report stages hand their data over as structured output, and the 
     // What the agent handed over shows in its transcript: a report that came as data alone is seen there.
     const handover = (await h.engine.svc.readTranscript(taskId, key)).find((i) => i.type === 'tool_use' && i.name === 'StructuredOutput');
     assert.ok(handover && handover.type === 'tool_use' && (handover.input as { status?: string }).status, 'the hand-over is shown, with its data');
+  } finally {
+    h.hooks.dispose();
+  }
+});
+
+test('schemas: a developer that writes no text, only its status with the report in it, is done, and its report reads as one', async () => {
+  const ws = workspace(['api'], 'repos:\n  api: {}\n');
+  const h = await harness(ws, { FAKE_REPOS: 'api', FAKE_DEV_NO_TEXT: '1' });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Do a thing', auto: true });
+    const s = await runTask(h.engine, taskId);
+    assert.equal(s.checkpoint!.id, 'confirm-push', 'no correction, no failed step');
+    const dev = await h.engine.svc.readArtifact(taskId, 'reports/r1/developer-api.md');
+    assert.match(dev, /^## Developer report\nChanged feature\.txt\.\n\n```json\n\{\n {2}"status": "done"\n\}\n```\n$/, 'the report, then only the status');
   } finally {
     h.hooks.dispose();
   }

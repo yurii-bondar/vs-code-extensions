@@ -14,7 +14,7 @@ import { TaskService, type DispatchResult } from './store';
 import { AS_TEXT, exec, getChildEnv, GitRepo, branchAt, taskRepos, prepareRepos, taskDiff, removeWorktrees, SLOW_GIT_MS } from './git';
 import { runGates, runShell, sandboxNote, withoutCredentials } from './gates';
 import { guardBash, inGitMetadata, inside, outsideLabel } from './guard';
-import { buildAgentPrompt, parseStageReport, lastJsonBlock, workReport, type StageReport } from './prompt';
+import { buildAgentPrompt, parseStageReport, lastJsonBlock, workReport, workTurn, type StageReport } from './prompt';
 import { commitSubject, prTitle, prBody } from './pr';
 import { renderReport, jiraText } from './report';
 import type { Live, PermissionRequest, RepoStatus } from './wire';
@@ -1242,7 +1242,7 @@ class Engine extends EventEmitter {
         r = await this.turnOf(taskId, session);
         if (await stopped()) return null;
       }
-      return r;
+      return workTurn(stage.output, r);
     };
     try {
       // Stopped while it started: Stop found no session to interrupt then.

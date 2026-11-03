@@ -53,8 +53,12 @@ const AUDIT = obj(
   ['summary', 'findings']
 );
 
-/** A code or tests stage: done, or blocked by what it cannot settle (each blocker one line). */
-const WORK = obj({ status: oneOf(['done', 'blocked']), blockers: list(str(1)) }, ['status']);
+/**
+ * A code or tests stage: done, or blocked by what it cannot settle (each blocker one line), with its report. Claude Code
+ * ends the turn on the StructuredOutput call, and an agent often writes no text before it: the report is part of the
+ * data, so a call without it is one Claude Code itself sends back.
+ */
+const WORK = obj({ status: oneOf(['done', 'blocked']), blockers: list(str(1)), report: str(1) }, ['status', 'report']);
 
 const draft7 = (schema: Schema): Schema => ({ $schema: 'http://json-schema.org/draft-07/schema#', ...schema });
 
