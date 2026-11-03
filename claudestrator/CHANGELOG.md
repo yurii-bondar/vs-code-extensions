@@ -1,3 +1,9 @@
+## [0.11.2](https://github.com/yurii-bondar/vs-code-extensions/compare/claudestrator-v0.11.1...claudestrator-v0.11.2) (2026-11-03)
+
+### Bug Fixes
+
+* **claudestrator:** the Docker note names the Settings → Safety fields and the VS Code restart the variables need ([7586532](https://github.com/yurii-bondar/vs-code-extensions/commit/7586532579bd10a6516bfe2aeeac3d452602f4c7))
+
 ## [0.11.1](https://github.com/yurii-bondar/vs-code-extensions/compare/claudestrator-v0.11.0...claudestrator-v0.11.1) (2026-11-03)
 
 ### Bug Fixes
