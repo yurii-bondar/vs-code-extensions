@@ -82,13 +82,14 @@ test('secrets: the question about the push names a credential and a hook the age
 });
 
 test('secrets: a megabyte line of repeated token prefixes is scanned in milliseconds, not minutes', () => {
-  for (const unit of ['sk-', 'xoxb-', 'a.a.://', 'ATATT3', 'ghp_', 'x://y:z', '-----BEGIN A ']) {
+  for (const unit of ['sk-', 'xoxb-', 'a.a.://', 'ATATT3', 'ghp_', 'x://y:z', 'x://:', '-----BEGIN A ']) {
     const line = unit.repeat(Math.ceil(400000 / unit.length));
     const started = Date.now();
     scanDiff(`+++ b/min.js\n@@ -0,0 +1 @@\n+${line}\n`);
     assert.ok(Date.now() - started < 1000, `${unit}: ${Date.now() - started} ms`);
   }
   assert.deepEqual(scanDiff(`+++ b/a.js\n@@ -0,0 +1 @@\n+const u = "postgres://app:s3cretpw@db.prod.acme.io/x"; const k = "${GH}";\n`).secrets.map((s) => s.what), ['a GitHub token', 'a password in a URL']);
+  assert.deepEqual(scanDiff('+++ b/a.js\n@@ -0,0 +1 @@\n+const r = "redis://:s3cretpw@cache.prod.acme.io:6379/0";\n').secrets.map((s) => s.what), ['a password in a URL'], 'Redis\'s URL has no user name');
 });
 
 test('secrets: a changed .lfsconfig or CLAUDE.md is named with the hooks, since it acts outside the sandbox', () => {
