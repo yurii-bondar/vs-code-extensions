@@ -11,7 +11,7 @@ export type ReportSeverity = 'critical' | 'high' | 'medium' | 'low';
 export type CriterionStatus = 'met' | 'partial' | 'not_met' | 'unverifiable';
 export type ReadinessVerdict = 'ready' | 'not_ready' | 'needs_check';
 export type GitMode = 'branch' | 'worktree';
-export type CheckpointId = 'approve-plan' | 'gate-failure' | 'agent-failure' | 'review-limit' | 'hook-failure' | 'confirm-push';
+export type CheckpointId = 'approve-plan' | 'gate-failure' | 'agent-failure' | 'review-limit' | 'protected-changes' | 'hook-failure' | 'confirm-push';
 export type NextMode = 'initial' | 'retry' | 'replan' | 'fix';
 export type GroupType = 'epic' | 'story' | 'group';
 
@@ -265,6 +265,26 @@ export interface Policy {
   localPorts: boolean;
   /** Variables of your environment that checks and git hooks keep although they look like credentials (a test database's URL). */
   checkEnv: string[];
+  /**
+   * What becomes of a change an agent makes to the repo's Claude Code or VS Code settings (`.claude/`, `.mcp.json`,
+   * `.vscode/`), which it never writes itself: `ask` puts it to you to apply, `rules` applies the rules of `.claude/rules/`
+   * at once and asks for the rest, `off` only tells you, for you to make it.
+   */
+  protectedChanges: ProtectedMode;
+}
+
+export type ProtectedMode = 'off' | 'ask' | 'rules';
+
+/** A change an agent made to a file of the repo's settings, kept for you: the content is a task artifact. */
+export interface ProtectedChange {
+  repo: string;
+  /** Where it goes in the repo, with forward slashes: `.claude/rules/forms.md`. */
+  file: string;
+  /**
+   * The task artifact that holds the file's content as the agent wrote it. None: the agent tried with a shell command,
+   * which the sandbox refused, so its content is not known.
+   */
+  artifact?: string;
 }
 
 export interface Config {
@@ -430,6 +450,8 @@ export interface TaskState {
   outcome?: string;
   /** The last failure a retry answered (an agent's step, a commit a hook rejected), until a step or a commit goes through. */
   lastFailure?: { id: CheckpointId; step?: Step; reason: string };
+  /** Changes agents made to the repos' settings, waiting for you since their step ended. */
+  proposed?: ProtectedChange[];
 }
 
 // ---------- events ----------
@@ -491,8 +513,18 @@ export type OrchEvent = EventBase &
         gates?: 'none' | 'pass' | 'fail';
         /** A verdict stage: the diff it reviewed had no changed file in any repo. */
         emptyDiff?: boolean;
+        /** A code or tests stage: what it changed of the repos' settings, which no agent writes, kept for you. */
+        protectedChanges?: ProtectedChange[];
       }
-    | { type: 'stage_failed'; agent: string; repo?: string; error: string; blocked?: boolean }
+    | {
+        type: 'stage_failed';
+        agent: string;
+        repo?: string;
+        error: string;
+        blocked?: boolean;
+        /** What the step changed of the repos' settings before it failed, kept for you as when it completes. */
+        protectedChanges?: ProtectedChange[];
+      }
     | { type: 'checkpoint_answered'; id: string; option: string; feedback?: string }
     | { type: 'committed'; repos: string[] }
     | { type: 'commit_failed'; repo: string; output: string }

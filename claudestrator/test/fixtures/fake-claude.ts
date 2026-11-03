@@ -127,8 +127,11 @@ function main(): void {
   let role: string | undefined;
   let repoDir: string | undefined;
 
-  /** Runs the hook like Claude Code: JSON on stdin, decision JSON on stdout. */
-  function tool(name: string, input: ToolInput) {
+  /**
+   * Runs the hook like Claude Code: JSON on stdin, decision JSON on stdout. `failed`: what the tool says when it runs and
+   * fails (a command the sandbox refused).
+   */
+  function tool(name: string, input: ToolInput, failed?: string) {
     sleep(DELAY);
     const id = `tu_${Math.random().toString(36).slice(2)}`;
     out({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name, input }] }, parent_tool_use_id: null });
@@ -140,7 +143,8 @@ function main(): void {
       fs.writeFileSync(input.file_path!, input.content!);
       result = `File created successfully at: ${input.file_path}`;
     }
-    out({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: !allowed, content: result }] }, parent_tool_use_id: null });
+    if (allowed && failed !== undefined) result = failed;
+    out({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: !allowed || failed !== undefined, content: result }] }, parent_tool_use_id: null });
     return allowed;
   }
 
@@ -245,6 +249,13 @@ function main(): void {
         tool('Write', { file_path: path.join(repoDir!, 'feature.txt'), content: 'feature\n' });
         // FAKE_DEV_FILES: more files the developer writes, as {"path": "content"} (a credential it should not have).
         for (const [file, content] of Object.entries(JSON.parse(process.env.FAKE_DEV_FILES || '{}') as Record<string, string>)) tool('Write', { file_path: path.join(repoDir!, file), content });
+        // FAKE_DEV_SHELL: commands it runs that fail as given, [{"command", "output"}] (a git apply the sandbox refused);
+        // only on the first run, so a retry does without them.
+        const shell = path.join(state!, 'dev-shell-done');
+        if (process.env.FAKE_DEV_SHELL && !fs.existsSync(shell)) {
+          fs.writeFileSync(shell, '1');
+          for (const c of JSON.parse(process.env.FAKE_DEV_SHELL) as { command: string; output: string }[]) tool('Bash', { command: c.command }, c.output);
+        }
         // FAKE_BLOCKED=developer: the plan does not hold, and the developer says so instead of working around it.
         if (process.env.FAKE_BLOCKED === 'developer') return reply(`The plan names table bets_v2, which does not exist.\n\`\`\`json\n${JSON.stringify({ status: 'blocked', blockers: ['the plan names table bets_v2, which does not exist'] })}\n\`\`\``, uuid);
         // FAKE_DEV_NO_TEXT: no text at all, the report only in the status it hands over (as agents end on StructuredOutput).

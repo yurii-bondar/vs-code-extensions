@@ -41,9 +41,10 @@ const SECRET_FILE = /(^|\/)(\.env(\.(?!example$|sample$|template$|dist$|defaults
 /**
  * Files that act outside the sandbox once pushed or used: a git hook manager's, which run when you use git in the repo;
  * `.lfsconfig`, which says where Git LFS uploads go; a `CLAUDE.md`, which every Claude Code session there takes as
- * instructions.
+ * instructions; Claude Code's and VS Code's settings (`.claude/`, `.mcp.json`, `.vscode/`), whose hooks, MCP servers and
+ * tasks run (a change there you applied from an agent, or one of yours).
  */
-const HOOK_FILE = /^(\.husky\/|\.githooks\/|\.git-hooks\/|\.lefthook\/|\.?lefthook(-local)?\.ya?ml$|\.pre-commit-config\.yaml$|\.lfsconfig$)|(^|\/)CLAUDE\.md$/;
+const HOOK_FILE = /^(\.husky\/|\.githooks\/|\.git-hooks\/|\.lefthook\/|\.?lefthook(-local)?\.ya?ml$|\.pre-commit-config\.yaml$|\.lfsconfig$|\.claude\/|\.mcp\.json$|\.vscode\/)|(^|\/)CLAUDE\.md$/;
 
 const excerptOf = (match: string): string => `${match.slice(0, 6)}… (${match.length} characters)`;
 

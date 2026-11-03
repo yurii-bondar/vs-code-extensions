@@ -628,6 +628,7 @@ function resolveConfig(layers: Layer[], opts: { flags?: Flags | undefined; readF
         network: merged.policy.network ?? [],
         writable: merged.policy.writable ?? [],
         checkEnv: merged.policy.checkEnv ?? [],
+        protectedChanges: merged.policy.protectedChanges ?? 'ask',
       },
       context,
       git: { mode: merged.gitMode ?? 'branch' },
@@ -909,13 +910,15 @@ function loosened(layers: Layer[]): Diagnostic[] {
   if (!project) return [];
   const brought = layers.filter((l) => l.listedBy === 'project');
   const under = mergeLayers(layers.filter((l) => l !== project && !brought.includes(l)));
-  const was = { sandbox: true, localPorts: false, allowNoVerify: false, draftPrsOnly: true, forbidAiAttribution: false, protectedBranches: ['main', 'master'], ...under.policy };
+  const was = { sandbox: true, localPorts: false, allowNoVerify: false, draftPrsOnly: true, forbidAiAttribution: false, protectedBranches: ['main', 'master'], protectedChanges: 'ask', ...under.policy };
   const p = project.config.policy ?? {};
   const out: string[] = [];
   if (p.sandbox === false && was.sandbox) out.push("turns the sandbox off: agents' commands, checks and git hooks run without it");
   if (p.network && p.network.includes('*')) out.push('lets sandboxed commands reach any host (network: "*")');
   if (p.localPorts === true && !was.localPorts) out.push('lets sandboxed commands open local ports and reach every service listening on this machine (localPorts)');
   if (p.allowNoVerify === true && !was.allowNoVerify) out.push('lets git hooks be skipped (allowNoVerify)');
+  if (p.protectedChanges === 'rules' && was.protectedChanges !== 'rules') out.push("applies the rules agents write in .claude/rules/ without asking (protectedChanges: rules)");
+  else if (p.protectedChanges === 'ask' && was.protectedChanges === 'off') out.push("lets you apply the changes agents make to the repos' Claude Code and VS Code settings (protectedChanges: ask)");
   if (p.draftPrsOnly === false && was.draftPrsOnly) out.push('opens PRs ready for review instead of as drafts');
   if (p.forbidAiAttribution === false && was.forbidAiAttribution) out.push('allows AI attribution in commits and PRs');
   const unprotected = p.protectedBranches ? was.protectedBranches.filter((b) => !p.protectedBranches!.includes(b)) : [];
