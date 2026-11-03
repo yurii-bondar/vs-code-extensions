@@ -1,3 +1,10 @@
+## [0.5.1](https://github.com/yurii-bondar/vs-code-extensions/compare/jetbrains-claudestrator-v0.5.0...jetbrains-claudestrator-v0.5.1) (2026-11-03)
+
+### Bug Fixes
+
+* **claudestrator:** a password in a URL without a user name (redis://:p@) is a credential too ([21f4cdc](https://github.com/yurii-bondar/vs-code-extensions/commit/21f4cdcb5070b111293072be7169ae9a849d17ae))
+* **claudestrator:** an agent leaves a test that needs a policy.checkEnv variable to the checks instead of reporting it missing ([46912a9](https://github.com/yurii-bondar/vs-code-extensions/commit/46912a951786b4f13817b7676fa4242576e2b30e))
+
 ## [0.5.0](https://github.com/yurii-bondar/vs-code-extensions/compare/jetbrains-claudestrator-v0.4.3...jetbrains-claudestrator-v0.5.0) (2026-11-03)
 
 ### Features
