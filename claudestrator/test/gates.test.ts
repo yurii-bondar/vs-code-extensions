@@ -200,6 +200,8 @@ test('gates: Docker the sandbox refuses goes to you with how to give the test it
     'Cannot connect to the Docker daemon at unix:///Users/me/.docker/run/docker.sock. Is the docker daemon running?',
     'Error: Could not find a working container runtime strategy',
   ]) assert.match(sandboxNote(says), /no Docker.*policy\.localPorts.*policy\.checkEnv/, says);
+  // Named as Settings → Safety shows them, with the restart that brings the variables in.
+  assert.match(sandboxNote('Error: Could not find a working container runtime strategy'), /"Let commands open local ports" in Settings → Safety.*VS Code quit and opened again.*"Variables checks and git hooks still get" in Settings → Safety/);
   const ws = workspace(['api'], 'repos:\n  api: {}\n');
   const dir = path.join(ws, 'api');
   fs.writeFileSync(path.join(dir, 'x.txt'), 'x\n');
