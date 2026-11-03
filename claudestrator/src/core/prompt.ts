@@ -95,7 +95,7 @@ function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, 
   if (JSON_OUTPUTS.has(next.output)) lines.push('Write your report for a human, then hand over the json your instructions describe: as your structured output when you have the StructuredOutput tool, else as a fenced ```json block at the end. A program validates it. The report is the text of your final message: the json carries its data and does not replace it.');
   if (next.output === 'code' || next.output === 'tests') {
     lines.push(
-      'After your report, hand over its status: {"status": "done"} when your part is done; {"status": "blocked", "blockers": ["<one line each>"]} when you cannot go on (the plan does not hold, a test shows a bug in code that is not yours to change, something only the user can decide), and stop there rather than work around it. As your structured output when you have the StructuredOutput tool, else as a fenced ```json block at the end.'
+      'Write your report as the text of your final message, then hand over its status: {"status": "done"} when your part is done; {"status": "blocked", "blockers": ["<one line each>"]} when you cannot go on (the plan does not hold, a test shows a bug in code that is not yours to change, something only the user can decide), and stop there rather than work around it. As your structured output when you have the StructuredOutput tool, else as a fenced ```json block at the end. The status does not replace the report: a reply with only the status is sent back.'
     );
     // Claude Code tells it to name Claude Code's sandbox settings, which never reach the checks and git hooks: Claudestrator's do.
     if (sandboxed) lines.push("Your shell commands run in Claudestrator's sandbox. A command it refuses (EPERM, Operation not permitted) is a blocker for the user, who widens it in Claudestrator's Settings → Safety, not in Claude Code's settings: policy.writable for a folder to write, policy.network for a host to reach, policy.localPorts for a local port to open (a test that starts a server on 127.0.0.1). Name the one it needs.");
@@ -104,7 +104,7 @@ function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, 
   if (next.output === 'verdict' && next.round > 1) {
     lines.push('', `This is review round ${next.round}: the previous round's review is among the inputs. Check first that each of its blocker and major findings is fixed, and report again any that is not. Raise a new blocker or major finding only for what the fixes broke or what truly blocks the change, not for what the earlier round could have raised.`);
   }
-  lines.push('Do not commit, push, stash or switch branches: Claudestrator owns git.', 'Your final message is your report; nothing may follow it.');
+  lines.push('Do not commit, push, stash or switch branches: Claudestrator owns git.', 'Your final message is your report; nothing may follow it but the json or the status asked for above.');
   return lines.join('\n');
 }
 
@@ -155,7 +155,7 @@ function planProseProblem(prose: string, plan: PlanMeta): string | null {
  */
 function parseStageReport(output: Output, text: string, structured?: unknown): StageReport {
   const prose = proseOf(text, structured !== undefined);
-  const noText = output !== 'verdict' && !prose ? 'the report has no text, only its data: write the report itself as your final message (the json carries only its data, it does not replace the report)' : null;
+  const noText = output !== 'verdict' && !prose ? 'the report has no text, only its data: write the report as the text of your final message, then hand over the data again (it does not replace the report)' : null;
   // Every problem at once: each one sent back alone would cost the agent a turn of its own.
   const rejected = (problem?: string): StageReport => ({ ok: false, error: [noText, problem].filter(Boolean).join('; also, ') });
   if (!JSON_OUTPUTS.has(output)) return noText ? rejected() : { ok: true };
