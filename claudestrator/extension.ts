@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { Orchestrator, settings } from './src/orchestrator';
-import { TaskTree, escapeMd } from './src/tree';
+import { SectionColors, TaskTree, escapeMd } from './src/tree';
 import { DashboardPanel, deleteTask, openConfig } from './src/panel';
 import * as view from './src/core/view';
 import { CHECKPOINT_TITLE } from './src/core/describe';
@@ -102,7 +102,8 @@ function activate(context: vscode.ExtensionContext) {
   };
   context.subscriptions.push(log, orch.onEngine((e) => e.name === 'log' && write(e.data)));
   const tree = new TaskTree(orch);
-  const treeView = vscode.window.createTreeView('claudestrator.tasks', { treeDataProvider: tree, showCollapseAll: false });
+  const treeView = vscode.window.createTreeView('claudestrator.tasks', { treeDataProvider: tree, showCollapseAll: true });
+  context.subscriptions.push(vscode.window.registerFileDecorationProvider(new SectionColors()));
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
   status.command = 'claudestrator.open';
   status.name = 'Claudestrator';

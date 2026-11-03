@@ -6,7 +6,7 @@ import { describeEvent, checkpointTitle } from './describe';
 import { transcriptKey } from './engine';
 import { resultOf } from './report';
 import { parseInvocation } from './intake';
-import type { OrchEvent, Source, StepRef, TaskState } from './types';
+import type { GroupType, OrchEvent, Source, StepRef, TaskState } from './types';
 
 import type { Card, FeedEvent, Live, PermissionRequest, Status, StepItem, TaskDetail, TaskError, TaskPush, TaskSource, UsageItem } from './wire';
 /** The part of the engine the UI models read. */
@@ -351,6 +351,45 @@ async function detail(engine: ViewEngine, taskId: string): Promise<TaskDetail> {
   };
 }
 
+/** Which kind of section of the sidebar a task falls in: its group's type, or none. */
+type SectionKind = GroupType | 'ungrouped';
+
+/** One top-level row of the sidebar: the tasks of one epic, story or group, or every task without one. */
+interface Section {
+  /** Stable across refreshes, so the tree keeps a section folded the way the user left it. */
+  key: string;
+  kind: SectionKind;
+  label: string;
+  jira?: string;
+  cards: Card[];
+}
+
+const SECTION_ORDER: readonly SectionKind[] = ['epic', 'story', 'group', 'ungrouped'];
+const STATUS_ORDER: readonly string[] = ['attention', 'running', 'stopped', 'done'];
+
+/**
+ * The cards by the group each task belongs to: epics, then stories, then groups, then the ungrouped tasks. Sections of
+ * one kind and the cards in a section keep the order the cards come in (newest first), with the tasks that need you
+ * ahead of the running, the paused and the finished ones. A section is labelled as its newest task saw the group.
+ */
+function sectionsOf(cards: readonly Card[]): Section[] {
+  const byKey = new Map<string, Section>();
+  for (const card of cards) {
+    const g = card.group;
+    const key = g ? `${g.type}:${g.id}` : 'ungrouped';
+    let section = byKey.get(key);
+    if (!section) {
+      section = g ? { key, kind: g.type, label: g.label, ...(g.jira && { jira: g.jira }), cards: [] } : { key, kind: 'ungrouped', label: 'Ungrouped', cards: [] };
+      byKey.set(key, section);
+    }
+    section.cards.push(card);
+  }
+  const rank = (c: Card): number => STATUS_ORDER.indexOf(c.status.group);
+  const sections = [...byKey.values()];
+  for (const s of sections) s.cards.sort((a, b) => rank(a) - rank(b));
+  return sections.sort((a, b) => SECTION_ORDER.indexOf(a.kind) - SECTION_ORDER.indexOf(b.kind));
+}
+
 type OutputPush = Extract<TaskPush, { type: 'output' }>;
 
 /**
@@ -364,7 +403,7 @@ function queueOutput(queue: OutputPush[], push: OutputPush): void {
   } else queue.push({ ...push, item: { ...push.item } as OutputPush['item'] });
 }
 
-export type { Card, OutputPush, Status, StepItem, TaskEntry, TaskError, ViewEngine };
+export type { Card, OutputPush, Section, SectionKind, Status, StepItem, TaskEntry, TaskError, ViewEngine };
 /**
  * Whether Markdown loads something from the web when shown: an image or a reference an image uses at an address
  * (`![](https://host/?q=<the code>)`). VS Code's preview fetches them; an agent steered by a ticket could write one
@@ -418,4 +457,4 @@ function permissionNotice(p: Pick<PermissionRequest, 'agent' | 'repo' | 'tool' |
   return { text: plainNotice(`${p.agent}${p.repo ? ` @ ${p.repo}` : ''} wants to ${what}`), whole };
 }
 
-export { isWebLink, loadsRemote, logLine, permissionNotice, plainNotice, summary, detail, stepsOf, statusOf, queueOutput, CHECKPOINT_HINT };
+export { isWebLink, loadsRemote, logLine, permissionNotice, plainNotice, sectionsOf, summary, detail, stepsOf, statusOf, queueOutput, CHECKPOINT_HINT };

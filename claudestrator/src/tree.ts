@@ -1,24 +1,33 @@
-// Sidebar: tasks grouped by what they need from you.
+// Sidebar: tasks by the epic, story or group they belong to; each task's icon says what it needs from you.
 import * as vscode from 'vscode';
 import * as view from './core/view';
 import type { Orchestrator } from './orchestrator';
 
-interface Group {
-  id: string;
-  label: string;
-  icon: string;
-  expanded: boolean;
+/** A row of the tree: a section of cards, or a card. */
+type TreeNode = { section: view.Section } | { card: view.Card };
+
+/** What a section's header shows per kind; `color` is one of the colors `package.json` contributes. */
+const SECTION_LOOK: Record<view.SectionKind, { prefix: string; icon: string; color: string }> = {
+  epic: { prefix: 'Epic', icon: 'zap', color: 'claudestrator.epicForeground' },
+  story: { prefix: 'Story', icon: 'bookmark', color: 'claudestrator.storyForeground' },
+  group: { prefix: 'Group', icon: 'folder', color: 'claudestrator.groupForeground' },
+  ungrouped: { prefix: '', icon: 'inbox', color: 'claudestrator.ungroupedForeground' },
+};
+
+/** The scheme of a section header's resource: the only way a tree item's label takes a color is a file decoration. */
+const SECTION_SCHEME = 'claudestrator-section';
+
+const sectionUri = (s: view.Section): vscode.Uri => vscode.Uri.from({ scheme: SECTION_SCHEME, path: `/${s.kind}/${encodeURIComponent(s.key)}` });
+
+/** Colors section headers by kind, read back from the path `sectionUri` writes. */
+class SectionColors implements vscode.FileDecorationProvider {
+  provideFileDecoration(uri: vscode.Uri): vscode.FileDecoration | undefined {
+    if (uri.scheme !== SECTION_SCHEME) return undefined;
+    const kind = uri.path.split('/')[1];
+    const look = kind && kind in SECTION_LOOK ? SECTION_LOOK[kind as view.SectionKind] : undefined;
+    return look && new vscode.FileDecoration(undefined, undefined, new vscode.ThemeColor(look.color));
+  }
 }
-
-/** A row of the tree: a group of cards, or a card. */
-type TreeNode = { group: Group } | { card: view.Card };
-
-const GROUPS: Group[] = [
-  { id: 'attention', label: 'Needs you', icon: 'bell-dot', expanded: true },
-  { id: 'running', label: 'Running', icon: 'sync', expanded: true },
-  { id: 'stopped', label: 'Paused', icon: 'debug-pause', expanded: true },
-  { id: 'done', label: 'Finished', icon: 'pass', expanded: false },
-];
 
 const STATUS_ICON: Record<string, [string, string]> = {
   running: ['sync~spin', 'charts.blue'],
@@ -88,24 +97,13 @@ class TaskTree implements vscode.TreeDataProvider<TreeNode> {
 
   getChildren(node?: TreeNode): TreeNode[] {
     if (!this.orch.engine) return [];
-    if (!node) {
-      if (!this.cards.length) return [];
-      return GROUPS.filter((g) => this.cards.some((c) => c.status.group === g.id)).map((g) => ({ group: g }));
-    }
-    if ('group' in node) return this.cards.filter((c) => c.status.group === node.group.id).map((card) => ({ card }));
+    if (!node) return view.sectionsOf(this.cards).map((section) => ({ section }));
+    if ('section' in node) return node.section.cards.map((card) => ({ card }));
     return [];
   }
 
   getTreeItem(node: TreeNode): vscode.TreeItem {
-    if ('group' in node) {
-      const n = this.cards.filter((c) => c.status.group === node.group.id).length;
-      const item = new vscode.TreeItem(node.group.label, node.group.expanded ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed);
-      item.id = `group:${node.group.id}`;
-      item.description = String(n);
-      item.iconPath = new vscode.ThemeIcon(node.group.icon);
-      item.contextValue = 'group';
-      return item;
-    }
+    if ('section' in node) return sectionItem(node.section);
     const c = node.card;
     const item = new vscode.TreeItem(c.title, vscode.TreeItemCollapsibleState.None);
     item.id = `task:${c.taskId}`;
@@ -132,7 +130,32 @@ class TaskTree implements vscode.TreeDataProvider<TreeNode> {
   }
 }
 
+/** A section's header: `Epic CP-12` with the epic's name beside it, open while any of its tasks is not finished. */
+function sectionItem(s: view.Section): vscode.TreeItem {
+  const look = SECTION_LOOK[s.kind];
+  const name = s.kind === 'ungrouped' ? s.label : `${look.prefix} ${s.jira || s.label}`;
+  const open = s.cards.some((c) => c.status.group !== 'done');
+  const item = new vscode.TreeItem(name, open ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed);
+  item.id = `section:${s.key}`;
+  item.resourceUri = sectionUri(s);
+  item.description = [s.jira && s.label, String(s.cards.length)].filter(Boolean).join(' · ');
+  item.iconPath = new vscode.ThemeIcon(look.icon, new vscode.ThemeColor(look.color));
+  item.contextValue = 'section';
+  const md = new vscode.MarkdownString(undefined, true);
+  md.appendMarkdown(`**${escapeMd(name)}**${s.jira ? ` · ${escapeMd(s.label)}` : ''}\n\n`);
+  const by = (g: string): number => s.cards.filter((c) => c.status.group === g).length;
+  const parts: [number, string][] = [
+    [by('attention'), 'need you'],
+    [by('running'), 'running'],
+    [by('stopped'), 'paused'],
+    [by('done'), 'finished'],
+  ];
+  md.appendMarkdown(parts.filter(([n]) => n).map(([n, what]) => `${n} ${what}`).join(' · '));
+  item.tooltip = md;
+  return item;
+}
+
 const escapeMd = (s: unknown): string => String(s || '').replace(/[\\`*_{}[\]()#+\-.!|<>]/g, '\\$&');
 
 export type { TreeNode };
-export { TaskTree, ago, escapeMd };
+export { SectionColors, TaskTree, ago, escapeMd };
