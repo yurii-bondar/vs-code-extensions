@@ -106,6 +106,8 @@ interface ExtraEdit {
   text: string;
   /** A group's: the instructions it ticks when picked. */
   defaults: string[];
+  /** A group's: the branch its tasks start from where a repo's origin has it. */
+  baseBranch: string;
 }
 
 /** Small interface state that survives a reload: which groups are folded, which scenario is being edited. */

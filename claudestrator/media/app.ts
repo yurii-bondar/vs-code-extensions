@@ -1018,6 +1018,7 @@ interface Views {
           ${group ? `<label class="field"><span>Type</span><select class="input" data-change="extra-type">${Object.entries(GROUP_TYPES).map(([v, l]) => `<option value="${v}" ${e.type === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>` : ''}
           <label class="field"><span>Name</span><input class="input" data-input="extra-field" data-field="label" data-key="extra-label" value="${esc(e.label)}" maxlength="80" placeholder="${group ? 'e.g. Checkout revamp' : 'e.g. No new dependencies'}"></label>
           ${group ? `<label class="field"><span>Jira key <span class="muted">(optional)</span></span><input class="input" data-input="extra-field" data-field="jira" data-key="extra-jira" value="${esc(e.jira)}" placeholder="e.g. CP-123" spellcheck="false"></label>` : ''}
+          ${group ? `<label class="field" title="Its tasks start from this branch, and open their PRs into it, in each repo where origin has it; elsewhere from the repo's own base"><span>Base branch <span class="muted">(optional)</span></span><input class="input mono" data-input="extra-field" data-field="baseBranch" data-key="extra-base" value="${esc(e.baseBranch)}" placeholder="e.g. feat/provably-fair" spellcheck="false"></label>` : ''}
         </div>
         ${group
           ? `<div class="field"><span>Instructions it ticks <span class="muted">(when you pick the group; a task can still untick them)</span></span><div class="extra-defaults">${this.defaultsHtml(e.defaults)}</div></div>
@@ -1522,7 +1523,7 @@ interface Views {
     },
     'extra-new': (el) => {
       closeMenus();
-      S.ui.extraEdit = { kind: el.dataset.kind === 'group' ? 'group' : 'instruction', type: 'epic', label: '', jira: '', text: '', defaults: [] };
+      S.ui.extraEdit = { kind: el.dataset.kind === 'group' ? 'group' : 'instruction', type: 'epic', label: '', jira: '', text: '', defaults: [], baseBranch: '' };
       persist();
       views.home.renderExtras();
       $('[data-key="extra-label"]')?.focus();
@@ -1533,8 +1534,8 @@ interface Views {
       const id = el.dataset.id;
       const g = el.dataset.kind === 'group' && c ? c.groups.find((x) => x.id === id) : undefined;
       const x = el.dataset.kind === 'instruction' && c ? c.instructions.find((y) => y.id === id) : undefined;
-      if (g) S.ui.extraEdit = { kind: 'group', id, type: g.type, label: g.label, jira: g.jira ?? '', text: g.instructions ?? '', defaults: g.defaultInstructions ?? [] };
-      else if (x) S.ui.extraEdit = { kind: 'instruction', id, type: 'epic', label: x.label, jira: '', text: x.text, defaults: [] };
+      if (g) S.ui.extraEdit = { kind: 'group', id, type: g.type, label: g.label, jira: g.jira ?? '', text: g.instructions ?? '', defaults: g.defaultInstructions ?? [], baseBranch: g.baseBranch ?? '' };
+      else if (x) S.ui.extraEdit = { kind: 'instruction', id, type: 'epic', label: x.label, jira: '', text: x.text, defaults: [], baseBranch: '' };
       else return;
       persist();
       views.home.renderExtras();
@@ -1557,7 +1558,7 @@ interface Views {
     'extra-save': async () => {
       const e = S.ui.extraEdit;
       if (!e) return;
-      const r = e.kind === 'group' ? await attempt('saveGroup', { id: e.id, type: e.type, label: e.label, jira: e.jira || undefined, instructions: e.text, defaultInstructions: e.defaults }) : await attempt('saveInstruction', { id: e.id, label: e.label, text: e.text });
+      const r = e.kind === 'group' ? await attempt('saveGroup', { id: e.id, type: e.type, label: e.label, jira: e.jira || undefined, instructions: e.text, defaultInstructions: e.defaults, baseBranch: e.baseBranch || undefined }) : await attempt('saveInstruction', { id: e.id, label: e.label, text: e.text });
       if (!r) return;
       // What the draft's group ticked before the save: a saved group is picked with what it ticks now.
       const before = groupTicks(S.draft.group);
@@ -1793,7 +1794,7 @@ interface Views {
     'extra-field': (el) => {
       const e = S.ui.extraEdit;
       const f = el.dataset.field;
-      if (e && (f === 'label' || f === 'jira' || f === 'text')) S.ui.extraEdit = { ...e, [f]: el.value };
+      if (e && (f === 'label' || f === 'jira' || f === 'text' || f === 'baseBranch')) S.ui.extraEdit = { ...e, [f]: el.value };
       persist();
     },
     'setup-name': (el) => (views.setup.repos[+el.dataset.i]!.name = el.value.trim()),

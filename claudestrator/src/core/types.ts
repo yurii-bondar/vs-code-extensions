@@ -224,6 +224,11 @@ export interface TaskGroup {
   instructions?: string;
   /** Ids of instructions the composer ticks when the group is picked; a task can still untick them. */
   defaultInstructions?: string[];
+  /**
+   * The branch its tasks start from (and open their PRs into), in each repo where origin has it: an epic's own branch,
+   * `feat/provably-fair`. Elsewhere, and where a plan names another, the repo's base as before.
+   */
+  baseBranch?: string;
 }
 
 /** Instructions the user wrote once and picks per task; every agent of the task gets them. */

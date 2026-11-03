@@ -98,7 +98,7 @@ const PARAMS: { [M in keyof Rpc]: Check } = {
   saveScenario: obj({ 'id?': T.str(), 'label?': T.str(), 'description?': T.str(), 'agents?': T.arr(obj({ name: T.str(1), 'model?': T.str(), 'effort?': T.oneOf(EFFORTS) })) }),
   deleteScenario: byId,
   restoreScenario: byId,
-  saveGroup: obj({ 'id?': T.str(), type: T.oneOf(GROUP_TYPES), label: T.str(), 'jira?': T.str(), 'instructions?': T.str(), 'defaultInstructions?': T.arr(T.str(1)) }),
+  saveGroup: obj({ 'id?': T.str(), type: T.oneOf(GROUP_TYPES), label: T.str(), 'jira?': T.str(), 'instructions?': T.str(), 'defaultInstructions?': T.arr(T.str(1)), 'baseBranch?': T.str() }),
   deleteGroup: byId,
   saveInstruction: obj({ 'id?': T.str(), label: T.str(), text: T.str() }),
   deleteInstruction: byId,

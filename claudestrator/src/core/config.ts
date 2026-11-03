@@ -6,7 +6,7 @@ import * as path from 'path';
 import * as YAML from 'yaml';
 import { AsyncLocalStorage } from 'async_hooks';
 import { isDeepStrictEqual } from 'util';
-import { validateConfigLayer, validateAgentPatch, validateLibraryLayer, SCENARIO_OUTPUT, JIRA_KEY } from './protocol';
+import { validateConfigLayer, validateAgentPatch, validateLibraryLayer, SCENARIO_OUTPUT, JIRA_KEY, BRANCH_PATTERN } from './protocol';
 import { ORCH_DIR } from './store';
 import { ENV_FILE, SECRET_PATHS, GITHUB_TOKENS } from './settings';
 import { signature, writeAtomic } from './files';
@@ -591,7 +591,7 @@ function resolveConfig(layers: Layer[], opts: { flags?: Flags | undefined; readF
     const ticks = g.defaultInstructions ?? [];
     for (const x of ticks.filter((t) => !merged.instructions[t])) diags.push({ level: 'warning', code: 'unknown_instruction', message: `group "${id}" ticks the instruction "${x}", which is not defined; it is left out` });
     const known = ticks.filter((t) => merged.instructions[t]);
-    groups[id] = { id, type: g.type, label: g.label, ...(g.jira && { jira: g.jira }), ...(g.instructions && { instructions: g.instructions }), ...(known.length && { defaultInstructions: known }) };
+    groups[id] = { id, type: g.type, label: g.label, ...(g.jira && { jira: g.jira }), ...(g.instructions && { instructions: g.instructions }), ...(known.length && { defaultInstructions: known }), ...(g.baseBranch && { baseBranch: g.baseBranch }) };
   }
 
   const errors = diags.filter((d) => d.level === 'error');
@@ -1495,13 +1495,14 @@ interface SaveGroupArgs {
   jira?: string | undefined;
   instructions?: string | undefined;
   defaultInstructions?: string[] | undefined;
+  baseBranch?: string | undefined;
 }
 
 /**
  * Creates or changes a task group: an epic, a story or a plain group, with an optional Jira key (`cp-123` is written
  * `CP-123`), optional instructions for every task in it, and the instructions it ticks when picked. Returns its id.
  */
-async function saveGroup({ workspace, home, id, type, label, jira, instructions, defaultInstructions = [] }: SaveGroupArgs): Promise<string> {
+async function saveGroup({ workspace, home, id, type, label, jira, instructions, defaultInstructions = [], baseBranch }: SaveGroupArgs): Promise<string> {
   const r = await loadConfig({ workspace, home });
   const ticks = [...new Set(defaultInstructions)];
   const missing = ticks.filter((x) => !(r.ok && r.config.instructions[x]));
@@ -1509,7 +1510,9 @@ async function saveGroup({ workspace, home, id, type, label, jira, instructions,
   const key = (jira || '').trim().toUpperCase();
   if (key && !JIRA_KEY.test(key)) throw new Error(`"${jira}" is not a Jira key (e.g. CP-123)`);
   const text = (instructions || '').trim();
-  const value: GroupLayer = { type, label: label.trim(), ...(key && { jira: key }), ...(text && { instructions: text }), ...(ticks.length && { defaultInstructions: ticks }) };
+  const base = (baseBranch || '').trim();
+  if (base && !BRANCH_PATTERN.test(base)) throw new Error(`"${baseBranch}" is not a branch name (e.g. feat/provably-fair)`);
+  const value: GroupLayer = { type, label: label.trim(), ...(key && { jira: key }), ...(text && { instructions: text }), ...(ticks.length && { defaultInstructions: ticks }), ...(base && { baseBranch: base }) };
   return saveEntry(workspace, 'groups', r.ok ? r.config.groups : {}, id, value);
 }
 

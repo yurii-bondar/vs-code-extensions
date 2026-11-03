@@ -632,8 +632,8 @@ class DashboardPanel implements RpcHandlers {
 
   // ---------- task groups and instructions ----------
 
-  async $saveGroup({ id, type, label, jira, instructions, defaultInstructions }: SaveGroupParams) {
-    return { id: await cfg.saveGroup({ workspace: this.root, id, type, label, jira, instructions, defaultInstructions }) };
+  async $saveGroup({ id, type, label, jira, instructions, defaultInstructions, baseBranch }: SaveGroupParams) {
+    return { id: await cfg.saveGroup({ workspace: this.root, id, type, label, jira, instructions, defaultInstructions, baseBranch }) };
   }
 
   async $deleteGroup({ id }: { id: string }) {
