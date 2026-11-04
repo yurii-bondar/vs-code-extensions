@@ -96,6 +96,12 @@ export interface Finding {
   line?: number;
   problem: string;
   fix?: string;
+  /**
+   * Set by Claudestrator when it records the verdict, never by the agent: the finding is about a file no agent changes
+   * (the repo's Claude Code or VS Code settings), so it is yours and sends no repo into a fix round. On the event, so a
+   * log replays as it was decided: one written before this field existed has none.
+   */
+  yours?: boolean;
 }
 
 export interface Verdict {

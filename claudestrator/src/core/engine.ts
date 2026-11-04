@@ -9,7 +9,7 @@ import { exists, ownTemp, ownTempRoot } from './files';
 import { EFFORTS, REPO_NAME, SCENARIOS } from './protocol';
 import { buildPipeline, scenarioKind, taskPipeline, fitsScenario, onRepos, reposBeforePlan } from './pipeline';
 import { nextAction, runOf, artifactPath, branchName, sameStep, editableFrom, spentOf, stepRepos, unknownRepos, onlyHumanFindings, TASK_FILES, type NextAction, type RunAction } from './machine';
-import { contentAfter, isInstructionsOnly, isProtectedFile, refusedSettings } from './protected';
+import { contentAfter, humanFinding, isInstructionsOnly, isProtectedFile, refusedSettings } from './protected';
 import { parseInvocation, classifyInput, detectScenario, runIntake, renderTicket, IntakeError, extractAcceptanceCriteria, otherSite, planFromTicket, capSpec, projectAllowed } from './intake';
 import { TaskService, type DispatchResult } from './store';
 import { AS_TEXT, exec, getChildEnv, GitRepo, branchAt, taskRepos, prepareRepos, taskDiff, removeWorktrees, SLOW_GIT_MS } from './git';
@@ -1455,7 +1455,8 @@ class Engine extends EventEmitter {
         ...(step.repo && { repo: step.repo }),
         artifact,
         ...(parsed.plan && { plan: parsed.plan }),
-        ...(parsed.verdict && { verdict: parsed.verdict }),
+        // Which findings are yours is decided here, once, and recorded: the log replays as it was decided.
+        ...(parsed.verdict && { verdict: { ...parsed.verdict, findings: parsed.verdict.findings.map((f) => (humanFinding(f) ? { ...f, yours: true } : f)) } }),
         ...(parsed.readiness && { readiness: parsed.readiness }),
         ...(parsed.audit && { audit: parsed.audit }),
         ...(emptyDiff && { emptyDiff: true }),

@@ -276,7 +276,8 @@ function main(): void {
         if (process.env.FAKE_REVIEW === 'fail-once' && !fs.existsSync(marker)) {
           fs.writeFileSync(marker, '1');
           const repo = (process.env.FAKE_REPOS || 'api').split(',').pop();
-          return reply(`Needs a fix.\n\`\`\`json\n${JSON.stringify({ status: 'changes_requested', summary: 'missing edge case', findings: [{ severity: 'major', repo, file: 'feature.txt', line: 1, problem: 'edge case' }] })}\n\`\`\``, uuid);
+          // FAKE_REVIEW_FILE: the file its finding is about (one of the repo's settings, say).
+          return reply(`Needs a fix.\n\`\`\`json\n${JSON.stringify({ status: 'changes_requested', summary: 'missing edge case', findings: [{ severity: 'major', repo, file: process.env.FAKE_REVIEW_FILE || 'feature.txt', line: 1, problem: 'edge case' }] })}\n\`\`\``, uuid);
         }
         return reply(`Looks good.\n\`\`\`json\n${JSON.stringify({ status: 'approved', summary: 'ok', findings: [{ severity: 'minor', problem: 'nit' }] })}\n\`\`\``, uuid);
       }

@@ -139,7 +139,7 @@ test('machine: what a failed step kept waits for the retry, and a try with a com
 });
 
 /** The task through its first review, with these findings. */
-function reviewed(findings: { severity: 'blocker' | 'major' | 'minor'; repo?: string; file?: string; problem: string }[]) {
+function reviewed(findings: { severity: 'blocker' | 'major' | 'minor'; repo?: string; file?: string; problem: string; yours?: boolean }[]) {
   const apply = task();
   for (const repo of ['api', 'web']) {
     apply({ type: 'stage_started', agent: 'developer', repo });
@@ -152,7 +152,7 @@ function reviewed(findings: { severity: 'blocker' | 'major' | 'minor'; repo?: st
 }
 
 test('machine: blocking findings only about the settings go to you, not into a fix round no agent could do', () => {
-  const { apply, s } = reviewed([{ severity: 'major', repo: 'web', file: '.claude/rules/forms.md', problem: 'missing' }, { severity: 'minor', repo: 'api', file: 'src/a.ts', problem: 'naming' }]);
+  const { apply, s } = reviewed([{ severity: 'major', repo: 'web', file: '.claude/rules/forms.md', problem: 'missing', yours: true }, { severity: 'minor', repo: 'api', file: 'src/a.ts', problem: 'naming' }]);
   assert.equal(s.checkpoint!.id, 'review-limit');
   assert.match(s.checkpoint!.reason!, /web\/\.claude\/rules\/forms\.md\), which no agent changes/);
   assert.equal(s.review.round, 1, 'no fix round was started');
@@ -163,10 +163,19 @@ test('machine: blocking findings only about the settings go to you, not into a f
 });
 
 test('machine: with findings an agent can fix too, the fix round goes to their repos only', () => {
-  const { s } = reviewed([{ severity: 'major', repo: 'web', file: '.claude/rules/forms.md', problem: 'missing' }, { severity: 'major', repo: 'api', file: 'src/a.ts', problem: 'bug' }]);
+  const { s } = reviewed([{ severity: 'major', repo: 'web', file: '.claude/rules/forms.md', problem: 'missing', yours: true }, { severity: 'major', repo: 'api', file: 'src/a.ts', problem: 'bug' }]);
   assert.equal(s.checkpoint, null);
   assert.equal(s.review.round, 2);
   assert.deepEqual(s.review.fixRepos, ['api']);
+});
+
+test('machine: a log written before findings were marked yours replays as it was decided: a fix round', () => {
+  // T-20261102-1010: a major finding about .claude/skills, then the fix round that version started.
+  const { apply, s } = reviewed([{ severity: 'major', repo: 'web', file: '.claude/skills', problem: 'missing' }, { severity: 'minor', repo: 'web', file: 'a.spec.ts', problem: 'naming' }]);
+  assert.equal(s.checkpoint, null, 'no question the old log never answered');
+  assert.equal(s.review.round, 2);
+  assert.deepEqual(s.review.fixRepos, ['web']);
+  apply({ type: 'stage_started', agent: 'developer', repo: 'web' });
 });
 
 // ---------- prompts and the push question ----------
@@ -263,6 +272,22 @@ test('engine: a change tried with a command the sandbox refused comes up without
     const prompts = h.outputs.filter((o) => o.item.type === 'prompt').map((o) => String((o.item as { text?: unknown }).text));
     assert.ok(prompts.some((p) => /Your last attempt changed api\/\.claude\/rules\/forms\.md with a shell command, which the sandbox refused/.test(p)), 'the retry heard what to do differently');
     assert.equal(s.checkpoint!.id, 'protected-changes', 'the kept change still waits');
+  } finally {
+    h.hooks.dispose();
+  }
+});
+
+test('engine: the review records which findings are yours, and such a review comes to you', { skip: process.platform === 'win32' }, async () => {
+  const ws = workspace(['api'], 'repos:\n  api: {}\n');
+  const h = await harness(ws, { FAKE_REPOS: 'api', FAKE_REVIEW: 'fail-once', FAKE_REVIEW_FILE: '.claude/rules/forms.md' });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
+    const s = await runTask(h.engine, taskId);
+    assert.equal(s.checkpoint!.id, 'review-limit', JSON.stringify(h.engine.lastError(taskId)));
+    const review = (await h.engine.svc.events(taskId)).find((e) => e.type === 'stage_completed' && e.agent === 'reviewer');
+    assert.ok(review && review.type === 'stage_completed');
+    assert.deepEqual(review.verdict!.findings.map((f) => [f.file, f.yours ?? false]), [['.claude/rules/forms.md', true]]);
+    assert.deepEqual((await h.engine.checkpointContext(s, s.checkpoint)).humanFiles, ['api/.claude/rules/forms.md']);
   } finally {
     h.hooks.dispose();
   }
