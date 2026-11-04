@@ -2,7 +2,6 @@
 // event (a skipped approval, an extra review round, a push before it was confirmed) is rejected.
 import { CHECKPOINT_OPTIONS, JIRA_ONLY_OPTIONS, REPO_NAME, isBlocking, isInfoEvent } from './protocol';
 import { onRepos, reposBeforePlan } from './pipeline';
-import { humanFinding } from './protected';
 import type { Checkpoint, CheckpointId, Finding, NextMode, Output, OrchEvent, PlanRepo, ProtectedChange, RecordedVerdict, Stage, Step, StepRef, TaskState, Transition } from './types';
 
 /** The event of one type: `Ev<'stopped'>`. */
@@ -432,7 +431,7 @@ const MAX_EMPTY_ROUNDS = 2;
  */
 function onlyHumanFindings(verdicts: readonly RecordedVerdict[]): string[] | null {
   const blocking = verdicts.flatMap((v) => v.findings).filter(isBlocking);
-  if (!blocking.length || !blocking.every(humanFinding)) return null;
+  if (!blocking.length || !blocking.every((f) => f.yours === true)) return null;
   return [...new Set(blocking.map((f) => (f.repo ? `${f.repo}/${f.file}` : f.file!)))];
 }
 
@@ -450,7 +449,7 @@ function evaluateRound(s: TaskState, at: string): void {
 
 function startFixRound(s: TaskState, feedback: string | null): void {
   // A finding about a file no agent changes is yours: it sends no repo back (with only those, the review runs again).
-  const findings = s.review.verdicts.flatMap((v) => v.findings).filter((f) => isBlocking(f) && !humanFinding(f));
+  const findings = s.review.verdicts.flatMap((v) => v.findings).filter((f) => isBlocking(f) && f.yours !== true);
   const names = s.repos.map((r) => r.name);
   const targeted = findings.map((f) => f.repo);
   // A finding without a repo, or with one outside the plan, sends every repo back.
