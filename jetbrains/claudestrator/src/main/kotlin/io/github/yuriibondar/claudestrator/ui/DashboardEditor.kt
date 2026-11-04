@@ -172,10 +172,12 @@ class DashboardEditor(private val project: Project, private val file: VirtualFil
         b.cefBrowser.executeJavaScript("window.__csReceive($json)", b.cefBrowser.url, 0)
     }
 
-    /** A new IDE theme: the page keeps its state and only gets new colors. */
+    /** A new IDE theme: the page keeps its state and only gets new colors and its theme class. */
     private fun restyle() {
         val b = browser ?: return
-        b.cefBrowser.executeJavaScript("document.getElementById('ide-theme').textContent = ${gson.toJson(ThemeCss.build())}", b.cefBrowser.url, 0)
+        val js = "document.getElementById('ide-theme').textContent = ${gson.toJson(ThemeCss.build())};" +
+            "document.body.classList.remove('vscode-light', 'vscode-dark'); document.body.classList.add(${gson.toJson(ThemeCss.bodyClass())});"
+        b.cefBrowser.executeJavaScript(js, b.cefBrowser.url, 0)
     }
 
     override fun getComponent(): JComponent = root

@@ -41,7 +41,7 @@ window.acquireVsCodeApi = function () {
 };
 </script>
 </head>
-<body>
+<body class="${ThemeCss.bodyClass()}">
 <div id="app"><div class="boot"><div class="spinner"></div></div></div>
 <div id="toasts" aria-live="polite"></div>
 <div id="modal-root"></div>

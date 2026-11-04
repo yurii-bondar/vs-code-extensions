@@ -70,6 +70,12 @@ object ThemeCss {
         return ":root{color-scheme:${if (dark) "dark" else "light"};${v.entries.joinToString(";") { "${it.key}:${it.value}" }}}"
     }
 
+    /**
+     * The class VS Code puts on the page's <body> for this kind of theme. The page's design tokens key their light
+     * variants on it (status text darker on a light ground), so a light IDE theme gets them too.
+     */
+    fun bodyClass(): String = if (JBColor.isBright()) "vscode-light" else "vscode-dark"
+
     private fun ui(key: String, fallback: Color): Color = UIManager.getColor(key) ?: fallback
 
     private fun mix(a: Color, b: Color, t: Double): Color = Color(
