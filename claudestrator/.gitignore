@@ -3,3 +3,4 @@ node_modules/
 .orch/
 dist/
 .eval/
+scripts/design-sync/out/

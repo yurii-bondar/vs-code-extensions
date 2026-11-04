@@ -3,6 +3,8 @@
 # where release builds and local copies of past packages are kept
 vsix/**
 test/**
+# tooling that rebuilds the design file from the dashboard
+scripts/**
 dist/test/**
 **/*.ts
 **/*.map

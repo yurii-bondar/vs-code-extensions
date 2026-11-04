@@ -6,7 +6,7 @@ Monorepo of five VS Code extensions, each a self-contained folder with its own `
 |---|---|---|
 | `personify/` | Personify | settings panel (hotkeys, colors, fonts, syntax); settings and keybindings logic in `src/core/`, catalog in `src/catalog/`, webview in `media/main.ts` |
 | `claude-ctx-man/` | Claude Ctx Man | accounts/sessions tree, statusline (`src/`, `statusline/`) |
-| `claudestrator/` | Claudestrator | orchestrator; engine in `src/core/`, hook in `hook/`, tests in `test/` |
+| `claudestrator/` | Claudestrator | orchestrator; engine in `src/core/`, hook in `hook/`, tests in `test/`; `scripts/design-sync/` rebuilds the Penpot design file's Screens page from the dashboard (its README) |
 | `go-to-project/` | Go to Project | quick pick in `src/`, pure logic (cross-window state, git branch, icons) in `src/core/`, tests in `test/` |
 | `scriptor/` | Scriptor | script launcher: groups of `.sh`/`.js`/`.py` scripts run in a terminal; pure logic in `src/core/`, dashboard webview in `media/` |
 
