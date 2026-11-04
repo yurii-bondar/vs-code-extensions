@@ -619,7 +619,7 @@ interface Views {
       ${Object.keys(d.model || {}).length ? row('Model', `${Object.entries(d.model).map(([a, m]) => `<span class="eff-pair">${esc(a)} <code>${esc(m)}</code></span>`).join(' ')}<div class="muted small">from the scenario, over the agents' settings</div>`) : ''}
       ${Object.keys(d.effort || {}).length ? row('Effort', `${Object.entries(d.effort).map(([a, l]) => `<span class="eff-pair">${esc(a)} ${effortTag(l)}</span>`).join(' ')}<div class="muted small">for this task, over the agents' settings</div>`) : ''}
       ${d.group ? row('Group', `${esc(d.group.label)}<div class="muted small">${esc(d.group.type)}${d.group.jira ? ` · Jira ${esc(d.group.jira)}` : ''}</div>${d.group.instructions ? `<div class="muted small pre-wrap">${esc(d.group.instructions)}</div>` : ''}`) : ''}
-      ${d.instructions.length ? row('Instructions', `${d.instructions.map((x) => `<div class="extra-pick"><b>${esc(x.label)}</b><div class="muted small pre-wrap">${esc(x.text)}</div></div>`).join('')}`) : ''}
+      ${d.instructions.length ? row('Instructions', `${d.instructions.map((x) => `<details class="kv-more"><summary>${esc(x.label)}</summary><div class="muted small pre-wrap">${esc(x.text)}</div></details>`).join('')}`) : ''}
       ${deliver ? row('Review', `round ${d.round} of ${d.maxRounds}`) : ''}
       ${row('Cost', money(d.cost))}
       ${row('Started', `<span title="${esc(d.createdAt)}">${ago(d.createdAt)}</span>`)}

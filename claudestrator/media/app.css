@@ -703,7 +703,13 @@ span.gate-chip { cursor: default; }
 .plan-card { padding: 12px 14px; }
 
 .aside-card { padding: 12px 14px; }
-.kv { display: grid; grid-template-columns: 92px 1fr; gap: 8px; padding: 4px 0; font-size: var(--cs-font-sm); border-top: 1px solid var(--cs-border-default); align-items: baseline; }
+.kv { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 8px; padding: 4px 0; font-size: var(--cs-font-sm); border-top: 1px solid var(--cs-border-default); align-items: baseline; }
+/* A value never widens the column: long paths and ids break where they must. */
+.kv > :last-child { min-width: 0; overflow-wrap: anywhere; }
+/* A long value (an instruction's text) shows its name and opens on a click. */
+.kv-more summary { cursor: pointer; font-weight: var(--cs-weight-medium); }
+.kv-more + .kv-more { margin-top: 4px; }
+.kv-more > div { margin-top: 4px; }
 .kv:first-of-type { border-top: 0; }
 .kv > span { color: var(--cs-text-secondary); }
 .kv code { word-break: break-all; }
