@@ -1,6 +1,6 @@
 // UI models built from a task's state and events: cards for lists, a step timeline, the activity feed.
 import * as path from 'path';
-import { transition, passSteps, sameStep, branchName, spentOf, onlyHumanFindings, MAX_EMPTY_ROUNDS } from './machine';
+import { transition, passSteps, sameStep, branchName, spentOf, blockingQuestions, onlyHumanFindings, MAX_EMPTY_ROUNDS } from './machine';
 import { onRepos } from './pipeline';
 import { describeEvent, checkpointTitle } from './describe';
 import { transcriptKey } from './engine';
@@ -60,6 +60,7 @@ function hintOf(state: TaskState): string | undefined {
   if (cp.id === 'review-limit' && state.review.emptyRounds >= MAX_EMPTY_ROUNDS) return EMPTY_DIFF_HINT;
   if (cp.id === 'review-limit' && onlyHumanFindings(state.review.verdicts)) return HUMAN_FINDINGS_HINT;
   if (cp.id === 'agent-failure' && cp.blocked) return 'An agent reported it cannot go on, and why.';
+  if (cp.id === 'approve-plan' && blockingQuestions(state.plan).length) return 'The plan holds a question only you can answer: answer it, and the planner revises the plan with your answer.';
   const hint = CHECKPOINT_HINT[cp.id];
   return cp.repeated && hint ? `${hint} It failed the same way as the attempt before.` : hint;
 }

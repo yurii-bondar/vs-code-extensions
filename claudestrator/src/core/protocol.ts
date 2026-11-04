@@ -260,7 +260,7 @@ const PLAN = T.obj(
     slug: T.re(SLUG_PATTERN, 'slug must be kebab-case latin'),
     'title?': T.str(1, 100),
     repos: T.arr(T.obj({ name: T.str(1), 'mode?': T.oneOf(['full', 'tests_only']), 'baseBranch?': BRANCH }), 1),
-    'openQuestions?': T.arr(T.obj({ question: T.str(), default: T.str() }, { strict: false })),
+    'openQuestions?': T.arr(T.obj({ question: T.str(), default: T.str(), 'blocking?': T.bool() }, { strict: false })),
   },
   { strict: false }
 );
@@ -280,7 +280,7 @@ function parsePlanMeta(raw: unknown): ParseResult<PlanMeta> {
       slug: v.slug,
       ...(v.title && { title: v.title }),
       repos: v.repos.map((r) => ({ name: r.name, mode: r.mode || 'full', ...(r.baseBranch && { baseBranch: r.baseBranch }) })),
-      openQuestions: (v.openQuestions || []).map((q) => ({ question: q.question, default: q.default })),
+      openQuestions: (v.openQuestions || []).map((q) => ({ question: q.question, default: q.default, ...(q.blocking === true && { blocking: true }) })),
     },
   };
 }
@@ -291,7 +291,7 @@ interface RawPlan {
   slug: string;
   title?: string;
   repos: { name: string; mode?: 'full' | 'tests_only'; baseBranch?: string }[];
-  openQuestions?: { question: string; default: string }[];
+  openQuestions?: { question: string; default: string; blocking?: boolean }[];
 }
 interface RawVerdict {
   status: 'approved' | 'changes_requested';

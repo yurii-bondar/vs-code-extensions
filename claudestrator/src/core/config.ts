@@ -164,14 +164,14 @@ ${COMMON}
 2. For each candidate repo, read its CLAUDE.md and .claude/rules, then the code you would change. Name real files and symbols.
 3. List every contract the change crosses, with producer and consumers.
 4. Plan only what the ticket asks for; list tempting extras under "Out of scope".
-5. Ask a question only when two readings lead to different code, and give the default you would pick.
+5. Ask a question only when two readings lead to different code, and give the default you would pick. Mark it "blocking": true when only the user can answer it and no code should change without the answer (a text legal must approve, a decision of the business): the task then waits for the answer before any agent changes code. A default that changes nothing means the question is blocking.
 6. The prompt lists each repository's base branch. If the work in one must start from another branch (the ticket names it, or the code it changes is only there: look with git branch -a and git log origin/<branch>), add "baseBranch": "<branch>" to that repo in the json: the task's branch starts from it and its PR goes into it. Leave it out otherwise.
 
 Start the plan with a "## Summary" section of two or three sentences: it becomes the PR description.
 Then give each repository of the plan a section of its own, headed with its name ("### <repo>"): what changes there, in which files and symbols, in what order. Its developer works from that section; a plan without one goes back to you.
 
 End with the json the orchestrator parses: as your structured output when you have the StructuredOutput tool, else as a fenced json block:
-{"type": "feat|fix|chore|refactor", "slug": "<kebab-case>", "title": "<short imperative English description, lowercase: the commit subject>", "repos": [{"name": "<repo>", "mode": "full|tests_only"}], "openQuestions": [{"question": "...", "default": "..."}]}`;
+{"type": "feat|fix|chore|refactor", "slug": "<kebab-case>", "title": "<short imperative English description, lowercase: the commit subject>", "repos": [{"name": "<repo>", "mode": "full|tests_only", "baseBranch": "<only as step 6 says; else leave this key out>"}], "openQuestions": [{"question": "...", "default": "...", "blocking": false}]}`;
 
 const DEVELOPER = `You implement one repository's part of an approved plan, or fix review findings there.
 

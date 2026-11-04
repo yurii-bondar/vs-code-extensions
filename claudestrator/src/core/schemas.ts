@@ -19,7 +19,7 @@ const PLAN = obj(
     slug: { type: 'string', pattern: SLUG_PATTERN.source },
     title: str(1, 100),
     repos: list(obj({ name: str(1), mode: oneOf(['full', 'tests_only']), baseBranch: { type: 'string', pattern: BRANCH_PATTERN.source } }, ['name']), 1),
-    openQuestions: list(obj({ question: str(), default: str() }, ['question', 'default'])),
+    openQuestions: list(obj({ question: str(), default: str(), blocking: { type: 'boolean' } }, ['question', 'default'])),
   },
   ['type', 'slug', 'repos']
 );

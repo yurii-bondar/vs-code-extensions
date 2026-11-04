@@ -86,7 +86,18 @@ export interface PlanMeta {
   slug: string;
   title?: string;
   repos: PlanRepo[];
-  openQuestions: { question: string; default: string }[];
+  openQuestions: PlanQuestion[];
+}
+
+/** A question the planner leaves open, with the answer it goes on with. */
+export interface PlanQuestion {
+  question: string;
+  default: string;
+  /**
+   * Only the user can answer it (a text legal must approve, a decision of the business), and no code is changed without
+   * the answer: the plan waits for it, also in a task that runs on its own.
+   */
+  blocking?: boolean;
 }
 
 export interface Finding {
