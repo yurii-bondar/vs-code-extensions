@@ -231,8 +231,8 @@ button.rail-health { width: 100%; padding: 2px 0; border: 0; background: transpa
 .nav { display: flex; flex-direction: column; gap: 2px; }
 /* The tasks scroll; Setup and the footer stay under them. */
 /* The tasks and Setup scroll together; the footer stays at the bottom. */
-.rail > .nav { flex: 0 1 auto; min-height: 0; overflow-y: auto; margin: 0 calc(-1 * var(--cs-space-1)); padding: 0 var(--cs-space-1); }
-.tree-filter { margin: var(--cs-space-1) 0 var(--cs-space-2) 22px; width: calc(100% - 22px); }
+.rail > .nav { flex: 0 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; margin: 0 calc(-1 * var(--cs-space-1)); padding: 0 var(--cs-space-1); }
+.nav .tree-filter { margin: var(--cs-space-1) 0 var(--cs-space-2) 22px; width: calc(100% - 22px); }
 .tree-sections { display: flex; flex-direction: column; gap: 1px; margin-bottom: var(--cs-space-2); }
 .tree-empty { padding: var(--cs-space-2) var(--cs-space-3); }
 .tree-sec, .tree-task, .tree-more { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 26px; padding: 3px var(--cs-space-2); border: 0; border-radius: var(--cs-radius-md); background: transparent; color: var(--cs-text-secondary); font: inherit; font-size: var(--cs-font-sm); text-align: left; cursor: pointer; }
