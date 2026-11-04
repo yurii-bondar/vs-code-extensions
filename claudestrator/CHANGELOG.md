@@ -1,3 +1,9 @@
+## [0.12.1](https://github.com/yurii-bondar/vs-code-extensions/compare/claudestrator-v0.12.0...claudestrator-v0.12.1) (2026-11-04)
+
+### Bug Fixes
+
+* **claudestrator:** a task a review of the settings went through before 0.12.0 reads again: which findings are yours is recorded, not decided anew ([d675bd5](https://github.com/yurii-bondar/vs-code-extensions/commit/d675bd599befcd7e3a31d1ca5dbdca1a047e67db))
+
 ## [0.12.0](https://github.com/yurii-bondar/vs-code-extensions/compare/claudestrator-v0.11.2...claudestrator-v0.12.0) (2026-11-03)
 
 ### Features
