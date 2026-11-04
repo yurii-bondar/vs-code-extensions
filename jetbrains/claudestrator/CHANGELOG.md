@@ -1,3 +1,13 @@
+## [0.7.0](https://github.com/yurii-bondar/vs-code-extensions/compare/jetbrains-claudestrator-v0.6.1...jetbrains-claudestrator-v0.7.0) (2026-11-04)
+
+### Features
+
+* **claudestrator:** a plan's question only you can answer holds the plan until you answer it, also on auto ([4ad9519](https://github.com/yurii-bondar/vs-code-extensions/commit/4ad951900f11dc67b2526f3a04fd9149d62c74ea))
+
+### Bug Fixes
+
+* **claudestrator:** the planner's json shows where a repo's base branch goes, so one it names is not left in its text ([f5499f9](https://github.com/yurii-bondar/vs-code-extensions/commit/f5499f91d6b2bfbe1421523f8e9de3aeed7e3121))
+
 ## [0.6.1](https://github.com/yurii-bondar/vs-code-extensions/compare/jetbrains-claudestrator-v0.6.0...jetbrains-claudestrator-v0.6.1) (2026-11-04)
 
 ### Bug Fixes
