@@ -18,7 +18,7 @@ function chromePath() {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-export async function launch({ port = 9333, profile, width = 1440, height = 900 }) {
+export async function launch({ port = 9333, profile, width = 1440, height = 900, scale = 1 }) {
   const proc = spawn(chromePath(), ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, `--window-size=${width},${height}`, '--hide-scrollbars', '--no-first-run', '--no-default-browser-check', 'about:blank'], { stdio: 'ignore' });
   let info;
   for (let i = 0; i < 50 && !info; i++) {
@@ -50,7 +50,7 @@ export async function launch({ port = 9333, profile, width = 1440, height = 900 
   });
   await send('Page.enable');
   await send('Runtime.enable');
-  await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+  await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: scale, mobile: false });
   const api = {
     send,
     sleep,
@@ -63,10 +63,10 @@ export async function launch({ port = 9333, profile, width = 1440, height = 900 
       if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description || 'eval failed');
       return r.result.value;
     },
-    /** A PNG of the page as it is now (the whole of it), for comparing with what Penpot builds. */
-    async shot(file) {
-      const h = await api.eval('Math.max(document.documentElement.scrollHeight, document.body.scrollHeight)');
-      const r = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true, clip: { x: 0, y: 0, width, height: Math.min(h, 4000), scale: 1 } });
+    /** A PNG of the page as it is now: the whole of it, or (`viewport`) what the window shows. */
+    async shot(file, { viewport = false } = {}) {
+      const h = viewport ? height : await api.eval('Math.max(document.documentElement.scrollHeight, document.body.scrollHeight)');
+      const r = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: !viewport, clip: { x: 0, y: 0, width, height: Math.min(h, 4000), scale: 1 } });
       writeFileSync(file, Buffer.from(r.data, 'base64'));
     },
     close() {
