@@ -200,7 +200,9 @@ function main(): void {
   function plan(names: string, uuid: string, { slug = 'add-feature', text = true, base = process.env.FAKE_PLAN_BASE }: { slug?: string; text?: boolean; base?: string | undefined } = {}) {
     const repos = names.split(',').map((name) => ({ name, mode: 'full', ...(base && { baseBranch: base }) }));
     const sections = repos.map((r) => `### ${r.name}\n- do it`).join('\n\n');
-    const data = `\`\`\`json\n${JSON.stringify({ type: 'feat', slug, title: 'add the feature', repos, openQuestions: [] })}\n\`\`\``;
+    // FAKE_PLAN_BLOCKING: a question only the user can answer, until a prompt carries the user's answer.
+    const blocking = process.env.FAKE_PLAN_BLOCKING && !/Feedback from the user, verbatim:/.test(firstPrompt) ? [{ question: process.env.FAKE_PLAN_BLOCKING, default: 'change nothing', blocking: true }] : [];
+    const data = `\`\`\`json\n${JSON.stringify({ type: 'feat', slug, title: 'add the feature', repos, openQuestions: blocking })}\n\`\`\``;
     return reply(text ? `## Summary\n\nAdd the feature to every repo.\n\n## Steps\n\n${sections}\n\n${data}` : `\n${data}`, uuid);
   }
 

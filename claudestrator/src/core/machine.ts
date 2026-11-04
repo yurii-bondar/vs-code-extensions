@@ -2,7 +2,7 @@
 // event (a skipped approval, an extra review round, a push before it was confirmed) is rejected.
 import { CHECKPOINT_OPTIONS, JIRA_ONLY_OPTIONS, REPO_NAME, isBlocking, isInfoEvent } from './protocol';
 import { onRepos, reposBeforePlan } from './pipeline';
-import type { Checkpoint, CheckpointId, Finding, NextMode, Output, OrchEvent, PlanRepo, ProtectedChange, RecordedVerdict, Stage, Step, StepRef, TaskState, Transition } from './types';
+import type { Checkpoint, CheckpointId, Finding, NextMode, Output, OrchEvent, PlanMeta, PlanQuestion, PlanRepo, ProtectedChange, RecordedVerdict, Stage, Step, StepRef, TaskState, Transition } from './types';
 
 /** The event of one type: `Ev<'stopped'>`. */
 type Ev<T extends OrchEvent['type']> = Extract<OrchEvent, { type: T }>;
@@ -209,7 +209,8 @@ function stageCompleted(s: TaskState, e: Ev<'stage_completed'>): Transition {
       // Each repo once (the engine has the planner correct a plan that names one twice): a step per repo would
       // otherwise find its own first copy and run again and again.
       s.repos = e.plan!.repos.filter((r, i, all) => all.findIndex((x) => x.name === r.name) === i);
-      if (stage.approval) openCheckpoint(s, 'approve-plan', { at: e.at, step });
+      // A question only you can answer stops the plan, also where it is not approved by hand (a task on auto).
+      if (stage.approval || blockingQuestions(s.plan).length) openPlanApproval(s, step, e.at);
       else advance(s, step);
       return ok(s);
     case 'code':
@@ -413,6 +414,15 @@ function mergeProposed(was: ProtectedChange[], now: ProtectedChange[]): Protecte
 function afterWork(s: TaskState, step: Step, at: string): void {
   if (s.proposed && s.proposed.length) openCheckpoint(s, 'protected-changes', { at, step });
   else advance(s, step);
+}
+
+/** The plan's questions only you can answer: with any, it is not approved until a new plan has none. */
+const blockingQuestions = (plan: PlanMeta | undefined): PlanQuestion[] => (plan ? plan.openQuestions.filter((q) => q.blocking === true) : []);
+
+/** The plan's question to you: without approve while it holds a question only you can answer, which "change" carries. */
+function openPlanApproval(s: TaskState, step: Step, at: string): void {
+  openCheckpoint(s, 'approve-plan', { at, step });
+  if (blockingQuestions(s.plan).length) s.checkpoint!.options = s.checkpoint!.options.filter((o) => o !== 'approve' && o !== 'approve-post');
 }
 
 function advance(s: TaskState, from: Step): void {
@@ -641,4 +651,4 @@ function branchName(s: TaskState): string | null {
 }
 
 export type { NextAction, RunAction, SessionTotals };
-export { MAX_EMPTY_ROUNDS, onlyHumanFindings, sessionTotals, spentOf, transition, replay, canPush, passSteps, editableFrom, stepRepos, nextAction, runOf, artifactPath, branchName, sameStep, unknownRepos, TASK_FILES };
+export { MAX_EMPTY_ROUNDS, blockingQuestions, onlyHumanFindings, sessionTotals, spentOf, transition, replay, canPush, passSteps, editableFrom, stepRepos, nextAction, runOf, artifactPath, branchName, sameStep, unknownRepos, TASK_FILES };

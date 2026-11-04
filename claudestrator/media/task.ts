@@ -627,7 +627,18 @@ interface Views {
   function checkpointHtml(d: TaskScreen) {
     const cp = d.checkpointFull;
     if (!cp) return '';
-    const ui = cpUi(cp);
+    // A plan with a question only you can answer is not approved as it is: your answer goes to the planner.
+    const waits = cp.id === 'approve-plan' && Boolean(d.plan && d.plan.openQuestions.some((q) => q.blocking === true));
+    const base = cpUi(cp);
+    const ui: CpUi = waits
+      ? {
+          ...base,
+          title: 'The plan needs your answer',
+          lead: 'The planner left a question only you can answer, and without it no agent should change code. Answer it below: the planner revises the plan with your answer, and you approve that one.',
+          options: { ...base.options, change: { label: 'Answer and revise the plan', kind: 'primary', icon: 'edit', feedback: 'required' } },
+          placeholder: 'Your answer to the question marked "needs your answer", e.g. the wording legal approved',
+        }
+      : base;
     const ctx: Partial<CheckpointContext> = d.checkpointContext ?? {};
     const stopped = d.status.key === 'stopped';
     let body = '';
@@ -636,7 +647,7 @@ interface Views {
       const questions = plan ? plan.openQuestions : [];
       body = `
         ${plan ? `<div class="plan-meta"><span class="chip">${esc(plan.type)}</span><span class="chip mono">${icon('branch')}${esc(`${plan.type}/${d.source && d.source.kind === 'jira' ? `${d.taskId}-` : ''}${plan.slug}`)}</span>${plan.repos.map((r) => `<span class="chip" ${r.baseBranch ? `title="The task's branch starts from ${esc(r.baseBranch)}, and its PR goes into it"` : ''}>${icon('repo')}${esc(r.name)}${r.mode === 'tests_only' ? ' · tests only' : ''}${r.baseBranch ? ` · from ${esc(r.baseBranch)}` : ''}</span>`).join('')}</div>` : ''}
-        ${questions.length ? `<div class="questions"><h4>${icon('info')}Open questions <span class="muted">(the planner's default applies unless you say otherwise)</span></h4>${questions.map((q) => `<div class="q"><div>${esc(q.question)}</div><div class="muted small">Default: ${esc(q.default)}</div></div>`).join('')}</div>` : ''}
+        ${questions.length ? `<div class="questions"><h4>${icon('info')}Open questions <span class="muted">(the planner's default applies unless you say otherwise${waits ? '; the ones marked need your answer' : ''})</span></h4>${questions.map((q) => `<div class="q">${q.blocking ? `<span class="chip warn">${icon('user')}needs your answer</span>` : ''}<div>${esc(q.question)}</div><div class="muted small">${q.blocking ? 'Without an answer' : 'Default'}: ${esc(q.default)}</div></div>`).join('')}</div>` : ''}
         <div class="doc-frame"><div class="markdown">${md(stripJsonBlock(ctx.text || ''))}</div></div>
         ${ctx.file ? `<button class="link small" data-action="open-artifact" data-file="${esc(ctx.file)}" data-preview="1">${icon('ext')}Open the plan in an editor</button>` : ''}`;
     } else if (cp.id === 'review-limit') {
