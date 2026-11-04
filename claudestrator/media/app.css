@@ -776,6 +776,25 @@ span.gate-chip { cursor: default; }
 
 /* ---------- repos ---------- */
 .repo-card.editing { border-color: var(--cs-border-focus); }
+/* Repos & checks: one row per repo; its form opens under the row. */
+.repo-table { padding: 0; overflow: hidden; }
+.rt-row { display: grid; grid-template-columns: minmax(180px, 1.4fr) minmax(150px, 1fr) 90px minmax(160px, 1.4fr) 210px; gap: var(--cs-space-4); align-items: center; padding: var(--cs-space-3) var(--cs-space-4); }
+.rt-head { background: var(--cs-bg-raised); padding-top: var(--cs-space-2); padding-bottom: var(--cs-space-2); font-size: var(--cs-font-xs); font-weight: var(--cs-weight-strong); letter-spacing: 0.04em; text-transform: uppercase; color: var(--cs-text-secondary); }
+.rt-item { border-top: 1px solid var(--cs-border-default); }
+.rt-repo { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.rt-repo > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rt-state, .rt-checks { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-width: 0; }
+.rt-base { color: var(--cs-text-secondary); }
+.rt-label { display: none; font-family: var(--cs-font-ui); }
+.rt-actions { display: flex; gap: 4px; justify-content: flex-end; }
+.rt-item .repo-card { border: 0; border-top: 1px dashed var(--cs-border-default); border-radius: 0; box-shadow: none; margin: 0; background: var(--cs-bg-raised); }
+.rt-results { padding: 0 var(--cs-space-4) var(--cs-space-3); }
+@media (max-width: 760px) {
+  .rt-head { display: none; }
+  .rt-row { grid-template-columns: minmax(0, 1fr); gap: var(--cs-space-2); }
+  .rt-actions { justify-content: flex-start; }
+  .rt-label { display: inline; }
+}
 .rc-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
 .rc-title { display: flex; align-items: center; gap: 6px; }
 .rc-title .ic { color: var(--cs-text-secondary); }

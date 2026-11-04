@@ -29,9 +29,12 @@ interface ReposView extends View {
   drafts: Record<string, RepoDraft>;
   results: Record<string, RepoGates>;
   picked: PickedRepos | null;
+  /** Repos whose editor is open under their row (one with unsaved changes stays open). */
+  open: Record<string, boolean>;
   load(): Promise<void>;
   draft(name: string): RepoDraft;
   render(): void;
+  repoRow(x: RepoView): string;
   repoCard(x: RepoView): string;
 }
 
@@ -436,10 +439,12 @@ interface Views {
     drafts: {},
     results: {},
     picked: null,
+    open: {},
     async enter() {
       $('#view')!.innerHTML = `<div class="page repos-page" data-region="repos"></div>`;
       this.drafts = {};
       this.results = {};
+      this.open = {};
       await this.load();
     },
     async load() {
@@ -474,7 +479,7 @@ interface Views {
           <p class="lead">The repositories agents may change, and the checks (gates) that must pass after an agent touches one. A red check goes back to the agent with its output, up to the attempt limit in Settings.</p></div>
           <div class="row"><button class="btn" data-action="open-config">${icon('edit')}config.yaml</button><button class="btn primary" data-action="repo-pick">${icon('folder')}Add repository…</button></div></div>
         ${this.picked ? pickedCard(this.picked) : ''}
-        ${r.repos.length ? r.repos.map((x) => this.repoCard(x)).join('') : this.picked ? '' : `<div class="banner info">${icon('info')}<div class="grow">No repos configured yet. Without them, agents work in folders named by the plan, with no checks.</div><div class="banner-actions"><button class="btn sm primary" data-action="repo-pick">${icon('folder')}Add repository…</button></div></div>`}
+        ${r.repos.length ? `<section class="card repo-table"><div class="rt-row rt-head" aria-hidden="true"><span>Repository</span><span>Checkout</span><span>Base</span><span>Checks</span><span></span></div>${r.repos.map((x) => this.repoRow(x)).join('')}</section>` : this.picked ? '' : `<div class="banner info">${icon('info')}<div class="grow">No repos configured yet. Without them, agents work in folders named by the plan, with no checks.</div><div class="banner-actions"><button class="btn sm primary" data-action="repo-pick">${icon('folder')}Add repository…</button></div></div>`}
         ${r.detected.length ? `<section class="card detected"><h3>${icon('search')}Found in this workspace</h3>${r.detected.map((d, i) => `<label class="det-row"><input type="checkbox" class="det-check" data-i="${i}" checked><b>${esc(d.name)}</b><span class="muted mono small">${esc(d.path)}</span>${d.stack.map((s) => `<span class="chip small">${esc(s)}</span>`).join('')}<span class="muted small">${d.gates.length ? d.gates.map((g) => esc(g.name)).join(', ') : 'no checks found'}</span></label>`).join('')}<div class="row end"><button class="btn primary sm" data-action="repo-add-detected">${icon('plus')}Add selected</button></div></section>` : ''}
         <section class="card context-card"><h3>${icon('doc')}What every agent reads first</h3>
           <p class="muted small">A short workspace map (what each repo is, the contracts between them, the merge order) is the cheapest way to better plans.</p>
@@ -482,6 +487,32 @@ interface Views {
           <div class="row">${r.context.some((f) => /workspace\.md$/.test(f.file)) ? '' : `<button class="btn sm" data-action="ctx-map">${icon('wand')}Create workspace map</button>`}<button class="btn ghost sm" data-action="ctx-add">${icon('plus')}Add a file…</button></div>
         </section>`
       );
+    },
+    /** A repo in the table: where it is, its checkout, its base, its checks and their last run; Edit opens its form under it. */
+    repoRow(x) {
+      const st = x.status;
+      const res = this.results[x.name];
+      const open = Boolean(this.open[x.name] || this.drafts[x.name]);
+      const state = !st?.exists ? '<span class="badge tone-error">folder missing</span>' : !st.isRepo ? '<span class="badge tone-error">not a git repo</span>' : `<span class="chip">${icon('branch')}${esc(st.branch || '?')}</span>${st.dirty ? `<span class="badge tone-warn">${plural(st.dirty, 'change')}</span>` : '<span class="badge tone-ok">clean</span>'}`;
+      const checks = x.gates.length
+        ? x.gates.map((g) => {
+            const r = res && res.results.find((y) => y.gate === g.name);
+            return `<span class="gate-chip ${r ? (r.status === 'pass' ? 'on' : r.status === 'fail' ? 'bad' : '') : ''}" title="${esc(g.cmd)}">${r ? icon(r.status === 'pass' ? 'check' : r.status === 'fail' ? 'x' : 'chevron') : ''}${esc(g.name)}</span>`;
+          }).join('')
+        : '<span class="muted small">no checks</span>';
+      return `<div class="rt-item ${open ? 'open' : ''}">
+        <div class="rt-row">
+          <div class="rt-repo"><b>${esc(x.name)}</b><span class="muted mono small">${esc(x.path)}</span>${x.role ? `<span class="muted small">${esc(x.role)}</span>` : ''}</div>
+          <div class="rt-state">${state}</div>
+          <div class="rt-base mono small"><span class="rt-label">base </span>${esc(x.baseBranch)}</div>
+          <div class="rt-checks">${checks}</div>
+          <div class="rt-actions">
+            <button class="btn ghost sm" data-action="repo-run" data-repo="${esc(x.name)}" ${x.gates.length && !this.drafts[x.name] ? '' : 'disabled'}>${icon('beaker')}Run checks</button>
+            <button class="btn ghost sm" data-action="repo-toggle" data-repo="${esc(x.name)}" aria-expanded="${open}">${icon('edit')}${open ? 'Close' : 'Edit'}</button>
+          </div>
+        </div>
+        ${open ? this.repoCard(x) : res && res.status !== 'pass' ? `<div class="rt-results">${gateResults(res)}</div>` : ''}
+      </div>`;
     },
     repoCard(x) {
       const d = this.drafts[x.name];
@@ -542,6 +573,14 @@ interface Views {
       'repo-cancel': (el) => {
         delete views.repos.drafts[el.dataset.repo];
         views.repos.render();
+      },
+      'repo-toggle': (el) => {
+        const v = views.repos;
+        const name = el.dataset.repo;
+        // A form with unsaved changes stays open: Cancel or Save closes it.
+        if (v.drafts[name]) return;
+        v.open[name] = !v.open[name];
+        v.render();
       },
       'repo-save': async (el) => {
         const v = views.repos;
