@@ -524,7 +524,7 @@ interface Views {
     const look = SECTION_LOOK[s.kind];
     const name = s.kind === 'ungrouped' ? s.label : `${look.prefix} ${s.jira || s.label}`;
     const needs = all.some((c) => c.status.group === 'attention');
-    const head = `<button class="tree-sec kind-${s.kind}" data-action="tree-section" data-key="${esc(s.key)}" aria-expanded="${open}">${icon('chevron', 'chev')}${icon(look.icon, 'kind')}<span class="ts-name">${esc(name)}</span>${s.jira ? `<span class="ts-label">${esc(s.label)}</span>` : ''}${needs ? `<span class="ts-dot" title="A task here needs you"></span>` : ''}<span class="ts-count">${all.length}</span></button>`;
+    const head = `<button class="tree-sec kind-${s.kind}" data-action="tree-section" data-key="${esc(s.key)}" aria-expanded="${open}" title="${esc(`${name}${s.jira ? ` · ${s.label}` : ''} · ${plural(all.length, 'task')}`)}">${icon('chevron', 'chev')}${icon(look.icon, 'kind')}<span class="ts-name">${esc(name)}</span>${s.jira ? `<span class="ts-label">${esc(s.label)}</span>` : ''}${needs ? `<span class="ts-dot" title="A task here needs you"></span>` : ''}<span class="ts-count">${all.length}</span></button>`;
     if (!open) return `<div class="tree-group">${head}</div>`;
     const fold = active.length && done.length ? `<button class="tree-more" data-action="tree-done" data-key="${esc(s.key)}" aria-expanded="${doneOpen}">${icon('chevron', 'chev')}<span>${done.length} finished</span></button>` : '';
     return `<div class="tree-group open">${head}<div class="tree-items">${active.map(treeTask).join('')}${fold}${doneOpen ? done.map(treeTask).join('') : ''}</div></div>`;
@@ -1992,6 +1992,32 @@ interface Views {
       renderNav();
     },
   };
+
+  /**
+   * Text cut short (an ellipsis or clamped lines; not a box that scrolls) shows in full on hover: the browser's tooltip, unless a tooltip around it
+   * already says it. The title is set while the text is cut and taken back once it fits.
+   */
+  document.addEventListener('mouseover', (e) => {
+    const el = e.target;
+    if (!(el instanceof HTMLElement) || el.children.length > 2) return;
+    const css = getComputedStyle(el);
+    const clamped = css.webkitLineClamp !== 'none' && css.webkitLineClamp !== '';
+    if (css.textOverflow !== 'ellipsis' && !clamped && el.dataset.autoTitle === undefined) return;
+    const text = (el.textContent ?? '').trim();
+    const cut = el.scrollWidth > el.clientWidth + 1 || (clamped && el.scrollHeight > el.clientHeight + 1);
+    if (el.dataset.autoTitle !== undefined) {
+      if (!cut) {
+        el.removeAttribute('title');
+        delete el.dataset.autoTitle;
+      }
+      return;
+    }
+    if (!cut || !text || el.title) return;
+    const around = el.parentElement?.closest<HTMLElement>('[title]');
+    if (around && around.title.includes(text)) return;
+    el.title = text;
+    el.dataset.autoTitle = '';
+  });
 
   document.addEventListener('click', (e) => {
     const target = e.target instanceof Element ? e.target : null;
