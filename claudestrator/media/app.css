@@ -187,6 +187,8 @@ p { margin: 0 0 8px; }
 .row.end { justify-content: flex-end; }
 .row.center { justify-content: center; }
 [hidden] { display: none !important; }
+/* Read by screen readers, not shown: a label whose field explains itself on screen. */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 
 .ic { width: 15px; height: 15px; flex: none; vertical-align: -3px; }
 .ic.big { width: 40px; height: 40px; opacity: 0.6; }
@@ -207,6 +209,12 @@ p { margin: 0 0 8px; }
 .rail-new { width: 100%; margin-bottom: var(--cs-space-2); }
 .rail-foot { margin-top: auto; display: flex; flex-direction: column; gap: var(--cs-space-3); padding: var(--cs-space-3); background: var(--cs-bg-raised); border: 1px solid var(--cs-border-default); border-radius: var(--cs-radius-lg); }
 .rail-foot:empty { display: none; }
+.rail-health { display: flex; align-items: center; gap: var(--cs-space-2); font-size: var(--cs-font-sm); color: var(--cs-text-secondary); }
+.rail-health span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-health.ok > .ic { color: var(--cs-status-ok-text); }
+button.rail-health { width: 100%; padding: 2px 0; border: 0; background: transparent; font: inherit; font-size: var(--cs-font-sm); text-align: left; cursor: pointer; }
+.rail-health.bad { color: var(--cs-status-warn-text); }
+.rail-health.bad:hover span { text-decoration: underline; }
 .rail-scrim { display: none; }
 .workarea { min-width: 0; }
 .brand { display: flex; align-items: center; gap: 10px; background: none; border: 0; color: inherit; cursor: pointer; padding: 0; font: inherit; text-align: left; min-width: 0; }
@@ -396,11 +404,10 @@ button.chip:hover, .link-chip:hover { border-color: var(--cs-border-focus); text
 
 .composer { padding: 16px 18px 12px; border-color: var(--cs-border-strong); box-shadow: var(--cs-shadow); }
 .composer:focus-within { border-color: var(--cs-border-focus); }
-.composer-label { display: flex; align-items: center; gap: 8px; font-weight: var(--cs-weight-strong); font-size: var(--cs-font-lg); margin-bottom: 8px; }
-.composer-label .ic { color: var(--cs-brand); }
 .composer-text { width: 100%; border: 0; background: transparent; color: var(--cs-text-primary); font: inherit; font-size: var(--cs-font-lg); line-height: 1.55; resize: none; outline: none; min-height: 60px; padding: 2px 0; }
 .composer-text::placeholder { color: var(--cs-text-secondary); opacity: 0.8; }
-.composer-detect { min-height: 22px; margin: 6px 0 10px; }
+.composer-detect { min-height: 0; margin: var(--cs-space-1) 0 var(--cs-space-2); }
+.composer-detect:empty { display: none; }
 .detect { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: var(--cs-font-sm); }
 .detect-kind { display: inline-flex; align-items: center; gap: 6px; }
 .detect.error, .detect .error { color: var(--cs-status-err-text); display: inline-flex; gap: 5px; align-items: center; }
@@ -408,7 +415,7 @@ button.chip:hover, .link-chip:hover { border-color: var(--cs-border-focus); text
 .detect-outline { margin-top: 8px; }
 .detect-warn { margin-top: 6px; color: var(--cs-status-warn-text); font-size: var(--cs-font-sm); }
 .detect-warn div { display: flex; gap: 6px; align-items: center; }
-.composer-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; border-top: 1px solid var(--cs-border-default); padding-top: 10px; }
+.composer-row { display: flex; align-items: center; gap: var(--cs-space-3); flex-wrap: wrap; padding-top: var(--cs-space-3); }
 .agents-chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .chips-label { margin-right: 2px; }
 .agent-chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: var(--cs-radius-lg); border: 1px solid color-mix(in srgb, var(--agent) 55%, var(--cs-border-default)); background: color-mix(in srgb, var(--agent) 10%, transparent); color: var(--cs-text-primary); font: inherit; font-size: var(--cs-font-sm); cursor: pointer; }
@@ -448,7 +455,9 @@ button.chip:hover, .link-chip:hover { border-color: var(--cs-border-focus); text
 .group.collapsed .cards { display: none; }
 .cards { display: flex; flex-direction: column; gap: 8px; }
 .task-card { display: flex; gap: 14px; align-items: center; padding: 12px 14px 12px 16px; border-radius: var(--cs-radius-lg); background: var(--cs-bg-surface); border: 1px solid var(--cs-border-default); cursor: pointer; position: relative; overflow: hidden; transition: border-color 0.12s, transform 0.12s; }
-.task-card::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--tone, var(--cs-text-secondary)); }
+.tc-marker { width: 30px; height: 30px; flex: none; display: grid; place-items: center; border-radius: var(--cs-radius-full); color: var(--tone, var(--cs-text-secondary)); background: color-mix(in srgb, var(--tone, var(--cs-text-secondary)) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone, var(--cs-text-secondary)) 40%, transparent); }
+.tc-marker .ic { width: 15px; height: 15px; }
+body.vscode-high-contrast .tc-marker { background: transparent; box-shadow: inset 0 0 0 1px var(--tone, var(--cs-text-secondary)); }
 .task-card:hover { border-color: var(--cs-border-strong); }
 .task-card:focus-visible { outline: 1px solid var(--cs-border-focus); }
 .tc-main { flex: 1; min-width: 0; }
@@ -780,7 +789,10 @@ span.gate-chip { cursor: default; }
 @media (max-width: 640px) {
   main { padding: 14px 12px 40px; }
   .ac-controls, .ac-more { margin-left: 0; }
-  .task-card { flex-direction: column; align-items: stretch; }
+  /* The marker stays beside the title; the action wraps under the text. */
+  .task-card { flex-wrap: wrap; align-items: flex-start; }
+  .tc-main { flex-basis: calc(100% - 44px); }
+  .tc-side { flex-basis: 100%; justify-content: flex-start; padding-left: 44px; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 
@@ -885,9 +897,10 @@ b.err, .lim-pct.err { color: var(--cs-status-err-text); }
 .acc-btn.signed-out { color: var(--cs-status-err-text); }
 
 /* ---------- scenarios: deliver, readiness check, audit ---------- */
-.composer-top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
-.composer-top .composer-label { margin-bottom: 0; }
-.scenarios { margin-left: auto; }
+/* The composer's bar: what kind of task, its group and instructions, then Start. */
+.composer-bar { display: flex; align-items: center; gap: var(--cs-space-2); flex-wrap: wrap; border-top: 1px solid var(--cs-border-default); padding-top: var(--cs-space-3); }
+.composer-bar .composer-extras { margin: 0; }
+.composer-bar .composer-actions { margin-left: auto; }
 .sc-current { display: inline-flex; align-items: center; gap: 7px; padding: 4px 10px 4px 12px; border-radius: var(--cs-radius-lg); border: 1px solid var(--cs-border-strong); background: var(--cs-bg-app); color: var(--cs-text-primary); font: inherit; font-size: var(--cs-font-sm); font-weight: var(--cs-weight-strong); cursor: pointer; white-space: nowrap; }
 .sc-current:hover { border-color: var(--cs-border-focus); }
 .sc-current .ic { width: 13px; height: 13px; }

@@ -468,7 +468,7 @@ interface Views {
     patch('nav', `${NAV.filter((n) => n.group === 'work').map(item).join('')}<div class="nav-section">Setup</div>${NAV.filter((n) => n.group === 'setup').map(item).join('')}`);
     patch('topbar-title', esc(NAV.find((n) => n.name === active)?.label || 'Claudestrator'));
     patch('workspace', o && o.rootName ? esc(o.rootName) : '');
-    patch('rail-foot', `${limitsPanel(o && o.limits)}${accountSwitcher(o)}`);
+    patch('rail-foot', `${railHealth(o && o.health)}${limitsPanel(o && o.limits)}${accountSwitcher(o)}`);
     renderGlobalPermissions();
     const a = o && o.account;
     patch('global-alerts', a && a.loggedIn === false ? `<div class="perm-strip"><div class="banner error">${icon('alert')}<div class="grow"><b>Claude Code is signed out for ${esc(a.email || a.label)}</b> <span class="muted small">(${esc(a.shownDir.replace(/^\/Users\/[^/]+/, '~'))})</span><div class="small">Agents cannot run under this account. Sign in again, or switch to a signed-in account.</div></div><div class="banner-actions"><button class="btn sm primary" data-action="claude-login">${icon('user')}Sign in</button><button class="btn sm" data-action="open-account-menu">Switch account</button></div></div></div>` : '');
@@ -771,6 +771,37 @@ interface Views {
     </div>`;
   }
 
+  /** The first thing wrong with the tools, and the section that fixes it; null while checking or when all is well. */
+  function healthProblem(h: HealthSummary | null | undefined): { text: string; section: string } | null {
+    if (!h || h.checking) return null;
+    if (!h.claude.ok) return { text: 'Claude Code is not ready', section: 'settings' };
+    if (!h.git.ok) return { text: 'Git is not found', section: 'settings' };
+    if (!h.gh.ok) return { text: 'GitHub CLI is not ready', section: 'settings' };
+    const m = S.overview && S.overview.mcp;
+    if (m && m.problems) return { text: `MCP: ${m.problems} of ${m.total} need attention`, section: 'mcp' };
+    return null;
+  }
+
+  /** The tools in one line of the rail; the Tasks page shows the full line only when something is wrong. */
+  function railHealth(h: HealthSummary | null | undefined) {
+    if (!h) return '';
+    if (h.checking) return `<div class="rail-health"><span class="spinner xs"></span><span>Checking tools…</span></div>`;
+    const p = healthProblem(h);
+    if (!p) return `<div class="rail-health ok">${icon('check')}<span>All tools ready</span></div>`;
+    return `<button class="rail-health bad" data-action="nav" data-name="${p.section}">${icon('alert')}<span>${esc(p.text)}</span>${icon('chevron')}</button>`;
+  }
+
+  const homeHealth = (h: HealthSummary | null | undefined) => (healthProblem(h) ? healthLine(h) : '');
+
+  /** "2 need you · 1 running · 3 finished today", or what to do when there is nothing yet. */
+  function inboxSummary(tasks: Card[]) {
+    const today = new Date().toDateString();
+    const n = (g: string) => tasks.filter((t) => t.status.group === g).length;
+    const done = tasks.filter((t) => t.status.group === 'done' && new Date(t.updatedAt).toDateString() === today).length;
+    const parts = [n('attention') ? `${n('attention')} need you` : '', n('running') ? `${n('running')} running` : '', done ? `${done} finished today` : ''].filter(Boolean);
+    return parts.length ? parts.join(' · ') : tasks.length ? 'Nothing waits for you' : 'Describe a task, or paste a Jira key or link';
+  }
+
   // ---------- home ----------
 
   const EXAMPLES = [
@@ -805,6 +836,7 @@ interface Views {
       }
       $('#view')!.innerHTML = `
         <div class="page home">
+          <header class="page-head inbox-head"><div><h1>Tasks</h1><p class="lead" data-region="inbox-summary"></p></div></header>
           <div data-region="onboarding"></div>
           <section class="composer card" data-region-static="composer"></section>
           <div data-region="health"></div>
@@ -852,7 +884,8 @@ interface Views {
           <div class="hero-actions"><button class="btn primary" data-action="nav" data-name="setup">${icon('wand')}Set up workspace</button></div>
         </div>` : o!.config && !o!.config.ok ? `
         <div class="banner error">${icon('alert')}<div><b>The config has errors, so tasks cannot start.</b><ul>${o!.config.errors.map((e) => `<li>${esc(e)}</li>`).join('')}</ul></div><button class="btn sm" data-action="open-config">Open config.yaml</button></div>` : '');
-      patch('health', healthLine(o!.health));
+      patch('inbox-summary', esc(inboxSummary(o!.tasks)));
+      patch('health', homeHealth(o!.health));
       patch('tasks', this.tasksHtml(o!.tasks));
     },
     tasksHtml(tasks) {
@@ -887,20 +920,20 @@ interface Views {
       const o = S.overview;
       const disabled = !o!.root || (o!.config && !o!.config.ok);
       $('[data-region-static="composer"]')!.innerHTML = `
-        <div class="composer-top">
-          <label class="composer-label" for="composer-text">${icon('sparkles')}What should the agents do?</label>
-          <div class="scenarios" data-region="scenarios"></div>
-        </div>
-        <textarea id="composer-text" class="composer-text" rows="3" placeholder="${esc(scInfo(this.scenario()).placeholder)}" ${disabled ? 'disabled' : ''}>${esc(S.draft.text)}</textarea>
-        <div class="composer-extras" data-region="extras"></div>
-        <div data-region="extra-editor"></div>
+        <label class="sr-only" for="composer-text">What should the agents do?</label>
+        <textarea id="composer-text" class="composer-text" rows="2" placeholder="${esc(scInfo(this.scenario()).placeholder)}" ${disabled ? 'disabled' : ''}>${esc(S.draft.text)}</textarea>
         <div class="composer-detect" data-region="detect"></div>
-        <div class="composer-row">
-          <div class="agents-chips" data-region="agent-chips"></div>
+        <div class="composer-bar">
+          <div class="scenarios" data-region="scenarios"></div>
+          <div class="composer-extras" data-region="extras"></div>
           <div class="composer-actions">
             <span data-region="auto-switch"></span>
             <button class="btn primary" data-action="start" id="start-btn" ${disabled ? 'disabled' : ''}>${icon('play')}<span data-region="start-label">Start</span><kbd>⌘↵</kbd></button>
           </div>
+        </div>
+        <div data-region="extra-editor"></div>
+        <div class="composer-row">
+          <div class="agents-chips" data-region="agent-chips"></div>
         </div>
         <details class="composer-more" ${S.draft.key ? 'open' : ''}>
           <summary>More options</summary>
@@ -1152,9 +1185,11 @@ interface Views {
     let cta = '';
     if (t.status.key === 'waiting') cta = `<button class="btn primary sm" data-action="open-task" data-id="${t.taskId}">${icon('bell')}${esc(t.checkpoint?.id === 'approve-plan' ? 'Review plan' : t.checkpoint?.id === 'confirm-push' ? 'Review & push' : 'Decide')}</button>`;
     else if (t.status.resumable) cta = `<button class="btn sm" data-action="run" data-id="${t.taskId}">${icon('play')}Resume</button>`;
-    else if (t.status.key === 'running') cta = `<button class="icon-btn" data-action="stop" data-id="${t.taskId}" title="Stop">${icon('stop')}</button>`;
+    else if (t.status.key === 'running') cta = `<button class="btn ghost sm" data-action="stop" data-id="${t.taskId}">${icon('stop')}Stop</button>`;
     const prs = Object.entries(t.prs || {});
+    const marker = t.status.tone === 'ok' ? 'check' : t.status.tone === 'error' ? 'x' : t.status.group === 'running' ? 'activity' : t.status.group === 'attention' ? 'bell' : t.status.group === 'stopped' ? 'pause' : 'dots';
     return `<article class="task-card tone-${t.status.tone}" data-action="open-task" data-id="${t.taskId}" tabindex="0">
+      <span class="tc-marker" aria-hidden="true">${icon(marker)}</span>
       <div class="tc-main">
         <div class="tc-title">${esc(t.title)}</div>
         <div class="tc-meta">
@@ -1451,7 +1486,8 @@ interface Views {
       const h = await attempt('health', { refresh: true });
       if (h && S.overview) {
         S.overview.health = h;
-        if (S.route.name === 'home') patch('health', healthLine(h));
+        renderNav();
+        if (S.route.name === 'home') patch('health', homeHealth(h));
         else if (current && current.load) current.load();
       }
     },
