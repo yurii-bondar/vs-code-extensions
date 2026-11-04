@@ -1,3 +1,9 @@
+## [0.14.1](https://github.com/yurii-bondar/vs-code-extensions/compare/claudestrator-v0.14.0...claudestrator-v0.14.1) (2026-11-04)
+
+### Bug Fixes
+
+* **claudestrator:** examples in the dashboard and its messages use made-up names ([06c3c62](https://github.com/yurii-bondar/vs-code-extensions/commit/06c3c62c8dd4c65cee7ddda836423052e7f0bffc))
+
 ## [0.14.0](https://github.com/yurii-bondar/vs-code-extensions/compare/claudestrator-v0.13.0...claudestrator-v0.14.0) (2026-11-04)
 
 ### Features
