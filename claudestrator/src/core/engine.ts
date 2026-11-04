@@ -1351,6 +1351,9 @@ class Engine extends EventEmitter {
           try {
             for (const r of targets) {
               this.setLive(taskId, { phase: 'gates', step, key, text: `Running gates in ${r.name}` });
+              // The checks see the repo as a commit would: without Claude Code's empty staging folders, which its
+              // session makes again before its next command.
+              await new GitRepo(r.dir).removeWriteStaging();
               runs.push(
                 await runGates({
                   // "Only if changed" compares with the base this task's branch started from.

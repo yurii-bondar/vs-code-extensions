@@ -223,37 +223,38 @@ test("git: a branch another task made holds that task's work, and is not taken f
   assert.equal((await prepareRepos(ws, a, config)).ok, true, 'its own task goes on there');
 });
 
-test("git: Claude Code's empty staging folders go before a commit, and nothing an agent wrote goes with them", async () => {
+test("git: Claude Code's empty staging folders go before checks and a commit, and nothing an agent wrote goes with them", async () => {
   const ws = workspace(['api'], '');
   const dir = path.join(ws, 'api');
   const repo = new GitRepo(dir);
   const mk = (...p: string[]) => fs.mkdirSync(path.join(dir, ...p), { recursive: true });
-  // The repo's own folders, tracked as `backend/src` is.
-  for (const d of ['src', 'lib', 'web']) {
-    mk(d);
-    fs.writeFileSync(path.join(dir, d, 'index.ts'), 'export {};\n');
-  }
+  const put = (file: string, text: string) => fs.writeFileSync(path.join(dir, file), text);
+  // The repo's own folders, tracked as `backend/src` is, a tracked `.claude/` and an ignored node_modules.
+  for (const d of ['src', 'lib', 'web', '.claude']) mk(d);
+  for (const f of ['src/index.ts', 'lib/index.ts', 'web/index.ts', '.claude/settings.json']) put(f, '{}\n');
+  put('.gitignore', 'node_modules/\n');
   git(dir, 'add', '-A');
   git(dir, 'commit', '-q', '-m', 'modules');
-  // In a folder an agent worked from: a `.claude/` with only the staging folder in it, as a module map would list it.
+  // Where agents' sessions worked: a folder of the repo, the repo's root, and a new folder an agent made.
   mk('src', '.claude', '.cc-writes');
-  // Beside the repo's own tracked `.claude/`: only the staging folder goes.
   mk('.claude', '.cc-writes');
-  fs.writeFileSync(path.join(dir, '.claude', 'settings.json'), '{}\n');
-  git(dir, 'add', '.claude/settings.json');
-  git(dir, 'commit', '-q', '-m', 'settings');
-  // One a file is in, and a `.claude/` with an agent's own file beside it: they stay.
+  mk('newmod', 'deep', '.claude', '.cc-writes');
+  put('newmod/deep/index.ts', 'export {};\n');
+  // One a file is in, a `.claude/` with an agent's own file beside it, and one in a folder the repo ignores: they stay.
   mk('lib', '.claude', '.cc-writes');
-  fs.writeFileSync(path.join(dir, 'lib', '.claude', '.cc-writes', 'tmp'), 'x');
+  put('lib/.claude/.cc-writes/tmp', 'x');
   mk('web', '.claude', '.cc-writes');
-  fs.writeFileSync(path.join(dir, 'web', '.claude', 'notes.md'), 'mine\n');
+  put('web/.claude/notes.md', 'mine\n');
+  mk('node_modules', 'x', '.claude', '.cc-writes');
 
-  assert.deepEqual((await repo.removeWriteStaging()).sort(), ['.claude/.cc-writes', 'src/.claude', 'web/.claude/.cc-writes']);
+  assert.deepEqual((await repo.removeWriteStaging()).sort(), ['.claude/.cc-writes', 'newmod/deep/.claude', 'src/.claude', 'web/.claude/.cc-writes']);
   assert.ok(!fs.existsSync(path.join(dir, 'src', '.claude')), 'the folder made only for it goes too');
+  assert.ok(fs.existsSync(path.join(dir, 'newmod', 'deep', 'index.ts')), "the agent's new folder stays, with its work");
   assert.ok(fs.existsSync(path.join(dir, '.claude', 'settings.json')));
   assert.ok(fs.existsSync(path.join(dir, 'lib', '.claude', '.cc-writes', 'tmp')), 'a staging folder with a file in it stays');
   assert.ok(fs.existsSync(path.join(dir, 'web', '.claude', 'notes.md')));
+  assert.ok(fs.existsSync(path.join(dir, 'node_modules', 'x', '.claude', '.cc-writes')), 'an ignored folder is not walked');
   assert.deepEqual(await repo.removeWriteStaging(), [], 'a second time finds nothing');
 
-  assert.deepEqual(writeStagingDirs(['a/.claude/', '.claude/.cc-writes/', 'node_modules/', 'x.claude/', 'b/.claude/rules/']), ['a/.claude', '.claude/.cc-writes']);
+  assert.deepEqual(writeStagingDirs(['src/', 'src/.claude/', 'src/.claude/.cc-writes/', 'node_modules/', 'x.cc-writes/']), ['src/.claude/.cc-writes']);
 });

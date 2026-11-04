@@ -111,15 +111,12 @@ const OWN = [`${ORCH_DIR}/`, '.claudestrator/'];
 const isOwn = (file: string): boolean => OWN.some((p) => file === p.slice(0, -1) || file.startsWith(p));
 const EXCLUDE = OWN.map((p) => `:(exclude)${p.slice(0, -1)}`);
 
-/** The folder Claude Code stages its atomic writes in, inside a `.claude/` folder. */
+/** The folder Claude Code stages its atomic writes in, made in a `.claude/` folder. */
 const WRITE_STAGING = '.cc-writes';
 
-/**
- * Of the untracked folders `git ls-files --others --directory` lists (`a/.claude/`, `.claude/.cc-writes/`), the ones that
- * may be Claude Code's staging: a `.claude/.cc-writes/`, or a `.claude/` with nothing tracked in it. Relative, no slash.
- */
+/** Of what `git ls-files --directory` lists, the `.cc-writes/` folders, relative and without the slash. */
 function writeStagingDirs(listed: readonly string[]): string[] {
-  return listed.filter((e) => /(^|\/)\.claude\/(\.cc-writes\/)?$/.test(e)).map((e) => e.replace(/\/$/, ''));
+  return listed.filter((e) => /(^|\/)\.cc-writes\/$/.test(e)).map((e) => e.slice(0, -1));
 }
 
 class GitRepo {
@@ -175,29 +172,25 @@ class GitRepo {
 
   /** `git status --porcelain` lines (`XY path`): uncommitted and untracked work. */
   /**
-   * Removes the empty folders Claude Code leaves for its atomic writes (`.cc-writes`, in the `.claude/` of each folder a
-   * session worked from). Git ignores them, but a check that lists folders, such as a pre-commit hook mapping the
-   * modules, takes one for the repo's own. Only empty ones go, and a `.claude/` that held nothing else: what an agent
-   * wrote stays. Returns what it removed, relative to the repo.
+   * Removes the empty folders Claude Code leaves for its atomic writes: `.cc-writes`, which it makes in the `.claude/` of
+   * each folder a session starts or `cd`s into (and again before its next sandboxed command). Git ignores them, but a
+   * check that lists folders from disk, such as a pre-commit hook mapping the modules, takes one for the repo's own. Only
+   * empty ones go, with a `.claude/` they leave empty: what an agent wrote stays. Returns what it removed, relative.
    */
   async removeWriteStaging(): Promise<string[]> {
-    // Untracked folders, empty ones and ignored ones too, each listed once without what is under it.
-    const listed = paths((await this.git('ls-files', '-z', '--others', '--directory')).stdout);
+    // Every `.cc-writes/` outside git, in new folders too; folders the repo ignores (node_modules) are not walked.
+    const listed = paths((await this.git('ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--exclude', WRITE_STAGING, '--directory')).stdout);
     const removed: string[] = [];
     for (const rel of writeStagingDirs(listed)) {
-      const dir = path.join(this.dir, rel);
-      const staging = path.basename(dir) === WRITE_STAGING ? dir : path.join(dir, WRITE_STAGING);
-      const inside = await fs.promises.readdir(staging).catch(() => null);
-      if (!inside || inside.length) continue;
-      // A `.claude/` listed whole holds nothing tracked: it goes with its staging folder when that is all it holds.
-      const alone = staging !== dir && (await fs.promises.readdir(dir).catch(() => [])).length === 1;
       try {
-        await fs.promises.rmdir(staging);
-        if (alone) await fs.promises.rmdir(dir);
-        removed.push(staging === dir || alone ? rel : path.posix.join(rel, WRITE_STAGING));
+        // rmdir removes only an empty folder: one with a file in it stays.
+        await fs.promises.rmdir(path.join(this.dir, rel));
       } catch {
-        // written to meanwhile, or not ours to remove: it stays
+        continue;
       }
+      const parent = path.posix.dirname(rel);
+      const gone = path.posix.basename(parent) === '.claude' && (await fs.promises.rmdir(path.join(this.dir, parent)).then(() => true, () => false));
+      removed.push(gone ? parent : rel);
     }
     return removed;
   }
