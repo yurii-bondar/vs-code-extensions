@@ -1,5 +1,7 @@
 .vscode/**
 *.vsix
+# where release builds and local copies of past packages are kept
+vsix/**
 test/**
 dist/test/**
 **/*.ts
