@@ -205,21 +205,26 @@ interface Views {
           <div data-region="task-header"></div>
           <div data-region="task-alerts"></div>
           <div data-region="task-perms"></div>
-          <div data-region="task-checkpoint"></div>
-          <div data-region="task-result"></div>
-          <div data-region="task-pipeline"></div>
-          <div data-region="task-steps"></div>
-          <div class="task-grid">
-            <div class="task-main">
-              <div class="tabs" data-region="task-tabs"></div>
-              <div class="tab-body" data-tab="output">
-                <div class="transcript-head" data-region="transcript-head"></div>
-                <div class="transcript" id="transcript"></div>
-                <div data-region="message-box"></div>
+          <div class="task-layout">
+            <nav class="task-rail" aria-label="Pipeline">
+              <div data-region="task-progress"></div>
+              <div data-region="task-steps"></div>
+            </nav>
+            <div class="task-work">
+              <div data-region="task-checkpoint"></div>
+              <div data-region="task-result"></div>
+              <div data-region="task-pipeline"></div>
+              <div class="task-main">
+                <div class="tabs" data-region="task-tabs"></div>
+                <div class="tab-body" data-tab="output">
+                  <div class="transcript-head" data-region="transcript-head"></div>
+                  <div class="transcript" id="transcript"></div>
+                  <div data-region="message-box"></div>
+                </div>
+                <div class="tab-body" data-tab="activity" data-region="tab-activity"></div>
+                <div class="tab-body" data-tab="files" data-region="tab-files"></div>
+                <div class="tab-body" data-tab="ticket" data-region="tab-ticket"></div>
               </div>
-              <div class="tab-body" data-tab="activity" data-region="tab-activity"></div>
-              <div class="tab-body" data-tab="files" data-region="tab-files"></div>
-              <div class="tab-body" data-tab="ticket" data-region="tab-ticket"></div>
             </div>
             <aside class="task-aside" data-region="task-aside"></aside>
           </div>
@@ -312,11 +317,9 @@ interface Views {
         patch('task-checkpoint', d.checkpointFull ? checkpointHtml(d) : '');
       }
       patch('task-result', reportHtml(d));
-      if (patch('task-steps', stepsHtml(d))) {
-        const strip = $('.steps');
-        const focus = strip && (strip.querySelector<HTMLElement>('.st.s-running, .st.s-waiting, .st.s-failed, .st.s-interrupted') || strip.querySelector<HTMLElement>('.st.selected'));
-        if (strip && focus) strip.scrollLeft = Math.max(0, focus.offsetLeft - strip.clientWidth / 2 + focus.clientWidth / 2);
-      }
+      patch('task-progress', progressHtml(d));
+      patch('task-steps', stepsHtml(d));
+      $('.task-rail')?.classList.toggle('steps-open', Boolean(S.ui.stepsOpen));
       // A re-render would drop the chip being dragged.
       if (!pipeDragging()) patch('task-pipeline', pipelineHtml(d));
       patch('task-tabs', tabsHtml(d));
@@ -453,6 +456,11 @@ interface Views {
       },
       'pipe-toggle': () => {
         S.ui.pipeEdit = !S.ui.pipeEdit;
+        persist();
+        views.task.render();
+      },
+      'toggle-steps': () => {
+        S.ui.stepsOpen = !S.ui.stepsOpen;
         persist();
         views.task.render();
       },
@@ -736,6 +744,28 @@ interface Views {
 
   // ---------- steps ----------
 
+  /**
+   * The pipeline's heading: where the task is ("step 3 of 10") and Edit. A narrow panel shows the steps as segments,
+   * with the list behind a toggle.
+   */
+  function progressHtml(d: TaskScreen) {
+    const n = d.steps.length;
+    if (!n) return '';
+    const done = d.steps.filter((s) => s.status === 'done' || s.status === 'skipped').length;
+    const now = d.steps.find((s) => s.status !== 'done' && s.status !== 'skipped' && s.status !== 'pending');
+    const open = Boolean(S.ui.stepsOpen);
+    return `<div class="task-progress">
+      <div class="tp-head">
+        <h4>Pipeline <span class="tp-count">· step ${Math.min(done + 1, n)} of ${n}</span></h4>
+        ${d.pipelineEdit && !S.ui.pipeEdit ? `<button class="btn ghost sm" data-action="pipe-toggle" title="Add, remove or reorder the agents still to come in this task">${icon('edit')}Edit</button>` : ''}
+      </div>
+      <div class="tp-narrow">
+        <div class="segments" aria-hidden="true">${d.steps.map((s) => `<span class="seg s-${s.status}"></span>`).join('')}</div>
+        <button class="btn ghost sm" data-action="toggle-steps" aria-expanded="${open}">${now ? `${esc(stepName(now))} · ` : ''}${open ? 'Hide steps' : 'Show steps'}</button>
+      </div>
+    </div>`;
+  }
+
   function stepsHtml(d: TaskScreen) {
     const c = colors();
     let round = 1;
@@ -781,7 +811,8 @@ interface Views {
   function pipelineHtml(d: TaskScreen) {
     const pe = d.pipelineEdit;
     if (!pe) return '';
-    if (!S.ui.pipeEdit) return `<div class="pipe-bar"><button class="btn ghost sm" data-action="pipe-toggle" title="Add, remove or reorder the agents still to come in this task">${icon('edit')}Edit pipeline</button></div>`;
+    // Closed, the editor is the Edit button in the pipeline's heading (progressHtml).
+    if (!S.ui.pipeEdit) return '';
     return `<section class="card pipe-editor">
       <div class="pipe-head">
         <div><h3>${icon('edit')}Pipeline of this task</h3>

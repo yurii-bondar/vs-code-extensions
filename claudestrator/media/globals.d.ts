@@ -119,6 +119,8 @@ interface UiState {
   showAllDone?: boolean;
   taskTab?: string;
   pipeEdit?: boolean;
+  /** A narrow task screen: the pipeline's steps listed, not only as segments. */
+  stepsOpen?: boolean;
   /** What "Fix in chat" runs Claude Code with: a model alias or id (`inherit`: the account's default), an effort or ''. */
   fixModel?: string;
   fixEffort?: string;
