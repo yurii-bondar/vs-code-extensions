@@ -31,7 +31,7 @@ interface HomeView extends View {
   start(): Promise<void>;
 }
 
-/** Every scenario as a card; the one in `S.ui.scEdit` has its editor open. */
+/** The scenarios listed on the left; the one in `S.ui.scEdit` is on the right, with its editor. */
 interface ScenariosView extends View {
   /** The libraries this project uses, for the page's own section. */
   libs: LibraryView[];
@@ -1220,7 +1220,6 @@ interface Views {
     async enter() {
       $('#view')!.innerHTML = '<div class="page scenarios-page" data-region="scenarios-page"></div>';
       await this.load();
-      $('.sc-card.open')?.scrollIntoView({ block: 'nearest' });
     },
     async load() {
       const [, data] = await Promise.all([loadOverview(), call('config')]);
@@ -1249,49 +1248,63 @@ interface Views {
         const lib = own.source && own.source.startsWith('library:') ? own.source.slice('library:'.length) : '';
         return lib ? `<span class="chip small lib-chip" title="${esc(`From the library ${lib}`)}">${icon('folder')}${esc(lib)}</span>` : '<span class="chip small" title="Defined in this project\'s or your own config.yaml">yours</span>';
       };
-      const card = (id: string) => {
+      const ids = views.home.scenarioIds();
+      // One scenario is always on the right: the one picked, else Deliver. Its editor saves to it (S.ui.scEdit).
+      if (!S.ui.scDraft && (!S.ui.scEdit || !ids.includes(S.ui.scEdit))) S.ui.scEdit = ids[0] ?? null;
+      const sel = S.ui.scDraft ? null : S.ui.scEdit;
+      const item = (id: string) => {
         const x = scInfo(id);
-        const open = S.ui.scEdit === id;
         const agents = views.home.scenarioAgents(id).filter((a) => a.enabled);
-        return `<article class="card sc-card ${open ? 'open' : ''}">
-          <div class="sc-card-head">
+        const on = id === sel;
+        return `<button class="sc-entry ${on ? 'selected' : ''}" data-action="sc-edit" data-id="${esc(id)}"${on ? ' aria-current="true"' : ''}>
+          <span class="sc-entry-head">${icon(x.icon)}<b>${esc(x.label)}</b>${origin(id)}</span>
+          <span class="muted small">${esc(x.hint)}</span>
+          <span class="sc-entry-agents">${agents.length ? agents.map((a) => `<span class="${agentColor(a.color)}"><span class="adot"></span></span>`).join('') : ''}<span class="muted small">${agents.length ? plural(agents.length, 'agent') : 'no agents yet'}</span></span>
+        </button>`;
+      };
+      const detail = (id: string) => {
+        const x = scInfo(id);
+        return `<div class="sc-detail-head">
             <span class="sc-card-icon">${icon(x.icon)}</span>
-            <div class="sc-card-title"><b>${esc(x.label)}</b>${origin(id)}<span class="muted small">${esc(x.hint)}</span></div>
+            <div class="sc-card-title"><h2>${esc(x.label)}</h2>${origin(id)}<span class="muted small">${esc(x.hint)}</span></div>
             <div class="sc-card-actions">
-              <button class="btn sm" data-action="sc-use" data-id="${esc(id)}" title="Start a task with ${esc(x.label)}">${icon('play')}Use</button>
-              <button class="btn sm ${open ? 'primary' : ''}" data-action="sc-edit" data-id="${esc(id)}" title="${open ? 'Close the editor' : `Edit ${esc(x.label)}: agents, their order${x.custom ? ', models and effort' : ''}`}">${icon(open ? 'check' : 'edit')}${open ? 'Done' : 'Edit'}</button>
-              ${c.custom.find((s) => s.id === id)?.source === 'project' ? libraryMove('scenario', id, this.libs) : ''}
-              ${id === 'deliver' ? '' : `<button class="icon-btn sc-del" data-action="sc-delete" data-id="${esc(id)}" title="Delete ${esc(x.label)}">${icon('trash')}</button>`}
+              <button class="btn sm" data-action="sc-use" data-id="${esc(id)}" title="Start a task with ${esc(x.label)}">${icon('play')}Use in a new task</button>
+              ${c.custom.find((sc) => sc.id === id)?.source === 'project' ? libraryMove('scenario', id, this.libs) : ''}
+              ${id === 'deliver' ? '' : `<button class="icon-btn sc-del" data-action="sc-delete" data-id="${esc(id)}" aria-label="Delete ${esc(x.label)}" title="Delete ${esc(x.label)}">${icon('trash')}</button>`}
             </div>
           </div>
-          ${open ? this.editorHtml(id) : `<div class="sc-agents">${agents.length ? agents.map((a) => `<span class="${agentColor(a.color)}"><span class="adot"></span>${esc(a.name)}</span>`).join('<span class="pipe-arrow">→</span>') : '<span class="muted">no agents yet</span>'}</div>`}
-        </article>`;
+          ${this.editorHtml(id)}`;
       };
       const removed = c.removedScenarios || [];
       patch(
         'scenarios-page',
         `<div class="page-head">
           <div><h1>${icon('wand')}Scenarios</h1>
-          <p class="lead">What a task is for, and which agents do it in what order. Pick one in the task composer, or let your words pick it. Your own scenarios and those from libraries can set each agent's model and effort for themselves.</p></div>
-          <div class="row"><button class="btn" data-action="backup-save" title="Save this project's agents, pipeline and scenarios to a file">${icon('download')}Save backup</button><button class="btn" data-action="backup-restore" title="Bring agents, pipeline and scenarios back from a backup file; ones with the same name are replaced">${icon('upload')}Restore</button><button class="btn" data-action="open-config">${icon('edit')}config.yaml</button><button class="btn primary" data-action="sc-new">${icon('plus')}New scenario</button></div>
+          <p class="lead">What a task is for, and which agents do it in what order. Pick one in the task composer, or let your words pick it.</p></div>
+          <div class="row"><button class="btn ghost" data-action="open-config">${icon('edit')}config.yaml</button><button class="btn" data-action="backup-save" title="Save this project's agents, pipeline and scenarios to a file">${icon('download')}Save backup</button><button class="btn" data-action="backup-restore" title="Bring agents, pipeline and scenarios back from a backup file; ones with the same name are replaced">${icon('upload')}Restore</button><button class="btn primary" data-action="sc-new">${icon('plus')}New scenario</button></div>
         </div>
-        <div class="sc-cards">${this.draftHtml()}${views.home.scenarioIds().map(card).join('')}</div>
-        ${removed.length ? `<h3 class="section-title">Removed</h3><div class="row">${removed.map((id) => `<button class="btn" data-action="sc-restore" data-id="${esc(id)}" title="${esc(SCENARIO_INFO[id]!.hint)}">${icon('refresh')}Bring back ${esc(SCENARIO_INFO[id]!.label)}</button>`).join('')}</div>` : ''}
-        <p class="muted small">Saved to <code>.claudestrator/config.yaml</code>: new tasks run the new order, running tasks keep theirs (change those on the task screen). A change to a library's scenario is kept in this project's config; the library stays as it is.</p>
-        <h3 class="section-title">Libraries</h3>
-        <p class="muted small">Your own scenarios together with the agents they run, in a folder of their own (<code>library.yaml</code>, instructions in <code>prompts/</code>), kept anywhere on disk: for all your projects or for this one and its team. Adding one brings in both: its scenarios show up above, its agents on the Agents page. They load before your config, so this project can change a library's agent or scenario without touching the library; an agent only a library has is not in the delivery pipeline until you add it there.</p>
-        ${this.libs.map(libraryBlock).join('')}
-        <div class="row"><button class="btn" data-action="lib-add">${icon('plus')}Add library…</button></div>`
+        <div class="sc-layout">
+          <div class="sc-list">
+            ${ids.map(item).join('')}
+            ${removed.length ? `<h4 class="sc-list-head">Removed</h4>${removed.map((id) => `<button class="btn ghost sm" data-action="sc-restore" data-id="${esc(id)}" title="${esc(SCENARIO_INFO[id]!.hint)}">${icon('refresh')}Bring back ${esc(SCENARIO_INFO[id]!.label)}</button>`).join('')}` : ''}
+          </div>
+          <div class="sc-list sc-libs">
+            <h4 class="sc-list-head" title="Your own scenarios with the agents they run, in a folder of their own (library.yaml, instructions in prompts/), for all your projects or for this one. They load before your config, so this project can change them without touching the library.">Libraries</h4>
+            ${this.libs.map(libraryBlock).join('')}
+            <button class="btn ghost sm" data-action="lib-add">${icon('plus')}Add library…</button>
+          </div>
+          <section class="card sc-detail ${S.ui.scDraft ? 'sc-draft' : ''}">${S.ui.scDraft ? this.draftHtml() : sel ? detail(sel) : ''}</section>
+        </div>
+        <p class="muted small">Saved to <code>.claudestrator/config.yaml</code>: new tasks run the new order, running tasks keep theirs (change those on the task screen). A change to a library's scenario is kept in this project's config; the library stays as it is.</p>`
       );
     },
     draftHtml() {
       const d = S.ui.scDraft;
       const c = okConfig();
       if (!d || !c) return '';
-      return `<article class="card sc-card open sc-draft">
-          <div class="sc-card-head">
+      return `<div class="sc-detail-head">
             <span class="sc-card-icon">${icon('wand')}</span>
-            <div class="sc-card-title"><b>${esc(d.label)}</b><span class="chip small">not saved yet</span><span class="muted small">It is saved to config.yaml when you add its first agent.</span></div>
+            <div class="sc-card-title"><h2>${esc(d.label)}</h2><span class="chip small">not saved yet</span><span class="muted small">It is saved to config.yaml when you add its first agent.</span></div>
             <div class="sc-card-actions"><button class="btn sm" data-action="sc-draft-cancel">${icon('x')}Cancel</button></div>
           </div>
           <div class="pipe-editor sc-editor">
@@ -1301,8 +1314,7 @@ interface Views {
             </div>
             <p class="muted small">Add the first agent: agents that change code make it end with draft PRs, readiness or audit agents make it a read-only report.</p>
             ${pipeRowHtml('scenario-draft', { stages: [], choices: c.catalog, empty: 'No agents yet.' })}
-          </div>
-        </article>`;
+          </div>`;
     },
     editorHtml(sc) {
       const c = okConfig();
@@ -1560,7 +1572,8 @@ interface Views {
       if (ed) pipeSave(pipe, [...ed.names(), name], `${name} added at the end`);
     },
     'sc-edit': (el) => {
-      S.ui.scEdit = S.ui.scEdit === el.dataset.id ? null : el.dataset.id;
+      S.ui.scEdit = el.dataset.id;
+      S.ui.scDraft = null;
       persist();
       views.scenarios.render();
     },
@@ -1830,7 +1843,7 @@ interface Views {
       }
       S.ui.scDraft = { ...d, label: el.value.trim() };
       persist();
-      const title = $('.sc-draft .sc-card-title b');
+      const title = $('.sc-draft .sc-card-title h2');
       if (title) title.textContent = el.value.trim();
     },
     'scd-desc': (el) => {

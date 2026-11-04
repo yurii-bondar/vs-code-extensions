@@ -744,9 +744,12 @@ span.gate-chip { cursor: default; }
 .check.on { background: var(--cs-status-ok-text); border-color: var(--cs-status-ok-text); }
 
 /* ---------- agents ---------- */
-.agent-list { display: flex; flex-direction: column; gap: 10px; }
-.agent-card { background: var(--cs-bg-surface); border: 1px solid var(--cs-border-default); border-left: 4px solid var(--agent, var(--cs-text-secondary)); border-radius: var(--cs-radius-lg); padding: 12px 14px; transition: border-color 0.12s, opacity 0.12s; }
-.agent-card.disabled { opacity: 0.6; }
+/* Agents as a grid of cards; one opened for its details takes the whole row. */
+.agent-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: var(--cs-space-3); align-items: start; }
+.agent-card.open { grid-column: 1 / -1; }
+.agent-card { background: var(--cs-bg-surface); border: 1px solid var(--cs-border-default); border-radius: var(--cs-radius-lg); padding: 12px 14px; transition: border-color 0.12s, opacity 0.12s; }
+.agent-card.disabled { border-style: dashed; }
+.agent-card.disabled .ac-name, .agent-card.disabled .ac-desc { color: var(--cs-text-secondary); }
 .agent-card.dragging { opacity: 0.35; }
 .agent-card.drop-before { box-shadow: 0 -3px 0 0 var(--cs-border-focus); }
 .agent-card.drop-after { box-shadow: 0 3px 0 0 var(--cs-border-focus); }
@@ -762,11 +765,11 @@ span.gate-chip { cursor: default; }
 .out-code { color: var(--cs-status-ok-text); background: color-mix(in srgb, var(--cs-status-ok-text) 14%, transparent); }
 .out-tests { color: var(--cs-status-warn-text); background: color-mix(in srgb, var(--cs-status-warn-text) 14%, transparent); }
 .out-verdict { color: var(--cs-status-err-text); background: color-mix(in srgb, var(--cs-status-err-text) 12%, transparent); }
-.ac-controls { display: flex; align-items: center; gap: 8px; margin: 10px 0 0 calc(16px + 16px + 22px); flex-wrap: wrap; }
+.ac-controls { display: flex; align-items: center; gap: 8px; margin: 10px 0 0; flex-wrap: wrap; }
 .mini-field { display: inline-flex; align-items: center; gap: 6px; color: var(--cs-text-secondary); }
 .mini-field select { width: auto; }
 .custom-model { width: 200px; }
-.ac-more { margin: 12px 0 2px calc(16px + 16px + 22px); padding-top: 12px; border-top: 1px dashed var(--cs-border-default); }
+.ac-more { margin: 12px 0 2px; padding-top: 12px; border-top: 1px dashed var(--cs-border-default); }
 .sources { display: flex; flex-direction: column; gap: 3px; padding-top: 4px; word-break: break-all; }
 .preview summary { cursor: pointer; color: var(--cs-text-secondary); font-size: var(--cs-font-sm); }
 .new-agent { border-color: var(--cs-border-focus); }
@@ -936,8 +939,6 @@ b.err, .lim-pct.err { color: var(--cs-status-err-text); }
 .sc-item.current .sc-pick > .ic { color: var(--cs-border-focus); }
 .sc-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .sc-text b { display: flex; align-items: center; gap: 6px; }
-.sc-agents { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: var(--cs-font-xs); margin-top: 2px; }
-.sc-agents > span { display: inline-flex; align-items: center; gap: 4px; }
 .sc-editor { margin: 10px 0 0; padding: 10px 12px; border-radius: var(--cs-radius-lg); border: 1px dashed var(--cs-border-strong); background: var(--cs-bg-app); }
 .pipe-chip.off { color: var(--cs-text-secondary); border-style: dashed; }
 .sc-opt { display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: var(--cs-radius-lg); padding: 3px 11px; background: transparent; color: var(--cs-text-secondary); font: inherit; font-size: var(--cs-font-sm); cursor: pointer; white-space: nowrap; }
@@ -1015,16 +1016,32 @@ b.err, .lim-pct.err { color: var(--cs-status-err-text); }
 .menu .sc-foot .sc-manage > .ic { color: var(--cs-border-focus); }
 
 /* The Scenarios page: one card per scenario, its editor opening inside the card. */
-.sc-cards { display: flex; flex-direction: column; gap: 10px; }
-.sc-card { padding: 12px 14px; }
-.sc-card.open { border-color: var(--cs-border-focus); }
-.sc-card-head { display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
+/* The Scenarios page: the list on the left, the picked scenario and its pipeline on the right. */
+.sc-layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); grid-template-areas: "list detail" "libs detail"; grid-template-rows: auto 1fr; gap: var(--cs-space-2) var(--cs-space-6); align-items: start; margin-bottom: var(--cs-space-4); }
+.sc-layout > .sc-list { grid-area: list; }
+.sc-layout > .sc-libs { grid-area: libs; }
+.sc-layout > .sc-detail { grid-area: detail; }
+.sc-list { display: flex; flex-direction: column; gap: var(--cs-space-2); min-width: 0; }
+.sc-list-head { margin: var(--cs-space-4) 0 0; }
+.sc-list > .btn { align-self: flex-start; }
+.sc-entry { display: flex; flex-direction: column; gap: var(--cs-space-1); width: 100%; padding: var(--cs-space-3) var(--cs-space-4); border-radius: var(--cs-radius-lg); border: 1px solid var(--cs-border-default); background: var(--cs-bg-surface); color: var(--cs-text-primary); font: inherit; text-align: left; cursor: pointer; }
+.sc-entry:hover { border-color: var(--cs-border-strong); }
+.sc-entry.selected { border-color: var(--cs-border-focus); background: var(--cs-bg-selected); }
+.sc-entry-head { display: flex; align-items: center; gap: var(--cs-space-2); flex-wrap: wrap; }
+.sc-entry-head > .ic { color: var(--cs-border-focus); }
+.sc-entry-agents { display: flex; align-items: center; gap: 4px; }
+.sc-entry-agents .muted { margin-left: 4px; }
+.sc-detail { padding: var(--cs-space-5); min-width: 0; }
+.sc-detail .sc-editor { margin-top: var(--cs-space-4); }
+.sc-detail-head { display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
+.sc-detail-head h2 { margin: 0; }
+.sc-list .lib-block { margin: 0; padding: var(--cs-space-3); border: 1px solid var(--cs-border-default); border-radius: var(--cs-radius-lg); background: var(--cs-bg-surface); }
+@media (max-width: 860px) { .sc-layout { grid-template-columns: minmax(0, 1fr); grid-template-areas: "list" "detail" "libs"; grid-template-rows: auto; gap: var(--cs-space-4); } }
 .sc-card-icon { flex: none; display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: var(--cs-radius-md); color: var(--cs-border-focus); background: color-mix(in srgb, var(--cs-border-focus) 12%, transparent); }
 .sc-card-title { flex: 1; min-width: 200px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .sc-card-title .muted { flex-basis: 100%; }
 .sc-card-actions { flex: none; display: flex; align-items: center; gap: 6px; }
 .sc-card-actions .sc-del:hover { color: var(--cs-status-err-text); }
-.sc-card > .sc-agents { margin: 8px 0 0 38px; }
 .sc-current.sc-custom .ic, .sc-chip.sc-custom .ic { color: var(--cs-border-focus); }
 .sc-fields { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
 .sc-fields .field { flex: 1 1 220px; margin-bottom: 4px; }

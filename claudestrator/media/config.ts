@@ -163,13 +163,14 @@ interface Views {
       patch(
         'agents',
         `<div class="page-head">
-          <div><h1>${icon('users')}Agents & pipeline</h1>
-          <p class="lead">Agents run top to bottom. What an agent <b>produces</b> decides how it is used: a <b>plan</b> waits for your approval, <b>code</b> runs once per repo of the plan and <b>tests</b> once across all of them (each switchable), with checks after them, and a <b>review</b> sends blocking findings back for a fix round.</p></div>
-          <div class="row"><button class="btn" data-action="backup-save" title="Save agents, pipeline and scenarios to a file">${icon('download')}Save backup</button><button class="btn" data-action="backup-restore" title="Bring agents, pipeline and scenarios back from a backup file">${icon('upload')}Restore</button><button class="btn" data-action="open-config">${icon('edit')}config.yaml</button><button class="btn primary" data-action="agent-new-open">${icon('plus')}New agent</button></div>
+          <div><h1>${icon('users')}Agents</h1>
+          <p class="lead">Every agent this project can run: its model, effort and instructions. What it <b>produces</b> decides how a task uses it: a <b>plan</b> waits for your approval, <b>code</b> runs per repo, <b>tests</b> across them, a <b>review</b> sends blocking findings back for a fix round. <a data-action="nav" data-name="scenarios">Scenarios</a> decide where each one runs.</p></div>
+          <div class="row"><button class="btn ghost" data-action="open-config">${icon('edit')}config.yaml</button><button class="btn" data-action="backup-save" title="Save agents, pipeline and scenarios to a file">${icon('download')}Save backup</button><button class="btn" data-action="backup-restore" title="Bring agents, pipeline and scenarios back from a backup file">${icon('upload')}Restore</button><button class="btn primary" data-action="agent-new-open">${icon('plus')}New agent</button></div>
         </div>
         <div class="card flow-card"><div class="flow-label muted small">A task goes through</div>${outlineHtml(c.outline, colors)}</div>
         ${warningsHtml(c.warnings)}
         ${this.newOpen ? newAgentForm(c) : ''}
+        <h3 class="section-title">In Deliver <span class="muted small">· in this order; drag to reorder</span></h3>
         <div class="agent-list" data-dropzone="pipeline">
           ${inPipeline.map((a, i) => agentCard(a, { index: i, total: inPipeline.length, open: Boolean(open[a.name]), defaults, libraries: c.libraries })).join('')}
         </div>
@@ -180,7 +181,7 @@ interface Views {
           return `<div class="scenario-block"><div class="sb-head">${icon(SCENARIO_INFO[sc]!.icon)}<b>${esc(SCENARIO_INFO[sc]!.label)}</b><span class="muted small">${esc(SCENARIO_INFO[sc]!.hint)}</span></div>
             <div class="agent-list">${agents.length ? agents.map((a) => agentCard(a, { index: -1, total: 0, open: Boolean(open[a.name]), scenario: sc, defaults, libraries: c.libraries })).join('') : `<div class="muted small">No agent: add one that produces a ${esc(OUTPUT_INFO[sc]!.label)} report.</div>`}</div></div>`;
         }).join('')}
-        ${others.length ? `<h3 class="section-title">Not in the pipeline</h3><p class="muted small">Agents that <a data-action="nav" data-name="scenarios">your scenarios</a> run, and agents not used yet.</p><div class="agent-list">${others.map((a) => agentCard(a, { index: -1, total: 0, open: Boolean(open[a.name]), defaults, libraries: c.libraries })).join('')}</div>` : ''}
+        ${others.length ? `<h3 class="section-title">Not in a pipeline</h3><p class="muted small">Agents that <a data-action="nav" data-name="scenarios">your scenarios</a> run, and agents not used yet.</p><div class="agent-list">${others.map((a) => agentCard(a, { index: -1, total: 0, open: Boolean(open[a.name]), defaults, libraries: c.libraries })).join('')}</div>` : ''}
         <p class="muted small">Libraries of your own agents and scenarios are added and removed on the <a data-action="nav" data-name="scenarios">Scenarios</a> page.</p>
         <p class="muted small">Changes are saved to <code>.claudestrator/config.yaml</code> and apply to new tasks; a running task keeps the pipeline it started with, but picks up edited instructions for its next agent.</p>`
       );
@@ -358,7 +359,7 @@ interface Views {
     const act = a.actual;
     const supported = defaults ? (defaults.models.find((m) => m.model === act.model || m.value === a.model)?.efforts ?? []) : null;
     const lineage = a.lineage ?? [];
-    return `<article class="agent-card ${agentColor(a.color)} ${a.enabled ? '' : 'disabled'}" data-name="${esc(a.name)}" draggable="${inPipeline}">
+    return `<article class="agent-card ${agentColor(a.color)} ${a.enabled ? '' : 'disabled'} ${open ? 'open' : ''}" data-name="${esc(a.name)}" draggable="${inPipeline}">
       <div class="ac-top">
         ${inPipeline ? `<span class="grip" title="Drag to reorder">${icon('grip')}</span><span class="ac-index">${index + 1}</span>` : ''}
         <span class="adot big"></span>
