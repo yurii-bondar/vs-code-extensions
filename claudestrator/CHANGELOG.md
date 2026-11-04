@@ -1,3 +1,28 @@
+## [0.14.0](https://github.com/yurii-bondar/vs-code-extensions/compare/claudestrator-v0.13.0...claudestrator-v0.14.0) (2026-11-04)
+
+### Features
+
+* **claudestrator:** a task's pipeline runs down the left of its screen ([9c24260](https://github.com/yurii-bondar/vs-code-extensions/commit/9c2426060a92955280768f786ebf2b8d7fd9693e))
+* **claudestrator:** Integrations holds the MCP servers and Jira, Settings lists its sections ([e8a1bcf](https://github.com/yurii-bondar/vs-code-extensions/commit/e8a1bcf2aa33fb56f63a4316aacc1055a3dd6056))
+* **claudestrator:** Repos & checks is a table, each repo's form under its row ([9840fbe](https://github.com/yurii-bondar/vs-code-extensions/commit/9840fbe3a8f8746da880833fe6d94aa27187da9f))
+* **claudestrator:** Scenarios list on the left with the picked one open, Agents as a grid ([e3a22bb](https://github.com/yurii-bondar/vs-code-extensions/commit/e3a22bba768f456b1e6dd167f0226d46760ad36d))
+* **claudestrator:** Tasks folds the tree when clicked, like the other rail items ([8dc0c63](https://github.com/yurii-bondar/vs-code-extensions/commit/8dc0c63fac05c91acf23806e75e0dbf99b91d1e2))
+* **claudestrator:** Tasks in the rail folds the task tree, Setup follows it ([2b10ffe](https://github.com/yurii-bondar/vs-code-extensions/commit/2b10ffeed9cebf9806aa5b74c1db2df27c4c3186))
+* **claudestrator:** text cut short in the dashboard shows in full on hover ([d18645a](https://github.com/yurii-bondar/vs-code-extensions/commit/d18645acb37678ba617f482e0e37f8441ff11999))
+* **claudestrator:** the dashboard rail lists the tasks as the sidebar tree does ([c77188b](https://github.com/yurii-bondar/vs-code-extensions/commit/c77188b261059e38b30f6a5f44e1be9ca672b845))
+* **claudestrator:** the dashboard's sections move to a side rail ([fffffc7](https://github.com/yurii-bondar/vs-code-extensions/commit/fffffc7ab26f67c17467705dbf85cb80ae2d03a6))
+* **claudestrator:** the Tasks page reads as an inbox ([4a30616](https://github.com/yurii-bondar/vs-code-extensions/commit/4a3061670cd16712bef5779f1e106841529960c5))
+
+### Bug Fixes
+
+* **claudestrator:** a long repo name in a task's details wraps inside its column ([ff692cf](https://github.com/yurii-bondar/vs-code-extensions/commit/ff692cf2d0aea081349da9de2c5b1497da243eaf))
+* **claudestrator:** a task's details stay in their column ([30f8628](https://github.com/yurii-bondar/vs-code-extensions/commit/30f8628a526e0bbf4701def571e45c16c517bcb1))
+* **claudestrator:** Claude Code's empty staging folders do not fail a commit hook ([21afbe1](https://github.com/yurii-bondar/vs-code-extensions/commit/21afbe179124c8e019bb2cc9614fcbec5bd2aefe))
+* **claudestrator:** Claude Code's staging folders are gone before checks, in new folders too ([66ec854](https://github.com/yurii-bondar/vs-code-extensions/commit/66ec854ec874f20d18ff2327657df369cf0f8802))
+* **claudestrator:** the .vsix leaves out the vsix folder ([68a8033](https://github.com/yurii-bondar/vs-code-extensions/commit/68a80337ecfe1adbe6c5dc1c939376b25fc20452))
+* **claudestrator:** the dashboard reads light and high-contrast themes ([039570c](https://github.com/yurii-bondar/vs-code-extensions/commit/039570c07b4c0497ebf6bb95886a9d9d023b4dfb))
+* **claudestrator:** the task filter fits the rail, which no longer scrolls sideways ([a5dd3cc](https://github.com/yurii-bondar/vs-code-extensions/commit/a5dd3cc1336f1a23c92151368632a603b4fe4c02))
+
 ## [0.13.0](https://github.com/yurii-bondar/vs-code-extensions/compare/claudestrator-v0.12.1...claudestrator-v0.13.0) (2026-11-04)
 
 ### Features
