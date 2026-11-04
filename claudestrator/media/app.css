@@ -813,6 +813,17 @@ span.gate-chip { cursor: default; }
 
 /* ---------- settings & setup ---------- */
 .settings-card h3 { margin-bottom: 12px; }
+/* Settings: its sections listed on the left, the list jumps to them. */
+.settings-layout { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: var(--cs-space-8); align-items: start; }
+.settings-nav { position: sticky; top: var(--cs-space-5); display: flex; flex-direction: column; gap: 2px; }
+.settings-sections { min-width: 0; }
+.settings-card { scroll-margin-top: var(--cs-space-5); }
+@media (max-width: 760px) {
+  .settings-layout { grid-template-columns: minmax(0, 1fr); gap: var(--cs-space-4); }
+  .settings-nav { position: static; flex-direction: row; flex-wrap: wrap; }
+  .settings-nav .nav-item { width: auto; }
+  .settings-card { scroll-margin-top: 56px; }
+}
 .tool-check { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 6px 0; }
 .tool-check.ok > .ic { color: var(--cs-status-ok-text); }
 .tool-check.bad > .ic, .tool-check.bad b { color: var(--cs-status-err-text); }

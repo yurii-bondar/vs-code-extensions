@@ -401,7 +401,7 @@ interface Views {
     { name: 'agents', label: 'Agents', icon: 'users', group: 'setup' },
     { name: 'scenarios', label: 'Scenarios', icon: 'wand', group: 'setup' },
     { name: 'repos', label: 'Repos & checks', icon: 'repo', group: 'setup' },
-    { name: 'mcp', label: 'MCP', icon: 'plug', group: 'setup' },
+    { name: 'mcp', label: 'Integrations', icon: 'plug', group: 'setup' },
     { name: 'settings', label: 'Settings', icon: 'gear', group: 'setup' },
   ];
 

@@ -433,7 +433,7 @@ interface Views {
       'copy-id': () => call('copy', { text: T.taskId }).then(() => toast('Task id copied', 'ok')),
       'toggle-tool': (el) => el.closest('.tool')?.classList.toggle('open'),
       'task-menu': (el) => el.closest('.menu-wrap')?.classList.toggle('open'),
-      'settings-atlassian': () => go({ name: 'settings', section: 'atlassian' }),
+      'settings-atlassian': () => go({ name: 'mcp' }),
       'post-report': async (el) => {
         el.disabled = true;
         el.classList.add('busy');

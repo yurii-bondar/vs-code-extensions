@@ -47,6 +47,9 @@ interface SettingsView extends View {
 
 interface McpView extends View {
   m: McpData | null;
+  /** For the Jira & Confluence section: the token and site (settings) and the allowed projects (config). */
+  s: SettingsData | null;
+  c: ConfigData | null;
   /** A server's details: `true` while they load, then the text. */
   details: Record<string, true | string>;
   load(refresh?: boolean): Promise<void>;
@@ -682,13 +685,40 @@ interface Views {
     return `<div class="gate-results g-${r.status}"><div class="g-head">${icon('beaker')}<b>${r.status === 'pass' ? 'All checks passed' : r.status === 'fail' ? 'Some checks failed' : 'Skipped'}</b>${r.results.map((x) => `<span class="gate-chip ${x.status === 'pass' ? 'on' : x.status === 'fail' ? 'bad' : ''}">${icon(x.status === 'pass' ? 'check' : x.status === 'fail' ? 'x' : 'chevron')}${esc(x.gate)}${x.ms !== undefined && x.ms >= 1000 ? `<span class="muted">${dur(x.ms)}</span>` : ''}</span>`).join('')}</div>${r.status !== 'pass' ? `<pre class="log small ${r.status === 'fail' ? 'error' : ''}">${esc(r.summary)}</pre>` : ''}</div>`;
   }
 
+  /** "workspace" next to a field that this workspace's config.yaml sets (the user config or a default sets the rest). */
+  function projectTag(c: ConfigData) {
+    const layer = c.layer || {};
+    const fromProject = (keyPath: string[]) => keyPath.reduce<unknown>((o, k) => (isRecord(o) ? o[k] : undefined), layer) !== undefined;
+    return (keyPath: string[]) => (fromProject(keyPath) ? '<span class="chip small" title="Set in this workspace\'s config.yaml">workspace</span>' : '');
+  }
+
+  /** Jira & Confluence, on the Integrations page: how tickets are read, the API token, the projects tasks may come from. */
+  function atlassianSection(s: SettingsData, c: ConfigData) {
+    const cfg = c.ok ? c.config : null;
+    const tag = projectTag(c);
+    return `<section class="card settings-card" id="sec-atlassian"><h3>${icon('jira')}Jira & Confluence</h3>
+      ${s.atlassian.connected ? `<div class="tool-check ok">${icon('check')}<b>Reading tickets</b><span>with the API token below (Jira REST)</span></div>` : s.atlassian.mcp ? `<div class="tool-check ok">${icon('check')}<b>Reading tickets</b><span>through the MCP server “${esc(s.atlassian.mcp.server)}”, signed in with Claude Code. No token needed; a short read-only agent reads each issue (a few cents).</span></div>` : `<div class="tool-check bad">${icon('alert')}<b>Reading tickets</b><span>not set up: sign in to an Atlassian MCP server below, or add an API token</span></div>`}
+      <p class="muted small">An API token (optional with MCP) makes reading instant and free, and lets Claudestrator post Jira comments. It is kept in VS Code's secret storage. Create one at <a data-href="https://id.atlassian.com/manage-profile/security/api-tokens">id.atlassian.com</a>.</p>
+      <div class="field-row three">
+        <label class="field"><span>Site</span><input id="at-site" class="input mono" value="${esc(s.atlassian.site)}" placeholder="acme.atlassian.net"></label>
+        <label class="field"><span>Email</span><input id="at-email" class="input" value="${esc(s.atlassian.email)}" placeholder="you@acme.com"></label>
+        <label class="field"><span>API token ${s.atlassian.hasToken ? '<span class="badge tone-ok">saved</span>' : s.atlassian.fromEnv ? '<span class="chip small">from env</span>' : ''}</span><input id="at-token" class="input mono" type="password" placeholder="${s.atlassian.hasToken ? '•••••••• (leave empty to keep)' : 'paste the token'}"></label>
+      </div>
+      <div class="row"><button class="btn primary sm" data-action="at-save">${icon('check')}Save</button><button class="btn sm" data-action="at-test" ${s.atlassian.connected ? '' : 'disabled'}>${icon('zap')}Test connection</button>${s.atlassian.hasToken ? `<button class="btn ghost sm danger" data-action="at-forget">Forget token</button>` : ''}</div>
+      <label class="field"><span>Allowed Jira projects ${tag(['jira', 'allowedProjects'])}<span class="muted">empty = any</span></span><input class="input mono" data-change="set-list" data-path="jira.allowedProjects" value="${esc(cfg ? cfg.jira.allowedProjects.join(', ') : '')}" placeholder="CP, OPS"></label>
+    </section>`;
+  }
+
   // ---------- settings ----------
+
+  /** The sections of Settings, in their order on the page: the list on its left jumps to them. */
+  const SETTINGS_SECTIONS = [['general', 'How agents work'], ['workspace', 'Workspace'], ['safety', 'Safety'], ['claude', 'Claude Code'], ['notifications', 'Notifications'], ['config', 'Config files']] as const;
 
   views.settings = {
     s: null,
     c: null,
     async enter(route) {
-      $('#view')!.innerHTML = `<div class="page narrow settings-page" data-region="settings"></div>`;
+      $('#view')!.innerHTML = `<div class="page settings-page" data-region="settings"></div>`;
       await this.load();
       if (route.section) {
         const el = $(`#sec-${route.section}`);
@@ -711,17 +741,18 @@ interface Views {
       const { s, c } = this;
       if (!s || !c) return;
       const cfg = c.ok ? c.config : null;
-      const layer = c.layer || {};
       const h = s.health;
       const claude = h.checking ? null : h.claude;
       const lang = cfg ? cfg.language : 'English';
       const langs = [...new Set([...c.languages, lang])];
-      const fromProject = (keyPath: string[]) => keyPath.reduce<unknown>((o, k) => (isRecord(o) ? o[k] : undefined), layer) !== undefined;
-      const tag = (keyPath: string[]) => (fromProject(keyPath) ? '<span class="chip small" title="Set in this workspace\'s config.yaml">workspace</span>' : '');
+      const tag = projectTag(c);
       patch(
         'settings',
         `<h1>${icon('gear')}Settings</h1>
         ${!c.ok ? errorsHtml(c.errors) : ''}
+        <div class="settings-layout">
+        <nav class="settings-nav" aria-label="Settings sections">${SETTINGS_SECTIONS.map(([id, label], i) => `<button class="nav-item ${i ? '' : 'active'}" data-action="settings-jump" data-sec="${id}"><span class="nav-label">${label}</span></button>`).join('')}</nav>
+        <div class="settings-sections">
         <section class="card settings-card" id="sec-general"><h3>How agents work</h3>
           <div class="field-row two">
             <label class="field"><span>Language ${tag(['language'])}<span class="muted">of plans, reviews, questions and PR descriptions</span></span>
@@ -780,28 +811,18 @@ interface Views {
           </div>
         </section>
 
-        <section class="card settings-card" id="sec-atlassian"><h3>${icon('jira')}Jira & Confluence</h3>
-          ${s.atlassian.connected ? `<div class="tool-check ok">${icon('check')}<b>Reading tickets</b><span>with the API token below (Jira REST)</span></div>` : s.atlassian.mcp ? `<div class="tool-check ok">${icon('check')}<b>Reading tickets</b><span>through the MCP server “${esc(s.atlassian.mcp.server)}”, signed in with Claude Code. No token needed; a short read-only agent reads each issue (a few cents).</span></div>` : `<div class="tool-check bad">${icon('alert')}<b>Reading tickets</b><span>not set up: sign in to an Atlassian MCP server on the MCP tab, or add an API token below</span><button class="btn sm" data-action="nav" data-name="mcp">${icon('plug')}MCP</button></div>`}
-          <p class="muted small">An API token (optional with MCP) makes reading instant and free, and lets Claudestrator post Jira comments. It is kept in VS Code's secret storage. Create one at <a data-href="https://id.atlassian.com/manage-profile/security/api-tokens">id.atlassian.com</a>.</p>
-          <div class="field-row three">
-            <label class="field"><span>Site</span><input id="at-site" class="input mono" value="${esc(s.atlassian.site)}" placeholder="acme.atlassian.net"></label>
-            <label class="field"><span>Email</span><input id="at-email" class="input" value="${esc(s.atlassian.email)}" placeholder="you@acme.com"></label>
-            <label class="field"><span>API token ${s.atlassian.hasToken ? '<span class="badge tone-ok">saved</span>' : s.atlassian.fromEnv ? '<span class="chip small">from env</span>' : ''}</span><input id="at-token" class="input mono" type="password" placeholder="${s.atlassian.hasToken ? '•••••••• (leave empty to keep)' : 'paste the token'}"></label>
-          </div>
-          <div class="row"><button class="btn primary sm" data-action="at-save">${icon('check')}Save</button><button class="btn sm" data-action="at-test" ${s.atlassian.connected ? '' : 'disabled'}>${icon('zap')}Test connection</button>${s.atlassian.hasToken ? `<button class="btn ghost sm danger" data-action="at-forget">Forget token</button>` : ''}</div>
-          <label class="field"><span>Allowed Jira projects ${tag(['jira', 'allowedProjects'])}<span class="muted">empty = any</span></span><input class="input mono" data-change="set-list" data-path="jira.allowedProjects" value="${esc(cfg ? cfg.jira.allowedProjects.join(', ') : '')}" placeholder="CP, OPS"></label>
-        </section>
-
-        <section class="card settings-card"><h3>${icon('bell')}Notifications</h3>
+        <section class="card settings-card" id="sec-notifications"><h3>${icon('bell')}Notifications</h3>
           <select class="input" data-change="set-setting" data-key="notifications">
             ${[['all', 'When a task needs you, finishes or fails'], ['needsYou', 'Only when a task needs you'], ['off', 'Never']].map(([v, l]) => `<option value="${v}" ${s.notifications === v ? 'selected' : ''}>${l}</option>`).join('')}
           </select>
         </section>
 
-        <section class="card settings-card"><h3>${icon('file')}Config files</h3>
+        <section class="card settings-card" id="sec-config"><h3>${icon('file')}Config files</h3>
           <p class="muted small">Layers, each overriding the one before field by field: built-in defaults → your user config → this workspace's config.</p>
           <div class="row"><button class="btn sm" data-action="open-config">${icon('edit')}Workspace config.yaml</button><button class="btn ghost sm" data-action="open-user-config">${icon('user')}User config.yaml</button></div>
-        </section>`
+        </section>
+        </div>
+        </div>`
       );
     },
     actions: {
@@ -822,16 +843,9 @@ interface Views {
         views.settings.load();
       },
       'open-user-config': () => attempt('openConfig', { which: 'user' }),
-      'at-save': async () => {
-        const token = $<HTMLInputElement>('#at-token')!.value.trim();
-        if (await save('saveAtlassian', { site: $<HTMLInputElement>('#at-site')!.value, email: $<HTMLInputElement>('#at-email')!.value, ...(token && { token }) })) views.settings.load();
-      },
-      'at-forget': async () => {
-        if (await save('saveAtlassian', { site: $<HTMLInputElement>('#at-site')!.value, email: $<HTMLInputElement>('#at-email')!.value, token: '' }, 'Token removed')) views.settings.load();
-      },
-      'at-test': async () => {
-        const me = await attempt('testAtlassian');
-        if (me) toast(`Connected as ${me.name}${me.email ? ` (${me.email})` : ''}`, 'ok');
+      'settings-jump': (el) => {
+        for (const b of $$('.settings-nav .nav-item')) b.classList.toggle('active', b === el);
+        $(`#sec-${el.dataset.sec}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       },
     },
     changes: {
@@ -900,6 +914,8 @@ interface Views {
 
   views.mcp = {
     m: null,
+    s: null,
+    c: null,
     details: {},
     async enter() {
       $('#view')!.innerHTML = `<div class="page mcp-page" data-region="mcp"></div>`;
@@ -907,7 +923,10 @@ interface Views {
       await this.load();
     },
     async load(refresh) {
-      this.m = await call('mcp', { refresh: Boolean(refresh) });
+      const [m, s, c] = await Promise.all([call('mcp', { refresh: Boolean(refresh) }), call('settings'), call('config')]);
+      this.m = m;
+      this.s = s;
+      this.c = c;
       this.render();
     },
     refresh() {
@@ -920,10 +939,12 @@ interface Views {
       const count = (st: string) => servers.filter((x) => x.state === st).length;
       patch(
         'mcp',
-        `<div class="page-head"><div><h1>${icon('plug')}MCP servers</h1>
-          <p class="lead">Connections to external tools (Jira, Grafana, docs…) that Claude Code and the agents can use. The check runs <code>claude mcp list</code>, which contacts every server.</p>
+        `<div class="page-head"><div><h1>${icon('plug')}Integrations</h1>
+          <p class="lead">Tickets, docs and tools the agents can reach: Jira and Confluence, and the MCP servers Claude Code loads for your account. The check runs <code>claude mcp list</code>, which contacts every server.</p>
           ${m.account ? `<div class="acc-line">${icon('user')}Account <b>${esc(m.account.email || m.account.label)}</b><span class="muted small">${esc(m.account.shownDir.replace(/^\/Users\/[^/]+/, '~'))} · ${esc(m.account.sourceText)}</span><button class="link small" data-action="open-account-menu">Switch account</button></div>` : ''}</div>
           <div class="row"><span class="muted small">${m.checking ? '<span class="spinner xs"></span> checking…' : m.checkedAt ? `checked ${ago(m.checkedAt)}` : ''}</span><button class="btn" data-action="mcp-refresh" ${m.checking ? 'disabled' : ''}>${icon('refresh')}Check again</button></div></div>
+        ${this.s && this.c ? `<h3 class="section-title">Tickets</h3>${atlassianSection(this.s, this.c)}` : ''}
+        <h3 class="section-title">MCP servers</h3>
         <div class="mcp-legend">
           <span><span class="mcp-dot s-connected"></span>connected · ${count('connected')}</span>
           <span><span class="mcp-dot s-installed"></span>configured, not checked · ${count('installed')}</span>
@@ -958,7 +979,24 @@ interface Views {
         ${opened ? `<pre class="log small">${esc(opened === true ? 'Loading…' : opened)}</pre>` : ''}
       </div>`;
     },
+    changes: {
+      'set-list': async (el) => {
+        const value = el.value.split(/[\s,]+/).filter(Boolean);
+        if (await save('setValue', { keyPath: el.dataset.path.split('.'), value: value.length ? value : undefined })) views.mcp.load();
+      },
+    },
     actions: {
+      'at-save': async () => {
+        const token = $<HTMLInputElement>('#at-token')!.value.trim();
+        if (await save('saveAtlassian', { site: $<HTMLInputElement>('#at-site')!.value, email: $<HTMLInputElement>('#at-email')!.value, ...(token && { token }) })) views.mcp.load();
+      },
+      'at-forget': async () => {
+        if (await save('saveAtlassian', { site: $<HTMLInputElement>('#at-site')!.value, email: $<HTMLInputElement>('#at-email')!.value, token: '' }, 'Token removed')) views.mcp.load();
+      },
+      'at-test': async () => {
+        const me = await attempt('testAtlassian');
+        if (me) toast(`Connected as ${me.name}${me.email ? ` (${me.email})` : ''}`, 'ok');
+      },
       'mcp-refresh': async () => {
         await views.mcp.load(true);
       },
