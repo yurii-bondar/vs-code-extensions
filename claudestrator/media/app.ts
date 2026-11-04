@@ -151,6 +151,7 @@ interface Views {
     link: 'M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71',
     zap: 'M13 2 3 14h9l-1 8 10-12h-9z',
     list: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',
+    menu: 'M4 6h16M4 12h16M4 18h16',
     activity: 'M22 12h-4l-3 9L9 3l-3 9H2',
     gauge: 'M12 14l4-4M3.34 19a10 10 0 1 1 17.32 0',
     plug: 'M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4',
@@ -394,34 +395,59 @@ interface Views {
 
   // ---------- shell ----------
 
+  /** The sections in the side rail: the work first, then what sets it up. */
   const NAV = [
-    { name: 'home', label: 'Tasks', icon: 'list' },
-    { name: 'agents', label: 'Agents', icon: 'users' },
-    { name: 'scenarios', label: 'Scenarios', icon: 'wand' },
-    { name: 'repos', label: 'Repos & checks', icon: 'repo' },
-    { name: 'mcp', label: 'MCP', icon: 'plug' },
-    { name: 'settings', label: 'Settings', icon: 'gear' },
+    { name: 'home', label: 'Tasks', icon: 'list', group: 'work' },
+    { name: 'agents', label: 'Agents', icon: 'users', group: 'setup' },
+    { name: 'scenarios', label: 'Scenarios', icon: 'wand', group: 'setup' },
+    { name: 'repos', label: 'Repos & checks', icon: 'repo', group: 'setup' },
+    { name: 'mcp', label: 'MCP', icon: 'plug', group: 'setup' },
+    { name: 'settings', label: 'Settings', icon: 'gear', group: 'setup' },
   ];
 
+  /**
+   * The side rail holds the sections, New task, the limits and the account. A narrow panel (an editor beside it, a
+   * JetBrains tool window) hides it behind the menu button of a slim top bar, and opens it as a sheet.
+   */
   function renderShell() {
     const app = $('#app')!;
     if (!$('.shell', app)) {
       app.innerHTML = `
         <div class="shell">
-          <header class="topbar">
-            <button class="brand" data-action="go-home" title="All tasks">
-              <span class="logo">${LOGO}</span>
-              <span class="brand-text"><span class="brand-name">Claudestrator</span><span class="brand-sub" data-region="workspace"></span></span>
-            </button>
-            <nav class="nav" data-region="nav"></nav>
-            <div class="top-actions" data-region="top-actions"></div>
-          </header>
-          <div data-region="global-alerts"></div>
-          <div data-region="global-permissions"></div>
-          <main id="view"></main>
+          <aside class="rail" id="rail" aria-label="Claudestrator">
+            <div class="rail-head">
+              <button class="brand" data-action="go-home" title="Tasks">
+                <span class="logo">${LOGO}</span>
+                <span class="brand-text"><span class="brand-name">Claudestrator</span><span class="brand-sub" data-region="workspace"></span></span>
+              </button>
+              <button class="icon-btn rail-close" data-action="toggle-nav" aria-label="Close the menu" title="Close the menu">${icon('x')}</button>
+            </div>
+            <button class="btn primary rail-new" data-action="new-task" title="New task (⌘⌥N)">${icon('plus')}<span>New task</span></button>
+            <nav class="nav" data-region="nav" aria-label="Sections"></nav>
+            <div class="rail-foot" data-region="rail-foot"></div>
+          </aside>
+          <div class="rail-scrim" data-action="toggle-nav"></div>
+          <div class="workarea">
+            <header class="topbar">
+              <button class="icon-btn" data-action="toggle-nav" aria-label="Open the menu" aria-controls="rail" aria-expanded="false" title="Menu">${icon('menu')}</button>
+              <span class="topbar-title" data-region="topbar-title"></span>
+              <button class="icon-btn" data-action="new-task" aria-label="New task" title="New task (⌘⌥N)">${icon('plus')}</button>
+            </header>
+            <div data-region="global-alerts"></div>
+            <div data-region="global-permissions"></div>
+            <main id="view"></main>
+          </div>
         </div>`;
     }
     renderNav();
+  }
+
+  /** Opens or closes the rail as a sheet (narrow panels only; a wide one always shows it). */
+  function setNavOpen(open: boolean) {
+    const shell = $('.shell');
+    if (!shell) return;
+    shell.classList.toggle('nav-open', open);
+    for (const b of $$('.topbar [data-action="toggle-nav"]')) b.setAttribute('aria-expanded', String(open));
   }
 
   function renderNav() {
@@ -429,20 +455,20 @@ interface Views {
     const attention = o ? o.tasks.filter((t) => t.status.group === 'attention').length : 0;
     const running = o ? o.tasks.filter((t) => t.status.group === 'running').length : 0;
     const active = S.route.name === 'task' ? 'home' : S.route.name;
-    patch(
-      'nav',
-      NAV.map((n) => {
-        const mcpBad = o && o.mcp ? o.mcp.problems : 0;
-        if (n.name === 'mcp') {
-          const dot = !o || !o.mcp || !o.mcp.total ? '' : mcpBad ? `<span class="nb err" title="${plural(mcpBad, 'server')} with a problem">${mcpBad}</span>` : o.mcp.connected === o.mcp.total ? '<span class="mcp-dot s-connected" title="All connected"></span>' : '<span class="mcp-dot s-installed" title="Not checked yet"></span>';
-          return `<button class="nav-item ${active === n.name ? 'active' : ''}" data-action="nav" data-name="${n.name}">${icon(n.icon)}<span>${n.label}</span>${dot}</button>`;
-        }
-        const badge = n.name === 'home' && (attention || running) ? `<span class="nav-badges">${running ? `<span class="nb run" title="${plural(running, 'task')} running"><span class="pulse"></span>${running}</span>` : ''}${attention ? `<span class="nb warn" title="${plural(attention, 'task')} need you">${attention}</span>` : ''}</span>` : '';
-        return `<button class="nav-item ${active === n.name ? 'active' : ''}" data-action="nav" data-name="${n.name}">${icon(n.icon)}<span>${n.label}</span>${badge}</button>`;
-      }).join('')
-    );
+    const item = (n: (typeof NAV)[number]) => {
+      let badge = '';
+      if (n.name === 'home' && (attention || running)) badge = `<span class="nav-badges">${running ? `<span class="nb run" title="${plural(running, 'task')} running"><span class="pulse"></span>${running}</span>` : ''}${attention ? `<span class="nb warn" title="${plural(attention, 'task')} need you">${attention}</span>` : ''}</span>`;
+      if (n.name === 'mcp' && o && o.mcp && o.mcp.total) {
+        const bad = o.mcp.problems;
+        badge = bad ? `<span class="nb err" title="${plural(bad, 'server')} with a problem">${bad}</span>` : o.mcp.connected === o.mcp.total ? '<span class="mcp-dot s-connected" title="All connected"></span>' : '<span class="mcp-dot s-installed" title="Not checked yet"></span>';
+      }
+      const on = active === n.name;
+      return `<button class="nav-item ${on ? 'active' : ''}" data-action="nav" data-name="${n.name}"${on ? ' aria-current="page"' : ''}>${icon(n.icon)}<span class="nav-label">${n.label}</span>${badge}</button>`;
+    };
+    patch('nav', `${NAV.filter((n) => n.group === 'work').map(item).join('')}<div class="nav-section">Setup</div>${NAV.filter((n) => n.group === 'setup').map(item).join('')}`);
+    patch('topbar-title', esc(NAV.find((n) => n.name === active)?.label || 'Claudestrator'));
     patch('workspace', o && o.rootName ? esc(o.rootName) : '');
-    patch('top-actions', `${accountSwitcher(o)}${limitsPill(o && o.limits)}<button class="btn primary sm" data-action="new-task" title="New task (⌘⌥N)">${icon('plus')}<span>New task</span></button>`);
+    patch('rail-foot', `${limitsPanel(o && o.limits)}${accountSwitcher(o)}`);
     renderGlobalPermissions();
     const a = o && o.account;
     patch('global-alerts', a && a.loggedIn === false ? `<div class="perm-strip"><div class="banner error">${icon('alert')}<div class="grow"><b>Claude Code is signed out for ${esc(a.email || a.label)}</b> <span class="muted small">(${esc(a.shownDir.replace(/^\/Users\/[^/]+/, '~'))})</span><div class="small">Agents cannot run under this account. Sign in again, or switch to a signed-in account.</div></div><div class="banner-actions"><button class="btn sm primary" data-action="claude-login">${icon('user')}Sign in</button><button class="btn sm" data-action="open-account-menu">Switch account</button></div></div></div>` : '');
@@ -466,13 +492,13 @@ interface Views {
     </span>`;
   }
 
-  /** The account's 5-hour and weekly windows, as the Claude Code status line shows them. */
-  function limitsPill(l: StoredLimits | null) {
+  /** The account's 5-hour and weekly windows, as the Claude Code status line shows them, one per row of the rail. */
+  function limitsPanel(l: StoredLimits | null) {
     if (!l) return '';
     const win = (label: string, w: LimitWindow | undefined) =>
-      w ? `<span class="lim" title="${esc(`${label === '5h' ? '5-hour' : 'Weekly'} limit: ${w.pct}% used${w.reset ? ' (window reset)' : w.resetsAt ? `, resets in ${resetIn(w.resetsAt)}` : ''}`)}"><b>${label}</b>${meter(w.pct)}<span class="lim-pct ${level(w.pct)}">${w.pct}%</span>${w.resetsAt ? `<span class="muted">${resetIn(w.resetsAt)}</span>` : ''}</span>` : '';
+      w ? `<div class="lim" title="${esc(`${label === 'Session' ? '5-hour session' : 'Weekly'} limit: ${w.pct}% used${w.reset ? ' (window reset)' : w.resetsAt ? `, resets in ${resetIn(w.resetsAt)}` : ''}`)}"><div class="lim-head"><b>${label}</b><span class="muted">${w.resetsAt ? `resets ${resetIn(w.resetsAt)}` : ''}</span><span class="lim-pct ${level(w.pct)}">${w.pct}%</span></div>${meter(w.pct)}</div>` : '';
     const when = l.at ? ago(new Date(l.at).toISOString()) : '';
-    return `<span class="limits" title="${esc(`${l.source === 'statusline' ? 'From your Claude Code status line' : 'Reported to the agents'}, ${when}`)}">${win('5h', l.fiveHour)}${win('wk', l.sevenDay)}</span>`;
+    return `<div class="limits" title="${esc(`${l.source === 'statusline' ? 'From your Claude Code status line' : 'Reported to the agents'}, ${when}`)}">${win('Session', l.fiveHour)}${win('Week', l.sevenDay)}</div>`;
   }
 
   /** Permission prompts are urgent wherever you are; the task page shows its own, so skip there. */
@@ -1392,10 +1418,18 @@ interface Views {
   const closeMenus = () => $$('.menu-wrap.open').forEach((w) => w.classList.remove('open'));
 
   const actions: Record<string, ActionFn> = {
-    nav: (el) => go({ name: el.dataset.name }),
+    nav: (el) => {
+      setNavOpen(false);
+      go({ name: el.dataset.name });
+    },
+    'toggle-nav': () => setNavOpen(!$('.shell')?.classList.contains('nav-open')),
     'nav-settings': () => go({ name: 'settings' }),
-    'go-home': () => go({ name: 'home' }),
+    'go-home': () => {
+      setNavOpen(false);
+      go({ name: 'home' });
+    },
     'new-task': () => {
+      setNavOpen(false);
       if (S.route.name === 'home') return $('#composer-text')?.focus();
       go({ name: 'home', compose: '' });
     },
@@ -1820,6 +1854,11 @@ interface Views {
   });
   document.addEventListener('keydown', (e) => {
     const t = e.target instanceof HTMLElement ? e.target : null;
+    if (e.key === 'Escape' && $('.shell.nav-open')) {
+      setNavOpen(false);
+      $<HTMLElement>('.topbar [data-action="toggle-nav"]')?.focus();
+      return;
+    }
     if ((e.key === 'Enter' || e.key === ' ') && t && t.matches('[data-action][tabindex], [role="button"]') && !t.matches('button, a, input, textarea, select')) {
       e.preventDefault();
       t.click();
