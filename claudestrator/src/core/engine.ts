@@ -1662,6 +1662,9 @@ class Engine extends EventEmitter {
       for (const r of taskRepos(this.workspace, s, config, s.repos.map((x) => x.name))) {
         if (await stopped()) return;
         if (!(await r.git.isRepo())) continue;
+        // Claude Code's empty staging folders, left where an agent's session worked, are not the task's: the repo's
+        // commit hooks would take them for its own (a module missing from a project map).
+        await r.git.removeWriteStaging();
         if ((await r.git.dirty()).length) {
           // The work is committed on the task branch only: another branch checked out meanwhile (main, another task's)
           // would get it instead.

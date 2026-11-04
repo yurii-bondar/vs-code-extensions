@@ -111,6 +111,17 @@ const OWN = [`${ORCH_DIR}/`, '.claudestrator/'];
 const isOwn = (file: string): boolean => OWN.some((p) => file === p.slice(0, -1) || file.startsWith(p));
 const EXCLUDE = OWN.map((p) => `:(exclude)${p.slice(0, -1)}`);
 
+/** The folder Claude Code stages its atomic writes in, inside a `.claude/` folder. */
+const WRITE_STAGING = '.cc-writes';
+
+/**
+ * Of the untracked folders `git ls-files --others --directory` lists (`a/.claude/`, `.claude/.cc-writes/`), the ones that
+ * may be Claude Code's staging: a `.claude/.cc-writes/`, or a `.claude/` with nothing tracked in it. Relative, no slash.
+ */
+function writeStagingDirs(listed: readonly string[]): string[] {
+  return listed.filter((e) => /(^|\/)\.claude\/(\.cc-writes\/)?$/.test(e)).map((e) => e.replace(/\/$/, ''));
+}
+
 class GitRepo {
   dir: string;
 
@@ -163,6 +174,34 @@ class GitRepo {
   }
 
   /** `git status --porcelain` lines (`XY path`): uncommitted and untracked work. */
+  /**
+   * Removes the empty folders Claude Code leaves for its atomic writes (`.cc-writes`, in the `.claude/` of each folder a
+   * session worked from). Git ignores them, but a check that lists folders, such as a pre-commit hook mapping the
+   * modules, takes one for the repo's own. Only empty ones go, and a `.claude/` that held nothing else: what an agent
+   * wrote stays. Returns what it removed, relative to the repo.
+   */
+  async removeWriteStaging(): Promise<string[]> {
+    // Untracked folders, empty ones and ignored ones too, each listed once without what is under it.
+    const listed = paths((await this.git('ls-files', '-z', '--others', '--directory')).stdout);
+    const removed: string[] = [];
+    for (const rel of writeStagingDirs(listed)) {
+      const dir = path.join(this.dir, rel);
+      const staging = path.basename(dir) === WRITE_STAGING ? dir : path.join(dir, WRITE_STAGING);
+      const inside = await fs.promises.readdir(staging).catch(() => null);
+      if (!inside || inside.length) continue;
+      // A `.claude/` listed whole holds nothing tracked: it goes with its staging folder when that is all it holds.
+      const alone = staging !== dir && (await fs.promises.readdir(dir).catch(() => [])).length === 1;
+      try {
+        await fs.promises.rmdir(staging);
+        if (alone) await fs.promises.rmdir(dir);
+        removed.push(staging === dir || alone ? rel : path.posix.join(rel, WRITE_STAGING));
+      } catch {
+        // written to meanwhile, or not ours to remove: it stays
+      }
+    }
+    return removed;
+  }
+
   async dirty(): Promise<string[]> {
     const entries = paths((await this.git('status', '--porcelain', '-z', NO_SUBMODULES)).stdout);
     const out: string[] = [];
@@ -476,4 +515,4 @@ async function removeWorktrees(workspace: string, state: TaskState, config: Repo
 }
 
 export type { ExecResult, ExecOptions, TaskRepo, Prepared, PrepareResult };
-export { AS_TEXT, exec, launch, setShim, setChildEnv, getChildEnv, GitRepo, branchAt, worktreeDir, taskRepos, prepareRepos, taskDiff, removeWorktrees, isOwn, SLOW_GIT_MS };
+export { AS_TEXT, writeStagingDirs, exec, launch, setShim, setChildEnv, getChildEnv, GitRepo, branchAt, worktreeDir, taskRepos, prepareRepos, taskDiff, removeWorktrees, isOwn, SLOW_GIT_MS };
