@@ -3,7 +3,7 @@
 // `vscode` is replaced by src/vscode-shim.ts, which hands what the engine asks of an editor to the IDE.
 import { build } from 'esbuild';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -47,6 +47,8 @@ const ship = (name) => {
 };
 ship(SANDBOX);
 
-cpSync(join(ext, 'media'), join(out, 'media'), { recursive: true, filter: (src) => !src.endsWith('.ts') });
+// The page's files, as the .vsix ships them: not its TypeScript sources, nor the Marketplace screenshots.
+const shots = join(ext, 'media', 'screenshots');
+cpSync(join(ext, 'media'), join(out, 'media'), { recursive: true, filter: (src) => !src.endsWith('.ts') && src !== shots && !src.startsWith(shots + sep) });
 mkdirSync(join(out, 'dist/media'), { recursive: true });
 for (const f of readdirSync(webviewJs)) if (f.endsWith('.js')) cpSync(join(webviewJs, f), join(out, 'dist/media', f));
