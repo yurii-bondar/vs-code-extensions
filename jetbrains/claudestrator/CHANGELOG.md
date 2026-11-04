@@ -1,3 +1,10 @@
+## [0.8.1](https://github.com/yurii-bondar/vs-code-extensions/compare/jetbrains-claudestrator-v0.8.0...jetbrains-claudestrator-v0.8.1) (2026-11-04)
+
+### Bug Fixes
+
+* **claudestrator:** examples in the dashboard and its messages use made-up names ([06c3c62](https://github.com/yurii-bondar/vs-code-extensions/commit/06c3c62c8dd4c65cee7ddda836423052e7f0bffc))
+* **jetbrains:** the plugin leaves out the Marketplace screenshots ([5d56994](https://github.com/yurii-bondar/vs-code-extensions/commit/5d569942499003fa3ec8c078600b578ea650a1a4))
+
 ## [0.8.0](https://github.com/yurii-bondar/vs-code-extensions/compare/jetbrains-claudestrator-v0.7.0...jetbrains-claudestrator-v0.8.0) (2026-11-04)
 
 ### Features
