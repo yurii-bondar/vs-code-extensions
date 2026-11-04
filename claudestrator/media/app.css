@@ -232,14 +232,8 @@ button.rail-health { width: 100%; padding: 2px 0; border: 0; background: transpa
 /* The tasks scroll; Setup and the footer stay under them. */
 /* The tasks and Setup scroll together; the footer stays at the bottom. */
 .rail > .nav { flex: 0 1 auto; min-height: 0; overflow-y: auto; margin: 0 calc(-1 * var(--cs-space-1)); padding: 0 var(--cs-space-1); }
-.tree-root { display: flex; align-items: center; gap: 2px; }
-.tree-root .nav-item { flex: 1; min-width: 0; padding-left: var(--cs-space-1); }
-.tree-toggle { flex: none; display: grid; place-items: center; width: 22px; height: 30px; padding: 0; border: 0; border-radius: var(--cs-radius-md); background: transparent; color: var(--cs-text-secondary); cursor: pointer; }
-.tree-toggle:hover { background: var(--cs-bg-hover); color: var(--cs-text-primary); }
-.tree-toggle .chev { width: 12px; height: 12px; transition: transform var(--cs-duration); }
-.tree-toggle[aria-expanded="true"] .chev { transform: rotate(90deg); }
-.nav .tree-filter { margin: var(--cs-space-1) 0 var(--cs-space-2) 22px; width: calc(100% - 22px); }
-.tree-sections { display: flex; flex-direction: column; gap: 1px; }
+.tree-filter { margin: var(--cs-space-1) 0 var(--cs-space-2) 22px; width: calc(100% - 22px); }
+.tree-sections { display: flex; flex-direction: column; gap: 1px; margin-bottom: var(--cs-space-2); }
 .tree-empty { padding: var(--cs-space-2) var(--cs-space-3); }
 .tree-sec, .tree-task, .tree-more { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 26px; padding: 3px var(--cs-space-2); border: 0; border-radius: var(--cs-radius-md); background: transparent; color: var(--cs-text-secondary); font: inherit; font-size: var(--cs-font-sm); text-align: left; cursor: pointer; }
 .tree-sec:hover, .tree-task:hover, .tree-more:hover { background: var(--cs-bg-hover); color: var(--cs-text-primary); }
@@ -270,7 +264,6 @@ button.rail-health { width: 100%; padding: 2px 0; border: 0; background: transpa
 .finished-row .btn .chev { transition: transform var(--cs-duration); }
 .finished-row .btn .chev.open { transform: rotate(90deg); }
 .finished-cards { margin-top: var(--cs-space-2); }
-.nav-section { padding: var(--cs-space-4) var(--cs-space-3) var(--cs-space-1); font-size: var(--cs-font-xs); font-weight: var(--cs-weight-strong); letter-spacing: 0.04em; text-transform: uppercase; color: var(--cs-text-secondary); }
 .nav-item { display: flex; align-items: center; gap: var(--cs-space-3); width: 100%; padding: 6px var(--cs-space-3); border-radius: var(--cs-radius-md); border: 0; background: transparent; color: var(--cs-text-secondary); cursor: pointer; font: inherit; text-align: left; }
 .nav-item .nav-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nav-item:hover { background: var(--cs-bg-hover); color: var(--cs-text-primary); }

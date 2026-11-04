@@ -456,22 +456,24 @@ interface Views {
     const attention = o ? o.tasks.filter((t) => t.status.group === 'attention').length : 0;
     const running = o ? o.tasks.filter((t) => t.status.group === 'running').length : 0;
     const active = S.route.name === 'task' ? 'home' : S.route.name;
-    const item = (n: (typeof NAV)[number]) => {
+    /** A section's item; `action` replaces the link to the section (then it is never the current page). */
+    const item = (n: (typeof NAV)[number], action?: string) => {
       let badge = '';
       if (n.name === 'home' && (attention || running)) badge = `<span class="nav-badges">${running ? `<span class="nb run" title="${plural(running, 'task')} running"><span class="pulse"></span>${running}</span>` : ''}${attention ? `<span class="nb warn" title="${plural(attention, 'task')} need you">${attention}</span>` : ''}</span>`;
       if (n.name === 'mcp' && o && o.mcp && o.mcp.total) {
         const bad = o.mcp.problems;
         badge = bad ? `<span class="nb err" title="${plural(bad, 'server')} with a problem">${bad}</span>` : o.mcp.connected === o.mcp.total ? '<span class="mcp-dot s-connected" title="All connected"></span>' : '<span class="mcp-dot s-installed" title="Not checked yet"></span>';
       }
-      const on = S.route.name === n.name;
-      return `<button class="nav-item ${on ? 'active' : ''}" data-action="nav" data-name="${n.name}"${on ? ' aria-current="page"' : ''}>${icon(n.icon)}<span class="nav-label">${n.label}</span>${badge}</button>`;
+      const on = !action && S.route.name === n.name;
+      return `<button class="nav-item ${on ? 'active' : ''}" ${action ?? `data-action="nav" data-name="${n.name}"`}${on ? ' aria-current="page"' : ''}>${icon(n.icon)}<span class="nav-label">${n.label}</span>${badge}</button>`;
     };
-    // Tasks is the root of the tree: its chevron folds the tasks under it, its label opens the Tasks page.
+    // Tasks is the root of the tree, an item like the others: a click folds or opens the tasks under it (the logo opens
+    // the Tasks page). With no tasks yet it opens the page.
     const tasksOpen = S.ui.tasksOpen !== false;
     const tree = taskTree(o);
-    const root = NAV.filter((n) => n.group === 'work').map(item).join('');
-    const work = tree ? `<div class="tree-root"><button class="tree-toggle" data-action="tasks-toggle" aria-expanded="${tasksOpen}" aria-label="${tasksOpen ? 'Fold the tasks' : 'Show the tasks'}" title="${tasksOpen ? 'Fold the tasks' : 'Show the tasks'}">${icon('chevron', 'chev')}</button>${root}</div>${tasksOpen ? tree : ''}` : root;
-    patch('nav', `${work}<div class="nav-section">Setup</div>${NAV.filter((n) => n.group === 'setup').map(item).join('')}`);
+    const tasks = NAV.find((n) => n.name === 'home')!;
+    const root = tree ? item(tasks, `data-action="tasks-toggle" aria-expanded="${tasksOpen}"`) : item(tasks);
+    patch('nav', `${root}${tree && tasksOpen ? tree : ''}${NAV.filter((n) => n.group === 'setup').map((n) => item(n)).join('')}`);
     patch('topbar-title', esc(NAV.find((n) => n.name === active)?.label || 'Claudestrator'));
     patch('workspace', o && o.rootName ? esc(o.rootName) : '');
     patch('rail-foot', `${railHealth(o && o.health)}${limitsPanel(o && o.limits)}${accountSwitcher(o)}`);
