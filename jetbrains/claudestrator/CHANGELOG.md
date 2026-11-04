@@ -1,3 +1,9 @@
+## [0.6.1](https://github.com/yurii-bondar/vs-code-extensions/compare/jetbrains-claudestrator-v0.6.0...jetbrains-claudestrator-v0.6.1) (2026-11-04)
+
+### Bug Fixes
+
+* **claudestrator:** a task a review of the settings went through before 0.12.0 reads again: which findings are yours is recorded, not decided anew ([d675bd5](https://github.com/yurii-bondar/vs-code-extensions/commit/d675bd599befcd7e3a31d1ca5dbdca1a047e67db))
+
 ## [0.6.0](https://github.com/yurii-bondar/vs-code-extensions/compare/jetbrains-claudestrator-v0.5.2...jetbrains-claudestrator-v0.6.0) (2026-11-03)
 
 ### Features
