@@ -120,6 +120,8 @@ interface UiState {
   showAllDone?: boolean;
   /** The Tasks page lists the finished tasks too (they are always in the rail's tree). */
   showFinished?: boolean;
+  /** The rail lists the tasks under the Tasks item (false: folded). */
+  tasksOpen?: boolean;
   /** Sections of the rail's tree opened or folded by hand, by key; the rest are open while they hold unfinished tasks. */
   treeOpen?: Record<string, boolean>;
   /** Sections whose finished tasks are listed, not folded into one row. */

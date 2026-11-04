@@ -424,8 +424,7 @@ interface Views {
               <button class="icon-btn rail-close" data-action="toggle-nav" aria-label="Close the menu" title="Close the menu">${icon('x')}</button>
             </div>
             <button class="btn primary rail-new" data-action="new-task" title="New task (⌘⌥N)">${icon('plus')}<span>New task</span></button>
-            <nav class="nav tree" data-region="nav" aria-label="Tasks"></nav>
-            <nav class="nav nav-setup" data-region="nav-setup" aria-label="Setup"></nav>
+            <nav class="nav" data-region="nav" aria-label="Sections"></nav>
             <div class="rail-foot" data-region="rail-foot"></div>
           </aside>
           <div class="rail-scrim" data-action="toggle-nav"></div>
@@ -467,8 +466,12 @@ interface Views {
       const on = S.route.name === n.name;
       return `<button class="nav-item ${on ? 'active' : ''}" data-action="nav" data-name="${n.name}"${on ? ' aria-current="page"' : ''}>${icon(n.icon)}<span class="nav-label">${n.label}</span>${badge}</button>`;
     };
-    patch('nav', `${NAV.filter((n) => n.group === 'work').map(item).join('')}${taskTree(o)}`);
-    patch('nav-setup', `<div class="nav-section">Setup</div>${NAV.filter((n) => n.group === 'setup').map(item).join('')}`);
+    // Tasks is the root of the tree: its chevron folds the tasks under it, its label opens the Tasks page.
+    const tasksOpen = S.ui.tasksOpen !== false;
+    const tree = taskTree(o);
+    const root = NAV.filter((n) => n.group === 'work').map(item).join('');
+    const work = tree ? `<div class="tree-root"><button class="tree-toggle" data-action="tasks-toggle" aria-expanded="${tasksOpen}" aria-label="${tasksOpen ? 'Fold the tasks' : 'Show the tasks'}" title="${tasksOpen ? 'Fold the tasks' : 'Show the tasks'}">${icon('chevron', 'chev')}</button>${root}</div>${tasksOpen ? tree : ''}` : root;
+    patch('nav', `${work}<div class="nav-section">Setup</div>${NAV.filter((n) => n.group === 'setup').map(item).join('')}`);
     patch('topbar-title', esc(NAV.find((n) => n.name === active)?.label || 'Claudestrator'));
     patch('workspace', o && o.rootName ? esc(o.rootName) : '');
     patch('rail-foot', `${railHealth(o && o.health)}${limitsPanel(o && o.limits)}${accountSwitcher(o)}`);
@@ -1839,6 +1842,11 @@ interface Views {
       sec.classList.toggle('collapsed', collapsed);
       S.ui[`group-${id}`] = collapsed;
       persist();
+    },
+    'tasks-toggle': () => {
+      S.ui.tasksOpen = S.ui.tasksOpen === false;
+      persist();
+      renderNav();
     },
     'tree-section': (el) => {
       const key = el.dataset.key ?? '';

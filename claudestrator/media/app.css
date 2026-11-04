@@ -230,9 +230,15 @@ button.rail-health { width: 100%; padding: 2px 0; border: 0; background: transpa
 .brand-sub { font-size: var(--cs-font-xs); color: var(--cs-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nav { display: flex; flex-direction: column; gap: 2px; }
 /* The tasks scroll; Setup and the footer stay under them. */
-.nav.tree { flex: 1 1 auto; min-height: 0; overflow-y: auto; margin: 0 calc(-1 * var(--cs-space-1)); padding: 0 var(--cs-space-1); }
-.nav-setup { flex: none; }
-.tree-filter { margin: var(--cs-space-1) 0 var(--cs-space-2); }
+/* The tasks and Setup scroll together; the footer stays at the bottom. */
+.rail > .nav { flex: 0 1 auto; min-height: 0; overflow-y: auto; margin: 0 calc(-1 * var(--cs-space-1)); padding: 0 var(--cs-space-1); }
+.tree-root { display: flex; align-items: center; gap: 2px; }
+.tree-root .nav-item { flex: 1; min-width: 0; padding-left: var(--cs-space-1); }
+.tree-toggle { flex: none; display: grid; place-items: center; width: 22px; height: 30px; padding: 0; border: 0; border-radius: var(--cs-radius-md); background: transparent; color: var(--cs-text-secondary); cursor: pointer; }
+.tree-toggle:hover { background: var(--cs-bg-hover); color: var(--cs-text-primary); }
+.tree-toggle .chev { width: 12px; height: 12px; transition: transform var(--cs-duration); }
+.tree-toggle[aria-expanded="true"] .chev { transform: rotate(90deg); }
+.nav .tree-filter { margin: var(--cs-space-1) 0 var(--cs-space-2) 22px; width: calc(100% - 22px); }
 .tree-sections { display: flex; flex-direction: column; gap: 1px; }
 .tree-empty { padding: var(--cs-space-2) var(--cs-space-3); }
 .tree-sec, .tree-task, .tree-more { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 26px; padding: 3px var(--cs-space-2); border: 0; border-radius: var(--cs-radius-md); background: transparent; color: var(--cs-text-secondary); font: inherit; font-size: var(--cs-font-sm); text-align: left; cursor: pointer; }
@@ -250,14 +256,15 @@ button.rail-health { width: 100%; padding: 2px 0; border: 0; background: transpa
 .ts-dot { width: 7px; height: 7px; flex: none; border-radius: var(--cs-radius-full); background: var(--cs-status-warn-text); }
 .ts-count { margin-left: auto; flex: none; font-size: var(--cs-font-xs); color: var(--cs-text-secondary); font-variant-numeric: tabular-nums; }
 .tree-items { display: flex; flex-direction: column; gap: 1px; }
-.tree-task { padding-left: 26px; color: var(--cs-text-primary); }
+.tree-sec { padding-left: 18px; }
+.tree-task { padding-left: 38px; color: var(--cs-text-primary); }
 .tree-task > .ic { width: 14px; height: 14px; color: var(--tone, var(--cs-text-secondary)); }
 .tree-task.tone-muted > .ic { color: var(--cs-text-secondary); }
 .tt-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tt-hint { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--cs-font-xs); color: var(--cs-text-secondary); font-variant-numeric: tabular-nums; }
 .tree-task.tone-warn .tt-hint { color: var(--cs-status-warn-text); }
 .tree-task.active { background: var(--cs-bg-selected); font-weight: var(--cs-weight-strong); }
-.tree-more { padding-left: 26px; font-size: var(--cs-font-xs); }
+.tree-more { padding-left: 38px; font-size: var(--cs-font-xs); }
 /* The finished tasks in one row of the Tasks page. */
 .finished-row { display: flex; align-items: center; gap: var(--cs-space-3); margin-top: var(--cs-space-4); padding: var(--cs-space-3) var(--cs-space-4); background: var(--cs-bg-raised); border: 1px solid var(--cs-border-default); border-radius: var(--cs-radius-lg); }
 .finished-row .btn .chev { transition: transform var(--cs-duration); }
