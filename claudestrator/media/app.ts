@@ -149,6 +149,7 @@ interface Views {
     text: 'M17 6H3M21 12H3M15 18H3',
     dots: 'M12 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2M19 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2M5 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2',
     link: 'M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71',
+    inbox: 'M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z',
     zap: 'M13 2 3 14h9l-1 8 10-12h-9z',
     list: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',
     menu: 'M4 6h16M4 12h16M4 18h16',
@@ -423,7 +424,8 @@ interface Views {
               <button class="icon-btn rail-close" data-action="toggle-nav" aria-label="Close the menu" title="Close the menu">${icon('x')}</button>
             </div>
             <button class="btn primary rail-new" data-action="new-task" title="New task (⌘⌥N)">${icon('plus')}<span>New task</span></button>
-            <nav class="nav" data-region="nav" aria-label="Sections"></nav>
+            <nav class="nav tree" data-region="nav" aria-label="Tasks"></nav>
+            <nav class="nav nav-setup" data-region="nav-setup" aria-label="Setup"></nav>
             <div class="rail-foot" data-region="rail-foot"></div>
           </aside>
           <div class="rail-scrim" data-action="toggle-nav"></div>
@@ -462,16 +464,75 @@ interface Views {
         const bad = o.mcp.problems;
         badge = bad ? `<span class="nb err" title="${plural(bad, 'server')} with a problem">${bad}</span>` : o.mcp.connected === o.mcp.total ? '<span class="mcp-dot s-connected" title="All connected"></span>' : '<span class="mcp-dot s-installed" title="Not checked yet"></span>';
       }
-      const on = active === n.name;
+      const on = S.route.name === n.name;
       return `<button class="nav-item ${on ? 'active' : ''}" data-action="nav" data-name="${n.name}"${on ? ' aria-current="page"' : ''}>${icon(n.icon)}<span class="nav-label">${n.label}</span>${badge}</button>`;
     };
-    patch('nav', `${NAV.filter((n) => n.group === 'work').map(item).join('')}<div class="nav-section">Setup</div>${NAV.filter((n) => n.group === 'setup').map(item).join('')}`);
+    patch('nav', `${NAV.filter((n) => n.group === 'work').map(item).join('')}${taskTree(o)}`);
+    patch('nav-setup', `<div class="nav-section">Setup</div>${NAV.filter((n) => n.group === 'setup').map(item).join('')}`);
     patch('topbar-title', esc(NAV.find((n) => n.name === active)?.label || 'Claudestrator'));
     patch('workspace', o && o.rootName ? esc(o.rootName) : '');
     patch('rail-foot', `${railHealth(o && o.health)}${limitsPanel(o && o.limits)}${accountSwitcher(o)}`);
     renderGlobalPermissions();
     const a = o && o.account;
     patch('global-alerts', a && a.loggedIn === false ? `<div class="perm-strip"><div class="banner error">${icon('alert')}<div class="grow"><b>Claude Code is signed out for ${esc(a.email || a.label)}</b> <span class="muted small">(${esc(a.shownDir.replace(/^\/Users\/[^/]+/, '~'))})</span><div class="small">Agents cannot run under this account. Sign in again, or switch to a signed-in account.</div></div><div class="banner-actions"><button class="btn sm primary" data-action="claude-login">${icon('user')}Sign in</button><button class="btn sm" data-action="open-account-menu">Switch account</button></div></div></div>` : '');
+  }
+
+  /** What a section's header shows per kind, as the sidebar tree in VS Code does. */
+  const SECTION_LOOK: Record<TaskSection['kind'], { prefix: string; icon: string }> = {
+    epic: { prefix: 'Epic', icon: 'zap' },
+    story: { prefix: 'Story', icon: 'file' },
+    group: { prefix: 'Group', icon: 'folder' },
+    ungrouped: { prefix: '', icon: 'inbox' },
+  };
+  /** A checkpoint in a word, beside a task waiting at it. */
+  const CHECKPOINT_WORD: Record<string, string> = { 'approve-plan': 'plan', 'confirm-push': 'push' };
+
+  /** The task's status as one icon: the cards and the rail's tree draw the same. */
+  function statusIcon(t: Card) {
+    const s = t.status;
+    return s.tone === 'ok' ? 'check' : s.tone === 'error' ? 'x' : s.group === 'running' ? 'activity' : s.group === 'attention' ? 'bell' : s.group === 'stopped' ? 'pause' : 'dots';
+  }
+
+  /** A task in the rail's tree: its status icon, its title, and what it is at in a word or a time. */
+  function treeTask(t: Card) {
+    const on = S.route.name === 'task' && S.route.taskId === t.taskId;
+    const since = t.status.key === 'running' && t.live && t.live.since;
+    const hint = since ? `<span data-since="${since}"></span>` : t.status.group === 'done' ? esc(ago(t.updatedAt)) : t.status.group === 'attention' ? esc((t.checkpoint && CHECKPOINT_WORD[t.checkpoint.id]) || t.status.label) : '';
+    return `<button class="tree-task tone-${t.status.tone} ${on ? 'active' : ''}" data-action="open-task" data-id="${esc(t.taskId)}" title="${esc(`${t.title} · ${t.taskId} · ${t.status.label}`)}"${on ? ' aria-current="page"' : ''}>${icon(statusIcon(t))}<span class="tt-title">${esc(t.title)}</span>${hint ? `<span class="tt-hint">${hint}</span>` : ''}</button>`;
+  }
+
+  /**
+   * One section of the tree: open while it holds unfinished tasks (or the one on screen) unless folded by hand; its
+   * finished tasks folded into one row beside the others. A filter opens every section that has a match.
+   */
+  function treeSection(s: TaskSection, byId: Map<string, Card>, filter: string) {
+    const all = s.taskIds.flatMap((id) => byId.get(id) ?? []);
+    // A filter that names the section (its Jira key or label) keeps all of it; else the tasks it names.
+    const named = filter && `${s.jira ?? ''} ${s.label}`.toLowerCase().includes(filter);
+    const cards = filter && !named ? all.filter((c) => `${c.title} ${c.taskId}`.toLowerCase().includes(filter)) : all;
+    if (!cards.length) return '';
+    const active = cards.filter((c) => c.status.group !== 'done');
+    const done = cards.filter((c) => c.status.group === 'done');
+    const here = S.route.name === 'task' ? S.route.taskId : undefined;
+    const open = filter ? true : (S.ui.treeOpen?.[s.key] ?? (active.length > 0 || cards.some((c) => c.taskId === here)));
+    const doneOpen = Boolean(filter) || !active.length || Boolean(S.ui.treeDone?.[s.key]) || done.some((c) => c.taskId === here);
+    const look = SECTION_LOOK[s.kind];
+    const name = s.kind === 'ungrouped' ? s.label : `${look.prefix} ${s.jira || s.label}`;
+    const needs = all.some((c) => c.status.group === 'attention');
+    const head = `<button class="tree-sec kind-${s.kind}" data-action="tree-section" data-key="${esc(s.key)}" aria-expanded="${open}">${icon('chevron', 'chev')}${icon(look.icon, 'kind')}<span class="ts-name">${esc(name)}</span>${s.jira ? `<span class="ts-label">${esc(s.label)}</span>` : ''}${needs ? `<span class="ts-dot" title="A task here needs you"></span>` : ''}<span class="ts-count">${all.length}</span></button>`;
+    if (!open) return `<div class="tree-group">${head}</div>`;
+    const fold = active.length && done.length ? `<button class="tree-more" data-action="tree-done" data-key="${esc(s.key)}" aria-expanded="${doneOpen}">${icon('chevron', 'chev')}<span>${done.length} finished</span></button>` : '';
+    return `<div class="tree-group open">${head}<div class="tree-items">${active.map(treeTask).join('')}${fold}${doneOpen ? done.map(treeTask).join('') : ''}</div></div>`;
+  }
+
+  /** The tasks under the Tasks item, by epic, story and group, as the sidebar tree in VS Code lists them. */
+  function taskTree(o: Overview | null) {
+    if (!o || !o.tasks.length) return '';
+    const byId = new Map(o.tasks.map((t) => [t.taskId, t]));
+    const filter = (S.ui.treeFilter ?? '').trim().toLowerCase();
+    const sections = o.sections.map((s) => treeSection(s, byId, filter)).join('');
+    return `<input id="tree-filter" class="input sm tree-filter" type="search" placeholder="Filter tasks" aria-label="Filter tasks" data-input="tree-filter" value="${esc(S.ui.treeFilter ?? '')}">
+      <div class="tree-sections">${sections || '<div class="tree-empty muted small">No task matches</div>'}</div>`;
   }
 
   /** Which Claude Code account the agents, MCP and limits use; one click to switch. */
@@ -802,6 +863,20 @@ interface Views {
     return parts.length ? parts.join(' · ') : tasks.length ? 'Nothing waits for you' : 'Describe a task, or paste a Jira key or link';
   }
 
+  /** The finished tasks in one line of the Tasks page: they stay in the rail's tree, and the page lists them on request. */
+  function finishedRow(tasks: Card[]) {
+    const done = tasks.filter((t) => t.status.group === 'done');
+    if (!done.length) return '';
+    const today = new Date().toDateString();
+    const n = done.filter((t) => new Date(t.updatedAt).toDateString() === today).length;
+    const shown = Boolean(S.ui.showFinished);
+    return `<div class="finished-row">
+      <span class="tc-marker tone-ok" aria-hidden="true">${icon('check')}</span>
+      <div class="grow"><b>${n ? `${n} finished today · ${done.length} in all` : `${plural(done.length, 'task')} finished`}</b><div class="muted small">Finished tasks stay in the side rail, under their epic, story or group.</div></div>
+      <button class="btn ghost sm" data-action="show-finished" aria-expanded="${shown}">${icon('chevron', shown ? 'chev open' : 'chev')}${shown ? 'Hide finished' : 'Show finished'}</button>
+    </div>`;
+  }
+
   // ---------- home ----------
 
   const EXAMPLES = [
@@ -901,20 +976,23 @@ interface Views {
         { id: 'attention', title: 'Needs you', icon: 'bell', open: true },
         { id: 'running', title: 'Running', icon: 'activity', open: true },
         { id: 'stopped', title: 'Paused', icon: 'pause', open: true },
-        { id: 'done', title: 'Finished', icon: 'check', open: true },
       ];
-      return groups
+      const active = groups
         .map((g) => {
           const list = tasks.filter((t) => t.status.group === g.id);
           if (!list.length) return '';
           const collapsed = S.ui[`group-${g.id}`] === undefined ? !g.open : S.ui[`group-${g.id}`];
-          const shown = g.id === 'done' && !S.ui.showAllDone ? list.slice(0, 8) : list;
           return `<section class="group ${collapsed ? 'collapsed' : ''}">
             <button class="group-head" data-action="toggle-group" data-id="${g.id}">${icon('chevron', 'chev')}${icon(g.icon)}<span>${g.title}</span><span class="count">${list.length}</span></button>
-            <div class="cards">${shown.map(taskCard).join('')}${shown.length < list.length ? `<button class="btn ghost sm more" data-action="show-all-done">Show ${list.length - shown.length} more</button>` : ''}</div>
+            <div class="cards">${list.map(taskCard).join('')}</div>
           </section>`;
         })
         .join('');
+      // The finished ones, newest first, under their row when asked for.
+      const done = S.ui.showFinished ? tasks.filter((t) => t.status.group === 'done') : [];
+      const shown = S.ui.showAllDone ? done : done.slice(0, 8);
+      const more = shown.length < done.length ? `<button class="btn ghost sm more" data-action="show-all-done">Show ${done.length - shown.length} more</button>` : '';
+      return `${active}${finishedRow(tasks)}${done.length ? `<div class="cards finished-cards">${shown.map(taskCard).join('')}${more}</div>` : ''}`;
     },
     renderComposer() {
       const o = S.overview;
@@ -1187,9 +1265,8 @@ interface Views {
     else if (t.status.resumable) cta = `<button class="btn sm" data-action="run" data-id="${t.taskId}">${icon('play')}Resume</button>`;
     else if (t.status.key === 'running') cta = `<button class="btn ghost sm" data-action="stop" data-id="${t.taskId}">${icon('stop')}Stop</button>`;
     const prs = Object.entries(t.prs || {});
-    const marker = t.status.tone === 'ok' ? 'check' : t.status.tone === 'error' ? 'x' : t.status.group === 'running' ? 'activity' : t.status.group === 'attention' ? 'bell' : t.status.group === 'stopped' ? 'pause' : 'dots';
     return `<article class="task-card tone-${t.status.tone}" data-action="open-task" data-id="${t.taskId}" tabindex="0">
-      <span class="tc-marker" aria-hidden="true">${icon(marker)}</span>
+      <span class="tc-marker" aria-hidden="true">${icon(statusIcon(t))}</span>
       <div class="tc-main">
         <div class="tc-title">${esc(t.title)}</div>
         <div class="tc-meta">
@@ -1483,6 +1560,7 @@ interface Views {
     'open-task': (el, e) => {
       const inner = e.target instanceof Element ? e.target.closest('a, button') : null;
       if (inner && inner !== el) return;
+      setNavOpen(false);
       go({ name: 'task', taskId: el.dataset.id });
     },
     run: async (el) => {
@@ -1762,6 +1840,23 @@ interface Views {
       S.ui[`group-${id}`] = collapsed;
       persist();
     },
+    'tree-section': (el) => {
+      const key = el.dataset.key ?? '';
+      S.ui.treeOpen = { ...S.ui.treeOpen, [key]: el.getAttribute('aria-expanded') !== 'true' };
+      persist();
+      renderNav();
+    },
+    'tree-done': (el) => {
+      const key = el.dataset.key ?? '';
+      S.ui.treeDone = { ...S.ui.treeDone, [key]: el.getAttribute('aria-expanded') !== 'true' };
+      persist();
+      renderNav();
+    },
+    'show-finished': () => {
+      S.ui.showFinished = !S.ui.showFinished;
+      persist();
+      if (S.route.name === 'home') views.home.render();
+    },
     'show-all-done': () => {
       S.ui.showAllDone = true;
       persist();
@@ -1881,6 +1976,11 @@ interface Views {
       persist();
     },
     'setup-name': (el) => (views.setup.repos[+el.dataset.i]!.name = el.value.trim()),
+    'tree-filter': (el) => {
+      S.ui.treeFilter = el.value;
+      persist();
+      renderNav();
+    },
   };
 
   document.addEventListener('click', (e) => {

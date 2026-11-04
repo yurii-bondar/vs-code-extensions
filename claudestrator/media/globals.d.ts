@@ -12,6 +12,7 @@ type Live = import('../src/core/wire').Live;
 type TaskSource = import('../src/core/wire').TaskSource;
 type PermissionRequest = import('../src/core/wire').PermissionRequest;
 type Card = import('../src/core/wire').Card;
+type TaskSection = import('../src/core/wire').TaskSection;
 type AgentSummary = import('../src/core/wire').AgentSummary;
 type ConfigSummary = import('../src/core/wire').ConfigSummary;
 type HealthSummary = import('../src/core/wire').HealthSummary;
@@ -117,6 +118,14 @@ interface UiState {
   scDraft?: { label: string; description: string } | null;
   extraEdit?: ExtraEdit | null;
   showAllDone?: boolean;
+  /** The Tasks page lists the finished tasks too (they are always in the rail's tree). */
+  showFinished?: boolean;
+  /** Sections of the rail's tree opened or folded by hand, by key; the rest are open while they hold unfinished tasks. */
+  treeOpen?: Record<string, boolean>;
+  /** Sections whose finished tasks are listed, not folded into one row. */
+  treeDone?: Record<string, boolean>;
+  /** What the rail's tree is filtered by. */
+  treeFilter?: string;
   taskTab?: string;
   pipeEdit?: boolean;
   /** A narrow task screen: the pipeline's steps listed, not only as segments. */

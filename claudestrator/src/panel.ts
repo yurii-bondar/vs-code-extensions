@@ -291,6 +291,7 @@ class DashboardPanel implements RpcHandlers {
 
   async $overview() {
     const engine = this.orch.engine;
+    const tasks = engine ? await Promise.all((await this.orch.list()).map((entry) => view.summary(engine, entry))) : [];
     return {
       root: this.root,
       rootName: this.root ? path.basename(this.root) : null,
@@ -298,7 +299,8 @@ class DashboardPanel implements RpcHandlers {
       hasConfig: await this.orch.hasProjectConfig(),
       config: this.root ? await this.configSummary() : null,
       health: await this.healthSummary(),
-      tasks: engine ? await Promise.all((await this.orch.list()).map((entry) => view.summary(engine, entry))) : [],
+      tasks,
+      sections: view.sectionIndex(tasks),
       limits: await this.orch.limits(),
       account: await this.orch.account(),
       accounts: await this.orch.accounts(),

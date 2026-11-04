@@ -8,7 +8,7 @@ import { resultOf } from './report';
 import { parseInvocation } from './intake';
 import type { GroupType, OrchEvent, Source, StepRef, TaskState } from './types';
 
-import type { Card, FeedEvent, Live, PermissionRequest, Status, StepItem, TaskDetail, TaskError, TaskPush, TaskSource, UsageItem } from './wire';
+import type { Card, FeedEvent, Live, PermissionRequest, Status, StepItem, TaskDetail, TaskError, TaskPush, TaskSection, TaskSource, UsageItem } from './wire';
 /** The part of the engine the UI models read. */
 interface ViewEngine {
   isRunning(taskId: string): boolean;
@@ -395,6 +395,11 @@ function sectionsOf(cards: readonly Card[]): Section[] {
   return sections.sort((a, b) => SECTION_ORDER.indexOf(a.kind) - SECTION_ORDER.indexOf(b.kind));
 }
 
+/** The sections as the dashboard's rail lists them: ids in place of the cards, which the overview carries once. */
+function sectionIndex(cards: readonly Card[]): TaskSection[] {
+  return sectionsOf(cards).map(({ cards: list, ...s }) => ({ ...s, taskIds: list.map((c) => c.taskId) }));
+}
+
 type OutputPush = Extract<TaskPush, { type: 'output' }>;
 
 /**
@@ -462,4 +467,4 @@ function permissionNotice(p: Pick<PermissionRequest, 'agent' | 'repo' | 'tool' |
   return { text: plainNotice(`${p.agent}${p.repo ? ` @ ${p.repo}` : ''} wants to ${what}`), whole };
 }
 
-export { isWebLink, loadsRemote, logLine, permissionNotice, plainNotice, sectionsOf, summary, detail, stepsOf, statusOf, queueOutput, CHECKPOINT_HINT };
+export { isWebLink, loadsRemote, logLine, permissionNotice, plainNotice, sectionIndex, sectionsOf, summary, detail, stepsOf, statusOf, queueOutput, CHECKPOINT_HINT };

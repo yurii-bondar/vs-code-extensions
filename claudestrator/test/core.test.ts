@@ -17,7 +17,7 @@ import { parseHookRequest } from '../src/core/hookserver';
 import { plain } from '../src/core/gates';
 import { parseInvocation, storageToText, classifyInput, extractAcceptanceCriteria, adfToText, detectScenario } from '../src/core/intake';
 import { TaskService } from '../src/core/store';
-import { stepsOf, summary, queueOutput, sectionsOf } from '../src/core/view';
+import { stepsOf, summary, queueOutput, sectionIndex, sectionsOf } from '../src/core/view';
 import type { OutputPush } from '../src/core/view';
 import type { Card, ViewEngine } from '../src/core/view';
 import { buildArgs, limitsOf, sameWindows } from '../src/core/runner';
@@ -1681,6 +1681,11 @@ test('view: the sidebar sections tasks by epic, story, group, then the ungrouped
   );
   assert.deepEqual(sectionsOf(cards).map((s) => s.key), ['epic:e1', 'story:s1', 'group:g1', 'ungrouped'], 'keys stay the same across refreshes');
   assert.deepEqual(sectionsOf([]), []);
+  assert.deepEqual(
+    sectionIndex(cards).map((s) => [s.key, s.taskIds]),
+    [['epic:e1', ['T4', 'T6', 'T5']], ['story:s1', ['T3']], ['group:g1', ['T2']], ['ungrouped', ['T7', 'T1']]],
+    'the dashboard rail gets the same sections, by task id'
+  );
 });
 
 test('config: what the project config relaxes of your safety policy is said, not applied silently', async () => {

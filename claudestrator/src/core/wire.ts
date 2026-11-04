@@ -602,6 +602,16 @@ export type ConfigSummary =
     }
   | { ok: false; errors: string[]; warnings: string[] };
 
+/** A section of the task tree: its tasks by id, in the order the tree lists them (the cards are in `Overview.tasks`). */
+export interface TaskSection {
+  /** Stable across refreshes, so a section stays folded the way the user left it. */
+  key: string;
+  kind: GroupType | 'ungrouped';
+  label: string;
+  jira?: string;
+  taskIds: string[];
+}
+
 export interface Overview {
   root: string | null;
   rootName: string | null;
@@ -609,6 +619,8 @@ export interface Overview {
   config: ConfigSummary | null;
   health: HealthSummary;
   tasks: Card[];
+  /** The tasks by their epic, story or group, as the sidebar tree lists them: the rail of the dashboard shows the same. */
+  sections: TaskSection[];
   limits: StoredLimits | null;
   account: Account;
   accounts: AccountEntry[];
