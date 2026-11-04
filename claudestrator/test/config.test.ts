@@ -376,3 +376,11 @@ test('config edits: listing or dropping a library keeps the comments on the libr
   await libraries.removeLibrary({ workspace: ws, home, file: path.join(fresh, 'library.yaml'), scope: 'project' });
   assert.equal(projectText(ws), "# team config\nlibraries:\n  - ../shared-agents # the team's\n  # mine, for now\n  - ../old-agents\n");
 });
+
+test("config: the planner's json shows where a repo's base branch goes, so a branch it names is not only in its text", () => {
+  const r = config.resolveConfig([config.builtinLayer()]);
+  assert.ok(r.ok);
+  const planner = r.config.agents.planner!.instructions;
+  assert.match(planner, /add "baseBranch": "<branch>" to that repo in the json/);
+  assert.match(planner, /"repos": \[\{"name": "<repo>", "mode": "full\|tests_only", "baseBranch": "<only as step 6 says; else leave this key out>"\}\]/);
+});
