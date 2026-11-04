@@ -36,6 +36,7 @@ The only git hook is husky's `commit-msg` (`.husky/commit-msg`), which strips AI
 Hold every change to `typescript.md` and `principles.md`:
 - Match the surrounding style (naming, comment density, how sibling extensions solve the same thing).
 - Data from outside arrives as `unknown` and is narrowed once, at the boundary: `settings.json` and `getConfiguration().get()`, `~/.claude` files, hook payloads, `globalState`, files the user picks. Downstream code sees one shape.
+- Claudestrator's dashboard CSS uses only the `--cs-*` design tokens declared at the top of `claudestrator/media/app.css`. Host theme variables (`--vscode-*`) are read there and nowhere else, and components have no colour literals. Light and high-contrast variants key on the `<body>` class that VS Code sets; the JetBrains plugin sets the same class (`ThemeCss.bodyClass()`).
 - Webview messages are typed in `src/protocol.ts`: a `ClientMessage` / `HostMessage` union, `parseClientMessage` on the host side, an exhaustive `switch` with a `never` default on both sides. The webview script imports only types (`media/globals.d.ts`).
 - Functions with 3+ positional parameters take an options object.
 - Pure logic goes in `src/core/` and does not import `vscode`, so it is tested with `node --test` against the build. Edges (fs, settings, clock) come in as small interfaces where a test needs a fake. Keep `extension.ts` thin.
