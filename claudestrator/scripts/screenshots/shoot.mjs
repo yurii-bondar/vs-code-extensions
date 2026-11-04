@@ -1,5 +1,7 @@
-// The Marketplace screenshots (media/screenshots/*.png), from the real dashboard and made-up data only.
-//   npm run build && node scripts/screenshots/shoot.mjs
+// The Marketplace screenshots, from the real dashboard and made-up data only.
+//   npm run build && node scripts/screenshots/shoot.mjs             VS Code's: media/screenshots/*.png
+//   npm run build && node scripts/screenshots/shoot.mjs jetbrains   JetBrains': ../jetbrains/claudestrator/marketplace/screenshots
+//     (the IDE's dark theme, as the plugin's ThemeCss.kt hands it to the page, and its own menu item in the tips)
 // It starts the preview harness itself, with a throwaway HOME: none of your agents, libraries, MCP servers, accounts or
 // GitHub login can reach a screenshot. One real task runs through the fake agent (plan, work, a fix round, push), and
 // what the fake agent writes ("do it", feature.txt) is shown as a real agent would write it. The chrome around it (the
@@ -13,7 +15,8 @@ import { launch } from '../design-sync/cdp.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, '..', '..');
-const OUT = path.join(ROOT, 'media', 'screenshots');
+const JETBRAINS = process.argv[2] === 'jetbrains';
+const OUT = JETBRAINS ? path.resolve(ROOT, '..', 'jetbrains', 'claudestrator', 'marketplace', 'screenshots') : path.join(ROOT, 'media', 'screenshots');
 const PORT = 4781;
 const URL_ = `http://127.0.0.1:${PORT}/`;
 const W = 1200, H = 750, SCALE = 2;
@@ -38,6 +41,28 @@ function startPreview() {
 }
 
 // ---------- in the page: made-up surroundings ----------
+
+/** The IDE's New UI dark theme as ThemeCss.kt turns it into the page's variables (its colors, Inter, JetBrains Mono). */
+const IDE_THEME = `(() => {
+  const v = {
+    '--vscode-font-family': 'Inter, -apple-system, BlinkMacSystemFont, sans-serif', '--vscode-font-size': '13px', '--vscode-editor-font-family': '"JetBrains Mono", Menlo, monospace',
+    '--vscode-foreground': '#dfe1e5', '--vscode-descriptionForeground': '#868a91', '--vscode-editor-background': '#1e1f22', '--vscode-sideBar-background': '#2b2d30',
+    '--vscode-editorWidget-background': '#27282b', '--vscode-panel-border': '#393b40', '--vscode-contrastBorder': 'transparent', '--vscode-focusBorder': '#3574f0',
+    '--vscode-list-hoverBackground': '#2e3034', '--vscode-textLink-foreground': '#548af7', '--vscode-textCodeBlock-background': '#2e3034',
+    '--vscode-button-background': '#3574f0', '--vscode-button-foreground': '#ffffff', '--vscode-button-hoverBackground': '#4d85f2',
+    '--vscode-button-secondaryBackground': '#2b2d30', '--vscode-button-secondaryForeground': '#dfe1e5', '--vscode-button-secondaryHoverBackground': '#3e4044',
+    '--vscode-input-background': '#1e1f22', '--vscode-input-foreground': '#dfe1e5', '--vscode-input-border': '#4e5157',
+    '--vscode-menu-background': '#2b2d30', '--vscode-menu-foreground': '#dfe1e5', '--vscode-menu-selectionBackground': '#2e436e', '--vscode-menu-selectionForeground': '#ffffff',
+    '--vscode-notifications-background': '#2b2d30', '--vscode-notifications-foreground': '#dfe1e5',
+    '--vscode-testing-iconPassed': '#73c991', '--vscode-editorWarning-foreground': '#cca700', '--vscode-errorForeground': '#f48771', '--vscode-charts-blue': '#3794ff',
+    '--vscode-charts-red': '#f14c4c', '--vscode-charts-green': '#89d185', '--vscode-charts-orange': '#d18616', '--vscode-charts-purple': '#b180d7', '--vscode-charts-yellow': '#cca700',
+  };
+  const s = document.createElement('style');
+  s.textContent = "@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=block');" + ':root{color-scheme:dark;' + Object.entries(v).map(([k, x]) => k + ':' + x).join(';') + '}';
+  document.head.appendChild(s);
+  document.body.className = 'vscode-dark';
+  return document.fonts.ready.then(() => true);
+})()`;
 
 /** The overview and health as a demo workspace would have them, and a few more tasks in the tree and the list. */
 const DEMO = `(() => {
@@ -107,6 +132,7 @@ const WORDING = `(() => {
     [/^Read it\\.$/, 'Read the ticket.'],
     [/dev@example\\.com/g, 'alex.demo@example.com'],
     [/^flaky$/, 'unit tests'],
+    ...(${JSON.stringify(JETBRAINS)} ? [[/Tip: select text in an editor and run “Claudestrator: Start a Task from Selection”\\./, 'Tip: select text in an editor, right-click it and choose “Start a Claudestrator Task from Selection”.']] : []),
     // The preview's throwaway folders, wherever a path shows them: as a checkout of the demo workspace.
     [/(?:\\/private)?\\/var\\/folders\\/[^\\s/]+\\/[^\\s/]+\\/T\\/cs-preview-[\\w-]+/g, '/Users/alex/code/acme-shop'],
     [/[\\w]+\\/T\\/cs-preview-[\\w-]+/g, 'code/acme-shop'],
@@ -144,7 +170,7 @@ async function shot(b, name) {
   await b.sleep(150);
   await b.eval('window.scrollTo(0, 0); true');
   await b.shot(path.join(OUT, `${name}.png`), { viewport: true });
-  console.log(`media/screenshots/${name}.png`);
+  console.log(path.relative(path.resolve(ROOT, '..'), path.join(OUT, `${name}.png`)));
 }
 
 async function main() {
@@ -155,6 +181,7 @@ async function main() {
     await b.eval('sessionStorage.clear()');
     await b.goto(URL_);
     await b.eval(DEMO);
+    if (JETBRAINS) await b.eval(IDE_THEME);
     await until(b, '!!(window.CS && window.CS.S.overview)');
     // The Docs group folded, so the rail's last items stay in view.
     await b.eval(`window.CS.S.ui.treeOpen = { 'group:demo-docs': false }; window.CS.persist(); true`);
