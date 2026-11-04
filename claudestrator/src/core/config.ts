@@ -1500,7 +1500,7 @@ interface SaveGroupArgs {
 
 /**
  * Creates or changes a task group: an epic, a story or a plain group, with an optional Jira key (`cp-123` is written
- * `CP-123`), optional instructions for every task in it, and the instructions it ticks when picked. Returns its id.
+ * `PROJ-123`), optional instructions for every task in it, and the instructions it ticks when picked. Returns its id.
  */
 async function saveGroup({ workspace, home, id, type, label, jira, instructions, defaultInstructions = [], baseBranch }: SaveGroupArgs): Promise<string> {
   const r = await loadConfig({ workspace, home });
@@ -1508,10 +1508,10 @@ async function saveGroup({ workspace, home, id, type, label, jira, instructions,
   const missing = ticks.filter((x) => !(r.ok && r.config.instructions[x]));
   if (missing.length) throw new Error(`There is no instruction ${missing.map((x) => `"${x}"`).join(', ')}`);
   const key = (jira || '').trim().toUpperCase();
-  if (key && !JIRA_KEY.test(key)) throw new Error(`"${jira}" is not a Jira key (e.g. CP-123)`);
+  if (key && !JIRA_KEY.test(key)) throw new Error(`"${jira}" is not a Jira key (e.g. PROJ-123)`);
   const text = (instructions || '').trim();
   const base = (baseBranch || '').trim();
-  if (base && !BRANCH_PATTERN.test(base)) throw new Error(`"${baseBranch}" is not a branch name (e.g. feat/provably-fair)`);
+  if (base && !BRANCH_PATTERN.test(base)) throw new Error(`"${baseBranch}" is not a branch name (e.g. feat/checkout-revamp)`);
   const value: GroupLayer = { type, label: label.trim(), ...(key && { jira: key }), ...(text && { instructions: text }), ...(ticks.length && { defaultInstructions: ticks }), ...(base && { baseBranch: base }) };
   return saveEntry(workspace, 'groups', r.ok ? r.config.groups : {}, id, value);
 }

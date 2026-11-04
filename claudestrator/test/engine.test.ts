@@ -584,31 +584,31 @@ test('engine: a plan handed over as data alone goes back to the planner for its 
 test('engine: a plan names the branch a repo starts from: the task branches from it and its PR goes into it; one origin lacks goes back', async () => {
   const ws = workspace(['api'], 'pipeline: [planner, developer]\nrepos:\n  api: {}\n');
   const api = path.join(ws, 'api');
-  // origin has plinko, 2 commits past main, and the code the ticket is about is only there.
+  // origin has promo, 2 commits past main, and the code the ticket is about is only there.
   const origin = path.join(ws, 'origin.git');
   git(ws, 'init', '-q', '--bare', origin);
   git(api, 'remote', 'add', 'origin', origin);
   git(api, 'push', '-q', 'origin', 'main');
-  git(api, 'switch', '-q', '-c', 'plinko');
-  fs.writeFileSync(path.join(api, 'plinko.ts'), 'export const rows = 8;\n');
+  git(api, 'switch', '-q', '-c', 'promo');
+  fs.writeFileSync(path.join(api, 'promo.ts'), 'export const rows = 8;\n');
   git(api, 'add', '.');
-  git(api, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'plinko');
-  git(api, 'push', '-q', 'origin', 'plinko');
+  git(api, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'promo');
+  git(api, 'push', '-q', 'origin', 'promo');
   git(api, 'switch', '-q', 'main');
-  git(api, 'branch', '-q', '-D', 'plinko');
-  const h = await harness(ws, { FAKE_REPOS: 'api', FAKE_PLAN_BASE_FIRST: 'plinko-v2', FAKE_PLAN_BASE: 'plinko' });
+  git(api, 'branch', '-q', '-D', 'promo');
+  const h = await harness(ws, { FAKE_REPOS: 'api', FAKE_PLAN_BASE_FIRST: 'promo-v2', FAKE_PLAN_BASE: 'promo' });
   try {
-    const { taskId } = await h.engine.start({ text: 'Read the Plinko config from the server', auto: true });
+    const { taskId } = await h.engine.start({ text: 'Read the Promo config from the server', auto: true });
     const s = await runTask(h.engine, taskId);
     assert.equal(s.checkpoint && s.checkpoint.id, 'confirm-push', JSON.stringify(h.engine.lastError(taskId)));
     const planner = await h.engine.svc.readTranscript(taskId, (await view.detail(h.engine, taskId)).steps.find((st) => st.agent === 'planner')!.key!);
-    assert.ok(planner.some((i) => i.type === 'user' && i.from === 'orchestrator' && /origin has no branch plinko-v2 \(in api\)/.test(text(i.text))));
-    assert.equal(s.repos[0]!.baseBranch, 'plinko');
+    assert.ok(planner.some((i) => i.type === 'user' && i.from === 'orchestrator' && /origin has no branch promo-v2 \(in api\)/.test(text(i.text))));
+    assert.equal(s.repos[0]!.baseBranch, 'promo');
     const branch = git(api, 'branch', '--show-current').trim();
-    assert.ok(fs.existsSync(path.join(api, 'plinko.ts')), 'the task branch has the code that is only on plinko');
-    assert.equal(git(api, 'rev-list', '--count', `origin/plinko..${branch}`).trim(), '1', 'and only the task commit past it');
+    assert.ok(fs.existsSync(path.join(api, 'promo.ts')), 'the task branch has the code that is only on promo');
+    assert.equal(git(api, 'rev-list', '--count', `origin/promo..${branch}`).trim(), '1', 'and only the task commit past it');
     const ctx = await h.engine.checkpointContext(s, s.checkpoint!);
-    assert.deepEqual(ctx.repos!.map((r) => [r.name, r.base, r.files]), [['api', 'plinko', 1]], 'the push goes into plinko, with the task change alone');
+    assert.deepEqual(ctx.repos!.map((r) => [r.name, r.base, r.files]), [['api', 'promo', 1]], 'the push goes into promo, with the task change alone');
   } finally {
     h.hooks.dispose();
   }

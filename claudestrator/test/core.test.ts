@@ -384,16 +384,16 @@ test('machine: a failed agent opens agent-failure and retry runs the same step',
 test('machine: an agent that says it cannot go on is blocked; the same failure after a retry says so, and a retry stays yours to give', async () => {
   const { pipeline } = defaultPipeline();
   const blocker = (words: string): OrchEvent[] => timed([{ type: 'stage_started', agent: 'planner' }, { type: 'stage_failed', agent: 'planner', error: words, blocked: true }]);
-  let s = rpl([...timed([createdEvent(pipeline), { type: 'intake_completed', spec }]), ...blocker('planner reports it cannot go on: the branch fix/plinko-config was made from main, and the Plinko code is only on origin/plinko (e5d2be7d)')]);
+  let s = rpl([...timed([createdEvent(pipeline), { type: 'intake_completed', spec }]), ...blocker('planner reports it cannot go on: the branch fix/promo-config was made from main, and the Promo code is only on origin/promo (e5d2be7d)')]);
   assert.equal(s.checkpoint!.blocked, true);
   assert.equal(s.checkpoint!.repeated, undefined, 'the first time is news');
   s = passed(tr(s, { type: 'checkpoint_answered', id: 'agent-failure', option: 'retry', at: at(20) })).state;
   // Worded anew by the agent, with another hash: the same failure.
-  for (const e of blocker('planner reports it cannot go on: the task branch fix/plinko-config is made from main, but the Plinko code exists only on origin/plinko (32 commits ahead, 51e252e3)')) s = passed(tr(s, { ...e, at: at(30) })).state;
+  for (const e of blocker('planner reports it cannot go on: the task branch fix/promo-config is made from main, but the Promo code exists only on origin/promo (32 commits ahead, 51e252e3)')) s = passed(tr(s, { ...e, at: at(30) })).state;
   assert.equal(s.checkpoint!.repeated, true);
   // Its cause may be fixed outside the task (a setting, the branch), which no event records: a warning, not a refusal.
   assert.ok(passed(tr(s, { type: 'checkpoint_answered', id: 'agent-failure', option: 'retry', at: at(40) })).state);
-  s = passed(tr(s, { type: 'checkpoint_answered', id: 'agent-failure', option: 'retry', feedback: 'The branch is fast-forwarded to origin/plinko now', at: at(40) })).state;
+  s = passed(tr(s, { type: 'checkpoint_answered', id: 'agent-failure', option: 'retry', feedback: 'The branch is fast-forwarded to origin/promo now', at: at(40) })).state;
   // Another failure is news again, and so is any after a step that went through.
   for (const e of timed([{ type: 'stage_started', agent: 'planner' }, { type: 'stage_failed', agent: 'planner', error: 'the agent ran out of turns' }])) s = passed(tr(s, { ...e, at: at(50) })).state;
   assert.equal(s.checkpoint!.repeated, undefined);

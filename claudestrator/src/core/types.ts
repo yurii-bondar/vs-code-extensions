@@ -243,7 +243,7 @@ export interface TaskGroup {
   defaultInstructions?: string[];
   /**
    * The branch its tasks start from (and open their PRs into), in each repo where origin has it: an epic's own branch,
-   * `feat/provably-fair`. Elsewhere, and where a plan names another, the repo's base as before.
+   * `feat/checkout-revamp`. Elsewhere, and where a plan names another, the repo's base as before.
    */
   baseBranch?: string;
 }

@@ -122,7 +122,6 @@ const WORDING = `(() => {
     for (const [re, to] of swap) v = v.replace(re, to);
     if (v !== n.nodeValue) n.nodeValue = v;
   }
-  for (const f of document.querySelectorAll('[placeholder]')) f.placeholder = f.placeholder.replace('feat/provably-fair', 'feat/checkout-revamp');
   // The tips and toasts of a live session are not part of the picture.
   for (const t of document.querySelectorAll('#toasts > *')) t.remove();
   if (document.activeElement) document.activeElement.blur();

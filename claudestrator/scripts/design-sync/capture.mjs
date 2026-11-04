@@ -43,14 +43,14 @@ const TASK_TITLE = 'Add input validation to the signup form: email format, passw
 const FIX = `(() => {
   const now = Date.now(); const iso = (m) => new Date(now - m * 60000).toISOString();
   const st = { waiting: { key: 'waiting', label: 'Plan approval', tone: 'warn', group: 'attention' }, push: { key: 'waiting', label: 'Confirm push', tone: 'warn', group: 'attention' }, running: { key: 'running', label: 'Running', tone: 'accent', group: 'running' }, done: { key: 'done', label: 'PRs opened', tone: 'ok', group: 'done' }, ready: { key: 'done', label: 'Not ready', tone: 'warn', group: 'done' }, stopped: { key: 'stopped', label: 'Stopped', tone: 'muted', group: 'stopped' } };
-  const g = { loc: { id: 'g1', type: 'story', label: '[LOCALIZATION] K8s Job', jira: 'CP-1182' }, pl: { id: 'g2', type: 'story', label: '[PLINKO] Provably Fair', jira: 'CP-1125' }, ep: { id: 'g3', type: 'epic', label: '[PLINKO] Launch', jira: 'CP-1100' }, docs: { id: 'g4', type: 'group', label: 'Docs' } };
-  const card = (taskId, title, s, group, m) => ({ taskId, title, source: null, scenario: 'deliver', status: st[s], checkpoint: s === 'waiting' ? { id: 'approve-plan', title: 'Plan approval', hint: 'Read the plan. Approve it, or say what to change and the planner revises it.' } : s === 'push' ? { id: 'confirm-push', title: 'Confirm push', hint: 'The review passed. Look at the diff, then push and open the PRs.' } : null, live: s === 'running' ? { text: 'developer is working', since: now - 192000 } : null, error: null, stopReason: undefined, round: 1, maxRounds: 2, phase: '', outcome: undefined, prs: {}, branch: s === 'running' ? 'feat/CP-1184-sync-texts' : null, repos: [], cost: 0.31, createdAt: iso(m + 30), updatedAt: iso(m), progress: { done: 3, total: 8 }, mini: [], ...(group ? { group } : {}) });
+  const g = { loc: { id: 'g1', type: 'story', label: 'Guest checkout', jira: 'SHOP-131' }, pl: { id: 'g2', type: 'story', label: 'Promo codes', jira: 'SHOP-125' }, ep: { id: 'g3', type: 'epic', label: 'Checkout revamp', jira: 'SHOP-120' }, docs: { id: 'g4', type: 'group', label: 'Docs' } };
+  const card = (taskId, title, s, group, m) => ({ taskId, title, source: null, scenario: 'deliver', status: st[s], checkpoint: s === 'waiting' ? { id: 'approve-plan', title: 'Plan approval', hint: 'Read the plan. Approve it, or say what to change and the planner revises it.' } : s === 'push' ? { id: 'confirm-push', title: 'Confirm push', hint: 'The review passed. Look at the diff, then push and open the PRs.' } : null, live: s === 'running' ? { text: 'developer is working', since: now - 192000 } : null, error: null, stopReason: undefined, round: 1, maxRounds: 2, phase: '', outcome: undefined, prs: {}, branch: s === 'running' ? 'feat/SHOP-131-guest-checkout' : null, repos: [], cost: 0.31, createdAt: iso(m + 30), updatedAt: iso(m), progress: { done: 3, total: 8 }, mini: [], ...(group ? { group } : {}) });
   const fx = [
-    card('T-20261104-0815', 'CP-1184 Синк текстів: en.json', 'running', g.loc, 3),
+    card('T-20261104-0815', 'Guest checkout: skip the account step', 'running', g.loc, 3),
     card('T-20261104-0611', 'Cache tariff lookups in the pricing service', 'push', null, 25),
-    card('T-20261104-0702', 'CP-1183 Синк: таблиці', 'done', g.loc, 40), card('T-20261104-0544', 'CP-1181 Keys cleanup', 'done', g.loc, 300),
-    card('T-20261103-1120', 'CP-1125 Provably Fair', 'done', g.pl, 50), card('T-20261103-1012', 'CP-1125 readiness', 'ready', g.pl, 60), card('T-20261102-0930', 'CP-1126 Seeds', 'done', g.pl, 2000),
-    card('T-20261101-1800', 'CP-1101 Launch checklist', 'done', g.ep, 3000),
+    card('T-20261104-0702', 'Remember the shipping address', 'done', g.loc, 40), card('T-20261104-0544', 'Guest checkout: order confirmation email', 'done', g.loc, 300),
+    card('T-20261103-1120', 'Promo codes at checkout', 'done', g.pl, 50), card('T-20261103-1012', 'Readiness of SHOP-125 Promo codes', 'ready', g.pl, 60), card('T-20261102-0930', 'One promo code per order', 'done', g.pl, 2000),
+    card('T-20261101-1800', 'Apple Pay and Google Pay on the payment step', 'done', g.ep, 3000),
     card('T-20261103-1500', 'Write the API guide', 'stopped', g.docs, 600),
     card('T-20261104-0401', 'Bump eslint', 'done', null, 100),
   ];
@@ -67,7 +67,7 @@ const FIX = `(() => {
   return true;
 })()`;
 // No real address or workspace name in the design file.
-const MASK = `(() => { const re = /[\\w.+-]+@[\\w-]+\\.[\\w.]+/g; const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT); let n; while ((n = w.nextNode())) { if (re.test(n.nodeValue)) n.nodeValue = n.nodeValue.replace(re, 'you@example.com'); if (/^cs-preview-/.test(n.nodeValue)) n.nodeValue = 'crash-provider-gaming'; } return true; })()`;
+const MASK = `(() => { const re = /[\\w.+-]+@[\\w-]+\\.[\\w.]+/g; const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT); let n; while ((n = w.nextNode())) { if (re.test(n.nodeValue)) n.nodeValue = n.nodeValue.replace(re, 'you@example.com'); if (/^cs-preview-/.test(n.nodeValue)) n.nodeValue = 'acme-shop'; } return true; })()`;
 const until = async (b, expr, ms = 20000) => {
   for (let t = 0; t < ms; t += 300) {
     if (await b.eval(expr)) return true;

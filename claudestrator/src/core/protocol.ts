@@ -38,7 +38,7 @@ const PLAN_TYPES = ['feat', 'fix', 'chore', 'refactor'];
 const SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 /** What a task group is. */
 const GROUP_TYPES: GroupType[] = ['epic', 'story', 'group'];
-/** A Jira issue key, as a group names it: `CP-123`, `MY_PROJ-12` (a project key may have `_`). */
+/** A Jira issue key, as a group names it: `PROJ-123`, `MY_PROJ-12` (a project key may have `_`). */
 const JIRA_KEY = /^[A-Z][A-Z0-9_]+-\d+$/;
 const SEVERITIES: Severity[] = ['blocker', 'major', 'minor'];
 
@@ -222,7 +222,7 @@ const SANDBOX_LIST = 100;
 
 /** A branch name git takes as one (`main`, `release/2.x`): no leading `-`, which git would read as an option, and no `..`. */
 const BRANCH_PATTERN = /^(?!-)(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9][A-Za-z0-9._/-]*$/;
-const GROUP = T.obj({ type: T.oneOf(GROUP_TYPES), label: T.str(1, 80), 'jira?': T.re(JIRA_KEY, 'a Jira key looks like CP-123'), 'instructions?': T.str(1), 'defaultInstructions?': T.arr(entryId), 'baseBranch?': T.re(BRANCH_PATTERN, 'a branch name, e.g. feat/provably-fair') });
+const GROUP = T.obj({ type: T.oneOf(GROUP_TYPES), label: T.str(1, 80), 'jira?': T.re(JIRA_KEY, 'a Jira key looks like PROJ-123'), 'instructions?': T.str(1), 'defaultInstructions?': T.arr(entryId), 'baseBranch?': T.re(BRANCH_PATTERN, 'a branch name, e.g. feat/checkout-revamp') });
 const BRANCH = T.re(BRANCH_PATTERN, 'a branch name, e.g. main or release/2.x');
 
 const CONFIG_LAYER = T.obj({

@@ -82,7 +82,7 @@ interface Views {
         skip: { label: 'Leave them out', kind: 'secondary', icon: 'x', hint: 'The task goes on without them; make them yourself if they are needed.' },
         stop: { label: 'Stop task', kind: 'ghost', icon: 'stop' },
       },
-      placeholder: 'For a retry (optional), e.g. "take .claude/rules/forms.md as it is on origin/feat/provably-fair"',
+      placeholder: 'For a retry (optional), e.g. "take .claude/rules/forms.md as it is on origin/feat/checkout-revamp"',
     },
     'hook-failure': {
       title: 'A git hook rejected the commit',
