@@ -67,3 +67,50 @@ export interface CommitLine {
   subject: string;
   author: string;
 }
+
+/** A ref beside a commit in the log: a branch (here, on its remote, or both) or a tag. */
+export interface RefChip {
+  name: string;
+  kind: 'branch' | 'tag';
+  local: boolean;
+  remote: boolean;
+  /** The branch checked out. */
+  head: boolean;
+}
+
+/** One commit as the log shows it. */
+export interface CommitView {
+  sha: string;
+  short: string;
+  parents: string[];
+  author: string;
+  email: string;
+  committedAt: number;
+  subject: string;
+  refs: RefChip[];
+}
+
+export interface FileChange {
+  /** git's letter: Added, Modified, Deleted, Renamed, Copied, Type change. */
+  status: 'A' | 'M' | 'D' | 'R' | 'C' | 'T';
+  path: string;
+  /** For a rename or copy, the path before. */
+  oldPath: string | null;
+  add: number;
+  del: number;
+  binary: boolean;
+}
+
+/** One commit's message and changed files, against its first parent. */
+export interface CommitDetails {
+  sha: string;
+  short: string;
+  /** The first parent, which the files are compared with; null for the first commit. */
+  parent: string | null;
+  author: string;
+  email: string;
+  committedAt: number;
+  subject: string;
+  body: string;
+  files: FileChange[];
+}
