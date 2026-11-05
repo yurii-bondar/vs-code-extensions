@@ -21,6 +21,8 @@ import { nextTicked } from '../src/core/commit-groups.js';
 import type { Resolution } from '../src/core/conflict.js';
 import { compareHtml } from './compare-view.js';
 import { defaultMessage, squashRailHtml } from './squash-view.js';
+import { emptyStash, stashDialogHtml, stashRailHtml } from './stash-view.js';
+import type { StashDialog, StashState } from './stash-view.js';
 import type { SquashState } from './squash-view.js';
 import type { CompareState } from './compare-view.js';
 import { conflictPaneHtml, conflictRailHtml, emptyConflict } from './conflict-view.js';
@@ -43,7 +45,7 @@ const place = document.body.dataset['place'] === 'sidebar' ? 'sidebar' : 'editor
 // ---------- state ----------
 
 const saved = restore();
-let state: StateView = { repo: null, branches: [], loaded: false, fetchedAt: null, fetching: false, fetchError: null, defaultBranch: null, busy: null, head: null, working: [], grouping: 'none', operation: null };
+let state: StateView = { repo: null, branches: [], loaded: false, fetchedAt: null, fetching: false, fetchError: null, defaultBranch: null, busy: null, head: null, working: [], grouping: 'none', operation: null, stashes: 0 };
 let filter: BranchFilter = BRANCH_FILTERS.includes(saved.filter ?? 'all') ? (saved.filter ?? 'all') : 'all';
 let query = saved.query ?? '';
 /** The Git menu under `⋯` in the toolbar. */
@@ -80,6 +82,10 @@ let conflict: ConflictState = emptyConflict();
 /** The squash screen (`12`), over the tabs while open. */
 let squashView: SquashState | null = null;
 let squashDiff: DiffState | null = null;
+/** The Stash tab (`09`) and its dialogs. */
+let stash: StashState = emptyStash();
+let stashDiff: DiffState | null = null;
+let stashDialog: StashDialog | null = null;
 let pendingEdit: { path: string; index: number; text: string } | null = null;
 
 const keep = (): void => persist({ filter, query });
@@ -120,6 +126,10 @@ app.innerHTML =
     <section class="gt-pane gt-pane--rail" aria-label="Changes to commit" data-region="commitList"></section>
     <section class="gt-pane" aria-label="Diff" data-region="commitDiff"></section>
   </div>
+  <div class="gt-body gt-body--diff gt-body--stash" hidden>
+    <section class="gt-pane gt-pane--rail" aria-label="Stashes" data-region="stashRail"></section>
+    <section class="gt-pane" aria-label="Diff" data-region="stashDiff"></section>
+  </div>
   <div class="gt-body gt-body--diff gt-body--squash" hidden>
     <section class="gt-pane gt-pane--rail" aria-label="Commits to squash" data-region="squashRail"></section>
     <section class="gt-pane" aria-label="Diff" data-region="squashDiff"></section>
@@ -140,6 +150,7 @@ const input = app.querySelector('[data-role="query"]') as HTMLInputElement;
 input.value = query;
 
 function overlayHtml(): string {
+  if (stashDialog) return stashDialogHtml(stashDialog);
   if (mergedDialog) return dialogHtml(mergedDialog);
   if (branchDialog) return branchDialogHtml(branchDialog, state.branches);
   const branch = branchMenu && branchOf(branchMenu.ref);
@@ -179,7 +190,7 @@ function highlighted(): StateView['branches'][number] | undefined {
 
 /** Which set of panes the editor tab shows: the push screen over everything, else the tab, the log's diff inside Log. */
 function renderBodies(): void {
-  const view = state.operation ? 'conflict' : squashView ? 'squash' : pushReview ? 'push' : tab === 'commit' ? 'commit' : diffView ? 'diff' : 'log';
+  const view = state.operation ? 'conflict' : squashView ? 'squash' : pushReview ? 'push' : tab === 'commit' ? 'commit' : tab === 'stash' ? 'stash' : diffView ? 'diff' : 'log';
   // the commit and push bodies share the diff body's grid class, so the plain diff body is matched as the first one
   const show = (cls: string, on: boolean): void => {
     const body = app.querySelector<HTMLElement>(`.gt-body--${cls}`);
@@ -191,6 +202,11 @@ function renderBodies(): void {
   show('push', view === 'push');
   show('conflict', view === 'conflict');
   show('squash', view === 'squash');
+  show('stash', view === 'stash');
+  if (view === 'stash') {
+    fill('stashRail', stashRailHtml(stash, { changes: state.working.filter((f) => !f.conflicted).length }));
+    fill('stashDiff', stashDiff ? diffPaneHtml(stashDiff, { before: 'Last commit (HEAD)', after: 'Stashed version' }) : '<div class="gt-empty"><span>Pick a stash and one of its files.</span></div>');
+  }
   if (view === 'squash' && squashView) {
     fill('squashRail', squashRailHtml(squashView, { branch: state.branches.find((b) => b.current)?.name ?? 'HEAD', me: log.me }));
     const base = squashView.plan?.baseShort;
@@ -269,6 +285,21 @@ function reopen(index: number, edit: string | null): void {
   const choices = [...conflict.choices];
   choices[index] = null;
   conflict = { ...conflict, choices, editing: edit === null ? null : index, draft: edit ?? '' };
+}
+
+function selectStashFile(sha: string, path: string): void {
+  const file = stash.list?.find((s) => s.sha === sha)?.files.find((f) => f.path === path);
+  if (!file) return;
+  stash = { ...stash, file: path };
+  stashDiff = { sha, path, diff: null };
+  post({ type: 'stashDiff', sha, file });
+}
+
+function selectStash(sha: string): void {
+  stash = { ...stash, selected: sha, file: null };
+  stashDiff = null;
+  const first = stash.list?.find((s) => s.sha === sha)?.files[0];
+  if (first) selectStashFile(sha, first.path);
 }
 
 function openSquash(): void {
@@ -395,6 +426,15 @@ input.addEventListener('input', () => {
   render();
 });
 
+/** A stash's name: kept as typed; Rename follows whether it is empty. */
+app.addEventListener('input', (event) => {
+  const field = event.target as HTMLInputElement;
+  if (field.dataset['role'] !== 'stashName' || !stashDialog) return;
+  const was = stashDialog.message.trim() === '';
+  stashDialog = { ...stashDialog, message: field.value };
+  if (stashDialog.kind === 'rename' && was !== (field.value.trim() === '')) render();
+});
+
 /** The squash's message: kept as typed; the button follows whether it is empty. */
 app.addEventListener('input', (event) => {
   const field = event.target as HTMLTextAreaElement;
@@ -509,7 +549,7 @@ document.addEventListener('click', (event) => {
   const el = target?.closest<HTMLElement>('[data-action]');
   const action = el?.dataset['action'] ?? '';
   // a click inside a dialog box never reaches its backdrop's close
-  if ((action === 'closeDialog' || action === 'closeBranchDialog') && el?.classList.contains('gt-backdrop') && target?.closest('[data-stop]')) return;
+  if ((action === 'closeDialog' || action === 'closeBranchDialog' || action === 'closeStashDialog') && el?.classList.contains('gt-backdrop') && target?.closest('[data-stop]')) return;
   const closedSomething = menuOpen || branchMenu !== null || popover !== null || commit.groupMenu;
   if (commit.groupMenu && action !== 'groupMenu' && !target?.closest('[data-stop]')) commit = { ...commit, groupMenu: false };
   if (menuOpen && action !== 'menu') menuOpen = false;
@@ -569,6 +609,44 @@ document.addEventListener('click', (event) => {
       break;
     case 'tabLog':
       tab = 'log';
+      break;
+    case 'tabStash':
+      tab = 'stash';
+      post({ type: 'stashes' });
+      break;
+    case 'selectStash':
+      selectStash(el?.dataset['sha'] ?? '');
+      break;
+    case 'stashFile':
+      selectStashFile(el?.dataset['sha'] ?? '', el?.dataset['path'] ?? '');
+      break;
+    case 'stashApply':
+      post({ type: 'stashApply', sha: el?.dataset['sha'] ?? '' });
+      break;
+    case 'stashDrop':
+      post({ type: 'stashDrop', sha: el?.dataset['sha'] ?? '' });
+      break;
+    case 'stashRename': {
+      const s0 = stash.list?.find((s) => s.sha === el?.dataset['sha']);
+      if (s0) stashDialog = { kind: 'rename', sha: s0.sha, message: s0.message, busy: false };
+      break;
+    }
+    case 'stashChanges':
+      menuOpen = false;
+      stashDialog = { kind: 'push', message: '', includeUntracked: false, paths: null, busy: false };
+      break;
+    case 'stashTicked': {
+      const paths = state.working.filter((f) => commit.ticked.has(f.path) && !f.conflicted).map((f) => f.path);
+      if (paths.length) stashDialog = { kind: 'push', message: '', includeUntracked: true, paths, busy: false };
+      break;
+    }
+    case 'stashDialogDo':
+      if (stashDialog?.kind === 'push') post({ type: 'stashPush', message: stashDialog.message.trim(), paths: stashDialog.paths, includeUntracked: stashDialog.includeUntracked });
+      else if (stashDialog?.kind === 'rename' && stashDialog.message.trim()) post({ type: 'stashRename', sha: stashDialog.sha, message: stashDialog.message.trim() });
+      if (stashDialog) stashDialog = { ...stashDialog, busy: true };
+      break;
+    case 'closeStashDialog':
+      if (!stashDialog?.busy) stashDialog = null;
       break;
     case 'openSquash':
       openSquash();
@@ -803,6 +881,9 @@ document.addEventListener('change', (event) => {
     case 'toggleTags':
       if (popover) popover = { ...popover, tags: checked };
       return;
+    case 'toggleStashUntracked':
+      if (stashDialog?.kind === 'push') stashDialog = { ...stashDialog, includeUntracked: checked };
+      return;
     case 'tickFile':
     case 'tickGroup': {
       const paths: unknown = el.dataset['action'] === 'tickFile' ? [el.dataset['path']] : JSON.parse(el.dataset['paths'] ?? '[]');
@@ -849,12 +930,13 @@ document.addEventListener('change', (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Enter' && (event.target as HTMLElement).dataset['role'] === 'branchName') {
+  if (event.key === 'Enter' && ['branchName', 'stashName'].includes((event.target as HTMLElement).dataset['role'] ?? '')) {
     app.querySelector<HTMLButtonElement>('[data-role="submit"]:not(:disabled)')?.click();
     return;
   }
   if (event.key !== 'Escape') return;
-  if (mergedDialog && !mergedDialog.deleting) mergedDialog = null;
+  if (stashDialog && !stashDialog.busy) stashDialog = null;
+  else if (mergedDialog && !mergedDialog.deleting) mergedDialog = null;
   else if (branchDialog && !branchDialog.busy) branchDialog = null;
   else if (commit.groupMenu) commit = { ...commit, groupMenu: false };
   else if (conflict.editing !== null) conflict = { ...conflict, editing: null };
@@ -876,6 +958,7 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
       state = message.state;
       if (branchMenu && !branchOf(branchMenu.ref)) branchMenu = null;
       if (highlightRef && !branchOf(highlightRef)) highlightRef = null;
+      if (place === 'editor' && tab === 'stash' && (stash.list?.length ?? -1) !== message.state.stashes) post({ type: 'stashes' });
       refreshLog();
       followOperation();
       commit = { ...commit, ticked: nextTicked({ files: state.working, ticked: commit.ticked, known: commit.known }), known: new Set(state.working.map((f) => f.path)) };
@@ -906,6 +989,7 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
       if (matches(commitDiff)) commitDiff = { ...commitDiff, diff };
       if (matches(pushDiff)) pushDiff = { ...pushDiff, diff };
       if (matches(squashDiff)) squashDiff = { ...squashDiff, diff };
+      if (matches(stashDiff)) stashDiff = { ...stashDiff, diff };
       break;
     }
     case 'squashPlan':
@@ -914,6 +998,20 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
         const first = message.plan.files[0];
         if (first && !message.plan.problem) selectSquashFile(first.path);
       }
+      break;
+    case 'stashes': {
+      stash = { ...stash, list: message.stashes };
+      const still = message.stashes.some((s) => s.sha === stash.selected);
+      if (!still) {
+        stash = { ...stash, selected: null, file: null };
+        stashDiff = null;
+        const first = message.stashes[0];
+        if (first) selectStash(first.sha);
+      }
+      break;
+    }
+    case 'stashDone':
+      stashDialog = null;
       break;
     case 'squashDone':
       squashView = null;
@@ -986,6 +1084,7 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
       if (branchDialog) branchDialog = { ...branchDialog, busy: false };
       commit = { ...commit, committing: false };
       if (squashView) squashView = { ...squashView, busy: false };
+      if (stashDialog) stashDialog = { ...stashDialog, busy: false };
       showToast({ text: message.text, undo: null, error: true });
       break;
     default: {

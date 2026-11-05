@@ -45,6 +45,14 @@ The **Commit** tab of the editor lists what the working copy changed since the l
 
 The editor's **Push** opens the push screen first: where the commits go, each commit with its files (click one to see it side by side), and **Push** or **Cancel**. The sidebar's Push pushes at once.
 
+### Stash
+
+The **Stash** tab lists the stashes with the branch each was made on, its age and its files; click a file to see it side by side against the commit it was stashed on.
+
+- **Apply** puts a stash's changes back into the working copy on the checked-out branch, and keeps the stash.
+- **Rename** names it; **Delete** removes it, and **Undo** brings it back.
+- **Stash changes…** (in the tab, or in the Git menu) puts every change aside, unversioned files too when asked; **Stash…** in the Commit tab puts aside only the ticked files.
+
 ### Push, pull and sync
 
 The editor toolbar and the sidebar have **Sync**, **Pull** and **Push** for the current branch; a row offers **Push 2**, **Pull 3** or **Publish** on hover, for any branch.
@@ -101,10 +109,10 @@ VS Code's built-in Git extension (`git.enabled`). Githor runs the same `git` it 
 
 ## How it works
 
-- `src/core/` is pure logic with no `vscode` import, tested against real repositories: `branches.ts` reads `git for-each-ref`, `marks.ts` is the sync language of the design (also imported by the webview), `merged.ts` decides what is merged, `cleanup.ts` deletes and restores, `remote.ts` fetches, `sync.ts` pushes and pulls (`sync-rules.ts` says when they are offered), `branch-ops.ts` creates, renames and deletes one branch, `log.ts` reads the log and one commit, `graph.ts` lays out the lanes (also imported by the webview), `commit-ops.ts` switches to, cherry-picks and reverts commits, `side-by-side.ts` pairs a diff's lines and marks changed words, `file-diff.ts` reads one file's diff, `working.ts` reads and commits the working copy, `commit-groups.ts` builds the commit list's sections and groups, `compare.ts` compares a branch with its remote, `operation.ts` runs a merge or rebase and resolves its files, `conflict.ts` reads conflict markers with your side on the left, `squash.ts` plans and makes a squash, `tasks.ts` reads Claudestrator's task records, `repos.ts` picks the repository.
+- `src/core/` is pure logic with no `vscode` import, tested against real repositories: `branches.ts` reads `git for-each-ref`, `marks.ts` is the sync language of the design (also imported by the webview), `merged.ts` decides what is merged, `cleanup.ts` deletes and restores, `remote.ts` fetches, `sync.ts` pushes and pulls (`sync-rules.ts` says when they are offered), `branch-ops.ts` creates, renames and deletes one branch, `log.ts` reads the log and one commit, `graph.ts` lays out the lanes (also imported by the webview), `commit-ops.ts` switches to, cherry-picks and reverts commits, `side-by-side.ts` pairs a diff's lines and marks changed words, `file-diff.ts` reads one file's diff, `working.ts` reads and commits the working copy, `commit-groups.ts` builds the commit list's sections and groups, `compare.ts` compares a branch with its remote, `operation.ts` runs a merge or rebase and resolves its files, `conflict.ts` reads conflict markers with your side on the left, `squash.ts` plans and makes a squash, `stash.ts` lists and handles stashes, `tasks.ts` reads Claudestrator's task records, `repos.ts` picks the repository.
 - `src/model.ts` reads the repository once for every view and re-reads when the Git extension reports a change. `src/actions.ts` runs the git operations and logs failures to the **Githor** output channel.
 - `src/branches-view.ts` drives one webview page; `src/sidebar.ts` puts it in the sidebar, `src/panel.ts` in an editor tab. `src/status-bar.ts` and `src/quick-pick.ts` are the status bar item and the branch switcher; `src/git-content.ts` serves files at a commit to VS Code's diff editor.
-- `media/*.ts` are the page's ES modules: `main.ts` (state and events), `branch-list.ts`, `sync-controls.ts` (Sync, Pull, Push and its menu), `branch-menu.ts`, `branch-dialogs.ts` (new, rename, delete), `commit-log.ts`, `commit-details.ts`, `diff-view.ts`, `syntax.ts` (the diff's colours), `commit-view.ts`, `push-review.ts`, `compare-view.ts`, `conflict-view.ts`, `squash-view.ts`, `chrome.ts` (toolbar, menu, banner, toast), `merged-dialog.ts`, `icons.ts` (the design's icons). `media/app.css` holds the design tokens and components.
+- `media/*.ts` are the page's ES modules: `main.ts` (state and events), `branch-list.ts`, `sync-controls.ts` (Sync, Pull, Push and its menu), `branch-menu.ts`, `branch-dialogs.ts` (new, rename, delete), `commit-log.ts`, `commit-details.ts`, `diff-view.ts`, `syntax.ts` (the diff's colours), `commit-view.ts`, `push-review.ts`, `compare-view.ts`, `conflict-view.ts`, `squash-view.ts`, `stash-view.ts`, `chrome.ts` (toolbar, menu, banner, toast), `merged-dialog.ts`, `icons.ts` (the design's icons). `media/app.css` holds the design tokens and components.
 
 ## Develop
 

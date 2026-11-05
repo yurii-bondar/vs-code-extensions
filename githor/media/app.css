@@ -467,3 +467,11 @@ html, body { height: 100%; margin: 0; padding: 0; background: var(--gt-bg-app); 
 .gt-conflict__result .gt-textarea { min-height: 120px; font-family: var(--gt-font-mono); font-size: var(--gt-text-sm); }
 .gt-conflict__count { padding: 8px 12px; font-family: var(--gt-font-ui); }
 .gt-diff__side-label .gt-i { margin-right: 2px; }
+
+/* ---------- Stash tab (09) ---------- */
+.gt-stash { display: flex; flex-direction: column; gap: 2px; width: 100%; padding: 8px 12px; border: 0; border-bottom: 1px solid color-mix(in srgb, var(--gt-border) 50%, transparent); background: transparent; text-align: left; cursor: pointer; }
+.gt-stash:hover { background: var(--gt-bg-hover); }
+.gt-stash.is-selected { background: var(--gt-bg-selected); }
+.gt-stash__name { font-weight: var(--gt-weight-strong); }
+.gt-stash__actions { display: flex; flex-direction: column; gap: var(--gt-space-2); padding: 8px 12px 12px; border-bottom: 1px solid var(--gt-border); }
+.gt-stash__actions p { margin: 0; font-size: var(--gt-text-sm); }

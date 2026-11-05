@@ -81,6 +81,7 @@ export function commitListHtml(state: StateView, c: CommitState): string {
     <button class="gt-icon-btn${state.grouping !== 'none' ? ' is-on' : ''}" data-action="groupMenu" title="Group by" aria-label="Group by" aria-haspopup="menu" aria-expanded="${c.groupMenu}">${icon('group')}</button>
     ${c.groupMenu ? groupMenuHtml(state.grouping) : ''}
   </span>
+  <button class="gt-btn gt-btn--ghost" data-action="stashTicked"${ticked ? '' : ' disabled title="Tick the files to stash."'}>${icon('folder', 'gt-i--sm')}Stash…</button>
 </div>
 ${banner ? `<div class="gt-commit-banner">${banner}</div>` : ''}
 <div class="gt-scroll">${list}</div>

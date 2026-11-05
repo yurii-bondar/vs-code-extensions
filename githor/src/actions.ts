@@ -7,6 +7,7 @@ import { abortOperation, bringTogether, continueOperation, readConflict, reopenC
 import type { ConflictPart, Resolution } from './core/conflict';
 import { fileDiff } from './core/file-diff';
 import { squash, squashPlan } from './core/squash';
+import { applyStash, dropStash, listStashes, renameStash, restoreStash, stashFileDiff, stashPush } from './core/stash';
 import { commitFiles, commitsToPush, uncommit, workingDiff } from './core/working';
 import { commitDetails, readLog, userEmail } from './core/log';
 import { deleteBranches, restoreBranches } from './core/cleanup';
@@ -14,7 +15,7 @@ import { isMergedInto, mergeTargets, scanMerged } from './core/merged';
 import { fetchRemotes } from './core/remote';
 import { publish, publishRemote, pull, push, remoteOnlyCommits } from './core/sync';
 import { cannotPull, cannotPush } from './core/sync-rules';
-import type { Branch, CommitDetails, CommitLine, CommitView, CompareView, FileChange, FileDiff, MergedBranch, RepoRoot, SquashPlan } from './core/types';
+import type { Branch, CommitDetails, CommitLine, CommitView, CompareView, FileChange, FileDiff, MergedBranch, RepoRoot, SquashPlan, StashView } from './core/types';
 import type { RepoModel } from './model';
 import type { BusyView, MergedView } from './protocol';
 
@@ -542,5 +543,55 @@ export class Actions {
       await this.model.refresh();
     }
     return this.finished('squash', '', this.model.current?.name ?? 'HEAD');
+  }
+
+  // ---------- stash (09) ----------
+
+  stashes(): Promise<StashView[]> {
+    return listStashes(this.model.git, this.root());
+  }
+
+  stashDiff(args: { sha: string; file: FileChange }): Promise<FileDiff> {
+    return stashFileDiff(this.model.git, this.root(), args);
+  }
+
+  /** Runs a stash operation, logging a failure and re-reading the repository after. */
+  private async stashing<T>(what: string, run: () => Promise<T>): Promise<T> {
+    try {
+      return await run();
+    } catch (e) {
+      this.log(what, e);
+      throw e;
+    } finally {
+      await this.model.refresh();
+    }
+  }
+
+  async stashPush(args: { message: string; paths: readonly string[] | null; includeUntracked: boolean }): Promise<Outcome> {
+    const sha = await this.stashing('Stash', () => stashPush(this.model.git, this.root(), args));
+    if (!sha) return { text: 'There was nothing to stash', undo: null };
+    const n = args.paths?.length;
+    return { text: n ? `Stashed ${plural(n, 'file', 'files')}` : 'Stashed your changes', undo: null };
+  }
+
+  async stashApply(sha: string): Promise<Outcome> {
+    await this.stashing('Apply the stash', () => applyStash(this.model.git, this.root(), sha));
+    const conflicts = this.model.working.filter((f) => f.conflicted).length;
+    return { text: conflicts ? `Applied, with ${plural(conflicts, 'file', 'files')} in conflict: see the Commit tab` : 'Applied the stash; it is kept', undo: null };
+  }
+
+  async stashDrop(sha: string): Promise<Outcome> {
+    const root = this.root();
+    const dropped = await this.stashing('Delete the stash', () => dropStash(this.model.git, root, sha));
+    const undo = this.remember(async () => {
+      await restoreStash(this.model.git, root, dropped);
+      return 'The stash is back';
+    });
+    return { text: 'Deleted the stash', undo };
+  }
+
+  async stashRename({ sha, message }: { sha: string; message: string }): Promise<Outcome> {
+    await this.stashing('Rename the stash', () => renameStash(this.model.git, this.root(), { sha, message }));
+    return { text: `Renamed the stash to ${message}`, undo: null };
   }
 }

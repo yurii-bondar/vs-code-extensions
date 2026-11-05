@@ -1,6 +1,6 @@
 import type { Grouping } from './core/commit-groups';
 import type { ConflictPart, Resolution } from './core/conflict';
-import type { Branch, CommitDetails, CommitLine, CommitView, CompareView, FileChange, FileDiff, KeptBranch, MergedBranch, OperationView, SquashPlan, WorkingFile } from './core/types';
+import type { Branch, CommitDetails, CommitLine, CommitView, CompareView, FileChange, FileDiff, KeptBranch, MergedBranch, OperationView, SquashPlan, StashView, WorkingFile } from './core/types';
 
 /** A push, pull, publish or sync that is running, on `ref`; null `ref` for the current branch's sync. */
 export interface BusyView {
@@ -33,6 +33,8 @@ export interface StateView {
   grouping: Grouping;
   /** The merge or rebase in progress, if any. */
   operation: OperationView | null;
+  /** How many stashes there are. */
+  stashes: number;
 }
 
 /** The "Delete all merged branches" dialog for one target. */
@@ -95,7 +97,14 @@ export type ClientMessage =
   | { type: 'abortOperation' }
   /** Asks what squashing these commits would do (design `12`, `13`). */
   | { type: 'squashPlan'; shas: string[] }
-  | { type: 'squash'; shas: string[]; message: string };
+  | { type: 'squash'; shas: string[]; message: string }
+  | { type: 'stashes' }
+  /** Stashes every change, or only `paths`. */
+  | { type: 'stashPush'; message: string; paths: string[] | null; includeUntracked: boolean }
+  | { type: 'stashApply'; sha: string }
+  | { type: 'stashDrop'; sha: string }
+  | { type: 'stashRename'; sha: string; message: string }
+  | { type: 'stashDiff'; sha: string; file: FileChange };
 
 export type HostMessage =
   | { type: 'state'; state: StateView }
@@ -124,6 +133,9 @@ export type HostMessage =
   | { type: 'squashPlan'; shas: string[]; plan: SquashPlan }
   /** The squash is done or paused at a conflict: its screen closes. */
   | { type: 'squashDone' }
+  | { type: 'stashes'; stashes: StashView[] }
+  /** A stash dialog's work is done: it closes. */
+  | { type: 'stashDone' }
   | { type: 'error'; text: string };
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -146,6 +158,7 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
   if (!isRecord(raw)) return null;
   switch (raw['type']) {
     case 'ready':
+    case 'stashes':
     case 'continueOperation':
     case 'abortOperation':
     case 'pickBranch':
@@ -182,6 +195,18 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
     case 'cherryPick':
     case 'squashPlan':
       return Array.isArray(raw['shas']) && raw['shas'].length > 0 && raw['shas'].every(nonEmpty) ? { type: raw['type'], shas: raw['shas'] } : null;
+    case 'stashPush': {
+      const { message, paths, includeUntracked } = raw;
+      const okPaths = paths === null || (Array.isArray(paths) && paths.length > 0 && paths.every(nonEmpty));
+      return typeof message === 'string' && okPaths && typeof includeUntracked === 'boolean' ? { type: 'stashPush', message, paths: paths as string[] | null, includeUntracked } : null;
+    }
+    case 'stashApply':
+    case 'stashDrop':
+      return nonEmpty(raw['sha']) ? { type: raw['type'], sha: raw['sha'] } : null;
+    case 'stashRename':
+      return nonEmpty(raw['sha']) && nonEmpty(raw['message']) ? { type: 'stashRename', sha: raw['sha'], message: raw['message'] } : null;
+    case 'stashDiff':
+      return nonEmpty(raw['sha']) && isFileChange(raw['file']) ? { type: 'stashDiff', sha: raw['sha'], file: raw['file'] } : null;
     case 'squash':
       return Array.isArray(raw['shas']) && raw['shas'].length > 1 && raw['shas'].every(nonEmpty) && nonEmpty(raw['message']) ? { type: 'squash', shas: raw['shas'], message: raw['message'] } : null;
     case 'switchCommit':

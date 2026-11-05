@@ -9,7 +9,7 @@ import { esc, fetchedAgo } from './text.js';
 const fetchButton = (fetching: boolean): string =>
   `<button class="gt-icon-btn" data-action="fetch" title="Fetch" aria-label="Fetch"${fetching ? ' disabled' : ''}>${icon('refresh', fetching ? 'gt-spin' : '')}</button>`;
 
-export type Tab = 'log' | 'commit';
+export type Tab = 'log' | 'commit' | 'stash';
 
 export function toolbarHtml(state: StateView, { menuOpen, popover, tab }: { menuOpen: boolean; popover: PushPopover | null; tab: Tab }): string {
   const changes = state.working.filter((f) => !f.conflicted).length;
@@ -17,6 +17,7 @@ export function toolbarHtml(state: StateView, { menuOpen, popover, tab }: { menu
     ? `<span class="gt-tabs" role="tablist">
     <button class="gt-tab${tab === 'log' ? ' is-on' : ''}" role="tab" aria-selected="${tab === 'log'}" data-action="tabLog">Log</button>
     <button class="gt-tab${tab === 'commit' ? ' is-on' : ''}" role="tab" aria-selected="${tab === 'commit'}" data-action="tabCommit">Commit${changes ? ` <span class="gt-count">${changes}</span>` : ''}</button>
+    <button class="gt-tab${tab === 'stash' ? ' is-on' : ''}" role="tab" aria-selected="${tab === 'stash'}" data-action="tabStash">Stash${state.stashes ? ` <span class="gt-count">${state.stashes}</span>` : ''}</button>
   </span>`
     : '';
   return `<div class="gt-toolbar">
@@ -39,6 +40,7 @@ function menuHtml(): string {
   ${item('fetchAll', icon('refresh', 'gt-i--sm'), 'Fetch all')}
   ${item('pickBranch', icon('branch', 'gt-i--sm'), 'Switch branch…')}
   ${item('newBranch', '<span class="gt-option__tick"></span>', 'New branch…')}
+  ${item('stashChanges', '<span class="gt-option__tick"></span>', 'Stash changes…')}
   <div class="gt-menu__sep" role="separator"></div>
   ${item('openMerged', icon('trash', 'gt-i--sm'), 'Delete all merged branches…')}
 </div>`;
