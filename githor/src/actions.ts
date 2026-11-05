@@ -40,6 +40,8 @@ export class Actions {
   private readonly scans = new Map<string, MergedBranch[]>();
   /** Where the branch was before a merge Githor started, for Undo merge (design `30`). */
   private mergedFrom: { root: RepoRoot; sha: string } | null = null;
+  /** How many commits the squash in progress joins, for its toast. */
+  private squashed = 0;
 
   constructor(
     private readonly model: RepoModel,
@@ -443,16 +445,17 @@ export class Actions {
   }
 
   /** The toast after a merge or rebase is done, with Undo when Githor knows where the branch was. */
-  private finished(how: 'merge' | 'rebase', remote: string, local: string): Outcome {
+  private finished(how: 'merge' | 'rebase' | 'squash', remote: string, local: string): Outcome {
     const ahead = this.model.current?.ahead ?? 0;
     const from = this.mergedFrom;
     this.mergedFrom = null;
     const undo = from
       ? this.remember(async () => {
           await resetTo(this.model.git, from.root, from.sha);
-          return how === 'merge' ? 'The merge is undone' : 'The rebase is undone';
+          return `The ${how} is undone`;
         })
       : null;
+    if (how === 'squash') return { text: `Squashed ${commits(this.squashed)}`, undo };
     const verb = how === 'merge' ? `Merged ${remote} into ${local}` : `Rebased ${local} onto ${remote}`;
     return { text: `${verb}. ${ahead ? `${commits(ahead)} to push` : 'Nothing to push'}`, undo };
   }
@@ -501,6 +504,7 @@ export class Actions {
       this.mergedFrom = null;
       await this.model.refresh();
     }
-    return { text: `${op.kind === 'merge' ? 'Merge' : 'Rebase'} aborted: ${op.local} is back as it was`, undo: null };
+    const word = { merge: 'Merge', rebase: 'Rebase', squash: 'Squash' }[op.kind];
+    return { text: `${word} aborted: the branch is back as it was`, undo: null };
   }
 }

@@ -3,6 +3,7 @@
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import { applyResolutions, parseConflicts } from './conflict';
+import { clearSquashMarker, readSquashMarker } from './squash';
 import type { ConflictPart, Resolution } from './conflict';
 import type { GitRunner } from './git';
 import type { OperationView, RepoRoot } from './types';
@@ -35,6 +36,12 @@ export async function readOperation(git: GitRunner, root: RepoRoot): Promise<Ope
   }
   for (const dir of [rebaseMerge, rebaseApply]) {
     if (!(await exists(dir))) continue;
+    const marker = await readSquashMarker(git, root);
+    if (marker) {
+      // a squash putting later commits back: the squashed result is one side, the commit being put back the other
+      const replayed = (await git.run(root, ['rev-parse', '--short', 'REBASE_HEAD']).catch(() => '')).trim();
+      return { kind: 'squash', local: 'squashed commits', remote: replayed || 'the next commit', conflicted, staged };
+    }
     const head = (await read(path.join(dir, 'head-name'))).replace(/^refs\/heads\//, '');
     const onto = await read(path.join(dir, 'onto'));
     return { kind: 'rebase', local: head || 'HEAD', remote: onto ? await nameOf(git, root, onto) : 'upstream', conflicted, staged };
@@ -56,7 +63,8 @@ export async function bringTogether(git: GitRunner, root: RepoRoot, { how, other
 /** The conflicted file as its parts, with the sides placed for this operation (see conflict.ts). */
 export async function readConflict(git: GitRunner, root: RepoRoot, { file, kind }: { file: string; kind: OperationView['kind'] }): Promise<ConflictPart[]> {
   const text = await fs.readFile(path.join(root, file), 'utf8');
-  return parseConflicts(text, { localIsFirst: kind === 'merge' });
+  // the `<<<<<<<` side is your branch in a merge and the squashed result in a squash, but the other branch in a rebase
+  return parseConflicts(text, { localIsFirst: kind !== 'rebase' });
 }
 
 /** Writes the file from the choices and marks it resolved (`git add`). */
@@ -72,16 +80,22 @@ export async function reopenConflict(git: GitRunner, root: RepoRoot, file: strin
 }
 
 /** Continue: makes the merge commit, or replays the next commit of a rebase (which can stop at a conflict again). */
+/** git's command for an operation: a squash's second half is a rebase. */
+const command = (kind: OperationView['kind']): 'merge' | 'rebase' => (kind === 'merge' ? 'merge' : 'rebase');
+
 export async function continueOperation(git: GitRunner, root: RepoRoot, kind: OperationView['kind']): Promise<{ paused: boolean }> {
   try {
-    await git.run(root, [...NO_EDITOR, kind, '--continue']);
+    await git.run(root, [...NO_EDITOR, command(kind), '--continue']);
   } catch (e) {
     if (!(await readOperation(git, root))) throw e;
   }
-  return { paused: (await readOperation(git, root)) !== null };
+  const paused = (await readOperation(git, root)) !== null;
+  if (!paused && kind === 'squash') await clearSquashMarker(git, root);
+  return { paused };
 }
 
 /** Abort: the branch goes back exactly as it was before the merge or rebase. */
 export async function abortOperation(git: GitRunner, root: RepoRoot, kind: OperationView['kind']): Promise<void> {
-  await git.run(root, [kind, '--abort']);
+  await git.run(root, [command(kind), '--abort']);
+  if (kind === 'squash') await clearSquashMarker(git, root);
 }

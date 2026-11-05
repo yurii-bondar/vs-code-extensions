@@ -167,9 +167,12 @@ export interface WorkingFile {
   binary: boolean;
 }
 
-/** A merge or rebase the repository is in the middle of. */
+/**
+ * A merge or rebase the repository is in the middle of. `squash` is a rebase Githor started to put later commits back
+ * on top of squashed ones (design `16`): its sides are placed the other way round.
+ */
 export interface OperationView {
-  kind: 'merge' | 'rebase';
+  kind: 'merge' | 'rebase' | 'squash';
   /** Your branch: always the left side of a conflict, whatever git calls it. */
   local: string;
   /** The branch merged in, or rebased onto: always the right side. */
@@ -199,4 +202,23 @@ export interface CompareView {
   base: CompareCommit | null;
   /** Files a merge would conflict in; null when this git cannot tell (before 2.38). */
   conflicts: string[] | null;
+}
+
+/** What squashing a set of commits would do (design `12`, `13`), and why it cannot when it cannot. */
+export interface SquashPlan {
+  /** The commits, newest first. */
+  commits: CommitDetails[];
+  /** The commit the squashed one sits on; null when the first commit is among them. */
+  base: string | null;
+  baseShort: string | null;
+  /** Why the squash is off, in the design's words; null when it can go ahead. */
+  problem: string | null;
+  /** Commits of the branch between the selected ones that are not selected. */
+  gap: string[];
+  /** Selected commits already on a remote: the branch will need a force-push afterwards. */
+  pushed: string[];
+  /** Commits after the selected ones that get put back on top, and can conflict. */
+  after: number;
+  /** The files of the squashed result, against `base`. */
+  files: FileChange[];
 }
