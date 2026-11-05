@@ -136,3 +136,9 @@ test("a failing git command rejects with GitError and git's own message", async 
     return true;
   });
 });
+
+test('GitRunner passes environment for one call only, as config git reads', async () => {
+  const env = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'githor.probe', GIT_CONFIG_VALUE_0: 'yes' };
+  assert.equal((await git.run(repo.work, ['config', '--get', 'githor.probe'], { env })).trim(), 'yes');
+  await assert.rejects(git.run(repo.work, ['config', '--get', 'githor.probe']));
+});

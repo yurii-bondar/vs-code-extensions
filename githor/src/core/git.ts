@@ -1,9 +1,14 @@
 import { execFile } from 'child_process';
 import type { RepoRoot } from './types';
 
+/** Environment for one git call, on top of the extension host's: an account's header, for one. */
+export interface RunOptions {
+  env?: Readonly<Record<string, string>>;
+}
+
 /** Runs one git command in a repository and gives back its stdout. */
 export interface GitRunner {
-  run(cwd: RepoRoot, args: readonly string[]): Promise<string>;
+  run(cwd: RepoRoot, args: readonly string[], options?: RunOptions): Promise<string>;
 }
 
 export class GitError extends Error {
@@ -31,9 +36,9 @@ export function createGitRunner(gitPath: string): GitRunner {
   // GIT_TERMINAL_PROMPT=0: a command that needs credentials fails instead of waiting for input nobody can give.
   const env = { ...process.env, LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0' };
   return {
-    run: (cwd, args) =>
+    run: (cwd, args, options) =>
       new Promise((resolve, reject) => {
-        execFile(gitPath, [...args], { cwd, env, maxBuffer: MAX_OUTPUT }, (err, stdout, stderr) => {
+        execFile(gitPath, [...args], { cwd, env: options?.env ? { ...env, ...options.env } : env, maxBuffer: MAX_OUTPUT }, (err, stdout, stderr) => {
           if (err) reject(new GitError({ args, stderr, stdout, exitCode: typeof err.code === 'number' ? err.code : null }));
           else resolve(stdout);
         });
