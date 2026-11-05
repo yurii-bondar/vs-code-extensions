@@ -1,4 +1,5 @@
 import { refExists } from './branches';
+import { splitUpstream } from './sync';
 import type { GitRunner } from './git';
 import type { DeletedBranch, MergedBranch, RepoRoot } from './types';
 
@@ -10,12 +11,6 @@ export interface DeleteResult {
 }
 
 const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
-
-/** `origin/feat/x` → remote `origin`, branch `feat/x`. */
-function splitUpstream(upstream: string): { remote: string; branch: string } {
-  const slash = upstream.indexOf('/');
-  return { remote: upstream.slice(0, slash), branch: upstream.slice(slash + 1) };
-}
 
 /**
  * Deletes merged branches: on their remote first when `onRemote` (only an upstream that is merged too), then locally
