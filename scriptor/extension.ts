@@ -26,7 +26,7 @@ export function activate(context: vscode.ExtensionContext): void {
       return undefined;
     }
     const picked = await vscode.window.showQuickPick(
-      scripts.map((s) => ({ label: s.name, description: groups.find((g) => g.id === s.groupId)?.name ?? '', detail: s.path, id: s.id })),
+      scripts.map((s) => ({ label: s.name, description: groups.find((g) => g.id === s.groupId)?.name ?? '', detail: s.type === 'file' ? s.path : `${s.command}  ·  ${s.cwd}`, id: s.id })),
       { placeHolder, matchOnDescription: true, matchOnDetail: true }
     );
     return picked?.id;

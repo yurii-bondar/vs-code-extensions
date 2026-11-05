@@ -287,6 +287,7 @@ main { max-width: 1280px; margin: 0 auto; }
 .tip strong { font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }
 .tip-desc { color: var(--fg); font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .tip code { color: var(--muted); font: 11.5px/1.5 var(--mono); overflow-wrap: anywhere; }
+.tip code.cmd { color: var(--fg); }
 .tools { display: flex; margin: -4px -6px 0 0; opacity: 0; transition: opacity 0.14s; }
 .card:hover .tools, .card:focus-within .tools { opacity: 1; }
 
@@ -396,6 +397,14 @@ input[type='text']:focus, select:focus, textarea:focus { border-color: var(--rin
 .select select { appearance: none; padding-right: 34px; background: var(--vscode-input-background, var(--card)); }
 .select option { background: var(--vscode-dropdown-background, var(--bg)); color: var(--vscode-dropdown-foreground, var(--fg)); }
 .select .i { position: absolute; top: 10px; right: 11px; pointer-events: none; color: var(--muted); }
+
+.seg { display: flex; gap: 4px; padding: 4px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); }
+.seg button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: 30px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-weight: 600; }
+.seg button:hover { color: var(--fg); }
+.seg button.on { color: var(--fg); background: var(--card-hi); box-shadow: 0 0 0 1px var(--line); }
+.seg button:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.seg .i { width: 14px; height: 14px; }
+input.mono { font-family: var(--mono); }
 
 .adv { display: flex; flex-direction: column; gap: 14px; padding-top: 2px; }
 .adv summary { display: flex; align-items: center; gap: 6px; width: fit-content; color: var(--muted); font-size: 12px; font-weight: 600; list-style: none; cursor: pointer; user-select: none; }

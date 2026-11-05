@@ -1,8 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as os from 'os';
-import * as path from 'path';
-import { buildCommand, shellKind } from './core/command';
+import { buildCommand, locationOf, shellKind, workDirOf } from './core/command';
 import { markRun, removeGroup, removeScript } from './core/library';
 import type { Group, GroupId, Script, ScriptId } from './core/types';
 import type { Store } from './store';
@@ -26,11 +25,12 @@ export class Actions {
     const scripts = ids.map((id) => this.script(id)).filter((s): s is Script => !!s);
     const started: ScriptId[] = [];
     for (const [i, script] of scripts.entries()) {
-      if (!(await exists(script.path))) {
-        vscode.window.showErrorMessage(`Scriptor: "${script.name}" was not found at ${script.path}.`);
+      const location = locationOf(script);
+      if (!(await exists(location))) {
+        vscode.window.showErrorMessage(`Scriptor: "${script.name}" was not found at ${location}.`);
         continue;
       }
-      const terminal = vscode.window.createTerminal({ name: `▶ ${script.name}`, cwd: script.cwd || path.dirname(script.path), iconPath: new vscode.ThemeIcon('play-circle') });
+      const terminal = vscode.window.createTerminal({ name: `▶ ${script.name}`, cwd: workDirOf(script), iconPath: new vscode.ThemeIcon('play-circle') });
       terminal.show(i < scripts.length - 1);
       terminal.sendText(buildCommand({ script, shell: shellKind(vscode.env.shell), platform: process.platform }));
       started.push(script.id);
@@ -44,19 +44,19 @@ export class Actions {
 
   async openFile(id: ScriptId): Promise<void> {
     const script = this.script(id);
-    if (script) await vscode.window.showTextDocument(vscode.Uri.file(script.path));
+    if (script?.type === 'file') await vscode.window.showTextDocument(vscode.Uri.file(script.path));
   }
 
   async reveal(id: ScriptId): Promise<void> {
     const script = this.script(id);
-    if (script) await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(script.path));
+    if (script) await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(locationOf(script)));
   }
 
   /** Asks first; true when the script was removed. The file itself is never touched. */
   async removeScript(id: ScriptId): Promise<boolean> {
     const script = this.script(id);
     if (!script) return false;
-    const yes = await vscode.window.showWarningMessage(`Remove "${script.name}" from Scriptor?`, { modal: true, detail: 'The file stays where it is.' }, 'Remove');
+    const yes = await vscode.window.showWarningMessage(`Remove "${script.name}" from Scriptor?`, { modal: true, detail: script.type === 'file' ? 'The file stays where it is.' : 'Nothing on disk is touched.' }, 'Remove');
     if (yes !== 'Remove') return false;
     await this.store.update((lib) => removeScript(lib, id));
     return true;

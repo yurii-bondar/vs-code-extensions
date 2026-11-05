@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { markRun, parseLibrary, removeGroup, removeScript, saveGroup, saveScript, validateGroup, validateScript } from '../src/core/library';
 import type { GroupId, ScriptDraft, ScriptId } from '../src/core/types';
 
-const draft = (extra: Partial<ScriptDraft> = {}): ScriptDraft => ({ id: null, name: '', path: '/x/deploy.sh', description: '', groupId: null, interpreter: '', args: '', cwd: '', ...extra });
+const draft = (extra: Partial<ScriptDraft> = {}): ScriptDraft => ({ id: null, type: 'file', name: '', path: '/x/deploy.sh', command: '', description: '', groupId: null, interpreter: '', args: '', cwd: '', ...extra });
 let n = 0;
 const ids = () => `id${++n}`;
 
@@ -29,6 +29,31 @@ test('validateScript wants an absolute path', () => {
   assert.match(validateScript(draft({ cwd: 'rel' })) ?? '', /working directory/);
   assert.equal(validateScript(draft()), null);
   assert.match(validateGroup({ id: null, name: ' ', hue: 'blue' }) ?? '', /name/);
+});
+
+test('validateScript wants a command and an absolute folder for a command', () => {
+  const cmd = (extra: Partial<ScriptDraft>) => draft({ type: 'command', path: '', command: 'npm run dev', cwd: '/app', ...extra });
+  assert.equal(validateScript(cmd({})), null);
+  assert.match(validateScript(cmd({ command: '  ' })) ?? '', /command/);
+  assert.match(validateScript(cmd({ cwd: '' })) ?? '', /folder/);
+  assert.match(validateScript(cmd({ cwd: 'app' })) ?? '', /absolute/);
+});
+
+test('saveScript keeps only what a command uses and names it after the command', () => {
+  const lib = saveScript({ groups: [], scripts: [] }, draft({ type: 'command', path: '/x/left.sh', command: ' npm run dev ', interpreter: 'node', args: '-v', cwd: '/app' }), ids);
+  const s = lib.scripts[0];
+  assert.deepEqual([s?.type, s?.name, s?.path, s?.command, s?.interpreter, s?.args, s?.cwd], ['command', 'npm run dev', '', 'npm run dev', '', '', '/app']);
+});
+
+test('parseLibrary reads old entries as files and drops a command without a folder', () => {
+  const lib = parseLibrary({
+    scripts: [
+      { id: 'a', path: '/a/b.sh' },
+      { id: 'b', type: 'command', command: 'npm test', cwd: '/app' },
+      { id: 'c', type: 'command', command: 'npm test' },
+    ],
+  });
+  assert.deepEqual(lib.scripts.map((s) => [s.id, s.type, s.name]), [['a', 'file', 'b.sh'], ['b', 'command', 'npm test']]);
 });
 
 test('saveScript names the script after its file when no name is given', () => {

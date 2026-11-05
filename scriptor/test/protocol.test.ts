@@ -15,11 +15,14 @@ test('parseClientMessage rejects what is not a known message', () => {
 });
 
 test('parseClientMessage narrows a script draft and drops a malformed one', () => {
-  const draft = { id: null, name: '', path: '/a/b.sh', description: '', groupId: null, interpreter: '', args: '', cwd: '' };
+  const draft = { id: null, type: 'file', name: '', path: '/a/b.sh', command: '', description: '', groupId: null, interpreter: '', args: '', cwd: '' };
   assert.deepEqual(parseClientMessage({ type: 'saveScript', draft }), { type: 'saveScript', draft });
   assert.equal(parseClientMessage({ type: 'saveScript', draft: { ...draft, path: 5 } }), null);
   assert.equal(parseClientMessage({ type: 'saveScript', draft: { ...draft, id: 7 } }), null);
   assert.equal(parseClientMessage({ type: 'saveScript' }), null);
+  assert.equal(parseClientMessage({ type: 'saveScript', draft: { ...draft, type: 'url' } }), null);
+  const { command: _, ...noCommand } = draft;
+  assert.equal(parseClientMessage({ type: 'saveScript', draft: noCommand }), null);
 });
 
 test('parseClientMessage only takes a known hue for a group', () => {

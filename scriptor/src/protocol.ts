@@ -1,5 +1,5 @@
 import { HUES } from './core/types';
-import type { GroupDraft, Hue, ScriptDraft } from './core/types';
+import type { GroupDraft, Hue, ScriptDraft, ScriptType } from './core/types';
 
 export interface GroupView {
   id: string;
@@ -9,18 +9,19 @@ export interface GroupView {
 
 export interface ScriptView {
   id: string;
+  type: ScriptType;
   name: string;
   path: string;
-  dir: string;
+  command: string;
   description: string;
   groupId: string | null;
   interpreter: string;
   args: string;
   cwd: string;
   lastRunAt: number;
-  /** The file is not on disk any more. */
+  /** The file, or the folder of a command, is not on disk any more. */
   missing: boolean;
-  /** What the extension of the file means: `Python`, `PY`, a hue. */
+  /** What the extension of the file means: `Python`, `PY`, a hue; `Command` for a command. */
   kind: { label: string; short: string; hue: Hue };
   /** What runs it when no interpreter is set, e.g. `python3`; empty when the file is run itself. */
   detected: string;
@@ -56,9 +57,17 @@ function scriptDraft(raw: unknown): ScriptDraft | null {
   if (!isRecord(raw)) return null;
   const id = optStr(raw, 'id');
   const groupId = optStr(raw, 'groupId');
-  const [name, path, description, interpreter, args, cwd] = ['name', 'path', 'description', 'interpreter', 'args', 'cwd'].map((k) => str(raw, k));
-  if (id === undefined || groupId === undefined || name === null || path === null || description === null || interpreter === null || args === null || cwd === null) return null;
-  return { id, groupId, name: name ?? '', path: path ?? '', description: description ?? '', interpreter: interpreter ?? '', args: args ?? '', cwd: cwd ?? '' };
+  const type = raw['type'] === 'file' || raw['type'] === 'command' ? raw['type'] : null;
+  const name = str(raw, 'name');
+  const path = str(raw, 'path');
+  const command = str(raw, 'command');
+  const description = str(raw, 'description');
+  const interpreter = str(raw, 'interpreter');
+  const args = str(raw, 'args');
+  const cwd = str(raw, 'cwd');
+  if (id === undefined || groupId === undefined || type === null) return null;
+  if (name === null || path === null || command === null || description === null || interpreter === null || args === null || cwd === null) return null;
+  return { id, groupId, type, name, path, command, description, interpreter, args, cwd };
 }
 
 function groupDraft(raw: unknown): GroupDraft | null {
