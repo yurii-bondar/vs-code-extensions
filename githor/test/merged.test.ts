@@ -132,7 +132,7 @@ test('countTokens leaves out the version of a package.json, and baseGoesFurther 
 
 test('mergeTargets offers the default branch, then long-lived branches, then the current one', async () => {
   const { mergeTargets } = await import('../src/core/merged');
-  const b = (name: string, current = false): Parameters<typeof mergeTargets>[0][number] => ({ name, ref: `refs/heads/${name}`, current, local: true, upstream: null, sync: 'unpushed', ahead: 0, behind: 0, sha: 's', committedAt: 0 });
+  const b = (name: string, current = false): Parameters<typeof mergeTargets>[0][number] => ({ name, ref: `refs/heads/${name}`, current, pinned: false, local: true, upstream: null, sync: 'unpushed', ahead: 0, behind: 0, sha: 's', committedAt: 0 });
   assert.deepEqual(mergeTargets([b('feat/x', true), b('develop'), b('release/2.3'), b('main'), b('fix/y')], 'main'), ['main', 'develop', 'release/2.3', 'feat/x']);
   assert.deepEqual(mergeTargets([b('main', true)], 'main'), ['main']);
 });

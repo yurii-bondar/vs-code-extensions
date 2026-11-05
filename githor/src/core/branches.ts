@@ -34,16 +34,27 @@ export function parseRefs(output: string): Branch[] {
     if (ref.startsWith(LOCAL)) {
       const counts = { ahead: count(track ?? '', 'ahead'), behind: count(track ?? '', 'behind') };
       const sync = syncOf(upstream ?? '', track ?? '', counts);
-      local.push({ name: ref.slice(LOCAL.length), ref, current: head === '*', local: true, upstream: upstream || null, sync, ...counts, sha, committedAt });
+      local.push({ name: ref.slice(LOCAL.length), ref, current: head === '*', pinned: false, local: true, upstream: upstream || null, sync, ...counts, sha, committedAt });
     } else if (ref.startsWith(REMOTE) && !symref) {
       const short = ref.slice(REMOTE.length);
       const name = short.slice(short.indexOf('/') + 1);
-      remote.push({ name, ref, current: false, local: false, upstream: short, sync: 'remote', ahead: 0, behind: 0, sha, committedAt });
+      remote.push({ name, ref, current: false, pinned: false, local: false, upstream: short, sync: 'remote', ahead: 0, behind: 0, sha, committedAt });
     }
   }
   const tracked = new Set(local.map((b) => b.upstream));
   const newestFirst = (a: Branch, b: Branch): number => Number(b.current) - Number(a.current) || b.committedAt - a.committedAt;
   return [...local.sort(newestFirst), ...remote.filter((b) => !tracked.has(b.upstream)).sort(newestFirst)];
+}
+
+/**
+ * The list's order: the current branch, then pinned ones, then the other local branches, then remote-only ones; newest
+ * first within each. Marks `pinned` from the names given.
+ */
+export function sortBranches(branches: readonly Branch[], pinned: ReadonlySet<string>): Branch[] {
+  const group = (b: Branch): number => (b.current ? 0 : b.pinned ? 1 : b.local ? 2 : 3);
+  return branches
+    .map((b) => ({ ...b, pinned: b.local && pinned.has(b.name) }))
+    .sort((a, b) => group(a) - group(b) || b.committedAt - a.committedAt);
 }
 
 export async function listBranches(git: GitRunner, root: RepoRoot): Promise<Branch[]> {

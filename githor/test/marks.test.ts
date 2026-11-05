@@ -7,6 +7,7 @@ const branch = (sync: SyncState, ahead = 0, behind = 0): Branch => ({
   name: 'x',
   ref: 'refs/heads/x',
   current: false,
+  pinned: false,
   local: sync !== 'remote',
   upstream: sync === 'unpushed' ? null : 'origin/x',
   sync,

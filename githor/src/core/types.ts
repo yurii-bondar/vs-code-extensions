@@ -16,6 +16,8 @@ export interface Branch {
   /** The full ref, unique in the repository: `refs/heads/main`, `refs/remotes/origin/review`. */
   ref: string;
   current: boolean;
+  /** The person pinned it, so it sorts right after the current branch. */
+  pinned: boolean;
   /** A local branch exists; false for a remote-only one. */
   local: boolean;
   /** The remote branch: what a local branch tracks (`origin/main`), or a remote-only branch itself. Null for none. */

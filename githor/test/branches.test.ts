@@ -1,7 +1,7 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { promises as fs } from 'fs';
-import { defaultBranch, listBranches, parseRefs, switchBranch } from '../src/core/branches';
+import { defaultBranch, listBranches, parseRefs, sortBranches, switchBranch } from '../src/core/branches';
 import { GitError } from '../src/core/git';
 import { lastFetchedAt } from '../src/core/remote';
 import type { Branch } from '../src/core/types';
@@ -32,10 +32,16 @@ test('parseRefs reads local branches, their sync state, and remote branches nobo
     ['old', 'gone', true],
     ['review/one', 'remote', false],
   ]);
-  assert.deepEqual(branches[0], { name: 'main', ref: 'refs/heads/main', current: true, local: true, upstream: 'origin/main', sync: 'synced', ahead: 0, behind: 0, sha: 'a1', committedAt: 1700000000000 });
+  assert.deepEqual(branches[0], { name: 'main', ref: 'refs/heads/main', current: true, pinned: false, local: true, upstream: 'origin/main', sync: 'synced', ahead: 0, behind: 0, sha: 'a1', committedAt: 1700000000000 });
   const review = byName(branches).get('review/one');
   assert.deepEqual([review?.ref, review?.upstream], ['refs/remotes/origin/review/one', 'origin/review/one']);
   assert.deepEqual([byName(branches).get('feat/x')?.ahead, byName(branches).get('feat/x')?.behind], [2, 1]);
+});
+
+test('sortBranches puts the current branch first, then pinned ones, then the rest newest first, remote-only last', () => {
+  const b = (name: string, o: Partial<Branch> = {}): Branch => ({ name, ref: `refs/heads/${name}`, current: false, pinned: false, local: true, upstream: null, sync: 'unpushed', ahead: 0, behind: 0, sha: 's', committedAt: 0, ...o });
+  const sorted = sortBranches([b('old', { committedAt: 1 }), b('new', { committedAt: 9 }), b('cur', { current: true }), b('pin', { committedAt: 2 }), b('far', { local: false, sync: 'remote', committedAt: 99 })], new Set(['pin', 'far']));
+  assert.deepEqual(sorted.map((x) => [x.name, x.pinned]), [['cur', false], ['pin', true], ['new', false], ['old', false], ['far', false]]);
 });
 
 // ---------- against a real repository ----------

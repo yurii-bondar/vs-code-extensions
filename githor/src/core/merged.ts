@@ -195,6 +195,11 @@ export async function targetRef(git: GitRunner, root: RepoRoot, target: string):
   throw new Error(`There is no branch ${target}.`);
 }
 
+/** Whether `ref` (a full ref) is merged into the branch `target`, by every check above. */
+export async function isMergedInto({ git, root, ref, target }: { git: GitRunner; root: RepoRoot; ref: string; target: string }): Promise<boolean> {
+  return new MergeCheck(git, root, await targetRef(git, root, target)).isMerged(ref);
+}
+
 /** Branch name → path of the other worktree it is checked out in. */
 async function worktreeBranches(git: GitRunner, root: RepoRoot): Promise<Map<string, string>> {
   const held = new Map<string, string>();
