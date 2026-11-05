@@ -114,6 +114,22 @@
         "command": "githor.showOutput",
         "title": "Show Git Output",
         "category": "Githor"
+      },
+      {
+        "command": "githor.pickAccount",
+        "title": "Switch Account…",
+        "category": "Githor",
+        "icon": "$(account)"
+      },
+      {
+        "command": "githor.addAccount",
+        "title": "Add Account…",
+        "category": "Githor"
+      },
+      {
+        "command": "githor.manageAccounts",
+        "title": "Manage Accounts…",
+        "category": "Githor"
       }
     ],
     "menus": {
@@ -134,6 +150,33 @@
           "group": "1_branches@2"
         }
       ]
+    },
+    "configuration": {
+      "title": "Githor",
+      "properties": {
+        "githor.accounts.rules": {
+          "type": "array",
+          "default": [],
+          "markdownDescription": "Picks the account a repository commits and pushes as, by its remote. The first rule that matches wins; a choice made for one repository overrides the rules. `remote` is a host and path, such as `github.com/northwind/*`, or `*` for everything else; `account` is the account's name in Githor.",
+          "items": {
+            "type": "object",
+            "required": [
+              "remote",
+              "account"
+            ],
+            "properties": {
+              "remote": {
+                "type": "string",
+                "description": "Host and path, `*` for any part of a segment; a trailing `/*` covers everything under it."
+              },
+              "account": {
+                "type": "string",
+                "description": "The account's name, as in Manage accounts."
+              }
+            }
+          }
+        }
+      }
     }
   },
   "devDependencies": {

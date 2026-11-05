@@ -4,6 +4,7 @@ import { accountGit } from './account-git';
 import { Actions } from './actions';
 import { createGitRunner } from './core/git';
 import { RepoModel } from './model';
+import { AccountStatusBar } from './account-ui';
 import { BranchStatusBar } from './status-bar';
 import { gitApi } from './vscode-git';
 
@@ -28,7 +29,7 @@ export function lazyServices(context: vscode.ExtensionContext, output: vscode.Ou
       const model = new RepoModel(api, base, context.workspaceState);
       const accounts = new AccountStore(context);
       const actions = new Actions(model, output, accountGit({ base, store: accounts, model, fetch }));
-      context.subscriptions.push(model, accounts, new BranchStatusBar(model));
+      context.subscriptions.push(model, accounts, new BranchStatusBar(model), new AccountStatusBar(accounts, model));
       void model.refresh();
       return { model, actions, accounts };
     })());

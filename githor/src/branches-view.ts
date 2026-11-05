@@ -1,6 +1,11 @@
 import * as vscode from 'vscode';
 import * as crypto from 'crypto';
 import * as path from 'path';
+import { AccountProblem, activePick } from './account-git';
+import { accountsView, addAccount, signInAgain, useAccount } from './account-ui';
+import type { AccountStore } from './account-store';
+import { parseRemote, ruleAccount } from './core/accounts';
+import type { AccountId } from './core/types';
 import { gitUri } from './git-content';
 import { parseClientMessage } from './protocol';
 import type { Actions } from './actions';
@@ -20,6 +25,7 @@ export interface BranchesViewArgs {
   extensionUri: vscode.Uri;
   model: RepoModel;
   actions: Actions;
+  accounts: AccountStore;
   place: Place;
 }
 
@@ -33,9 +39,15 @@ export class BranchesView implements vscode.Disposable {
   private readonly model: RepoModel;
   private readonly actions: Actions;
   private readonly place: Place;
+  private readonly accounts: AccountStore;
+  /** What the remote or the commit check stopped, to run again after the person picks an account (design `48`). */
+  private pending: ClientMessage | null = null;
+  /** The page asked for the accounts page once: it gets it again when accounts change. */
+  private accountsShown = false;
 
-  constructor({ webview, extensionUri, model, actions, place }: BranchesViewArgs) {
+  constructor({ webview, extensionUri, model, actions, accounts, place }: BranchesViewArgs) {
     this.place = place;
+    this.accounts = accounts;
     this.webview = webview;
     this.model = model;
     this.actions = actions;
@@ -46,9 +58,13 @@ export class BranchesView implements vscode.Disposable {
     this.disposables.push(
       webview.onDidReceiveMessage((raw: unknown) => {
         const message = parseClientMessage(raw);
-        if (message) void this.handle(message).catch((e: unknown) => this.post({ type: 'error', text: errorText(e) }));
+        if (message) void this.handle(message).catch((e: unknown) => this.failed(e, message));
       }),
       model.onDidChange(() => this.sendState()),
+      accounts.onDidChange(() => {
+        this.sendState();
+        if (this.accountsShown) void this.sendAccounts();
+      }),
       model.onDidFail((text) => this.post({ type: 'error', text }))
     );
   }
@@ -91,8 +107,26 @@ export class BranchesView implements vscode.Disposable {
     await vscode.commands.executeCommand('vscode.diff', left, right, `${file.path} (${sha.slice(0, 7)})`, { preview: true });
   }
 
+  /** A refusal by the remote is an account's problem the page explains (design `48`); anything else is an error. */
+  private failed(e: unknown, message: ClientMessage): void {
+    if (e instanceof AccountProblem) {
+      this.pending = message;
+      const ref = (a: { id: AccountId; label: string }): { id: AccountId; label: string } => ({ id: a.id, label: a.label });
+      this.post({ type: 'accountProblem', kind: e.kind, account: ref(e.account), remoteName: this.model.remote?.name ?? 'The remote', remote: e.remote, suggestion: e.suggestion && ref(e.suggestion) });
+      return;
+    }
+    this.post({ type: 'error', text: errorText(e) });
+  }
+
   private sendState(): void {
-    if (this.ready) this.post({ type: 'state', state: this.model.state() });
+    if (!this.ready) return;
+    const { account } = activePick({ store: this.accounts, model: this.model });
+    const accountState = account ? { id: account.id, label: account.label, email: account.email, expired: this.accounts.expired().has(account.id) } : null;
+    this.post({ type: 'state', state: { ...this.model.state(), account: accountState, hasAccounts: this.accounts.list().length > 0 } });
+  }
+
+  private async sendAccounts(): Promise<void> {
+    this.post({ type: 'accounts', view: await accountsView({ store: this.accounts, model: this.model }) });
   }
 
   private async handle(message: ClientMessage): Promise<void> {
@@ -174,6 +208,15 @@ export class BranchesView implements vscode.Disposable {
       case 'setGrouping':
         return this.model.setGrouping(message.grouping);
       case 'commit': {
+        // the account differs from what the rules pick for this remote: ask first (design `48`)
+        const pick = activePick({ store: this.accounts, model: this.model });
+        const remote = this.model.remote ? parseRemote(this.model.remote.url) : null;
+        const byRule = ruleAccount({ accounts: this.accounts.list(), rules: this.accounts.rules(), remote });
+        if (!message.confirmedAccount && pick.account && byRule && pick.why !== 'rule' && byRule.account.id !== pick.account.id) {
+          this.pending = { ...message, confirmedAccount: true };
+          this.post({ type: 'confirmAccount', active: { id: pick.account.id, label: pick.account.label }, suggested: { id: byRule.account.id, label: byRule.account.label }, rule: byRule.rule.remote });
+          return;
+        }
         const outcome = await this.actions.commit(message);
         this.post({ type: 'committed', push: message.push, ref: this.model.current?.ref ?? null });
         this.post({ type: 'toast', text: outcome.text, undo: outcome.undo });
@@ -197,6 +240,59 @@ export class BranchesView implements vscode.Disposable {
         return this.toastIf(this.actions.continueOperation());
       case 'abortOperation':
         return this.toast(this.actions.abortOperation());
+      case 'accounts':
+        this.accountsShown = true;
+        return this.sendAccounts();
+      case 'addAccount': {
+        const added = await addAccount({ store: this.accounts, input: message.input });
+        this.post({ type: 'accountDone' });
+        if (added) this.post({ type: 'toast', text: `Added ${added.label}`, undo: null });
+        return this.sendAccounts();
+      }
+      case 'editAccount': {
+        const account = this.accounts.list().find((a) => a.id === message.id);
+        if (account) await this.accounts.save({ ...account, label: message.label.trim(), name: message.name.trim(), email: message.email.trim() }, null);
+        this.post({ type: 'accountDone' });
+        return this.sendAccounts();
+      }
+      case 'removeAccount': {
+        const account = this.accounts.list().find((a) => a.id === message.id);
+        await this.accounts.remove(message.id as AccountId);
+        this.post({ type: 'accountDone' });
+        if (account) this.post({ type: 'toast', text: `Removed ${account.label}`, undo: null });
+        return this.sendAccounts();
+      }
+      case 'useAccount': {
+        const { text, undo } = await useAccount({ store: this.accounts, model: this.model, id: message.id as AccountId | null });
+        this.post({ type: 'toast', text, undo: this.actions.remember(undo) });
+        return this.sendAccounts();
+      }
+      case 'signInAgain': {
+        const signedIn = await signInAgain({ store: this.accounts, id: message.id as AccountId });
+        await this.sendAccounts();
+        if (!signedIn) return;
+        // a sign-in asked for by a refusal runs what was refused again
+        if (this.pending) return this.handle({ type: 'retryAs', id: null });
+        this.post({ type: 'toast', text: 'Signed in again', undo: null });
+        return;
+      }
+      case 'retryAs': {
+        const again = this.pending;
+        this.pending = null;
+        if (message.id) {
+          const { text, undo } = await useAccount({ store: this.accounts, model: this.model, id: message.id as AccountId });
+          this.post({ type: 'toast', text, undo: this.actions.remember(undo) });
+        }
+        // a second refusal opens its own dialog, for the message that was refused
+        if (again) await this.handle(again).catch((e: unknown) => this.failed(e, again));
+        return;
+      }
+      case 'dropRetry':
+        this.pending = null;
+        return;
+      case 'openRules':
+        await vscode.commands.executeCommand('workbench.action.openSettings', 'githor.accounts.rules');
+        return;
       case 'stashes':
         this.post({ type: 'stashes', stashes: await this.actions.stashes() });
         return;

@@ -6,6 +6,8 @@ import type { ClientMessage } from '../src/protocol.js';
 export interface Persisted {
   filter?: BranchFilter;
   query?: string;
+  /** "Not now" on the no-account notice. */
+  hideAccountHint?: boolean;
 }
 
 const api = acquireVsCodeApi();

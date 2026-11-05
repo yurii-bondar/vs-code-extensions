@@ -45,3 +45,20 @@ test('parseClientMessage rejects what is not a known message', () => {
   ];
   for (const raw of bad) assert.equal(parseClientMessage(raw), null, JSON.stringify(raw));
 });
+
+test('parseClientMessage reads the account messages, and never takes a token from the page', () => {
+  const input = { provider: 'gitlab', host: 'gitlab.acme.example', method: 'token', label: 'Client', name: 'Alex', email: 'alex@acme.example' };
+  assert.deepEqual(parseClientMessage({ type: 'addAccount', input }), { type: 'addAccount', input });
+  assert.deepEqual(parseClientMessage({ type: 'useAccount', id: null }), { type: 'useAccount', id: null });
+  assert.deepEqual(parseClientMessage({ type: 'retryAs', id: 'work' }), { type: 'retryAs', id: 'work' });
+  assert.deepEqual(parseClientMessage({ type: 'commit', paths: ['a'], message: 'm', push: false, confirmedAccount: true }), { type: 'commit', paths: ['a'], message: 'm', push: false, confirmedAccount: true });
+  const bad = [
+    { type: 'addAccount', input: { ...input, method: 'password' } },
+    { type: 'addAccount', input: { ...input, email: '' } },
+    { type: 'editAccount', id: 'a', label: 'A', name: 'A', email: '' },
+    { type: 'removeAccount', id: '' },
+    { type: 'useAccount' },
+    { type: 'commit', paths: ['a'], message: 'm', push: false },
+  ];
+  for (const raw of bad) assert.equal(parseClientMessage(raw), null, JSON.stringify(raw));
+});

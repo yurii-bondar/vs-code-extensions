@@ -88,7 +88,8 @@ export class RepoModel implements vscode.Disposable {
     return this.branches.find((b) => b.current);
   }
 
-  state(): StateView {
+  /** The repository's part of the state; the page adds the account. */
+  state(): Omit<StateView, 'account' | 'hasAccounts'> {
     const { root } = this;
     return {
       repo: root && { name: path.basename(root), root },

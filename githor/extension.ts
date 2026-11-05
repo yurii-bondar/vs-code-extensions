@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { GIT_SCHEME, GitContentProvider } from './src/git-content';
+import { accountMenu } from './src/account-ui';
 import { BranchesPanel } from './src/panel';
 import { pickBranch } from './src/quick-pick';
 import { lazyServices } from './src/services';
@@ -51,6 +52,15 @@ export function activate(context: vscode.ExtensionContext): void {
         else void vscode.window.showInformationMessage('Githor: the current branch has not moved on both sides.');
       })()
     ),
+    vscode.commands.registerCommand(
+      'githor.pickAccount',
+      withServices(async (s) => {
+        const next = await accountMenu({ store: s.accounts, model: s.model });
+        if (next) openEditor(s, { type: 'openAccounts', add: next === 'add' });
+      })
+    ),
+    vscode.commands.registerCommand('githor.addAccount', withServices((s) => openEditor(s, { type: 'openAccounts', add: true }))),
+    vscode.commands.registerCommand('githor.manageAccounts', withServices((s) => openEditor(s, { type: 'openAccounts', add: false }))),
     vscode.commands.registerCommand('githor.showOutput', () => output.show())
   );
   // The status bar item belongs on screen from the start, so the services are built now rather than on first use.

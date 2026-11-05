@@ -32,6 +32,9 @@ import { emptyLog, LOG_PAGE, logHeadHtml, logRowsHtml } from './commit-log.js';
 import type { LogState } from './commit-log.js';
 import { fetchBannerHtml, sidebarFooterHtml, sidebarHeaderHtml, toastHtml, toolbarHtml } from './chrome.js';
 import type { Tab, Toast } from './chrome.js';
+import { accountDialogHtml, accountsPageHtml, newAccount, noAccountHtml, withProvider } from './accounts-view.js';
+import type { AccountDialog } from './accounts-view.js';
+import type { AccountsView } from '../src/protocol.js';
 import { icon } from './icons.js';
 import { dialogHtml, openDialog, remoteCopies, withView } from './merged-dialog.js';
 import type { MergedDialog } from './merged-dialog.js';
@@ -45,7 +48,7 @@ const place = document.body.dataset['place'] === 'sidebar' ? 'sidebar' : 'editor
 // ---------- state ----------
 
 const saved = restore();
-let state: StateView = { repo: null, branches: [], loaded: false, fetchedAt: null, fetching: false, fetchError: null, defaultBranch: null, busy: null, head: null, working: [], grouping: 'none', operation: null, stashes: 0 };
+let state: StateView = { repo: null, branches: [], loaded: false, fetchedAt: null, fetching: false, fetchError: null, defaultBranch: null, busy: null, head: null, working: [], grouping: 'none', operation: null, stashes: 0, account: null, hasAccounts: false };
 let filter: BranchFilter = BRANCH_FILTERS.includes(saved.filter ?? 'all') ? (saved.filter ?? 'all') : 'all';
 let query = saved.query ?? '';
 /** The Git menu under `⋯` in the toolbar. */
@@ -87,8 +90,15 @@ let stash: StashState = emptyStash();
 let stashDiff: DiffState | null = null;
 let stashDialog: StashDialog | null = null;
 let pendingEdit: { path: string; index: number; text: string } | null = null;
+/** The Manage accounts page (`46`), over the tabs while open, and the account dialogs (`47`, `48`). */
+let accountsOpen = false;
+let accounts: AccountsView | null = null;
+let accountDialog: AccountDialog | null = null;
+/** Add account was asked for before the accounts (and git's name and email) arrived. */
+let addWhenLoaded = false;
+let hideAccountHint = saved.hideAccountHint ?? false;
 
-const keep = (): void => persist({ filter, query });
+const keep = (): void => persist({ filter, query, hideAccountHint });
 const branchOf = (ref: string): StateView['branches'][number] | undefined => state.branches.find((b) => b.ref === ref);
 
 // ---------- layout ----------
@@ -134,6 +144,9 @@ app.innerHTML =
     <section class="gt-pane gt-pane--rail" aria-label="Commits to squash" data-region="squashRail"></section>
     <section class="gt-pane" aria-label="Diff" data-region="squashDiff"></section>
   </div>
+  <div class="gt-body gt-body--accounts" hidden>
+    <section class="gt-pane" aria-label="Accounts" data-region="accounts"></section>
+  </div>
   <div class="gt-body gt-body--diff gt-body--push" hidden>
     <section class="gt-pane gt-pane--rail" aria-label="Commits to push" data-region="pushList"></section>
     <section class="gt-pane" aria-label="Diff" data-region="pushDiff"></section>
@@ -150,6 +163,7 @@ const input = app.querySelector('[data-role="query"]') as HTMLInputElement;
 input.value = query;
 
 function overlayHtml(): string {
+  if (accountDialog) return accountDialogHtml(accountDialog);
   if (stashDialog) return stashDialogHtml(stashDialog);
   if (mergedDialog) return dialogHtml(mergedDialog);
   if (branchDialog) return branchDialogHtml(branchDialog, state.branches);
@@ -190,7 +204,7 @@ function highlighted(): StateView['branches'][number] | undefined {
 
 /** Which set of panes the editor tab shows: the push screen over everything, else the tab, the log's diff inside Log. */
 function renderBodies(): void {
-  const view = state.operation ? 'conflict' : squashView ? 'squash' : pushReview ? 'push' : tab === 'commit' ? 'commit' : tab === 'stash' ? 'stash' : diffView ? 'diff' : 'log';
+  const view = accountsOpen ? 'accounts' : state.operation ? 'conflict' : squashView ? 'squash' : pushReview ? 'push' : tab === 'commit' ? 'commit' : tab === 'stash' ? 'stash' : diffView ? 'diff' : 'log';
   // the commit and push bodies share the diff body's grid class, so the plain diff body is matched as the first one
   const show = (cls: string, on: boolean): void => {
     const body = app.querySelector<HTMLElement>(`.gt-body--${cls}`);
@@ -203,6 +217,8 @@ function renderBodies(): void {
   show('conflict', view === 'conflict');
   show('squash', view === 'squash');
   show('stash', view === 'stash');
+  show('accounts', view === 'accounts');
+  if (view === 'accounts') fill('accounts', accountsPageHtml(accounts));
   if (view === 'stash') {
     fill('stashRail', stashRailHtml(stash, { changes: state.working.filter((f) => !f.conflicted).length }));
     fill('stashDiff', stashDiff ? diffPaneHtml(stashDiff, { before: 'Last commit (HEAD)', after: 'Stashed version' }) : '<div class="gt-empty"><span>Pick a stash and one of its files.</span></div>');
@@ -229,7 +245,7 @@ function renderBodies(): void {
     fill('diffPane', diffPaneHtml(diffView));
   }
   if (view === 'commit') {
-    fill('commitList', commitListHtml(state, commit));
+    fill('commitList', commitListHtml(state, commit, state.hasAccounts || hideAccountHint ? '' : noAccountHtml()));
     fill('commitDiff', commitDiff ? diffPaneHtml(commitDiff, { before: 'Last commit (HEAD)', after: 'Your working copy' }) : '<div class="gt-empty"><span>Pick a file to see its changes.</span></div>');
   }
   if (view === 'push' && pushReview) {
@@ -401,6 +417,24 @@ function showToast(next: Toast): void {
   }, TOAST_MS);
 }
 
+function openAccounts(add: boolean): void {
+  menuOpen = false;
+  accountsOpen = place === 'editor' || accountsOpen;
+  post({ type: 'accounts' });
+  if (add) openAddAccount();
+}
+
+function openAddAccount(): void {
+  if (accounts) accountDialog = newAccount(accounts.defaults);
+  else {
+    addWhenLoaded = true;
+    post({ type: 'accounts' });
+  }
+}
+
+/** The account a click names in `data-id`. */
+const accountOf = (el: HTMLElement | null | undefined): AccountsView['accounts'][number] | undefined => accounts?.accounts.find((a) => a.id === el?.dataset['id']);
+
 function openMerged(): void {
   menuOpen = false;
   mergedDialog = openDialog(null);
@@ -433,6 +467,18 @@ app.addEventListener('input', (event) => {
   const was = stashDialog.message.trim() === '';
   stashDialog = { ...stashDialog, message: field.value };
   if (stashDialog.kind === 'rename' && was !== (field.value.trim() === '')) render();
+});
+
+/** The account dialogs' fields: kept as typed; the button follows whether they are filled. */
+app.addEventListener('input', (event) => {
+  const field = event.target as HTMLInputElement;
+  const key = ({ accountHost: 'host', accountLabel: 'label', accountName: 'name', accountEmail: 'email' } as const)[field.dataset['role'] ?? ''];
+  if (!key || !accountDialog) return;
+  const before = accountDialogHtml(accountDialog);
+  if (accountDialog.kind === 'add') accountDialog = { ...accountDialog, input: { ...accountDialog.input, [key]: field.value } };
+  else if (accountDialog.kind === 'edit' && key !== 'host') accountDialog = { ...accountDialog, [key]: field.value };
+  // re-render only when the button's state changes, so typing is not interrupted
+  if (before.includes('data-role="submit" disabled') !== accountDialogHtml(accountDialog).includes('data-role="submit" disabled')) render();
 });
 
 /** The squash's message: kept as typed; the button follows whether it is empty. */
@@ -549,7 +595,7 @@ document.addEventListener('click', (event) => {
   const el = target?.closest<HTMLElement>('[data-action]');
   const action = el?.dataset['action'] ?? '';
   // a click inside a dialog box never reaches its backdrop's close
-  if ((action === 'closeDialog' || action === 'closeBranchDialog' || action === 'closeStashDialog') && el?.classList.contains('gt-backdrop') && target?.closest('[data-stop]')) return;
+  if (['closeDialog', 'closeBranchDialog', 'closeStashDialog', 'closeAccountDialog', 'dropRetry'].includes(action) && el?.classList.contains('gt-backdrop') && target?.closest('[data-stop]')) return;
   const closedSomething = menuOpen || branchMenu !== null || popover !== null || commit.groupMenu;
   if (commit.groupMenu && action !== 'groupMenu' && !target?.closest('[data-stop]')) commit = { ...commit, groupMenu: false };
   if (menuOpen && action !== 'menu') menuOpen = false;
@@ -749,7 +795,7 @@ document.addEventListener('click', (event) => {
     case 'commitAndPush': {
       const paths = state.working.filter((f) => commit.ticked.has(f.path) && !f.conflicted).map((f) => f.path);
       if (paths.length && commit.message.trim()) {
-        post({ type: 'commit', paths, message: commit.message.trim(), push: action === 'commitAndPush' });
+        post({ type: 'commit', paths, message: commit.message.trim(), push: action === 'commitAndPush', confirmedAccount: false });
         commit = { ...commit, committing: true };
       }
       break;
@@ -849,6 +895,76 @@ document.addEventListener('click', (event) => {
     case 'openMerged':
       openMerged();
       break;
+    case 'manageAccounts':
+      openAccounts(false);
+      break;
+    case 'closeAccounts':
+      accountsOpen = false;
+      break;
+    case 'addAccountOpen':
+      if (accountDialog?.kind === 'problem') post({ type: 'dropRetry' });
+      accountDialog = null;
+      openAddAccount();
+      break;
+    case 'pickMethod': {
+      const method = el?.dataset['method'];
+      if (accountDialog?.kind === 'add' && (method === 'browser' || method === 'token' || method === 'ssh')) accountDialog = { ...accountDialog, input: { ...accountDialog.input, method } };
+      break;
+    }
+    case 'addAccountDo':
+      if (accountDialog?.kind === 'add' && !accountDialog.busy) {
+        post({ type: 'addAccount', input: accountDialog.input });
+        accountDialog = { ...accountDialog, busy: true };
+      }
+      break;
+    case 'editAccount': {
+      const a = accountOf(el);
+      if (a) accountDialog = { kind: 'edit', id: a.id, label: a.label, name: a.name, email: a.email, busy: false };
+      break;
+    }
+    case 'editAccountDo':
+      if (accountDialog?.kind === 'edit' && !accountDialog.busy) {
+        const { id, label, name, email } = accountDialog;
+        post({ type: 'editAccount', id, label, name, email });
+        accountDialog = { ...accountDialog, busy: true };
+      }
+      break;
+    case 'removeAccountAsk': {
+      const a = accountOf(el);
+      if (a) accountDialog = { kind: 'remove', id: a.id, label: a.label, busy: false };
+      break;
+    }
+    case 'removeAccountDo':
+      if (accountDialog?.kind === 'remove' && !accountDialog.busy) {
+        post({ type: 'removeAccount', id: accountDialog.id });
+        accountDialog = { ...accountDialog, busy: true };
+      }
+      break;
+    case 'signInAgain':
+      post({ type: 'signInAgain', id: el?.dataset['id'] ?? '' });
+      // from a refusal the dialog waits for the sign-in; from the page there is no dialog
+      if (accountDialog?.kind === 'problem') accountDialog = null;
+      break;
+    case 'retryAs':
+      post({ type: 'retryAs', id: el?.dataset['id'] || null });
+      if (accountDialog?.kind === 'confirm') commit = { ...commit, committing: true };
+      accountDialog = null;
+      break;
+    case 'dropRetry':
+      // a click inside the dialog box never reaches its backdrop
+      post({ type: 'dropRetry' });
+      accountDialog = null;
+      break;
+    case 'closeAccountDialog':
+      if (!accountDialog?.busy) accountDialog = null;
+      break;
+    case 'openRules':
+      post({ type: 'openRules' });
+      break;
+    case 'hideAccountHint':
+      hideAccountHint = true;
+      keep();
+      break;
     case 'closeDialog':
       if (!mergedDialog?.deleting) mergedDialog = null;
       break;
@@ -919,6 +1035,12 @@ document.addEventListener('change', (event) => {
     case 'toggleRemote':
       if (mergedDialog) mergedDialog = { ...mergedDialog, onRemote: checked };
       break;
+    case 'pickProvider':
+      if (accountDialog?.kind === 'add') accountDialog = { ...accountDialog, input: withProvider(accountDialog.input, el.value === 'gitlab' || el.value === 'other' ? el.value : 'github') };
+      break;
+    case 'pickRepoAccount':
+      post({ type: 'useAccount', id: el.value || null });
+      return;
     case 'pickTarget':
       mergedDialog = openDialog(el.value);
       post({ type: 'scanMerged', target: el.value });
@@ -930,16 +1052,20 @@ document.addEventListener('change', (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Enter' && ['branchName', 'stashName'].includes((event.target as HTMLElement).dataset['role'] ?? '')) {
+  if (event.key === 'Enter' && ['branchName', 'stashName', 'accountHost', 'accountLabel', 'accountName', 'accountEmail'].includes((event.target as HTMLElement).dataset['role'] ?? '')) {
     app.querySelector<HTMLButtonElement>('[data-role="submit"]:not(:disabled)')?.click();
     return;
   }
   if (event.key !== 'Escape') return;
-  if (stashDialog && !stashDialog.busy) stashDialog = null;
+  if (accountDialog && !accountDialog.busy) {
+    if (accountDialog.kind === 'problem' || accountDialog.kind === 'confirm') post({ type: 'dropRetry' });
+    accountDialog = null;
+  } else if (stashDialog && !stashDialog.busy) stashDialog = null;
   else if (mergedDialog && !mergedDialog.deleting) mergedDialog = null;
   else if (branchDialog && !branchDialog.busy) branchDialog = null;
   else if (commit.groupMenu) commit = { ...commit, groupMenu: false };
   else if (conflict.editing !== null) conflict = { ...conflict, editing: null };
+  else if (accountsOpen && !popover && !menuOpen) accountsOpen = false;
   else if (compare && !popover && !branchMenu && !menuOpen) compare = null;
   else if (squashView && !squashView.busy && !popover && !branchMenu && !menuOpen) squashView = null;
   else if (pushReview && !popover && !branchMenu && !menuOpen) pushReview = null;
@@ -1013,6 +1139,28 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
     case 'stashDone':
       stashDialog = null;
       break;
+    case 'accounts':
+      accounts = message.view;
+      if (addWhenLoaded) {
+        addWhenLoaded = false;
+        accountDialog = newAccount(message.view.defaults);
+      }
+      break;
+    case 'openAccounts':
+      openAccounts(message.add);
+      break;
+    case 'accountDone':
+      accountDialog = null;
+      break;
+    case 'accountProblem':
+      commit = { ...commit, committing: false };
+      popover = null;
+      accountDialog = { kind: 'problem', problem: message, busy: false };
+      break;
+    case 'confirmAccount':
+      commit = { ...commit, committing: false };
+      accountDialog = { kind: 'confirm', active: message.active, suggested: message.suggested, rule: message.rule, busy: false };
+      break;
     case 'squashDone':
       squashView = null;
       squashDiff = null;
@@ -1085,6 +1233,7 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
       commit = { ...commit, committing: false };
       if (squashView) squashView = { ...squashView, busy: false };
       if (stashDialog) stashDialog = { ...stashDialog, busy: false };
+      if (accountDialog) accountDialog = { ...accountDialog, busy: false };
       showToast({ text: message.text, undo: null, error: true });
       break;
     default: {

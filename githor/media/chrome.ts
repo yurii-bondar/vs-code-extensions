@@ -42,6 +42,8 @@ function menuHtml(): string {
   ${item('newBranch', '<span class="gt-option__tick"></span>', 'New branch…')}
   ${item('stashChanges', '<span class="gt-option__tick"></span>', 'Stash changes…')}
   <div class="gt-menu__sep" role="separator"></div>
+  ${item('manageAccounts', icon('account', 'gt-i--sm'), 'Accounts…')}
+  <div class="gt-menu__sep" role="separator"></div>
   ${item('openMerged', icon('trash', 'gt-i--sm'), 'Delete all merged branches…')}
 </div>`;
 }

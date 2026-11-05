@@ -57,7 +57,8 @@ function groupMenuHtml(grouping: Grouping): string {
 </div>`;
 }
 
-export function commitListHtml(state: StateView, c: CommitState): string {
+/** `notice`: HTML shown above the files, such as the no-account notice. */
+export function commitListHtml(state: StateView, c: CommitState, notice = ''): string {
   const files = state.working;
   const conflicts = files.filter((f) => f.conflicted);
   const committable = files.filter((f) => !f.conflicted);
@@ -83,10 +84,10 @@ export function commitListHtml(state: StateView, c: CommitState): string {
   </span>
   <button class="gt-btn gt-btn--ghost" data-action="stashTicked"${ticked ? '' : ' disabled title="Tick the files to stash."'}>${icon('folder', 'gt-i--sm')}Stash…</button>
 </div>
-${banner ? `<div class="gt-commit-banner">${banner}</div>` : ''}
+${banner || notice ? `<div class="gt-commit-banner">${notice}${banner}</div>` : ''}
 <div class="gt-scroll">${list}</div>
 <div class="gt-composer">
-  <div class="gt-composer__target">${icon('branch', 'gt-i--sm')}${target}</div>
+  <div class="gt-composer__target">${icon('branch', 'gt-i--sm')}${target}${state.account ? `<span class="gt-spacer"></span><span class="gt-composer__as${state.account.expired ? ' is-expired' : ''}" title="${esc(state.account.email)}">${icon('account', 'gt-i--sm')}as ${esc(state.account.label)}</span>` : ''}</div>
   <label class="gt-section-title" for="gt-commit-message">Commit message</label>
   <textarea id="gt-commit-message" class="gt-textarea" data-role="commitMessage" placeholder="What does this change do?">${esc(c.message)}</textarea>
   <div class="gt-pane__row">

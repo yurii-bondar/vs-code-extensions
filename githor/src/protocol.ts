@@ -1,6 +1,6 @@
 import type { Grouping } from './core/commit-groups';
 import type { ConflictPart, Resolution } from './core/conflict';
-import type { Branch, CommitDetails, CommitLine, CommitView, CompareView, FileChange, FileDiff, KeptBranch, MergedBranch, OperationView, SquashPlan, StashView, WorkingFile } from './core/types';
+import type { Account, AccountId, AccountRule, Provider, Branch, CommitDetails, CommitLine, CommitView, CompareView, FileChange, FileDiff, KeptBranch, MergedBranch, OperationView, SquashPlan, StashView, WorkingFile } from './core/types';
 
 /** A push, pull, publish or sync that is running, on `ref`; null `ref` for the current branch's sync. */
 export interface BusyView {
@@ -11,6 +11,37 @@ export interface BusyView {
 export interface RepoView {
   name: string;
   root: string;
+}
+
+/** An account as the pages show it: no token, ever. */
+export interface AccountView extends Account {
+  expired: boolean;
+  /** The shown repository uses it. */
+  usedHere: boolean;
+}
+
+/** The Manage accounts page (design `46`). */
+export interface AccountsView {
+  accounts: AccountView[];
+  rules: AccountRule[];
+  repo: { name: string; remoteName: string | null; remote: string | null; picked: AccountId | null; why: string; choice: AccountId | null } | null;
+  /** git's own name and email, to start a new account with. */
+  defaults: { name: string; email: string };
+}
+
+/** What Add account asks (design `47`); the sign-in itself happens in VS Code, never in the page. */
+export interface NewAccount {
+  provider: Provider;
+  host: string;
+  method: 'browser' | 'token' | 'ssh';
+  label: string;
+  name: string;
+  email: string;
+}
+
+export interface AccountRef {
+  id: AccountId;
+  label: string;
 }
 
 /** Everything a page shows about the repository. */
@@ -35,6 +66,9 @@ export interface StateView {
   operation: OperationView | null;
   /** How many stashes there are. */
   stashes: number;
+  /** The account the repository commits and pushes as; null without accounts. */
+  account: (AccountRef & { email: string; expired: boolean }) | null;
+  hasAccounts: boolean;
 }
 
 /** The "Delete all merged branches" dialog for one target. */
@@ -85,7 +119,8 @@ export type ClientMessage =
   | { type: 'setGrouping'; grouping: Grouping }
   /** Asks for one working-copy file side by side, against the last commit. */
   | { type: 'workingDiff'; path: string }
-  | { type: 'commit'; paths: string[]; message: string; push: boolean }
+  /** `confirmedAccount`: the person was told the account differs from what the rules pick, and went on. */
+  | { type: 'commit'; paths: string[]; message: string; push: boolean; confirmedAccount: boolean }
   /** Asks for what a push of `ref` would send, for the push screen (`10`). */
   | { type: 'pushReview'; ref: string }
   | { type: 'compare'; ref: string }
@@ -104,7 +139,19 @@ export type ClientMessage =
   | { type: 'stashApply'; sha: string }
   | { type: 'stashDrop'; sha: string }
   | { type: 'stashRename'; sha: string; message: string }
-  | { type: 'stashDiff'; sha: string; file: FileChange };
+  | { type: 'stashDiff'; sha: string; file: FileChange }
+  | { type: 'accounts' }
+  | { type: 'addAccount'; input: NewAccount }
+  | { type: 'editAccount'; id: string; label: string; name: string; email: string }
+  | { type: 'removeAccount'; id: string }
+  /** Uses this account for the repository; null goes back to the rules. */
+  | { type: 'useAccount'; id: string | null }
+  | { type: 'signInAgain'; id: string }
+  /** After an account problem: use `id` for the repository (null keeps the one it has) and run what was refused again. */
+  | { type: 'retryAs'; id: string | null }
+  /** The account problem's dialog was closed without retrying. */
+  | { type: 'dropRetry' }
+  | { type: 'openRules' };
 
 export type HostMessage =
   | { type: 'state'; state: StateView }
@@ -136,6 +183,15 @@ export type HostMessage =
   | { type: 'stashes'; stashes: StashView[] }
   /** A stash dialog's work is done: it closes. */
   | { type: 'stashDone' }
+  | { type: 'accounts'; view: AccountsView }
+  /** An account dialog's work is done: it closes. */
+  | { type: 'accountDone' }
+  /** Opens the Manage accounts page, with Add account open when asked. */
+  | { type: 'openAccounts'; add: boolean }
+  /** The remote refused the account (design `48`); `suggestion` can push there. */
+  | { type: 'accountProblem'; kind: 'forbidden' | 'unauthorized' | 'notFound'; account: AccountRef; remoteName: string; remote: string; suggestion: AccountRef | null }
+  /** Before a commit: the account differs from the one the rules pick (design `48`). */
+  | { type: 'confirmAccount'; active: AccountRef; suggested: AccountRef; rule: string }
   | { type: 'error'; text: string };
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -148,6 +204,12 @@ function isFileChange(v: unknown): v is FileChange {
   return typeof status === 'string' && STATUSES.includes(status) && nonEmpty(path) && (oldPath === null || nonEmpty(oldPath)) && typeof add === 'number' && typeof del === 'number' && typeof binary === 'boolean';
 }
 
+function isNewAccount(v: unknown): v is NewAccount {
+  if (!isRecord(v)) return false;
+  const { provider, host, method, label, name, email } = v;
+  return (provider === 'github' || provider === 'gitlab' || provider === 'other') && typeof host === 'string' && (method === 'browser' || method === 'token' || method === 'ssh') && typeof label === 'string' && nonEmpty(name) && nonEmpty(email);
+}
+
 function isResolution(v: unknown): v is Resolution {
   if (!isRecord(v)) return false;
   return v['take'] === 'local' || v['take'] === 'remote' || v['take'] === 'both' || (v['take'] === 'edit' && typeof v['text'] === 'string');
@@ -158,6 +220,9 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
   if (!isRecord(raw)) return null;
   switch (raw['type']) {
     case 'ready':
+    case 'dropRetry':
+    case 'accounts':
+    case 'openRules':
     case 'stashes':
     case 'continueOperation':
     case 'abortOperation':
@@ -234,9 +299,24 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
     case 'pushReview':
       return nonEmpty(raw['ref']) ? { type: 'pushReview', ref: raw['ref'] } : null;
     case 'commit': {
-      const { paths, message, push } = raw;
-      return Array.isArray(paths) && paths.length > 0 && paths.every(nonEmpty) && nonEmpty(message) && typeof push === 'boolean' ? { type: 'commit', paths, message, push } : null;
+      const { paths, message, push, confirmedAccount } = raw;
+      return Array.isArray(paths) && paths.length > 0 && paths.every(nonEmpty) && nonEmpty(message) && typeof push === 'boolean' && typeof confirmedAccount === 'boolean'
+        ? { type: 'commit', paths, message, push, confirmedAccount }
+        : null;
     }
+    case 'addAccount':
+      return isNewAccount(raw['input']) ? { type: 'addAccount', input: raw['input'] } : null;
+    case 'editAccount': {
+      const { id, label, name, email } = raw;
+      return nonEmpty(id) && nonEmpty(label) && nonEmpty(name) && nonEmpty(email) ? { type: 'editAccount', id, label, name, email } : null;
+    }
+    case 'removeAccount':
+    case 'signInAgain':
+      return nonEmpty(raw['id']) ? { type: raw['type'], id: raw['id'] } : null;
+    case 'retryAs':
+      return raw['id'] === null || nonEmpty(raw['id']) ? { type: 'retryAs', id: raw['id'] } : null;
+    case 'useAccount':
+      return raw['id'] === null || nonEmpty(raw['id']) ? { type: 'useAccount', id: raw['id'] } : null;
     case 'pin':
       return nonEmpty(raw['ref']) && typeof raw['pinned'] === 'boolean' ? { type: 'pin', ref: raw['ref'], pinned: raw['pinned'] } : null;
     case 'push': {

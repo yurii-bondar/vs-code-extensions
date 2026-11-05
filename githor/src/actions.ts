@@ -58,7 +58,8 @@ export class Actions {
     return this.model.root;
   }
 
-  private remember(undo: () => Promise<string>): number {
+  /** Keeps what Undo puts back; the id goes in the toast. */
+  remember(undo: () => Promise<string>): number {
     const id = this.nextUndo++;
     this.undoable.set(id, undo);
     return id;
