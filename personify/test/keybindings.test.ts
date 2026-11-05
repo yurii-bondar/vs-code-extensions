@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyEdit, buildRows, humanize, normalizeKey, parseDefaultKeybindings, parseKeybindings } from '../src/core/keybindings';
+import { addMissing, applyEdit, buildRows, humanize, normalizeKey, parseDefaultKeybindings, parseKeybindings } from '../src/core/keybindings';
 import type { KeybindingEdit } from '../src/core/types';
 
 const apply = (text: string, edit: KeybindingEdit): unknown[] | null => parseKeybindings(applyEdit(text, parseKeybindings(text) ?? [], edit));
@@ -96,4 +96,11 @@ test('a removal switches off the user entries above it, not the ones after it', 
   );
   const before = buildRows({ defaults: [], user: [{ key: 'shift+cmd+j', command: 'x' }, { key: 'cmd+shift+j', command: '-x' }], title: (id) => id });
   assert.equal(before[0]?.removalIndex, 1);
+});
+
+test('addMissing appends only the entries the file does not have, each once', () => {
+  const text = '[\n  { "key": "a", "command": "x" }\n]';
+  const { text: next, added } = addMissing(text, parseKeybindings(text) ?? [], [{ key: 'a', command: 'x' }, { key: 'b', command: 'y', args: 1 }, { key: 'b', command: 'y', args: 1 }]);
+  assert.equal(added, 1);
+  assert.deepEqual(parseKeybindings(next), [{ key: 'a', command: 'x' }, { key: 'b', command: 'y', args: 1 }]);
 });

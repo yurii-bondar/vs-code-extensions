@@ -1009,6 +1009,8 @@
     counts: { all: 0, changed: 0, conflicts: 0, removed: 0, unbound: 0 },
   };
 
+  let cmdListHtml = '';
+
   function computeKb(kb: KeybindingsState): void {
     const rows = kb.rows
       .map((r): ViewRow => ({ ...r, nk: normKey(r.key), removed: r.removalIndex !== null, conflicts: [] }))
@@ -1036,7 +1038,12 @@
         unbound: kb.commands.filter((c) => !bound.has(c.id)).length,
       },
     };
-    $('#cmd-list').innerHTML = kb.commands.map((c) => `<option value="${esc(c.id)}">${esc(c.title)}</option>`).join('');
+    // Thousands of options: rebuilt only when the commands change, not on every edit.
+    const options = kb.commands.map((c) => `<option value="${esc(c.id)}">${esc(c.title)}</option>`).join('');
+    if (options !== cmdListHtml) {
+      cmdListHtml = options;
+      $('#cmd-list').innerHTML = options;
+    }
   }
 
   function kbFiltered(kb: KeybindingsState): ListRow[] {

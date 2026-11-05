@@ -142,6 +142,21 @@ function checkEntry(list: readonly unknown[], index: number, command: string): v
   if (!isRecord(found) || found.command !== command) throw new Error('keybindings.json changed outside Personify. The list has been refreshed, please try again.');
 }
 
+/** keybindings.json text with each of `entries` appended unless `list` (that text parsed) already has it, and how many were. */
+export function addMissing(text: string, list: readonly unknown[], entries: readonly JsonObject[]): { text: string; added: number } {
+  const existing = new Set(list.map((k) => JSON.stringify(k)));
+  let next = text;
+  let added = 0;
+  for (const kb of entries) {
+    const json = JSON.stringify(kb);
+    if (existing.has(json)) continue;
+    existing.add(json);
+    next = append(next, entry({ key: str(kb.key) ?? '', command: str(kb.command) ?? '', when: str(kb.when) ?? '', args: kb.args }));
+    added++;
+  }
+  return { text: next, added };
+}
+
 /** keybindings.json text after `change`; `list` is that text parsed. Throws when an indexed entry moved. */
 export function applyEdit(text: string, list: readonly unknown[], change: KeybindingEdit): string {
   switch (change.op) {

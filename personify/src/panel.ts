@@ -92,7 +92,12 @@ export class PersonifyPanel {
   private watchKeybindings(): void {
     if (this.watchedFile) fs.unwatchFile(this.watchedFile);
     this.watchedFile = this.store.file;
-    fs.watchFile(this.watchedFile, { interval: 1000 }, () => this.schedule('kb', () => void this.pushKeybindings()));
+    fs.watchFile(this.watchedFile, { interval: 1000 }, () => this.schedule('kb', () => void this.pushIfChanged()));
+  }
+
+  // The watcher also sees Personify's own writes, whose state is already pushed.
+  private async pushIfChanged(): Promise<void> {
+    if (!(await this.store.showsCurrentFile())) await this.pushKeybindings();
   }
 
   private schedule(name: string, fn: () => void, delay = 150): void {
@@ -253,11 +258,8 @@ export class PersonifyPanel {
         'Add'
       );
       if (ok) {
-        const existing = new Set((await this.store.disk.read()).list.map((k) => JSON.stringify(k)));
-        for (const kb of data.keybindings) {
-          if (existing.has(JSON.stringify(kb))) continue;
-          await this.store.apply({ op: 'add', command: str(kb.command) ?? '', key: str(kb.key) ?? '', when: str(kb.when) ?? '', args: kb.args });
-        }
+        const added = await this.store.addMissing(data.keybindings);
+        this.toast(added ? `Added ${added} shortcut${added > 1 ? 's' : ''}` : 'Every shortcut was already there');
         await this.pushKeybindings();
       }
     }
