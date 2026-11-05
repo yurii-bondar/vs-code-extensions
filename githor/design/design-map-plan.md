@@ -195,7 +195,7 @@ Merge and squash share one flow: find conflicts, show a side-by-side, resolve, c
 
 ### Accounts
 
-**Needs a spike before step 2.** The screens fix what people see, not how sign-in works.
+**Spike done: see `accounts-spike.md`.** Several GitHub accounts need VS Code 1.93 (`getAccounts`, `getSession` with `account`), so the engine has to move from `^1.85`; tokens reach git as an `Authorization` header through `GIT_CONFIG_*` environment variables, since a credential helper of our own cannot keep the system's out. The screens fix what people see, not how sign-in works.
 
 - **Identity:** `git config --local user.name` and `user.email`, or `git -c user.name=... commit` per call.
 - **Credentials, by account type:**
