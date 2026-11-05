@@ -239,7 +239,13 @@ export class PersonifyPanel {
     await this.customizations.importState(this.target, data, { replace: mode === 'Replace' });
 
     if (data.keybindings.length) {
-      const ok = await vscode.window.showInformationMessage(`The profile also has ${data.keybindings.length} keybindings. Add the missing ones to your keybindings.json?`, { modal: true }, 'Add');
+      const shown = data.keybindings.slice(0, 15).map((kb) => `${str(kb.key)} → ${str(kb.command)}${kb.args === undefined ? '' : ' (with args)'}`);
+      const more = data.keybindings.length - shown.length;
+      const ok = await vscode.window.showInformationMessage(
+        `The profile also has ${data.keybindings.length} keybindings. Add the missing ones to your keybindings.json?`,
+        { modal: true, detail: `${shown.join('\n')}${more > 0 ? `\n…and ${more} more` : ''}\n\nOnly add shortcuts from a profile you trust: a shortcut can run any command.` },
+        'Add'
+      );
       if (ok) {
         const existing = new Set((await this.store.disk.read()).list.map((k) => JSON.stringify(k)));
         for (const kb of data.keybindings) {

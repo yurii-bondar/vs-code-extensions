@@ -12,6 +12,9 @@ const RULE_PREFIX = 'personify:';
 const CUSTOM_PREFIX = 'personify:custom:';
 const STYLES = ['bold', 'italic', 'underline', 'strikethrough'];
 const SCOPES: readonly Scope[] = ['user', 'workspace'];
+const COLOR_KEYS: ReadonlySet<string> = new Set(catalog.COLOR_KEYS);
+// The webview and profiles may write these and nothing else.
+const SETTING_KEYS: ReadonlySet<string> = new Set([...catalog.SETTING_KEYS, SEMANTIC_ENABLED]);
 
 /** VS Code settings, as far as Personify needs them. */
 export interface Config {
@@ -25,18 +28,22 @@ export interface Config {
   canWriteWorkspace(): boolean;
 }
 
-/** What a profile file carries besides keybindings. */
+/** What a profile file carries besides keybindings. Only what the catalog knows is used: its colors, settings and semantic selectors, and rules named `personify:…`. */
 export interface Customization {
   readonly colors: Readonly<Record<string, string>>;
   readonly settings: Readonly<Record<string, SettingValue>>;
-  /** Only rules named `personify:…` are used. */
   readonly textMateRules: readonly JsonObject[];
-  /** By semantic selector; only selectors from the catalog are used. */
+  /** By semantic selector. */
   readonly semanticRules: Readonly<JsonObject>;
 }
 
 /** Raw values of every key Personify touches, at both levels, so a session can be reverted. */
 export type Snapshot = Record<Scope, Record<string, unknown>>;
+
+/** The entries of `record` whose key is in `keys`. */
+function only<T>(record: Readonly<Record<string, T>>, keys: ReadonlySet<string>): Record<string, T> {
+  return Object.fromEntries(Object.entries(record).filter(([k]) => keys.has(k)));
+}
 
 const clone = (v: unknown): unknown => (v === undefined ? undefined : (JSON.parse(JSON.stringify(v)) as unknown));
 const rulesOf = (blk: JsonObject): unknown[] => (Array.isArray(blk.textMateRules) ? blk.textMateRules : []);
@@ -117,11 +124,16 @@ export class Customizations {
     return isRecord(root) ? block(root, target.theme, false) : {};
   }
 
+  // Every write changes settings.json and wakes every listener, so an unchanged value is not written.
+  private async writeIfChanged(key: string, value: unknown, scope: Scope): Promise<void> {
+    if (JSON.stringify(this.readAt(key, scope)) !== JSON.stringify(value)) await this.config.write(key, value, scope);
+  }
+
   private async updateObject(key: string, target: Target, mutate: (blk: JsonObject) => void): Promise<void> {
     const root = this.readAt(key, target.scope);
     const obj = isRecord(root) ? root : {};
     mutate(block(obj, target.theme, true));
-    await this.config.write(key, pruned(obj, target.theme), target.scope);
+    await this.writeIfChanged(key, pruned(obj, target.theme), target.scope);
   }
 
   // ---------- appearance ----------
@@ -144,11 +156,11 @@ export class Customizations {
     return { colors, settings };
   }
 
-  /** A null or empty color removes it. */
+  /** A null or empty color removes it. Keys outside the catalog are ignored. */
   setColors(target: Target, changes: Readonly<Record<string, string | null>>): Promise<void> {
     return this.enqueue(() =>
       this.updateObject(COLORS, target, (blk) => {
-        for (const [key, value] of Object.entries(changes)) {
+        for (const [key, value] of Object.entries(only(changes, COLOR_KEYS))) {
           if (value) blk[key] = value;
           else delete blk[key];
         }
@@ -156,11 +168,11 @@ export class Customizations {
     );
   }
 
-  /** A null or empty value removes the setting. */
+  /** A null or empty value removes the setting. Keys outside the catalog are ignored. */
   setSettings(target: Target, changes: Readonly<Record<string, SettingValue | null>>): Promise<void> {
     return this.enqueue(async () => {
-      for (const [key, value] of Object.entries(changes)) {
-        await this.config.write(key, value === null || value === '' ? undefined : value, target.scope);
+      for (const [key, value] of Object.entries(only(changes, SETTING_KEYS))) {
+        await this.writeIfChanged(key, value === null || value === '' ? undefined : value, target.scope);
       }
     });
   }
@@ -256,11 +268,11 @@ export class Customizations {
     return this.enqueue(async () => {
       await this.updateObject(COLORS, target, (blk) => {
         if (replace) for (const key of catalog.COLOR_KEYS) delete blk[key];
-        Object.assign(blk, data.colors);
+        Object.assign(blk, only(data.colors, COLOR_KEYS));
       });
-      const settings: Record<string, SettingValue | undefined> = { ...data.settings };
+      const settings: Record<string, SettingValue | undefined> = only(data.settings, SETTING_KEYS);
       if (replace) for (const key of catalog.SETTING_KEYS) if (!(key in settings)) settings[key] = undefined;
-      for (const [key, value] of Object.entries(settings)) await this.config.write(key, value, target.scope);
+      for (const [key, value] of Object.entries(settings)) await this.writeIfChanged(key, value, target.scope);
 
       const incoming = data.textMateRules.filter((r) => nameOf(r)?.startsWith(RULE_PREFIX));
       await this.updateObject(TOKENS, target, (blk) => {
@@ -275,7 +287,7 @@ export class Customizations {
       await this.updateObject(SEMANTIC, target, (blk) => {
         const rules = isRecord(blk.rules) ? blk.rules : {};
         if (replace) for (const sel of catalog.SEMANTIC_SELECTORS) delete rules[sel];
-        Object.assign(rules, data.semanticRules);
+        Object.assign(rules, only(data.semanticRules, catalog.SEMANTIC_SELECTORS));
         setSemanticRules(blk, rules);
       });
     });
@@ -300,7 +312,7 @@ export class Customizations {
       for (const scope of SCOPES) {
         if (scope === 'workspace' && !this.config.canWriteWorkspace()) continue;
         for (const key of Customizations.snapshotKeys()) {
-          if (JSON.stringify(this.readAt(key, scope)) !== JSON.stringify(snap[scope][key])) await this.config.write(key, snap[scope][key], scope);
+          await this.writeIfChanged(key, snap[scope][key], scope);
         }
       }
     });
