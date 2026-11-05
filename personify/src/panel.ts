@@ -223,14 +223,14 @@ export class PersonifyPanel {
     if (!uri) return;
     const keybindings = includeKeybindings ? (await this.store.disk.read()).list : null;
     const data = profileFile(this.customizations.exportState(this.target), keybindings, new Date());
-    await fs.promises.writeFile(uri.fsPath, JSON.stringify(data, null, 2));
-    this.toast(`Exported to ${uri.fsPath}`, 'success');
+    await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(JSON.stringify(data, null, 2)));
+    this.toast(`Exported to ${uri.scheme === 'file' ? uri.fsPath : uri.toString()}`, 'success');
   }
 
   private async importFile(): Promise<void> {
     const [uri] = (await vscode.window.showOpenDialog({ canSelectMany: false, filters: { 'Personify profile': ['json'] } })) ?? [];
     if (!uri) return;
-    const data = parseProfile(JSON.parse(await fs.promises.readFile(uri.fsPath, 'utf8')));
+    const data = parseProfile(JSON.parse(new TextDecoder().decode(await vscode.workspace.fs.readFile(uri))));
     if (!data) throw new Error('This file is not a Personify profile.');
     const mode = await vscode.window.showInformationMessage(
       'Import Personify profile',
