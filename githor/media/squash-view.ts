@@ -21,8 +21,9 @@ const commits = (n: number): string => plural(n, 'commit', 'commits');
 /** The message a squash starts with: every subject, newest first, one per line. */
 export const defaultMessage = (plan: SquashPlan): string => plan.commits.map((c) => c.subject).join('\n');
 
-export function squashRailHtml(s: SquashState, { branch, me }: { branch: string; me: string | null }): string {
+export function squashRailHtml(s: SquashState, { branch: current, me }: { branch: string; me: string | null }): string {
   const p = s.plan;
+  const branch = p?.branch ?? current;
   const n = s.shas.length;
   const head = `<div class="gt-pane__head">
   <button class="gt-btn gt-btn--ghost gt-diff-back" data-action="closeSquash">${icon('back', 'gt-i--sm')}Back</button>
@@ -56,6 +57,8 @@ export function squashRailHtml(s: SquashState, { branch, me }: { branch: string;
   <textarea id="gt-squash-message" class="gt-textarea" data-role="squashMessage"${p.problem ? ' disabled' : ''}>${esc(s.message)}</textarea>
   ${note}
   ${p.after ? `<p class="gt-muted">${commits(p.after)} after these ${p.after === 1 ? 'is' : 'are'} put back on top.</p>` : ''}
+  ${p.switchFirst ? `<p class="gt-muted">Switches to ${esc(branch)} first.</p>` : ''}
+  ${!p.problem && p.branch && p.branch !== current && !p.switchFirst ? `<p class="gt-muted">${esc(branch)} is not checked out: only its tip moves, no file changes here.</p>` : ''}
   <div class="gt-pane__row">
     <button class="gt-btn gt-btn--primary" data-action="squashNow"${can ? '' : ' disabled'}>${s.busy ? 'Squashing…' : `Squash ${n}`}</button>
     <button class="gt-btn" data-action="closeSquash">Cancel</button>

@@ -208,6 +208,10 @@ export interface CompareView {
 export interface SquashPlan {
   /** The commits, newest first. */
   commits: CommitDetails[];
+  /** The branch the commits are squashed on: the current one, or another whose own line holds them. */
+  branch: string | null;
+  /** That branch is not checked out and has commits after these: Githor switches to it first. */
+  switchFirst: boolean;
   /** The commit the squashed one sits on; null when the first commit is among them. */
   base: string | null;
   baseShort: string | null;

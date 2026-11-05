@@ -201,7 +201,7 @@ export async function isMergedInto({ git, root, ref, target }: { git: GitRunner;
 }
 
 /** Branch name → path of the other worktree it is checked out in. */
-async function worktreeBranches(git: GitRunner, root: RepoRoot): Promise<Map<string, string>> {
+export async function worktreeBranches(git: GitRunner, root: RepoRoot): Promise<Map<string, string>> {
   const held = new Map<string, string>();
   const list = (await output(git.run(root, ['worktree', 'list', '--porcelain']))) ?? '';
   for (const block of list.split('\n\n')) {

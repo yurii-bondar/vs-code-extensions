@@ -524,7 +524,15 @@ export class Actions {
     if (plan.problem) throw new Error(plan.problem);
     this.squashed = plan.commits.length;
     try {
-      const { oldHead, paused } = await squash(this.model.git, root, { plan, message });
+      const { oldHead, movedRef, paused } = await squash(this.model.git, root, { plan, message });
+      if (movedRef) {
+        // a branch that is not checked out moved: Undo moves its ref back, whatever is checked out meanwhile
+        const undo = this.remember(async () => {
+          await this.model.git.run(root, ['update-ref', movedRef, oldHead]);
+          return 'The squash is undone';
+        });
+        return { text: `Squashed ${commits(plan.commits.length)} on ${plan.branch}`, undo };
+      }
       this.mergedFrom = { root, sha: oldHead };
       if (paused) return null;
     } catch (e) {

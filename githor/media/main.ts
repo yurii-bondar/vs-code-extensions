@@ -194,7 +194,7 @@ function renderBodies(): void {
   if (view === 'squash' && squashView) {
     fill('squashRail', squashRailHtml(squashView, { branch: state.branches.find((b) => b.current)?.name ?? 'HEAD', me: log.me }));
     const base = squashView.plan?.baseShort;
-    fill('squashDiff', squashDiff ? diffPaneHtml(squashDiff, { before: `Before: ${base ?? ''}`, after: 'After squash' }) : '<div class="gt-empty"><span>Pick a file to see the squashed change.</span></div>');
+    fill('squashDiff', squashDiff ? diffPaneHtml(squashDiff, { before: base ? `Before: ${base}` : 'Before: nothing (the first commit)', after: 'After squash' }) : '<div class="gt-empty"><span>Pick a file to see the squashed change.</span></div>');
   }
   // the compare screen takes the log's and details' place, beside the branch list
   for (const name of ['log', 'logHead', 'details']) {
@@ -282,7 +282,7 @@ function selectSquashFile(path: string): void {
   const plan = squashView?.plan;
   const newest = plan?.commits[0];
   const file = plan?.files.find((f) => f.path === path);
-  if (!squashView || !plan?.base || !newest || !file) return;
+  if (!squashView || !plan || !newest || !file) return;
   squashView = { ...squashView, selected: path };
   squashDiff = { sha: newest.sha, path, diff: null };
   post({ type: 'fileDiff', sha: newest.sha, parent: plan.base, file });
