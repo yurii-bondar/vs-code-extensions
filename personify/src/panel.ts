@@ -29,7 +29,8 @@ export class PersonifyPanel {
   private prefs: Prefs;
   /** What both levels of settings held when the panel opened, for Revert session. */
   private readonly snapshot: Snapshot;
-  private readonly keybindingsSnapshot: Promise<string>;
+  /** keybindings.json when the panel opened; null when it could not be read. */
+  private readonly keybindingsSnapshot: Promise<{ file: string; text: string } | null>;
   private watchedFile: string | undefined;
 
   static show(context: vscode.ExtensionContext, store: KeybindingStore, tab?: Tab): void {
@@ -48,7 +49,11 @@ export class PersonifyPanel {
   ) {
     this.prefs = parsePrefs(context.globalState.get<unknown>(PREFS_KEY));
     this.snapshot = this.customizations.snapshot();
-    this.keybindingsSnapshot = store.readText();
+    const file = store.file;
+    this.keybindingsSnapshot = store.disk.readText(file).then(
+      (text) => ({ file, text }),
+      () => null
+    );
 
     const media = vscode.Uri.joinPath(context.extensionUri, 'media');
     const scripts = vscode.Uri.joinPath(context.extensionUri, 'dist', 'media');
@@ -213,7 +218,7 @@ export class PersonifyPanel {
       filters: { 'Personify profile': ['json'] },
     });
     if (!uri) return;
-    const keybindings = includeKeybindings ? (await this.store.read()).list : null;
+    const keybindings = includeKeybindings ? (await this.store.disk.read()).list : null;
     const data = profileFile(this.customizations.exportState(this.target), keybindings, new Date());
     await fs.promises.writeFile(uri.fsPath, JSON.stringify(data, null, 2));
     this.toast(`Exported to ${uri.fsPath}`, 'success');
@@ -236,7 +241,7 @@ export class PersonifyPanel {
     if (data.keybindings.length) {
       const ok = await vscode.window.showInformationMessage(`The profile also has ${data.keybindings.length} keybindings. Add the missing ones to your keybindings.json?`, { modal: true }, 'Add');
       if (ok) {
-        const existing = new Set((await this.store.read()).list.map((k) => JSON.stringify(k)));
+        const existing = new Set((await this.store.disk.read()).list.map((k) => JSON.stringify(k)));
         for (const kb of data.keybindings) {
           if (existing.has(JSON.stringify(kb))) continue;
           await this.store.apply({ op: 'add', command: str(kb.command) ?? '', key: str(kb.key) ?? '', when: str(kb.when) ?? '', args: kb.args });
@@ -269,7 +274,7 @@ export class PersonifyPanel {
     if (!ok) return;
     await this.customizations.restoreSnapshot(this.snapshot);
     const keybindings = await this.keybindingsSnapshot;
-    if ((await this.store.readText()) !== keybindings) await this.store.writeText(keybindings);
+    if (keybindings) await this.store.disk.restore(keybindings.file, keybindings.text);
     await this.pushKeybindings();
     this.toast('Reverted to the state when the panel was opened', 'success');
   }

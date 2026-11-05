@@ -2,9 +2,11 @@ import * as vscode from 'vscode';
 import { promises as fs } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { applyEdit, buildRows, humanize, parseDefaultKeybindings, parseKeybindings, toBinding } from './core/keybindings';
+import { applyEdit, buildRows, humanize, parseDefaultKeybindings, toBinding } from './core/keybindings';
 import { errorMessage, isRecord, str } from './core/json';
+import { KeybindingsFile } from './core/keybindingsFile';
 import type { Binding } from './core/keybindings';
+import type { FileSystem } from './core/keybindingsFile';
 import type { KeybindingEdit, KeybindingsState } from './core/types';
 
 const DEFAULTS_URI = 'vscode://defaultsettings/keybindings.json';
@@ -24,12 +26,25 @@ function contributed(packageJSON: unknown, point: string): unknown[] {
   return Array.isArray(value) ? value : value === undefined || value === null ? [] : [value];
 }
 
+const nodeFs: FileSystem = {
+  readFile: (file) => fs.readFile(file, 'utf8'),
+  writeFile: (file, text) => fs.writeFile(file, text),
+  rename: (from, to) => fs.rename(from, to),
+  copyFile: (from, to) => fs.copyFile(from, to),
+  mkdir: async (dir) => {
+    await fs.mkdir(dir, { recursive: true });
+  },
+  realpath: (file) => fs.realpath(file),
+};
+
 /** The user's keybindings.json, edited in place, plus the defaults it overrides. */
 export class KeybindingStore {
   private defaults: Defaults | undefined;
-  private backedUp = false;
+  readonly disk: KeybindingsFile;
 
-  constructor(private readonly globalStorage: vscode.Uri) {}
+  constructor(private readonly globalStorage: vscode.Uri) {
+    this.disk = new KeybindingsFile(nodeFs, () => this.file);
+  }
 
   get file(): string {
     const custom = str(vscode.workspace.getConfiguration('personify').get<unknown>('keybindingsPath'));
@@ -38,40 +53,8 @@ export class KeybindingStore {
     return path.join(this.globalStorage.fsPath, '..', '..', 'keybindings.json');
   }
 
-  async readText(): Promise<string> {
-    try {
-      const text = await fs.readFile(this.file, 'utf8');
-      return text.trim() ? text : '[]';
-    } catch {
-      return '[]';
-    }
-  }
-
-  async read(): Promise<{ text: string; list: unknown[] }> {
-    const text = await this.readText();
-    const list = parseKeybindings(text);
-    if (!list) throw new Error('keybindings.json has syntax errors. Open it, fix them, then try again.');
-    return { text, list };
-  }
-
-  /** The first write of a session saves a copy next to the file. */
-  async writeText(text: string): Promise<void> {
-    const file = this.file;
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    if (!this.backedUp) {
-      try {
-        await fs.copyFile(file, `${file}.personify-backup`);
-        this.backedUp = true;
-      } catch {
-        // no file yet, nothing to back up
-      }
-    }
-    await fs.writeFile(file, text);
-  }
-
-  async apply(edit: KeybindingEdit): Promise<void> {
-    const { text, list } = await this.read();
-    await this.writeText(applyEdit(text, list, edit));
+  apply(edit: KeybindingEdit): Promise<void> {
+    return this.disk.update(({ text, list }) => applyEdit(text, list, edit));
   }
 
   private extensionDefaults(): Binding[] {
@@ -120,7 +103,7 @@ export class KeybindingStore {
     let user: unknown[] = [];
     let error: string | null = null;
     try {
-      user = (await this.read()).list;
+      user = (await this.disk.read()).list;
     } catch (e) {
       error = errorMessage(e);
     }
