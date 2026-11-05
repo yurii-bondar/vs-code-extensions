@@ -2,7 +2,7 @@
   "name": "scriptor",
   "displayName": "Scriptor",
   "description": "A launchpad for your scripts and commands. Add any .sh, .js, .py or other script, or a command like npm run dev in a folder, group them, and run each one in a terminal with a click.",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "publisher": "bondevn",
   "license": "MIT",
   "author": "Yurii Bondar",
