@@ -1,5 +1,5 @@
 import { classifyRefusal, identityArgs, parseRemote, pickAccount, remoteEnv } from './core/accounts';
-import type { AccountPick, RemoteRefusal } from './core/accounts';
+import type { AccountPick, RemoteInfo, RemoteRefusal } from './core/accounts';
 import { GitError } from './core/git';
 import type { GitRunner } from './core/git';
 import { canPush } from './core/hosting';
@@ -33,6 +33,13 @@ function subcommand(args: readonly string[]): string | undefined {
   return undefined;
 }
 
+/** Why an account cannot talk to this remote: an SSH key for an HTTPS address, or a token for an SSH one. */
+function mismatch(account: Account, remote: RemoteInfo, name: string): string {
+  return account.auth.kind === 'ssh'
+    ? `${account.label} signs in with an SSH key, and ${name} is an HTTPS address. Point ${name} at git@${remote.host}:${remote.path}.git, or add ${account.label} again with a token.`
+    : `${account.label} signs in with a token, and ${name} is an SSH address. Point ${name} at https://${remote.host}/${remote.path}.git, or add ${account.label} again with an SSH key.`;
+}
+
 export interface AccountGitArgs {
   base: GitRunner;
   store: AccountStore;
@@ -59,6 +66,10 @@ export function accountGit({ base, store, model, fetch }: AccountGitArgs): GitRu
       const remote = model.remote ? parseRemote(model.remote.url) : null;
       const network = NETWORK.has(subcommand(args) ?? '');
       let env: Record<string, string> = {};
+      if (network && remote && remote.host === account.host) {
+        // the account's sign-in fits only one kind of address; with the other git would sign in as whoever the system holds
+        if (remote.https === (account.auth.kind === 'ssh')) throw new Error(mismatch(account, remote, model.remote?.name ?? 'The remote'));
+      }
       if (network && remote) {
         const token = account.auth.kind === 'ssh' ? null : await store.token(account);
         if (account.auth.kind !== 'ssh' && token === null && remote.https && remote.host === account.host) {

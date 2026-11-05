@@ -94,7 +94,8 @@ Several accounts (personal, work, a client's GitLab) on one computer, each with 
 - **Add account**: GitHub through VS Code's own sign-in (an account already signed in to VS Code, or another one), or for any host an access token or an SSH key. A token is asked in VS Code's own box and kept in its secret storage; the page never sees it.
 - **Which account**: the one chosen for the repository, else the first rule in `githor.accounts.rules` whose `remote` matches (`github.com/northwind/*`, `*` for everything else), else the one used last.
 - **Before a commit** Githor asks when the account differs from the one the rules pick for this remote.
-- **Push rejected**: when the remote refuses the account (403, 404), Githor names another account that can push there and offers **Switch and retry**. A sign-in the remote no longer accepts is marked expired; **Sign in again** retries what was refused.
+- **Push rejected**: when the remote refuses the account (403, 404), Githor names another account that can push there and offers **Switch and retry**. A sign-in the remote no longer accepts is marked expired; **Sign in again** retries what was refused. Outside the page (the status bar's push, the fetch commands) the same choices come as a notification.
+- An account signs in only the way it was added: one with an SSH key does not talk to an HTTPS remote, nor one with a token to an SSH remote, so git never falls back to whatever the system holds.
 - Without an account, git runs as it is: your global name and email, the credentials git already has.
 
 ### Delete all merged branches

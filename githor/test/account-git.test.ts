@@ -81,3 +81,15 @@ test('a refusal that is not about the account is passed on as it is', async () =
   const git = accountGit({ base: fakeBase('! [rejected] main -> main (non-fast-forward)'), store: fakeStore([account('Work')], { work: 't' }, 'work'), model, fetch: noFetch });
   await assert.rejects(git.run('/repo' as RepoRoot, ['push']), (e: unknown) => e instanceof GitError && !(e instanceof AccountProblem));
 });
+
+test('an account whose sign-in does not fit the address refuses to talk to the remote, rather than sign in as someone else', async () => {
+  const base = fakeBase();
+  const ssh = account('Work', { auth: { kind: 'ssh', keyPath: '/k' } });
+  await assert.rejects(accountGit({ base, store: fakeStore([ssh], {}, 'work'), model, fetch: noFetch }).run('/repo' as RepoRoot, ['push']), /SSH key, and origin is an HTTPS address/);
+  const sshModel = { root: '/repo' as RepoRoot, remote: { name: 'origin', url: 'git@github.com:northwind/billing.git' } } as unknown as AccountGitArgs['model'];
+  await assert.rejects(accountGit({ base, store: fakeStore([account('Work')], { work: 't' }, 'work'), model: sshModel, fetch: noFetch }).run('/repo' as RepoRoot, ['fetch']), /token, and origin is an SSH address/);
+  // nothing reached git; a commit is not about the address
+  assert.equal(base.calls.length, 0);
+  await accountGit({ base, store: fakeStore([ssh], {}, 'work'), model, fetch: noFetch }).run('/repo' as RepoRoot, ['commit', '-m', 'x']);
+  assert.equal(base.calls.length, 1);
+});
