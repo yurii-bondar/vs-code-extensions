@@ -1334,10 +1334,11 @@
       const w = when.value.trim();
       if (!cmd) return toast('Choose a command first', 'error');
       if (!key) return toast('Record or type a shortcut first', 'error');
+      // The host confirms the save, or reports why it failed.
       if (opts.mode === 'add') kbOp({ op: 'add', command: cmd, key, when: w, args: opts.seed?.args });
       else if (opts.mode === 'update') kbOp({ op: 'update', index: opts.row.index, command: opts.row.command, key, when: w });
       else if (key !== opts.row.key || w !== opts.row.when) kbOp({ op: 'replaceDefault', command: opts.row.command, oldKey: opts.row.key, oldWhen: opts.row.when, key, when: w, args: opts.row.args });
-      toast('Shortcut saved', 'success');
+      else toast('Nothing changed');
       close();
     });
 

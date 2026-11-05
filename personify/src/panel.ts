@@ -173,6 +173,7 @@ export class PersonifyPanel {
         return this.customizations.setCustom(this.target, msg.list);
       case 'kb':
         await this.store.apply(msg.edit);
+        this.toast('Saved to keybindings.json', 'success');
         await this.pushKeybindings();
         return;
       case 'kbRefresh':
