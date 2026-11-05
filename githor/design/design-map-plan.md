@@ -135,7 +135,7 @@ Each step is usable alone and needs only what comes before it. Follow `.claude/r
 
 Disabled, with the reason shown: `Delete` on the current branch and on the default branch.
 
-Commits only on this branch, for the warning in `34`: `git log <branch> --not --exclude=refs/heads/<branch> --branches --remotes`. Verify this on real repositories.
+Commits only on this branch, for the warning in `34`: `git log <branch> --not --exclude=<branch> --branches --remotes`. `--exclude` takes the name as `--branches` sees it, without `refs/heads/`; with the prefix it excludes nothing. Commits that would leave origin with `Also delete origin/<branch>`: `git log origin/<branch> --not --exclude=<branch> --branches --exclude=origin/<branch> --remotes`. Both are tested in `test/branch-ops.test.ts`.
 
 ### Delete all merged branches
 
