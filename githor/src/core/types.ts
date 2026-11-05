@@ -226,3 +226,15 @@ export interface SquashPlan {
   /** The files of the squashed result, against `base`. */
   files: FileChange[];
 }
+
+/** One stash, as the Stash tab lists it (design `09`). */
+export interface StashView {
+  /** The stash commit: stable while `stash@{n}` numbers shift. */
+  sha: string;
+  /** What it was called: the message given, or git's `WIP` subject. */
+  message: string;
+  /** The branch it was made on. */
+  branch: string;
+  createdAt: number;
+  files: FileChange[];
+}
