@@ -152,3 +152,17 @@ export interface FileDiff {
   /** More lines than the page draws; VS Code's diff editor can still open it. */
   tooLarge: boolean;
 }
+
+/** A file the working copy changed, as the commit list shows it (design `04`, `49`). */
+export interface WorkingFile {
+  path: string;
+  /** For a rename, the path before. */
+  oldPath: string | null;
+  /** `A` added, `M` modified, `D` deleted, `R` renamed, `T` type changed; `U` for an unversioned (untracked) file. */
+  status: 'A' | 'M' | 'D' | 'R' | 'T' | 'U';
+  /** Git left the file unmerged: a merge or rebase stopped at a conflict in it. */
+  conflicted: boolean;
+  add: number;
+  del: number;
+  binary: boolean;
+}
