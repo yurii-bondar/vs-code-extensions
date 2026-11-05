@@ -166,3 +166,37 @@ export interface WorkingFile {
   del: number;
   binary: boolean;
 }
+
+/** A merge or rebase the repository is in the middle of. */
+export interface OperationView {
+  kind: 'merge' | 'rebase';
+  /** Your branch: always the left side of a conflict, whatever git calls it. */
+  local: string;
+  /** The branch merged in, or rebased onto: always the right side. */
+  remote: string;
+  /** Files still unmerged. */
+  conflicted: string[];
+  /** Files already staged for the merge commit: merged on their own, or resolved. */
+  staged: string[];
+}
+
+export interface CompareCommit {
+  short: string;
+  author: string;
+  email: string;
+  committedAt: number;
+  subject: string;
+}
+
+/** A branch that moved on both sides, compared with its remote (design `03`). */
+export interface CompareView {
+  ref: string;
+  name: string;
+  upstream: string;
+  local: CompareCommit[];
+  remote: CompareCommit[];
+  /** Where both sides start from. */
+  base: CompareCommit | null;
+  /** Files a merge would conflict in; null when this git cannot tell (before 2.38). */
+  conflicts: string[] | null;
+}

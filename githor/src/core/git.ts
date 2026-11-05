@@ -9,11 +9,14 @@ export interface GitRunner {
 export class GitError extends Error {
   readonly args: readonly string[];
   readonly exitCode: number | null;
+  /** What git printed before it failed: some commands (`merge-tree`) put their answer there and exit 1. */
+  readonly stdout: string;
 
-  constructor({ args, stderr, exitCode }: { args: readonly string[]; stderr: string; exitCode: number | null }) {
+  constructor({ args, stderr, stdout, exitCode }: { args: readonly string[]; stderr: string; stdout: string; exitCode: number | null }) {
     super(stderr.trim() || `git ${args.join(' ')} failed`);
     this.args = args;
     this.exitCode = exitCode;
+    this.stdout = stdout;
   }
 }
 
@@ -31,7 +34,7 @@ export function createGitRunner(gitPath: string): GitRunner {
     run: (cwd, args) =>
       new Promise((resolve, reject) => {
         execFile(gitPath, [...args], { cwd, env, maxBuffer: MAX_OUTPUT }, (err, stdout, stderr) => {
-          if (err) reject(new GitError({ args, stderr, exitCode: typeof err.code === 'number' ? err.code : null }));
+          if (err) reject(new GitError({ args, stderr, stdout, exitCode: typeof err.code === 'number' ? err.code : null }));
           else resolve(stdout);
         });
       }),
