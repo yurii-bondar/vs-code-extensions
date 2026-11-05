@@ -50,7 +50,7 @@ const clone = (v: unknown): unknown => (v === undefined ? undefined : (JSON.pars
 const rulesOf = (blk: JsonObject): unknown[] => (Array.isArray(blk.textMateRules) ? blk.textMateRules : []);
 const nameOf = (rule: unknown): string | null => (isRecord(rule) ? str(rule.name) : null);
 const ruleName = (langId: string, itemId: string): string => `${RULE_PREFIX}${langId}/${itemId}`;
-export const hasStyle = (style: TokenStyle | null): boolean => !!style && (!!style.fg || style.fontStyle !== null);
+const hasStyle = (style: TokenStyle | null): boolean => !!style && (!!style.fg || style.fontStyle !== null);
 const scopeList = (v: unknown): string[] => (typeof v === 'string' ? [v] : Array.isArray(v) ? v.filter((s): s is string => typeof s === 'string') : []);
 
 function setRules(blk: JsonObject, rules: unknown[]): void {

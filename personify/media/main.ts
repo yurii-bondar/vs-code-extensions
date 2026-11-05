@@ -242,6 +242,7 @@
     return [...mods, k].join('+');
   }
 
+  // A copy of normalizeKey in src/core/keybindings.ts (the webview loads no host module); keep the two the same.
   function normKey(key: string): string {
     return key
       .toLowerCase()
@@ -609,6 +610,7 @@
 
   const currentLang = (): Language | undefined => S.catalog.languages.find((l) => l.id === S.lang);
   const styleKey = (langId: string, itemId: string): string => `${langId}/${itemId}`;
+  // The same test as hasStyle in src/core/customizations.ts.
   const hasStyle = (st: TokenStyle | null | undefined): boolean => Boolean(st && (st.fg || st.fontStyle !== null));
   const STYLE_BUTTONS: readonly (readonly [string, string, string])[] = [
     ['bold', '<b>B</b>', 'Bold'],

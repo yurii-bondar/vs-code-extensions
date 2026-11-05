@@ -42,6 +42,9 @@ export class PersonifyPanel {
     PersonifyPanel.current = new PersonifyPanel(context, store, tab ?? null);
   }
 
+  /** Closes the open panel, if any; `activate` owns this, so nothing outlives the extension. */
+  static readonly owner: vscode.Disposable = { dispose: () => PersonifyPanel.current?.panel.dispose() };
+
   private constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly store: KeybindingStore,
@@ -302,7 +305,7 @@ export class PersonifyPanel {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; img-src ${webview.cspSource} data:; script-src 'nonce-${nonce}';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; img-src ${webview.cspSource} data:; script-src 'nonce-${nonce}';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="stylesheet" href="${css}">
   <title>Personify</title>
