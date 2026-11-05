@@ -1,4 +1,4 @@
-import type { Branch, KeptBranch, MergedBranch } from './core/types';
+import type { Branch, CommitLine, KeptBranch, MergedBranch } from './core/types';
 
 /** A push, pull, publish or sync that is running, on `ref`; null `ref` for the current branch's sync. */
 export interface BusyView {
@@ -49,9 +49,18 @@ export type ClientMessage =
   | { type: 'push'; ref: string; force: boolean; tags: boolean }
   | { type: 'pull'; ref: string }
   | { type: 'publish'; ref: string }
-  | { type: 'sync' }
+  /** Pull, then push: `ref`, or the current branch when null. */
+  | { type: 'sync'; ref: string | null }
   /** Asks what a force-push of `ref` would remove from its remote, for the confirmation. */
-  | { type: 'forceInfo'; ref: string };
+  | { type: 'forceInfo'; ref: string }
+  | { type: 'checkName'; name: string }
+  | { type: 'newBranch'; name: string; start: string; switchTo: boolean }
+  | { type: 'rename'; ref: string; to: string; onRemote: boolean }
+  /** Asks what deleting `ref` would lose, for the delete dialog. */
+  | { type: 'deleteInfo'; ref: string }
+  | { type: 'deleteBranch'; ref: string; onRemote: boolean }
+  | { type: 'pin'; ref: string; pinned: boolean }
+  | { type: 'copyName'; name: string };
 
 export type HostMessage =
   | { type: 'state'; state: StateView }
@@ -62,6 +71,11 @@ export type HostMessage =
   | { type: 'mergedDone' }
   | { type: 'toast'; text: string; undo: number | null }
   | { type: 'forceInfo'; ref: string; count: number; authors: string[] }
+  | { type: 'nameCheck'; name: string; problem: string | null }
+  /** What deleting `ref` loses: merged into the default branch, or the commits only it has, here and on its remote. */
+  | { type: 'deleteInfo'; ref: string; mergedInto: string | null; local: CommitLine[]; remote: CommitLine[] }
+  /** A branch dialog's work is done: it closes. */
+  | { type: 'branchDone' }
   | { type: 'error'; text: string };
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -72,7 +86,6 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
   if (!isRecord(raw)) return null;
   switch (raw['type']) {
     case 'ready':
-    case 'sync':
     case 'pickBranch':
     case 'openEditor':
     case 'showOutput':
@@ -83,7 +96,26 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
     case 'pull':
     case 'publish':
     case 'forceInfo':
+    case 'deleteInfo':
       return nonEmpty(raw['ref']) ? { type: raw['type'], ref: raw['ref'] } : null;
+    case 'sync':
+      return raw['ref'] === null || nonEmpty(raw['ref']) ? { type: 'sync', ref: raw['ref'] } : null;
+    case 'checkName':
+      return typeof raw['name'] === 'string' ? { type: 'checkName', name: raw['name'] } : null;
+    case 'copyName':
+      return nonEmpty(raw['name']) ? { type: 'copyName', name: raw['name'] } : null;
+    case 'newBranch': {
+      const { name, start, switchTo } = raw;
+      return nonEmpty(name) && nonEmpty(start) && typeof switchTo === 'boolean' ? { type: 'newBranch', name, start, switchTo } : null;
+    }
+    case 'rename': {
+      const { ref, to, onRemote } = raw;
+      return nonEmpty(ref) && nonEmpty(to) && typeof onRemote === 'boolean' ? { type: 'rename', ref, to, onRemote } : null;
+    }
+    case 'deleteBranch':
+      return nonEmpty(raw['ref']) && typeof raw['onRemote'] === 'boolean' ? { type: 'deleteBranch', ref: raw['ref'], onRemote: raw['onRemote'] } : null;
+    case 'pin':
+      return nonEmpty(raw['ref']) && typeof raw['pinned'] === 'boolean' ? { type: 'pin', ref: raw['ref'], pinned: raw['pinned'] } : null;
     case 'push': {
       const { ref, force, tags } = raw;
       return nonEmpty(ref) && typeof force === 'boolean' && typeof tags === 'boolean' ? { type: 'push', ref, force, tags } : null;

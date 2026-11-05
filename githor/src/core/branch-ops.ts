@@ -2,13 +2,7 @@
 import { refExists } from './branches';
 import { splitUpstream } from './sync';
 import type { GitRunner } from './git';
-import type { Branch, RepoRoot } from './types';
-
-export interface CommitLine {
-  sha: string;
-  subject: string;
-  author: string;
-}
+import type { Branch, CommitLine, RepoRoot } from './types';
 
 const lines = (out: string): CommitLine[] =>
   out

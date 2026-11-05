@@ -1,11 +1,12 @@
 import * as vscode from 'vscode';
+import { createBranch, deleteBranch, deleteOnRemote, nameProblem, onlyHere, renameBranch } from './core/branch-ops';
 import { switchBranch } from './core/branches';
 import { deleteBranches, restoreBranches } from './core/cleanup';
-import { mergeTargets, scanMerged } from './core/merged';
+import { isMergedInto, mergeTargets, scanMerged } from './core/merged';
 import { fetchRemotes } from './core/remote';
 import { publish, pull, push, remoteOnlyCommits } from './core/sync';
 import { cannotPull, cannotPush } from './core/sync-rules';
-import type { Branch, DeletedBranch, MergedBranch, RepoRoot } from './core/types';
+import type { Branch, CommitLine, MergedBranch, RepoRoot } from './core/types';
 import type { RepoModel } from './model';
 import type { BusyView, MergedView } from './protocol';
 
@@ -25,7 +26,8 @@ export interface Outcome {
  * output channel and refreshes the model when it is done.
  */
 export class Actions {
-  private readonly undoable = new Map<number, { root: RepoRoot; branches: DeletedBranch[] }>();
+  /** What each Undo id puts back; it returns the toast's text. */
+  private readonly undoable = new Map<number, () => Promise<string>>();
   private nextUndo = 1;
   /** The scan each dialog opened, by target, so a delete acts on what was checked, not on what a page sends. */
   private readonly scans = new Map<string, MergedBranch[]>();
@@ -38,6 +40,12 @@ export class Actions {
   private root(): RepoRoot {
     if (!this.model.root) throw new Error('Open a folder that is a git repository.');
     return this.model.root;
+  }
+
+  private remember(undo: () => Promise<string>): number {
+    const id = this.nextUndo++;
+    this.undoable.set(id, undo);
+    return id;
   }
 
   private log(what: string, e: unknown): void {
@@ -116,18 +124,18 @@ export class Actions {
     return { text: `Published ${branch.name} to ${upstream}`, undo: null };
   }
 
-  /** Pull, then push, on the current branch (design `44`). A branch on no remote yet is published. */
-  async sync(): Promise<Outcome> {
-    const current = this.model.current;
+  /** Pull, then push (design `44`): the current branch, or the one given. A branch on no remote yet is published. */
+  async sync(ref?: string): Promise<Outcome> {
+    const current = ref ? this.branch(ref) : this.model.current;
     if (!current) throw new Error('No branch is checked out.');
     if (current.sync === 'unpushed' || current.sync === 'gone') return this.publish(current.ref);
     const why = cannotPull(current);
     if (why) throw new Error(why);
-    const { pulled, pushed } = await this.syncing({ action: 'sync', ref: null }, `Sync ${current.name}`, async () => {
+    const { pulled, pushed } = await this.syncing({ action: 'sync', ref: ref ?? null }, `Sync ${current.name}`, async () => {
       const pulled = await pull(this.model.git, this.root(), current);
       await this.model.refresh();
-      const after = this.model.current;
-      if (!after?.ahead || after.ref !== current.ref) return { pulled, pushed: 0 };
+      const after = this.model.branches.find((b) => b.ref === current.ref);
+      if (!after?.ahead) return { pulled, pushed: 0 };
       await push(this.model.git, this.root(), { branch: after });
       return { pulled, pushed: after.ahead };
     });
@@ -175,8 +183,14 @@ export class Actions {
     this.scans.delete(target);
     await this.model.refresh();
 
-    const undo = result.deleted.length ? this.nextUndo++ : null;
-    if (undo !== null) this.undoable.set(undo, { root, branches: result.deleted });
+    const undo = result.deleted.length
+      ? this.remember(async () => {
+          const failed = await restoreBranches(this.model.git, root, result.deleted);
+          for (const name of failed) this.log(`Restore ${name}`, 'a branch of that name exists, or its commit is gone');
+          const restored = result.deleted.length - failed.length;
+          return failed.length ? `Restored ${plural(restored, 'branch')}; ${failed.join(', ')} could not be restored` : `Restored ${plural(restored, 'branch')}`;
+        })
+      : null;
     const parts = [`Deleted ${plural(result.deleted.length, 'merged branch')}`];
     if (result.deletedOnRemote.length) parts.push(`${result.deletedOnRemote.length} on origin`);
     if (result.failed.length) parts.push(`${result.failed.length} failed, see the Githor output`);
@@ -184,13 +198,95 @@ export class Actions {
   }
 
   async undo(id: number): Promise<Outcome> {
-    const record = this.undoable.get(id);
-    if (!record) return { text: 'There is nothing to undo.', undo: null };
+    const undo = this.undoable.get(id);
+    if (!undo) return { text: 'There is nothing to undo.', undo: null };
     this.undoable.delete(id);
-    const failed = await restoreBranches(this.model.git, record.root, record.branches);
-    for (const name of failed) this.log(`Restore ${name}`, 'a branch of that name exists, or its commit is gone');
-    await this.model.refresh();
-    const restored = record.branches.length - failed.length;
-    return { text: failed.length ? `Restored ${plural(restored, 'branch')}; ${failed.join(', ')} could not be restored` : `Restored ${plural(restored, 'branch')}`, undo: null };
+    try {
+      return { text: await undo(), undo: null };
+    } finally {
+      await this.model.refresh();
+    }
+  }
+
+  // ---------- one branch: the branch menu and its dialogs (31–37, 43) ----------
+
+  checkName(name: string): Promise<string | null> {
+    return nameProblem(this.model.git, this.root(), name);
+  }
+
+  async newBranch({ name, start, switchTo }: { name: string; start: string; switchTo: boolean }): Promise<Outcome> {
+    const problem = await this.checkName(name);
+    if (problem) throw new Error(problem);
+    const from = this.branch(start);
+    try {
+      await createBranch(this.model.git, this.root(), { name, start: from.local ? from.ref : (from.upstream ?? from.ref), switchTo });
+    } catch (e) {
+      this.log(`Create ${name}`, e);
+      throw e;
+    } finally {
+      await this.model.refresh();
+    }
+    return { text: switchTo ? `Created ${name} and switched to it` : `Created ${name} from ${from.name}`, undo: null };
+  }
+
+  async rename({ ref, to, onRemote }: { ref: string; to: string; onRemote: boolean }): Promise<Outcome> {
+    const branch = this.branch(ref);
+    const problem = await this.checkName(to);
+    if (problem) throw new Error(problem);
+    const root = this.root();
+    try {
+      await renameBranch(this.model.git, root, { branch, to, onRemote });
+    } catch (e) {
+      this.log(`Rename ${branch.name}`, e);
+      throw e;
+    } finally {
+      await this.model.refresh();
+    }
+    // Undo puts the local name back; a rename on origin is not undone, since others may already use the new name.
+    const undo = onRemote ? null : this.remember(async () => {
+      await this.model.git.run(root, ['branch', '--move', to, branch.name]);
+      return `Renamed back to ${branch.name}`;
+    });
+    return { text: `Renamed to ${to}`, undo };
+  }
+
+  /** What deleting `ref` loses, for the delete dialog (`34`, `35`). */
+  async deleteInfo(ref: string): Promise<{ mergedInto: string | null; local: CommitLine[]; remote: CommitLine[] }> {
+    const branch = this.branch(ref);
+    const { git } = this.model;
+    const root = this.root();
+    const main = this.model.defaultBranch;
+    const [lost, merged] = await Promise.all([
+      onlyHere(git, root, { branch, withUpstream: true }),
+      main && main !== branch.name && branch.local ? isMergedInto({ git, root, ref: branch.ref, target: main }).catch(() => false) : Promise.resolve(false),
+    ]);
+    return { mergedInto: merged ? main : null, ...lost };
+  }
+
+  async deleteBranch({ ref, onRemote }: { ref: string; onRemote: boolean }): Promise<Outcome> {
+    const branch = this.branch(ref);
+    if (branch.current) throw new Error('This is your current branch. Switch first.');
+    if (branch.name === this.model.defaultBranch) throw new Error(`${branch.name} is the default branch.`);
+    const root = this.root();
+    try {
+      if (branch.local) await deleteBranch(this.model.git, root, { branch, onRemote });
+      else if (branch.upstream) await deleteOnRemote(this.model.git, root, branch.upstream);
+    } catch (e) {
+      this.log(`Delete ${branch.name}`, e);
+      throw e;
+    } finally {
+      await this.model.refresh();
+    }
+    if (!branch.local) return { text: `Deleted ${branch.upstream ?? branch.name}`, undo: null };
+    const undo = this.remember(async () => {
+      const failed = await restoreBranches(this.model.git, root, [{ name: branch.name, sha: branch.sha, upstream: branch.upstream }]);
+      if (failed.length) throw new Error(`${branch.name} could not be restored: a branch of that name exists.`);
+      return `Restored ${branch.name}`;
+    });
+    return { text: `Deleted ${branch.name}${onRemote && branch.upstream ? ` and ${branch.upstream}` : ''}`, undo };
+  }
+
+  async pin(ref: string, pinned: boolean): Promise<void> {
+    await this.model.setPinned(this.branch(ref).name, pinned);
   }
 }

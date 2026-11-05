@@ -13,7 +13,12 @@ test('parseClientMessage accepts the known messages', () => {
   assert.deepEqual(parseClientMessage({ type: 'push', ref: 'refs/heads/x', force: true, tags: false }), { type: 'push', ref: 'refs/heads/x', force: true, tags: false });
   assert.deepEqual(parseClientMessage({ type: 'pull', ref: 'refs/heads/x' }), { type: 'pull', ref: 'refs/heads/x' });
   assert.deepEqual(parseClientMessage({ type: 'publish', ref: 'refs/heads/x' }), { type: 'publish', ref: 'refs/heads/x' });
-  assert.deepEqual(parseClientMessage({ type: 'sync' }), { type: 'sync' });
+  assert.deepEqual(parseClientMessage({ type: 'sync', ref: null }), { type: 'sync', ref: null });
+  assert.deepEqual(parseClientMessage({ type: 'newBranch', name: 'feat/x', start: 'refs/heads/main', switchTo: true }), { type: 'newBranch', name: 'feat/x', start: 'refs/heads/main', switchTo: true });
+  assert.deepEqual(parseClientMessage({ type: 'rename', ref: 'refs/heads/a', to: 'b', onRemote: false }), { type: 'rename', ref: 'refs/heads/a', to: 'b', onRemote: false });
+  assert.deepEqual(parseClientMessage({ type: 'deleteBranch', ref: 'refs/heads/a', onRemote: true }), { type: 'deleteBranch', ref: 'refs/heads/a', onRemote: true });
+  assert.deepEqual(parseClientMessage({ type: 'pin', ref: 'refs/heads/a', pinned: true }), { type: 'pin', ref: 'refs/heads/a', pinned: true });
+  assert.deepEqual(parseClientMessage({ type: 'checkName', name: '' }), { type: 'checkName', name: '' });
   assert.deepEqual(parseClientMessage({ type: 'forceInfo', ref: 'refs/heads/x' }), { type: 'forceInfo', ref: 'refs/heads/x' });
 });
 
@@ -32,6 +37,10 @@ test('parseClientMessage rejects what is not a known message', () => {
     { type: 'push', ref: 'refs/heads/x', force: 'yes', tags: false },
     { type: 'push', ref: 'refs/heads/x' },
     { type: 'pull' },
+    { type: 'sync' },
+    { type: 'rename', ref: 'refs/heads/a', to: '', onRemote: false },
+    { type: 'newBranch', name: 'x', start: 'refs/heads/main' },
+    { type: 'pin', ref: 'refs/heads/a' },
     { type: 'nope' },
   ];
   for (const raw of bad) assert.equal(parseClientMessage(raw), null, JSON.stringify(raw));

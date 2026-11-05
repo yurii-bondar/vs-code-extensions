@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { defaultBranch, listBranches } from './core/branches';
+import { defaultBranch, listBranches, sortBranches } from './core/branches';
 import { lastFetchedAt } from './core/remote';
 import { pickRepo } from './core/repos';
 import type { GitRunner } from './core/git';
@@ -46,7 +46,9 @@ export class RepoModel implements vscode.Disposable {
 
   constructor(
     private readonly api: API,
-    readonly git: GitRunner
+    readonly git: GitRunner,
+    /** Where pinned branches are kept, per repository: the workspace's state. */
+    private readonly memento: vscode.Memento
   ) {
     this.root = pickRepo({ roots: this.roots(), file: fileOf(vscode.window.activeTextEditor) });
     for (const repo of api.repositories) this.watch(repo);
@@ -111,11 +113,26 @@ export class RepoModel implements vscode.Disposable {
     try {
       const [branches, fetchedAt, main] = root ? await Promise.all([listBranches(this.git, root), lastFetchedAt(this.git, root), defaultBranch(this.git, root)]) : [[], null, null];
       if (generation !== this.generation) return;
-      Object.assign(this, { branches, fetchedAt, defaultBranch: main, loaded: true });
+      Object.assign(this, { branches: root ? sortBranches(branches, this.pins(root)) : [], fetchedAt, defaultBranch: main, loaded: true });
       this.changed.fire();
     } catch (e) {
       if (generation === this.generation) this.failed.fire(errorText(e));
     }
+  }
+
+  private pins(root: RepoRoot): Set<string> {
+    const saved: unknown = this.memento.get(`githor.pins:${root}`);
+    return new Set(Array.isArray(saved) ? saved.filter((n): n is string => typeof n === 'string') : []);
+  }
+
+  /** Pins or unpins a branch of the shown repository. */
+  async setPinned(name: string, pinned: boolean): Promise<void> {
+    if (!this.root) return;
+    const pins = this.pins(this.root);
+    if (pinned) pins.add(name);
+    else pins.delete(name);
+    await this.memento.update(`githor.pins:${this.root}`, [...pins]);
+    await this.refresh();
   }
 
   private roots(): RepoRoot[] {

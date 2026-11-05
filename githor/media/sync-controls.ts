@@ -108,6 +108,7 @@ export function rowActionHtml(branch: Branch, busy: BusyView | null): string {
   const button = (action: string, tone: string, glyph: Parameters<typeof icon>[0], label: string): string =>
     `<button class="gt-sync gt-sync--${tone} gt-branch__act" data-action="${action}" data-ref="${ref}"${disabled}>${icon(spinning ? 'spinner' : glyph, spinning ? 'gt-i--sm gt-spin' : 'gt-i--sm')}${label}</button>`;
   if (!branch.local) return '';
+  if (branch.sync === 'gone' && !branch.current) return button('deleteBranchAsk', 'gone', 'trash', 'Delete local');
   if (branch.sync === 'unpushed' && branch.ahead) return button('publish', 'ahead', 'push', 'Publish');
   if (!cannotPush(branch)) return button('push', 'ahead', 'push', `Push ${branch.ahead}`);
   if (!cannotPull(branch) && branch.behind) return button('pull', 'behind', 'pull', `Pull ${branch.behind}`);

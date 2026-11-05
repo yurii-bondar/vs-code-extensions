@@ -20,7 +20,7 @@ Each row shows where the branch lives and how far it is from its remote copy:
 | `remote` | only on the remote |
 | `local` alone | its remote branch was deleted |
 
-Filter by name, or by **All**, **Attention** (something to push, pull or clean up), **Local** (on this machine only) and **Remote** (on a remote only). Hover a row and click **Switch** to check the branch out; a remote-only branch gets a local branch that tracks it.
+Filter by name, or by **All**, **Attention** (something to push, pull or clean up), **Local** (on this machine only) and **Remote** (on a remote only). Hover a row and click **Switch** to check the branch out; a remote-only branch gets a local branch that tracks it. The list starts with the current branch, then pinned ones, then the rest, newest first.
 
 ### Push, pull and sync
 
@@ -33,6 +33,15 @@ The editor toolbar and the sidebar have **Sync**, **Pull** and **Push** for the 
 - A branch where local and remote both moved cannot be pulled or synced: there is no automatic merge that could stop at a conflict. Compare them, or force-push.
 
 Githor uses the credentials git already has (SSH keys, the system keychain); it never asks for a password.
+
+### The branch menu
+
+`⋯` on a row (on hover) opens what can be done with that branch: **Switch**, **New branch from here…**, **Pull**, **Push**, **Sync** or **Publish to origin**, **Rename…**, **Pin**, **Copy name** and **Delete…** (**Delete on origin…** for a branch only on the remote). What cannot be done says why: the current branch and the default branch cannot be deleted.
+
+- **New branch** takes a name (starting with the start branch's prefix, such as `feat/`), a start point, and whether to switch to it now. Typing a name no branch has in the filter, or in **Switch branch…**, offers to create it.
+- **Rename** checks the name as you type, and can rename the branch on origin too.
+- **Delete** says what is lost first: fully merged into the default branch, or the commits only this branch has. **Also delete origin/…** names whose commits leave origin. **Undo** restores the local branch; nothing restores a branch deleted on origin.
+- **Pin** keeps a branch right after the current one. Pins are per repository and stay in the workspace.
 
 ### Status bar
 
@@ -60,10 +69,10 @@ VS Code's built-in Git extension (`git.enabled`). Githor runs the same `git` it 
 
 ## How it works
 
-- `src/core/` is pure logic with no `vscode` import, tested against real repositories: `branches.ts` reads `git for-each-ref`, `marks.ts` is the sync language of the design (also imported by the webview), `merged.ts` decides what is merged, `cleanup.ts` deletes and restores, `remote.ts` fetches, `sync.ts` pushes and pulls (`sync-rules.ts` says when they are offered), `tasks.ts` reads Claudestrator's task records, `repos.ts` picks the repository.
+- `src/core/` is pure logic with no `vscode` import, tested against real repositories: `branches.ts` reads `git for-each-ref`, `marks.ts` is the sync language of the design (also imported by the webview), `merged.ts` decides what is merged, `cleanup.ts` deletes and restores, `remote.ts` fetches, `sync.ts` pushes and pulls (`sync-rules.ts` says when they are offered), `branch-ops.ts` creates, renames and deletes one branch, `tasks.ts` reads Claudestrator's task records, `repos.ts` picks the repository.
 - `src/model.ts` reads the repository once for every view and re-reads when the Git extension reports a change. `src/actions.ts` runs the git operations and logs failures to the **Githor** output channel.
 - `src/branches-view.ts` drives one webview page; `src/sidebar.ts` puts it in the sidebar, `src/panel.ts` in an editor tab. `src/status-bar.ts` and `src/quick-pick.ts` are the status bar item and the branch switcher.
-- `media/*.ts` are the page's ES modules: `main.ts` (state and events), `branch-list.ts`, `sync-controls.ts` (Sync, Pull, Push and its menu), `chrome.ts` (toolbar, menu, banner, toast), `merged-dialog.ts`, `icons.ts` (the design's icons). `media/app.css` holds the design tokens and components.
+- `media/*.ts` are the page's ES modules: `main.ts` (state and events), `branch-list.ts`, `sync-controls.ts` (Sync, Pull, Push and its menu), `branch-menu.ts`, `branch-dialogs.ts` (new, rename, delete), `chrome.ts` (toolbar, menu, banner, toast), `merged-dialog.ts`, `icons.ts` (the design's icons). `media/app.css` holds the design tokens and components.
 
 ## Develop
 

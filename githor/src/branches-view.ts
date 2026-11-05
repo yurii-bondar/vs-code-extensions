@@ -61,6 +61,13 @@ export class BranchesView implements vscode.Disposable {
     this.post({ type: 'toast', text, undo });
   }
 
+  /** A dialog's action: on success the dialog closes and the toast says what happened. */
+  private async toastAndClose(outcome: Promise<{ text: string; undo: number | null }>): Promise<void> {
+    const { text, undo } = await outcome;
+    this.post({ type: 'branchDone' });
+    this.post({ type: 'toast', text, undo });
+  }
+
   private sendState(): void {
     if (this.ready) this.post({ type: 'state', state: this.model.state() });
   }
@@ -103,7 +110,28 @@ export class BranchesView implements vscode.Disposable {
       case 'publish':
         return this.toast(this.actions.publish(message.ref));
       case 'sync':
-        return this.toast(this.actions.sync());
+        return this.toast(this.actions.sync(message.ref ?? undefined));
+      case 'checkName':
+        this.post({ type: 'nameCheck', name: message.name, problem: await this.actions.checkName(message.name) });
+        return;
+      case 'newBranch':
+        await this.toastAndClose(this.actions.newBranch(message));
+        return;
+      case 'rename':
+        await this.toastAndClose(this.actions.rename(message));
+        return;
+      case 'deleteInfo':
+        this.post({ type: 'deleteInfo', ref: message.ref, ...(await this.actions.deleteInfo(message.ref)) });
+        return;
+      case 'deleteBranch':
+        await this.toastAndClose(this.actions.deleteBranch(message));
+        return;
+      case 'pin':
+        return this.actions.pin(message.ref, message.pinned);
+      case 'copyName':
+        await vscode.env.clipboard.writeText(message.name);
+        this.post({ type: 'toast', text: `Copied ${message.name}`, undo: null });
+        return;
       case 'forceInfo':
         this.post({ type: 'forceInfo', ref: message.ref, ...(await this.actions.forceInfo(message.ref)) });
         return;

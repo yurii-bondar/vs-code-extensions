@@ -39,13 +39,16 @@ function marksHtml(branch: Branch): string {
   return `<span class="gt-marks">${parts.join('')}</span>${tail}`;
 }
 
-function rowHtml(branch: Branch, busy: BusyView | null): string {
-  const action = branch.current ? '' : `<button class="gt-branch__quick" data-action="switch" data-ref="${esc(branch.ref)}">Switch</button>`;
+function rowHtml(branch: Branch, busy: BusyView | null, menuRef: string | null): string {
+  const ref = esc(branch.ref);
+  const more = `<button class="gt-icon-btn gt-branch__more${menuRef === branch.ref ? ' is-open' : ''}" data-action="branchMenu" data-ref="${ref}" title="Branch actions" aria-label="Branch actions" aria-haspopup="menu">${icon('more', 'gt-i--sm')}</button>`;
+  const action = `${branch.current ? '' : `<button class="gt-branch__quick" data-action="switch" data-ref="${ref}">Switch</button>`}${more}`;
+  const pin = branch.pinned ? `<span class="gt-branch__pin" title="Pinned">${icon('pin', 'gt-i--sm')}</span>` : '';
   return `<div class="gt-branch${branch.current ? ' is-current' : ''}">
   <div class="gt-branch__top">
     ${branch.current ? `<span class="gt-branch__cur" title="Current branch">${icon('check', 'gt-i--sm')}</span>` : ''}
     <span class="gt-branch__name" title="${esc(branch.name)}">${nameHtml(branch.name)}</span>
-    <span class="gt-branch__age${action ? ' has-quick' : ''}">${age(branch.committedAt)}</span>${action}
+    ${pin}<span class="gt-branch__age has-quick">${age(branch.committedAt)}</span>${action}
   </div>
   <div class="gt-branch__bot">${marksHtml(branch)}${rowActionHtml(branch, busy)}</div>
 </div>`;
@@ -63,14 +66,24 @@ export interface ListArgs {
   filter: BranchFilter;
   query: string;
   busy: BusyView | null;
+  /** The branch whose menu is open. */
+  menuRef: string | null;
 }
 
-export function listHtml({ loaded, hasRepo, branches, filter, query, busy }: ListArgs): string {
+export function listHtml({ loaded, hasRepo, branches, filter, query, busy, menuRef }: ListArgs): string {
   if (!loaded) return SKELETON.repeat(4);
   if (!hasRepo) return empty({ glyph: icon('folder'), title: 'This folder is not a git repository', text: 'Open a folder that is a git repository.' });
   if (!branches.length) return empty({ glyph: icon('branch'), title: 'No branches yet', text: 'Make the first commit to start one.' });
   const shown = branches.filter((b) => inFilter(b, filter) && matchesQuery(b, query));
-  if (shown.length) return shown.map((b) => rowHtml(b, busy)).join('');
-  if (query.trim()) return empty({ glyph: icon('search'), title: `No branch matches “${esc(query.trim())}”`, text: 'Clear the filter to see every branch.', actions: '<button class="gt-btn" data-action="clearQuery">Clear</button>' });
+  if (shown.length) return shown.map((b) => rowHtml(b, busy, menuRef)).join('');
+  if (query.trim()) {
+    const from = branches.find((b) => b.current)?.name;
+    return empty({
+      glyph: icon('search'),
+      title: `No branch matches “${esc(query.trim())}”`,
+      text: from ? `Create it from ${esc(from)}, or clear the filter.` : 'Clear the filter to see every branch.',
+      actions: `${from ? '<button class="gt-btn gt-btn--primary" data-action="createFromQuery">Create branch</button>' : ''}<button class="gt-btn" data-action="clearQuery">Clear</button>`,
+    });
+  }
   return empty({ glyph: icon('check'), title: `No ${FILTER_LABELS[filter].toLowerCase()} branches`, text: 'Nothing here needs you.', actions: '<button class="gt-btn" data-action="filter" data-filter="all">Show all</button>' });
 }

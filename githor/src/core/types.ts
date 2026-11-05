@@ -60,3 +60,10 @@ export interface DeletedBranch {
   sha: string;
   upstream: string | null;
 }
+
+/** One commit, as a list in a dialog shows it. */
+export interface CommitLine {
+  sha: string;
+  subject: string;
+  author: string;
+}

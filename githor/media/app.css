@@ -378,3 +378,21 @@ html, body { height: 100%; margin: 0; padding: 0; background: var(--gt-bg-app); 
 .gt-check.gt-option { flex-direction: row; align-items: flex-start; gap: var(--gt-space-2); }
 .gt-popover .gt-banner { flex-wrap: nowrap; align-items: flex-start; }
 .gt-popover .gt-banner__icon { padding-top: 1px; }
+
+/* ---------- branch menu (31, 32) and branch dialogs (33–35, 43) ---------- */
+.gt-branch__more { display: none; width: 20px; height: 20px; }
+.gt-branch:hover .gt-branch__more, .gt-branch:focus-within .gt-branch__more, .gt-branch__more.is-open { display: inline-flex; position: relative; z-index: 1; pointer-events: auto; }
+.gt-menu--floating { position: fixed; top: 0; left: 0; right: auto; z-index: 5; min-width: 240px; }
+.gt-menu__title { display: flex; align-items: center; gap: 6px; padding: 6px 12px 4px; color: var(--gt-fg-muted); font-size: var(--gt-text-xs); font-weight: var(--gt-weight-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gt-menu--floating .gt-menu__item { flex-direction: column; align-items: flex-start; justify-content: center; gap: 0; height: auto; min-height: 30px; padding-top: 4px; padding-bottom: 4px; }
+.gt-menu__item:disabled { color: var(--gt-fg-muted); cursor: default; background: transparent; }
+.gt-menu__item .gt-option__tick { display: inline-block; }
+.gt-menu__item--danger:not(:disabled) { color: var(--gt-sync-gone); }
+.gt-menu__note { color: var(--gt-fg-muted); font-size: var(--gt-text-xs); white-space: normal; }
+.gt-field { display: flex; flex-direction: column; gap: 6px; }
+.gt-field .gt-input { color: var(--gt-input-fg); }
+.gt-input.is-invalid { border-color: var(--gt-sync-gone); }
+.gt-field__problem { min-height: 14px; color: var(--gt-sync-gone); font-size: var(--gt-text-xs); }
+.gt-select--wide, .gt-select--wide select { width: 100%; }
+.gt-commit-list { margin: 0; padding: 0 0 0 4px; list-style: none; display: flex; flex-direction: column; gap: 2px; font-size: var(--gt-text-sm); }
+.gt-sync--gone.gt-branch__act { --tone: var(--gt-sync-gone); }

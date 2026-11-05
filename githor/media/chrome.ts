@@ -28,6 +28,7 @@ function menuHtml(): string {
   return `<div class="gt-menu" role="menu">
   ${item('fetchAll', icon('refresh', 'gt-i--sm'), 'Fetch all')}
   ${item('pickBranch', icon('branch', 'gt-i--sm'), 'Switch branch…')}
+  ${item('newBranch', '<span class="gt-option__tick"></span>', 'New branch…')}
   <div class="gt-menu__sep" role="separator"></div>
   ${item('openMerged', icon('trash', 'gt-i--sm'), 'Delete all merged branches…')}
 </div>`;

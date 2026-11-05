@@ -13,18 +13,44 @@ function describe(branch: Branch): string {
   return parts.filter(Boolean).join('   ');
 }
 
-/** The branch switcher (design `07`): every branch with its marks; Enter switches. */
-export async function pickBranch(model: RepoModel, actions: Actions): Promise<void> {
-  const items = model.branches.map((branch) => ({ label: `$(git-branch) ${branch.name}`, description: `${branch.current ? '$(check) current   ' : ''}${describe(branch)}`, branch }));
-  if (!items.length) {
-    void vscode.window.showInformationMessage('Githor: this repository has no branches yet.');
-    return;
-  }
-  const picked = await vscode.window.showQuickPick(items, { placeHolder: 'Switch to a branch', matchOnDescription: false });
-  if (!picked || picked.branch.current) return;
-  try {
-    await actions.switchTo(picked.branch.ref);
-  } catch (e) {
-    void vscode.window.showErrorMessage(`Githor: ${e instanceof Error ? e.message : String(e)}`);
-  }
+interface Item extends vscode.QuickPickItem {
+  branch?: Branch;
+  /** Set on the "Create branch" item: the typed name. */
+  create?: string;
+}
+
+const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+/**
+ * The branch switcher (design `07`): every branch with its marks; Enter switches. Typing a name no branch has offers
+ * to create it from the current branch and switch to it.
+ */
+export function pickBranch(model: RepoModel, actions: Actions): Promise<void> {
+  const branches: Item[] = model.branches.map((branch) => ({ label: `$(git-branch) ${branch.name}`, description: `${branch.current ? '$(check) current   ' : ''}${describe(branch)}`, branch }));
+  const current = model.current;
+  const qp = vscode.window.createQuickPick<Item>();
+  qp.placeholder = current ? 'Switch to a branch, or type a new name' : 'Switch to a branch';
+  qp.items = branches;
+  qp.onDidChangeValue((value) => {
+    const name = value.trim();
+    const exists = model.branches.some((b) => b.name === name);
+    qp.items = current && name && !exists ? [{ label: `$(add) Create branch ${name}`, description: `from ${current.name}, and switch to it`, create: name, alwaysShow: true }, ...branches] : branches;
+  });
+  return new Promise((resolve) => {
+    qp.onDidAccept(async () => {
+      const picked = qp.selectedItems[0];
+      qp.hide();
+      try {
+        if (picked?.create && current) await actions.newBranch({ name: picked.create, start: current.ref, switchTo: true });
+        else if (picked?.branch && !picked.branch.current) await actions.switchTo(picked.branch.ref);
+      } catch (e) {
+        void vscode.window.showErrorMessage(`Githor: ${errorText(e)}`);
+      }
+    });
+    qp.onDidHide(() => {
+      qp.dispose();
+      resolve();
+    });
+    qp.show();
+  });
 }

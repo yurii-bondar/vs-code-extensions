@@ -21,7 +21,7 @@ export function lazyServices(context: vscode.ExtensionContext, output: vscode.Ou
     (services ??= (async () => {
       const api = await gitApi();
       if (!api) return undefined;
-      const model = new RepoModel(api, createGitRunner(api.git.path));
+      const model = new RepoModel(api, createGitRunner(api.git.path), context.workspaceState);
       const actions = new Actions(model, output);
       context.subscriptions.push(model, new BranchStatusBar(model));
       void model.refresh();
