@@ -87,6 +87,16 @@ Githor uses the credentials git already has (SSH keys, the system keychain); it 
 
 The current branch with the same marks: `↑2`, `↓3`, `↑1 ↓2`, `✓ in sync`. A click pushes what is ahead, pulls what is behind and publishes a new branch; otherwise it opens the branch picker.
 
+### Accounts
+
+Several accounts (personal, work, a client's GitLab) on one computer, each with the name and email its commits carry. The account on the right of the status bar is the one the repository commits and pushes as; a click switches it, adds one or opens **Manage accounts** (also `⋯` → **Accounts…**).
+
+- **Add account**: GitHub through VS Code's own sign-in (an account already signed in to VS Code, or another one), or for any host an access token or an SSH key. A token is asked in VS Code's own box and kept in its secret storage; the page never sees it.
+- **Which account**: the one chosen for the repository, else the first rule in `githor.accounts.rules` whose `remote` matches (`github.com/northwind/*`, `*` for everything else), else the one used last.
+- **Before a commit** Githor asks when the account differs from the one the rules pick for this remote.
+- **Push rejected**: when the remote refuses the account (403, 404), Githor names another account that can push there and offers **Switch and retry**. A sign-in the remote no longer accepts is marked expired; **Sign in again** retries what was refused.
+- Without an account, git runs as it is: your global name and email, the credentials git already has.
+
 ### Delete all merged branches
 
 `⋯` → **Delete all merged branches…** (or the command of that name) lists the local branches whose work is already in the target, `main` by default. It finds more than `git branch --merged`, which sees only regular merges:
@@ -105,14 +115,14 @@ The refresh button fetches the current branch's remote; `⋯` → **Fetch all** 
 
 ## Requirements
 
-VS Code's built-in Git extension (`git.enabled`). Githor runs the same `git` it found, so your config, credentials and hooks apply. Delete merged branches needs git 2.38 or later for its squash and stack checks (`git merge-tree --write-tree`); with an older git it finds fewer branches, never more.
+VS Code 1.93 or later, and its built-in Git extension (`git.enabled`). Githor runs the same `git` it found, so your config, credentials and hooks apply. Delete merged branches needs git 2.38 or later for its squash and stack checks (`git merge-tree --write-tree`); with an older git it finds fewer branches, never more.
 
 ## How it works
 
-- `src/core/` is pure logic with no `vscode` import, tested against real repositories: `branches.ts` reads `git for-each-ref`, `marks.ts` is the sync language of the design (also imported by the webview), `merged.ts` decides what is merged, `cleanup.ts` deletes and restores, `remote.ts` fetches, `sync.ts` pushes and pulls (`sync-rules.ts` says when they are offered), `branch-ops.ts` creates, renames and deletes one branch, `log.ts` reads the log and one commit, `graph.ts` lays out the lanes (also imported by the webview), `commit-ops.ts` switches to, cherry-picks and reverts commits, `side-by-side.ts` pairs a diff's lines and marks changed words, `file-diff.ts` reads one file's diff, `working.ts` reads and commits the working copy, `commit-groups.ts` builds the commit list's sections and groups, `compare.ts` compares a branch with its remote, `operation.ts` runs a merge or rebase and resolves its files, `conflict.ts` reads conflict markers with your side on the left, `squash.ts` plans and makes a squash, `stash.ts` lists and handles stashes, `tasks.ts` reads Claudestrator's task records, `repos.ts` picks the repository.
-- `src/model.ts` reads the repository once for every view and re-reads when the Git extension reports a change. `src/actions.ts` runs the git operations and logs failures to the **Githor** output channel.
+- `src/core/` is pure logic with no `vscode` import, tested against real repositories: `branches.ts` reads `git for-each-ref`, `marks.ts` is the sync language of the design (also imported by the webview), `merged.ts` decides what is merged, `cleanup.ts` deletes and restores, `remote.ts` fetches, `sync.ts` pushes and pulls (`sync-rules.ts` says when they are offered), `branch-ops.ts` creates, renames and deletes one branch, `log.ts` reads the log and one commit, `graph.ts` lays out the lanes (also imported by the webview), `commit-ops.ts` switches to, cherry-picks and reverts commits, `side-by-side.ts` pairs a diff's lines and marks changed words, `file-diff.ts` reads one file's diff, `working.ts` reads and commits the working copy, `commit-groups.ts` builds the commit list's sections and groups, `compare.ts` compares a branch with its remote, `operation.ts` runs a merge or rebase and resolves its files, `conflict.ts` reads conflict markers with your side on the left, `squash.ts` plans and makes a squash, `stash.ts` lists and handles stashes, `tasks.ts` reads Claudestrator's task records, `repos.ts` picks the repository, `accounts.ts` picks the account for a remote and builds what git gets (identity, an `Authorization` header in `GIT_CONFIG_*`, `core.sshCommand`), `hosting.ts` asks GitHub and GitLab who a token is and whether it can push.
+- `src/model.ts` reads the repository once for every view and re-reads when the Git extension reports a change. `src/account-store.ts` keeps the accounts (tokens in secret storage), `src/account-git.ts` runs git as the repository's account and turns a refusal into an account problem, `src/account-ui.ts` holds the account menu, status bar item and sign-in flows. `src/actions.ts` runs the git operations and logs failures to the **Githor** output channel.
 - `src/branches-view.ts` drives one webview page; `src/sidebar.ts` puts it in the sidebar, `src/panel.ts` in an editor tab. `src/status-bar.ts` and `src/quick-pick.ts` are the status bar item and the branch switcher; `src/git-content.ts` serves files at a commit to VS Code's diff editor.
-- `media/*.ts` are the page's ES modules: `main.ts` (state and events), `branch-list.ts`, `sync-controls.ts` (Sync, Pull, Push and its menu), `branch-menu.ts`, `branch-dialogs.ts` (new, rename, delete), `commit-log.ts`, `commit-details.ts`, `diff-view.ts`, `syntax.ts` (the diff's colours), `commit-view.ts`, `push-review.ts`, `compare-view.ts`, `conflict-view.ts`, `squash-view.ts`, `stash-view.ts`, `chrome.ts` (toolbar, menu, banner, toast), `merged-dialog.ts`, `icons.ts` (the design's icons). `media/app.css` holds the design tokens and components.
+- `media/*.ts` are the page's ES modules: `main.ts` (state and events), `branch-list.ts`, `sync-controls.ts` (Sync, Pull, Push and its menu), `branch-menu.ts`, `branch-dialogs.ts` (new, rename, delete), `commit-log.ts`, `commit-details.ts`, `diff-view.ts`, `syntax.ts` (the diff's colours), `commit-view.ts`, `push-review.ts`, `compare-view.ts`, `conflict-view.ts`, `squash-view.ts`, `stash-view.ts`, `accounts-view.ts`, `chrome.ts` (toolbar, menu, banner, toast), `merged-dialog.ts`, `icons.ts` (the design's icons). `media/app.css` holds the design tokens and components.
 
 ## Develop
 

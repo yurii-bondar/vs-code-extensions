@@ -97,10 +97,11 @@ Built in `githor/`, following the build order below (see `README.md` for what ea
 | 8 | `03`, `23`–`30` | Compare with remote (rebase, merge, force-push), conflict screens with your branch always on the left, Continue, Abort, Undo merge |
 | 9 | `12`–`22` | Squash from the log's selection, its states, the conflict screens in squash wording, Undo; merges, the first commit and another branch's commits included |
 | 10 | `09` | Stash tab, Apply, Rename, Delete with Undo, Stash changes from the Git menu and of the ticked files from the Commit tab |
+| 11 | `45`–`48` | Account menu in the status bar, Manage accounts, Add account (browser, token, SSH), rules by remote, the check before commit, Switch and retry after a refusal, Sign in again, no-account notice; see `accounts-spike.md` |
 
 Left out on purpose, with their reason:
 
-- **Menu items whose screens come later** are not shown dead: `Merge into` and `Rebase onto` another branch (they still lack the confirmation listed in the gaps), `Accounts…` (step 11), `Open settings` (Githor has no settings).
+- **Menu items whose screens come later** are not shown dead: `Merge into` and `Rebase onto` another branch (they still lack the confirmation listed in the gaps), `Open settings` (the one setting, `githor.accounts.rules`, opens from Manage accounts).
 - **Conflicts outside merge and rebase.** A cherry-pick or revert that stops at a conflict is aborted at once, so nothing changes. Pull stays fast-forward only: a diverged branch goes through the compare screen.
 - **Rebase wording** is a gap of the design; the screens say `Rebase paused at a conflict`, `Abort rebase`, and that Continue replays the rest of your commits.
 - **`52 Grouped by repository`.** Githor shows one repository at a time; `Repository` joins the Group by menu once the model holds every open repository.
@@ -108,7 +109,9 @@ Left out on purpose, with their reason:
 - **Squash conflicts are rare.** The squashed commit has the newest selected commit's tree, so the commits after it are put back on the same content; `16`–`22` are reached only when a merge among them has to be flattened.
 - **Search** covers the commits loaded (300 at a time), and the graph draws up to 8 lanes.
 
-`src/core/git.ts` sets `GIT_TERMINAL_PROMPT=0`: push and pull use the credentials git already has (SSH, the keychain), and fail instead of asking. Choosing between accounts is step 11.
+`src/core/git.ts` sets `GIT_TERMINAL_PROMPT=0`: push and pull use the repository's account (step 11), or without one the credentials git already has (SSH, the keychain), and fail instead of asking.
+
+**Not yet checked against a real remote:** a push with the account's header, and what git does after a 401 (whether it falls back to the keychain). It needs a test repository and a throwaway token.
 
 ## Suggested build order
 
