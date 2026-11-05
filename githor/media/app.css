@@ -309,7 +309,6 @@ html, body { height: 100%; margin: 0; padding: 0; background: var(--gt-bg-app); 
 #app { position: relative; display: flex; flex-direction: column; height: 100%; }
 .gt-scope.gt-in-sidebar { --gt-bg-app: var(--gt-bg-rail); }
 .gt-list-pane { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-.gt-in-editor .gt-list-pane { width: min(100%, 640px); border-right: 1px solid var(--gt-border); }
 .gt-toolbar__repo { display: inline-flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; }
 .gt-side-head { display: flex; align-items: center; gap: var(--gt-space-2); padding: 10px 12px; flex: none; border-bottom: 1px solid var(--gt-border); }
 .gt-side-head__branch { display: inline-flex; align-items: center; gap: 6px; flex: 1; min-width: 0; font-weight: var(--gt-weight-strong); }
@@ -396,3 +395,20 @@ html, body { height: 100%; margin: 0; padding: 0; background: var(--gt-bg-app); 
 .gt-select--wide, .gt-select--wide select { width: 100%; }
 .gt-commit-list { margin: 0; padding: 0 0 0 4px; list-style: none; display: flex; flex-direction: column; gap: 2px; font-size: var(--gt-text-sm); }
 .gt-sync--gone.gt-branch__act { --tone: var(--gt-sync-gone); }
+
+/* ---------- commit log (01, 14): rows draw their own slice of the graph ---------- */
+.gt-in-editor #app > .gt-body { flex: 1; min-height: 0; }
+.gt-log-head { flex-wrap: nowrap; }
+.gt-log-head__search { flex: 1; min-width: 120px; }
+.gt-log-head__branch { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--gt-text-sm); }
+.gt-commit { padding-left: 0; }
+.gt-commit__graph { flex: none; overflow: visible; }
+.gt-commit__graph path { fill: none; stroke-width: 1.75; }
+.gt-commit__graph.is-dim { opacity: .35; }
+.gt-commit__nograph { width: 12px; flex: none; }
+.gt-commit__refs .gt-i { margin-right: -1px; }
+.gt-log__more { display: flex; justify-content: center; padding: var(--gt-space-3); }
+.gt-details { overflow: auto; }
+.gt-detail__pick { display: flex; flex-direction: column; gap: 2px; }
+.gt-detail__meta .gt-icon-btn { width: 20px; height: 20px; }
+.gt-file:disabled { cursor: default; }

@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { GIT_SCHEME, GitContentProvider } from './src/git-content';
 import { BranchesPanel } from './src/panel';
 import { pickBranch } from './src/quick-pick';
 import { lazyServices } from './src/services';
@@ -19,8 +20,12 @@ export function activate(context: vscode.ExtensionContext): void {
   };
   const openEditor = (s: Services, request?: HostMessage): void => BranchesPanel.show({ extensionUri: context.extensionUri, ...s, ...(request ? { request } : {}) });
 
+  let git: Services['model']['git'] | undefined;
+  void services().then((s) => (git = s?.model.git));
+
   context.subscriptions.push(
     output,
+    vscode.workspace.registerTextDocumentContentProvider(GIT_SCHEME, new GitContentProvider(() => git)),
     vscode.window.registerWebviewViewProvider(BranchesSidebar.viewId, new BranchesSidebar(context.extensionUri, services)),
     vscode.commands.registerCommand('githor.open', withServices((s) => openEditor(s))),
     vscode.commands.registerCommand('githor.switchBranch', withServices((s) => pickBranch(s.model, s.actions))),

@@ -40,16 +40,16 @@ export function layoutGraph(commits: readonly GraphCommit[]): GraphRow[] {
   };
 
   return commits.map((commit) => {
+    // what reaches this row from above: a tip, which no lane waits for, gets no line from the top
+    const before = [...lanes];
     let lane = lanes.indexOf(commit.sha);
     if (lane === -1) {
       lane = freeLane(-1);
-      lanes[lane] = commit.sha;
       colors[lane] = nextColor++;
     }
     const color = colors[lane] ?? 0;
 
     const up: GraphLine[] = [];
-    const before = [...lanes];
     before.forEach((sha, j) => {
       if (sha === null) return;
       up.push({ from: j, to: sha === commit.sha ? lane : j, color: colors[j] ?? 0 });
@@ -58,6 +58,7 @@ export function layoutGraph(commits: readonly GraphCommit[]): GraphRow[] {
     before.forEach((sha, j) => {
       if (sha === commit.sha) lanes[j] = null;
     });
+    lanes[lane] = null;
 
     const down: GraphLine[] = [];
     commit.parents.forEach((parent, i) => {

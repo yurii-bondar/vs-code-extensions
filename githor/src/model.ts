@@ -30,6 +30,8 @@ export class RepoModel implements vscode.Disposable {
   fetchError: string | null = null;
   defaultBranch: string | null = null;
   busy: BusyView | null = null;
+  /** The commit checked out; null in a repository with no commit yet. */
+  head: string | null = null;
 
   private readonly changed = new vscode.EventEmitter<void>();
   /** Fires after the state changed. */
@@ -86,6 +88,7 @@ export class RepoModel implements vscode.Disposable {
       fetchError: this.fetchError,
       defaultBranch: this.defaultBranch,
       busy: this.busy,
+      head: this.head,
     };
   }
 
@@ -111,9 +114,10 @@ export class RepoModel implements vscode.Disposable {
     const generation = ++this.generation;
     const root = (this.root = pickRepo({ roots: this.roots(), current: this.root }));
     try {
-      const [branches, fetchedAt, main] = root ? await Promise.all([listBranches(this.git, root), lastFetchedAt(this.git, root), defaultBranch(this.git, root)]) : [[], null, null];
+      const head = (root: RepoRoot): Promise<string | null> => this.git.run(root, ['rev-parse', '--verify', '--quiet', 'HEAD']).then((s) => s.trim(), () => null);
+      const [branches, fetchedAt, main, headSha] = root ? await Promise.all([listBranches(this.git, root), lastFetchedAt(this.git, root), defaultBranch(this.git, root), head(root)]) : [[], null, null, null];
       if (generation !== this.generation) return;
-      Object.assign(this, { branches: root ? sortBranches(branches, this.pins(root)) : [], fetchedAt, defaultBranch: main, loaded: true });
+      Object.assign(this, { branches: root ? sortBranches(branches, this.pins(root)) : [], fetchedAt, defaultBranch: main, head: headSha, loaded: true });
       this.changed.fire();
     } catch (e) {
       if (generation === this.generation) this.failed.fire(errorText(e));

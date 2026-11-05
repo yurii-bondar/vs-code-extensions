@@ -46,6 +46,9 @@ test('layoutGraph gives a second tip its own lane and reuses a freed one', () =>
     { sha: 'other', parents: [] },
   ]);
   assert.deepEqual(rows.map((r) => r.lane), [0, 1, 0, 0, 0]);
+  // a tip has no line coming from above it: b1 only sees a2's lane passing
+  assert.deepEqual(rows[1]?.up.map((l) => [l.from, l.to]), [[0, 0]]);
+  assert.deepEqual(rows[0]?.up, []);
 });
 
 test('reachable follows parents among the loaded commits', () => {

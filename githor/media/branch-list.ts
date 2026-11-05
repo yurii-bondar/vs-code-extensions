@@ -39,12 +39,20 @@ function marksHtml(branch: Branch): string {
   return `<span class="gt-marks">${parts.join('')}</span>${tail}`;
 }
 
-function rowHtml(branch: Branch, busy: BusyView | null, menuRef: string | null): string {
+interface RowArgs {
+  busy: BusyView | null;
+  menuRef: string | null;
+  /** The branch highlighted in the log; undefined where rows cannot be selected (the sidebar has no log). */
+  selectedRef?: string | null;
+}
+
+function rowHtml(branch: Branch, { busy, menuRef, selectedRef }: RowArgs): string {
   const ref = esc(branch.ref);
+  const hit = selectedRef === undefined ? '' : `<button class="gt-branch__hit" data-action="selectBranch" data-ref="${ref}" aria-label="Highlight ${esc(branch.name)} in the log"></button>`;
   const more = `<button class="gt-icon-btn gt-branch__more${menuRef === branch.ref ? ' is-open' : ''}" data-action="branchMenu" data-ref="${ref}" title="Branch actions" aria-label="Branch actions" aria-haspopup="menu">${icon('more', 'gt-i--sm')}</button>`;
   const action = `${branch.current ? '' : `<button class="gt-branch__quick" data-action="switch" data-ref="${ref}">Switch</button>`}${more}`;
   const pin = branch.pinned ? `<span class="gt-branch__pin" title="Pinned">${icon('pin', 'gt-i--sm')}</span>` : '';
-  return `<div class="gt-branch${branch.current ? ' is-current' : ''}">
+  return `<div class="gt-branch${branch.current ? ' is-current' : ''}${selectedRef === branch.ref ? ' is-selected' : ''}">${hit}
   <div class="gt-branch__top">
     ${branch.current ? `<span class="gt-branch__cur" title="Current branch">${icon('check', 'gt-i--sm')}</span>` : ''}
     <span class="gt-branch__name" title="${esc(branch.name)}">${nameHtml(branch.name)}</span>
@@ -68,14 +76,16 @@ export interface ListArgs {
   busy: BusyView | null;
   /** The branch whose menu is open. */
   menuRef: string | null;
+  /** See RowArgs. */
+  selectedRef?: string | null;
 }
 
-export function listHtml({ loaded, hasRepo, branches, filter, query, busy, menuRef }: ListArgs): string {
+export function listHtml({ loaded, hasRepo, branches, filter, query, busy, menuRef, selectedRef }: ListArgs): string {
   if (!loaded) return SKELETON.repeat(4);
   if (!hasRepo) return empty({ glyph: icon('folder'), title: 'This folder is not a git repository', text: 'Open a folder that is a git repository.' });
   if (!branches.length) return empty({ glyph: icon('branch'), title: 'No branches yet', text: 'Make the first commit to start one.' });
   const shown = branches.filter((b) => inFilter(b, filter) && matchesQuery(b, query));
-  if (shown.length) return shown.map((b) => rowHtml(b, busy, menuRef)).join('');
+  if (shown.length) return shown.map((b) => rowHtml(b, { busy, menuRef, ...(selectedRef === undefined ? {} : { selectedRef }) })).join('');
   if (query.trim()) {
     const from = branches.find((b) => b.current)?.name;
     return empty({

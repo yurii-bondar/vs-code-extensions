@@ -1,4 +1,4 @@
-import type { Branch, CommitLine, KeptBranch, MergedBranch } from './core/types';
+import type { Branch, CommitDetails, CommitLine, CommitView, FileChange, KeptBranch, MergedBranch } from './core/types';
 
 /** A push, pull, publish or sync that is running, on `ref`; null `ref` for the current branch's sync. */
 export interface BusyView {
@@ -24,6 +24,8 @@ export interface StateView {
   fetchError: string | null;
   defaultBranch: string | null;
   busy: BusyView | null;
+  /** The commit checked out; null before the first commit. */
+  head: string | null;
 }
 
 /** The "Delete all merged branches" dialog for one target. */
@@ -60,7 +62,15 @@ export type ClientMessage =
   | { type: 'deleteInfo'; ref: string }
   | { type: 'deleteBranch'; ref: string; onRemote: boolean }
   | { type: 'pin'; ref: string; pinned: boolean }
-  | { type: 'copyName'; name: string };
+  | { type: 'copyName'; name: string }
+  /** Asks for the newest `limit` commits of the log. */
+  | { type: 'log'; limit: number }
+  | { type: 'commitDetails'; shas: string[] }
+  | { type: 'switchCommit'; sha: string }
+  | { type: 'cherryPick'; shas: string[] }
+  | { type: 'revert'; sha: string }
+  /** Opens a changed file side by side: as it was in `parent` and as it is in `sha`. */
+  | { type: 'openDiff'; sha: string; parent: string | null; file: FileChange };
 
 export type HostMessage =
   | { type: 'state'; state: StateView }
@@ -76,10 +86,19 @@ export type HostMessage =
   | { type: 'deleteInfo'; ref: string; mergedInto: string | null; local: CommitLine[]; remote: CommitLine[] }
   /** A branch dialog's work is done: it closes. */
   | { type: 'branchDone' }
+  | { type: 'log'; commits: CommitView[]; hasMore: boolean; me: string | null }
+  | { type: 'commitDetails'; details: CommitDetails[] }
   | { type: 'error'; text: string };
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
+
+const STATUSES: readonly string[] = ['A', 'M', 'D', 'R', 'C', 'T'];
+function isFileChange(v: unknown): v is FileChange {
+  if (!isRecord(v)) return false;
+  const { status, path, oldPath, add, del, binary } = v;
+  return typeof status === 'string' && STATUSES.includes(status) && nonEmpty(path) && (oldPath === null || nonEmpty(oldPath)) && typeof add === 'number' && typeof del === 'number' && typeof binary === 'boolean';
+}
 
 /** What the webview posted, narrowed once at the edge; null for anything that is not a known message. */
 export function parseClientMessage(raw: unknown): ClientMessage | null {
@@ -114,6 +133,18 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
     }
     case 'deleteBranch':
       return nonEmpty(raw['ref']) && typeof raw['onRemote'] === 'boolean' ? { type: 'deleteBranch', ref: raw['ref'], onRemote: raw['onRemote'] } : null;
+    case 'log':
+      return Number.isInteger(raw['limit']) && (raw['limit'] as number) > 0 ? { type: 'log', limit: raw['limit'] as number } : null;
+    case 'commitDetails':
+    case 'cherryPick':
+      return Array.isArray(raw['shas']) && raw['shas'].length > 0 && raw['shas'].every(nonEmpty) ? { type: raw['type'], shas: raw['shas'] } : null;
+    case 'switchCommit':
+    case 'revert':
+      return nonEmpty(raw['sha']) ? { type: raw['type'], sha: raw['sha'] } : null;
+    case 'openDiff': {
+      const { sha, parent, file } = raw;
+      return nonEmpty(sha) && (parent === null || nonEmpty(parent)) && isFileChange(file) ? { type: 'openDiff', sha, parent, file } : null;
+    }
     case 'pin':
       return nonEmpty(raw['ref']) && typeof raw['pinned'] === 'boolean' ? { type: 'pin', ref: raw['ref'], pinned: raw['pinned'] } : null;
     case 'push': {

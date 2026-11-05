@@ -3,12 +3,17 @@
 // is built once and never re-rendered; a dialog's name field gets its focus and caret back after a render.
 import type { BranchFilter } from '../src/core/marks.js';
 import { BRANCH_FILTERS } from '../src/core/marks.js';
+import { reachable } from '../src/core/graph.js';
+import type { CommitDetails } from '../src/core/types.js';
 import type { HostMessage, StateView } from '../src/protocol.js';
 import { branchDialogHtml, namePrefix } from './branch-dialogs.js';
 import type { BranchDialog } from './branch-dialogs.js';
 import { filtersHtml, listHtml } from './branch-list.js';
 import { branchMenuHtml } from './branch-menu.js';
 import type { BranchMenu } from './branch-menu.js';
+import { detailsHtml } from './commit-details.js';
+import { emptyLog, LOG_PAGE, logHeadHtml, logRowsHtml } from './commit-log.js';
+import type { LogState } from './commit-log.js';
 import { fetchBannerHtml, sidebarFooterHtml, sidebarHeaderHtml, toastHtml, toolbarHtml } from './chrome.js';
 import type { Toast } from './chrome.js';
 import { icon } from './icons.js';
@@ -24,7 +29,7 @@ const place = document.body.dataset['place'] === 'sidebar' ? 'sidebar' : 'editor
 // ---------- state ----------
 
 const saved = restore();
-let state: StateView = { repo: null, branches: [], loaded: false, fetchedAt: null, fetching: false, fetchError: null, defaultBranch: null, busy: null };
+let state: StateView = { repo: null, branches: [], loaded: false, fetchedAt: null, fetching: false, fetchError: null, defaultBranch: null, busy: null, head: null };
 let filter: BranchFilter = BRANCH_FILTERS.includes(saved.filter ?? 'all') ? (saved.filter ?? 'all') : 'all';
 let query = saved.query ?? '';
 /** The Git menu under `⋯` in the toolbar. */
@@ -36,6 +41,13 @@ let branchDialog: BranchDialog | null = null;
 let toast: Toast | null = null;
 let toastTimer: number | undefined;
 let nameTimer: number | undefined;
+/** The editor tab's log and details (`01`); the sidebar has neither. */
+let log: LogState = emptyLog();
+const details = new Map<string, CommitDetails>();
+/** The branch highlighted in the log; null means the current branch. */
+let highlightRef: string | null = null;
+/** What the loaded log was read for: HEAD and every branch tip. A change asks for the log again. */
+let logFor = '';
 
 const keep = (): void => persist({ filter, query });
 const branchOf = (ref: string): StateView['branches'][number] | undefined => state.branches.find((b) => b.ref === ref);
@@ -43,21 +55,33 @@ const branchOf = (ref: string): StateView['branches'][number] | undefined => sta
 // ---------- layout ----------
 
 const app = document.getElementById('app') as HTMLElement;
-app.innerHTML = `
-  <div data-region="top"></div>
-  <div class="gt-list-pane">
+const listPane = `
     <div data-region="banner"></div>
     <div class="gt-pane__head">
       <label class="gt-input">${icon('search', 'gt-i--sm')}<input data-role="query" placeholder="Filter or create a branch" aria-label="Filter or create a branch" spellcheck="false"></label>
       <div class="gt-filters" data-region="filters"></div>
     </div>
-    <div class="gt-scroll" data-region="list"></div>
-    ${place === 'sidebar' ? `<div class="gt-side-foot">${sidebarFooterHtml()}</div>` : ''}
+    <div class="gt-scroll" data-region="list"></div>`;
+app.innerHTML =
+  place === 'sidebar'
+    ? `<div data-region="top"></div>
+  <div class="gt-list-pane">${listPane}<div class="gt-side-foot">${sidebarFooterHtml()}</div></div>
+  <div data-region="overlay"></div>
+  <div data-region="toast"></div>`
+    : `<div data-region="top"></div>
+  <div class="gt-body gt-body--log">
+    <section class="gt-pane gt-pane--rail gt-list-pane" aria-label="Branches">${listPane}</section>
+    <section class="gt-pane" aria-label="Commits"><div class="gt-pane__head" data-region="logHead"></div><div class="gt-scroll" data-region="log"></div></section>
+    <section class="gt-pane gt-details" aria-label="Commit details" data-region="details"></section>
   </div>
   <div data-region="overlay"></div>
   <div data-region="toast"></div>`;
 
-const region = (name: string): HTMLElement => app.querySelector(`[data-region="${name}"]`) as HTMLElement;
+const region = (name: string): HTMLElement | null => app.querySelector(`[data-region="${name}"]`);
+const fill = (name: string, html: string): void => {
+  const el = region(name);
+  if (el) el.innerHTML = html;
+};
 const input = app.querySelector('[data-role="query"]') as HTMLInputElement;
 input.value = query;
 
@@ -74,12 +98,14 @@ function render(): void {
   const role = active?.dataset?.['role'] && active.dataset['role'] !== 'query' ? active.dataset['role'] : null;
   const caret = role ? [active?.selectionStart ?? null, active?.selectionEnd ?? null] : null;
 
-  region('top').innerHTML = place === 'sidebar' ? sidebarHeaderHtml(state, popover) : toolbarHtml(state, { menuOpen, popover });
-  region('banner').innerHTML = fetchBannerHtml(state);
-  region('filters').innerHTML = state.repo && state.branches.length ? filtersHtml(state.branches, filter) : '';
-  region('list').innerHTML = listHtml({ loaded: state.loaded, hasRepo: state.repo !== null, branches: state.branches, filter, query, busy: state.busy, menuRef: branchMenu?.ref ?? null });
-  region('overlay').innerHTML = overlayHtml();
-  region('toast').innerHTML = toastHtml(toast);
+  fill('top', place === 'sidebar' ? sidebarHeaderHtml(state, popover) : toolbarHtml(state, { menuOpen, popover }));
+  fill('banner', fetchBannerHtml(state));
+  fill('filters', state.repo && state.branches.length ? filtersHtml(state.branches, filter) : '');
+  const selectedRef = place === 'editor' ? (highlighted()?.ref ?? null) : undefined;
+  fill('list', listHtml({ loaded: state.loaded, hasRepo: state.repo !== null, branches: state.branches, filter, query, busy: state.busy, menuRef: branchMenu?.ref ?? null, ...(selectedRef === undefined ? {} : { selectedRef }) }));
+  if (place === 'editor') renderLog();
+  fill('overlay', overlayHtml());
+  fill('toast', toastHtml(toast));
 
   placeBranchMenu();
   if (role) {
@@ -87,6 +113,36 @@ function render(): void {
     field?.focus();
     if (field && caret?.[0] != null && caret[1] != null) field.setSelectionRange(caret[0], caret[1]);
   }
+}
+
+/** The branch highlighted in the log: the one picked in the list, else the current one. */
+function highlighted(): StateView['branches'][number] | undefined {
+  return (highlightRef ? branchOf(highlightRef) : undefined) ?? state.branches.find((b) => b.current);
+}
+
+function renderLog(): void {
+  const commits = log.commits ?? [];
+  const branch = highlighted();
+  const highlight = branch ? { name: branch.name, reach: reachable(commits, branch.sha) } : null;
+  fill('logHead', state.repo ? logHeadHtml({ log, highlight }) : '');
+  fill('log', state.repo ? logRowsHtml({ log, head: state.head, highlight }) : '');
+  const onHead = state.head ? reachable(commits, state.head) : new Set<string>();
+  fill('details', state.repo ? detailsHtml({ selected: log.selected, commits, details, me: log.me, head: state.head, onHead, current: state.branches.find((b) => b.current)?.name ?? null }) : '');
+}
+
+/** Asks for the log again when HEAD or a branch tip moved since it was read. */
+function refreshLog(): void {
+  if (place !== 'editor' || !state.repo) return;
+  const key = [state.head ?? '', ...state.branches.map((b) => `${b.ref}=${b.sha}`)].join(' ');
+  if (key === logFor) return;
+  logFor = key;
+  post({ type: 'log', limit: log.limit });
+}
+
+/** Asks for the details of selected commits not read yet. */
+function loadDetails(): void {
+  const missing = log.selected.filter((sha) => !details.has(sha));
+  if (missing.length) post({ type: 'commitDetails', shas: missing });
 }
 
 /** The branch menu sits under its `⋯`, inside the window. Set through the CSSOM: the page allows no inline styles. */
@@ -131,6 +187,14 @@ function checkNameSoon(name: string): void {
 input.addEventListener('input', () => {
   query = input.value;
   keep();
+  render();
+});
+
+/** Searching the log re-renders the rows; the field keeps its focus and caret. */
+app.addEventListener('input', (event) => {
+  const field = event.target as HTMLInputElement;
+  if (field.dataset['role'] !== 'logQuery') return;
+  log = { ...log, query: field.value };
   render();
 });
 
@@ -226,6 +290,45 @@ document.addEventListener('click', (event) => {
     return;
   }
   switch (action) {
+    case 'selectCommit': {
+      const sha = el?.dataset['sha'] ?? '';
+      const adding = event.metaKey || event.ctrlKey;
+      const selected = adding ? (log.selected.includes(sha) ? log.selected.filter((s) => s !== sha) : [...log.selected, sha]) : [sha];
+      log = { ...log, selected };
+      loadDetails();
+      break;
+    }
+    case 'selectBranch':
+      highlightRef = ref;
+      break;
+    case 'onlyMine':
+      log = { ...log, onlyMine: !log.onlyMine };
+      break;
+    case 'moreCommits':
+      log = { ...log, limit: log.limit + LOG_PAGE };
+      post({ type: 'log', limit: log.limit });
+      break;
+    case 'switchCommit':
+      post({ type: 'switchCommit', sha: el?.dataset['sha'] ?? '' });
+      break;
+    case 'cherryPick':
+      post({ type: 'cherryPick', shas: [el?.dataset['sha'] ?? ''] });
+      break;
+    case 'cherryPickAll':
+      post({ type: 'cherryPick', shas: log.selected });
+      break;
+    case 'revert':
+      post({ type: 'revert', sha: el?.dataset['sha'] ?? '' });
+      break;
+    case 'copySha':
+      post({ type: 'copyName', name: el?.dataset['sha'] ?? '' });
+      break;
+    case 'openDiff': {
+      const d = details.get(el?.dataset['sha'] ?? '');
+      const file = d?.files.find((f) => f.path === el?.dataset['path']);
+      if (d && file) post({ type: 'openDiff', sha: d.sha, parent: d.parent, file });
+      return;
+    }
     case 'filter':
       filter = (el?.dataset['filter'] as BranchFilter | undefined) ?? 'all';
       keep();
@@ -384,6 +487,20 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
     case 'state':
       state = message.state;
       if (branchMenu && !branchOf(branchMenu.ref)) branchMenu = null;
+      if (highlightRef && !branchOf(highlightRef)) highlightRef = null;
+      refreshLog();
+      break;
+    case 'log': {
+      const known = new Set(message.commits.map((c) => c.sha));
+      const kept = log.selected.filter((sha) => known.has(sha));
+      // the first read selects the commit checked out, as the design opens
+      const selected = log.commits === null && !kept.length && state.head && known.has(state.head) ? [state.head] : kept;
+      log = { ...log, commits: message.commits, hasMore: message.hasMore, me: message.me, selected };
+      loadDetails();
+      break;
+    }
+    case 'commitDetails':
+      for (const d of message.details) details.set(d.sha, d);
       break;
     case 'openDeleteMerged':
       openMerged();

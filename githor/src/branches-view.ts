@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as crypto from 'crypto';
+import { gitUri } from './git-content';
 import { parseClientMessage } from './protocol';
 import type { Actions } from './actions';
 import type { RepoModel } from './model';
@@ -68,6 +69,15 @@ export class BranchesView implements vscode.Disposable {
     this.post({ type: 'toast', text, undo });
   }
 
+  /** A changed file side by side in VS Code's diff editor: before on the left, the commit on the right. */
+  private async openDiff({ sha, parent, file }: Extract<ClientMessage, { type: 'openDiff' }>): Promise<void> {
+    const root = this.model.root;
+    if (!root) return;
+    const left = gitUri({ root, ref: file.status === 'A' ? null : parent, path: file.oldPath ?? file.path });
+    const right = gitUri({ root, ref: file.status === 'D' ? null : sha, path: file.path });
+    await vscode.commands.executeCommand('vscode.diff', left, right, `${file.path} (${sha.slice(0, 7)})`, { preview: true });
+  }
+
   private sendState(): void {
     if (this.ready) this.post({ type: 'state', state: this.model.state() });
   }
@@ -128,6 +138,20 @@ export class BranchesView implements vscode.Disposable {
         return;
       case 'pin':
         return this.actions.pin(message.ref, message.pinned);
+      case 'log':
+        this.post({ type: 'log', ...(await this.actions.commitLog(message.limit)) });
+        return;
+      case 'commitDetails':
+        this.post({ type: 'commitDetails', details: await this.actions.commitDetails(message.shas) });
+        return;
+      case 'switchCommit':
+        return this.toast(this.actions.switchCommit(message.sha));
+      case 'cherryPick':
+        return this.toast(this.actions.cherryPick(message.shas));
+      case 'revert':
+        return this.toast(this.actions.revert(message.sha));
+      case 'openDiff':
+        return this.openDiff(message);
       case 'copyName':
         await vscode.env.clipboard.writeText(message.name);
         this.post({ type: 'toast', text: `Copied ${message.name}`, undo: null });

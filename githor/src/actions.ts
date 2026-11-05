@@ -1,12 +1,14 @@
 import * as vscode from 'vscode';
 import { createBranch, deleteBranch, deleteOnRemote, nameProblem, onlyHere, renameBranch } from './core/branch-ops';
 import { switchBranch } from './core/branches';
+import { cherryPick, ConflictError, resetTo, revertCommit, switchToCommit } from './core/commit-ops';
+import { commitDetails, readLog, userEmail } from './core/log';
 import { deleteBranches, restoreBranches } from './core/cleanup';
 import { isMergedInto, mergeTargets, scanMerged } from './core/merged';
 import { fetchRemotes } from './core/remote';
 import { publish, pull, push, remoteOnlyCommits } from './core/sync';
 import { cannotPull, cannotPush } from './core/sync-rules';
-import type { Branch, CommitLine, MergedBranch, RepoRoot } from './core/types';
+import type { Branch, CommitDetails, CommitLine, CommitView, MergedBranch, RepoRoot } from './core/types';
 import type { RepoModel } from './model';
 import type { BusyView, MergedView } from './protocol';
 
@@ -288,5 +290,62 @@ export class Actions {
 
   async pin(ref: string, pinned: boolean): Promise<void> {
     await this.model.setPinned(this.branch(ref).name, pinned);
+  }
+
+  // ---------- the commit log (01, 14) ----------
+
+  async commitLog(limit: number): Promise<{ commits: CommitView[]; hasMore: boolean; me: string | null }> {
+    const root = this.root();
+    const [log, me] = await Promise.all([readLog({ git: this.model.git, root, limit }), userEmail(this.model.git, root)]);
+    return { ...log, me };
+  }
+
+  commitDetails(shas: readonly string[]): Promise<CommitDetails[]> {
+    return Promise.all(shas.map((sha) => commitDetails(this.model.git, this.root(), sha)));
+  }
+
+  async switchCommit(sha: string): Promise<Outcome> {
+    try {
+      await switchToCommit(this.model.git, this.root(), sha);
+    } catch (e) {
+      this.log(`Switch to ${sha.slice(0, 7)}`, e);
+      throw e;
+    } finally {
+      await this.model.refresh();
+    }
+    return { text: `Switched to ${sha.slice(0, 7)}, on no branch. Create a branch here to keep work made on it.`, undo: null };
+  }
+
+  /** Cherry-picks onto the current branch; Undo moves the branch back. A conflict aborts and changes nothing. */
+  async cherryPick(shas: readonly string[]): Promise<Outcome> {
+    const root = this.root();
+    const onto = this.model.current?.name ?? 'HEAD';
+    const before = await this.applying(`Cherry-pick ${shas.length} onto ${onto}`, () => cherryPick(this.model.git, root, shas));
+    return { text: `Cherry-picked ${commits(shas.length)} onto ${onto}`, undo: this.undoReset(root, before, onto) };
+  }
+
+  async revert(sha: string): Promise<Outcome> {
+    const root = this.root();
+    const onto = this.model.current?.name ?? 'HEAD';
+    const before = await this.applying(`Revert ${sha.slice(0, 7)}`, () => revertCommit(this.model.git, root, sha));
+    return { text: `Reverted ${sha.slice(0, 7)} on ${onto}`, undo: this.undoReset(root, before, onto) };
+  }
+
+  private async applying(what: string, run: () => Promise<string>): Promise<string> {
+    try {
+      return await run();
+    } catch (e) {
+      this.log(what, e);
+      throw e instanceof ConflictError ? new Error(`${e.message} Resolving conflicts comes with the merge screens.`) : e;
+    } finally {
+      await this.model.refresh();
+    }
+  }
+
+  private undoReset(root: RepoRoot, sha: string, branch: string): number {
+    return this.remember(async () => {
+      await resetTo(this.model.git, root, sha);
+      return `${branch} is back at ${sha.slice(0, 7)}`;
+    });
   }
 }
