@@ -351,6 +351,7 @@
     tm.value = p.themeMode;
     $('option[value="current"]', tm).textContent = `Only "${p.theme}"`;
     $$('.target-chip', app).forEach((el) => (el.innerHTML = targetChip()));
+    $$('.theme-note', app).forEach((el) => el.classList.toggle('hidden', p.themeMode !== 'current'));
   }
 
   const targetChip = (): string =>
@@ -359,6 +360,12 @@
       : '';
 
   // ---------- appearance ----------
+
+  // VS Code nests only color customizations under "[Theme]"; fonts and sizes are plain settings.
+  const themeNote = (area: Area): string =>
+    area.groups.some((g) => g.items.some((i) => i.kind === 'setting'))
+      ? `<div class="theme-note muted small ${S.prefs?.themeMode === 'current' ? '' : 'hidden'}">Fonts, sizes and other settings here apply to every theme: VS Code keeps only colors per theme.</div>`
+      : '';
 
   function settingControl(item: SettingItem): string {
     switch (item.type) {
@@ -411,7 +418,7 @@
         </aside>
         <div class="content">
           <div class="content-head">
-            <div><h2>${esc(area.title)}</h2><p>${esc(area.desc)}</p><div class="target-chip">${targetChip()}</div></div>
+            <div><h2>${esc(area.title)}</h2><p>${esc(area.desc)}</p><div class="target-chip">${targetChip()}</div>${themeNote(area)}</div>
             <div class="actions">
               <button class="btn secondary" data-action="open-settings-json">Open settings.json</button>
               <button class="btn secondary" data-action="reset-area">Reset ${esc(area.title.toLowerCase())}</button>
