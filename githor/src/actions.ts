@@ -2,13 +2,14 @@ import * as vscode from 'vscode';
 import { createBranch, deleteBranch, deleteOnRemote, nameProblem, onlyHere, renameBranch } from './core/branch-ops';
 import { switchBranch } from './core/branches';
 import { cherryPick, ConflictError, resetTo, revertCommit, switchToCommit } from './core/commit-ops';
+import { fileDiff } from './core/file-diff';
 import { commitDetails, readLog, userEmail } from './core/log';
 import { deleteBranches, restoreBranches } from './core/cleanup';
 import { isMergedInto, mergeTargets, scanMerged } from './core/merged';
 import { fetchRemotes } from './core/remote';
 import { publish, pull, push, remoteOnlyCommits } from './core/sync';
 import { cannotPull, cannotPush } from './core/sync-rules';
-import type { Branch, CommitDetails, CommitLine, CommitView, MergedBranch, RepoRoot } from './core/types';
+import type { Branch, CommitDetails, CommitLine, CommitView, FileChange, FileDiff, MergedBranch, RepoRoot } from './core/types';
 import type { RepoModel } from './model';
 import type { BusyView, MergedView } from './protocol';
 
@@ -302,6 +303,10 @@ export class Actions {
 
   commitDetails(shas: readonly string[]): Promise<CommitDetails[]> {
     return Promise.all(shas.map((sha) => commitDetails(this.model.git, this.root(), sha)));
+  }
+
+  fileDiff(args: { sha: string; parent: string | null; file: FileChange }): Promise<FileDiff> {
+    return fileDiff(this.model.git, this.root(), args);
   }
 
   async switchCommit(sha: string): Promise<Outcome> {

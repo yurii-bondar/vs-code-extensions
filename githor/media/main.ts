@@ -12,6 +12,8 @@ import { filtersHtml, listHtml } from './branch-list.js';
 import { branchMenuHtml } from './branch-menu.js';
 import type { BranchMenu } from './branch-menu.js';
 import { detailsHtml } from './commit-details.js';
+import { diffFilesHtml, diffPaneHtml } from './diff-view.js';
+import type { DiffState } from './diff-view.js';
 import { emptyLog, LOG_PAGE, logHeadHtml, logRowsHtml } from './commit-log.js';
 import type { LogState } from './commit-log.js';
 import { fetchBannerHtml, sidebarFooterHtml, sidebarHeaderHtml, toastHtml, toolbarHtml } from './chrome.js';
@@ -48,6 +50,8 @@ const details = new Map<string, CommitDetails>();
 let highlightRef: string | null = null;
 /** What the loaded log was read for: HEAD and every branch tip. A change asks for the log again. */
 let logFor = '';
+/** The side-by-side diff (`02`) that replaces the log while a file is open. */
+let diffView: DiffState | null = null;
 
 const keep = (): void => persist({ filter, query });
 const branchOf = (ref: string): StateView['branches'][number] | undefined => state.branches.find((b) => b.ref === ref);
@@ -73,6 +77,10 @@ app.innerHTML =
     <section class="gt-pane gt-pane--rail gt-list-pane" aria-label="Branches">${listPane}</section>
     <section class="gt-pane" aria-label="Commits"><div class="gt-pane__head" data-region="logHead"></div><div class="gt-scroll" data-region="log"></div></section>
     <section class="gt-pane gt-details" aria-label="Commit details" data-region="details"></section>
+  </div>
+  <div class="gt-body gt-body--diff" hidden>
+    <section class="gt-pane gt-pane--rail" aria-label="Changed files" data-region="diffFiles"></section>
+    <section class="gt-pane" aria-label="Diff" data-region="diffPane"></section>
   </div>
   <div data-region="overlay"></div>
   <div data-region="toast"></div>`;
@@ -103,7 +111,10 @@ function render(): void {
   fill('filters', state.repo && state.branches.length ? filtersHtml(state.branches, filter) : '');
   const selectedRef = place === 'editor' ? (highlighted()?.ref ?? null) : undefined;
   fill('list', listHtml({ loaded: state.loaded, hasRepo: state.repo !== null, branches: state.branches, filter, query, busy: state.busy, menuRef: branchMenu?.ref ?? null, ...(selectedRef === undefined ? {} : { selectedRef }) }));
-  if (place === 'editor') renderLog();
+  if (place === 'editor') {
+    renderLog();
+    renderDiff();
+  }
   fill('overlay', overlayHtml());
   fill('toast', toastHtml(toast));
 
@@ -118,6 +129,25 @@ function render(): void {
 /** The branch highlighted in the log: the one picked in the list, else the current one. */
 function highlighted(): StateView['branches'][number] | undefined {
   return (highlightRef ? branchOf(highlightRef) : undefined) ?? state.branches.find((b) => b.current);
+}
+
+function renderDiff(): void {
+  const logBody = app.querySelector<HTMLElement>('.gt-body--log');
+  const diffBody = app.querySelector<HTMLElement>('.gt-body--diff');
+  if (logBody) logBody.hidden = diffView !== null;
+  if (diffBody) diffBody.hidden = diffView === null;
+  if (!diffView) return;
+  fill('diffFiles', diffFilesHtml(diffView, details.get(diffView.sha)));
+  fill('diffPane', diffPaneHtml(diffView));
+}
+
+/** Opens one file of a commit side by side and asks for it. */
+function openFile(sha: string, path: string): void {
+  const d = details.get(sha);
+  const file = d?.files.find((f) => f.path === path);
+  if (!d || !file) return;
+  diffView = { sha, path, diff: null };
+  post({ type: 'fileDiff', sha, parent: d.parent, file });
 }
 
 function renderLog(): void {
@@ -323,12 +353,19 @@ document.addEventListener('click', (event) => {
     case 'copySha':
       post({ type: 'copyName', name: el?.dataset['sha'] ?? '' });
       break;
-    case 'openDiff': {
-      const d = details.get(el?.dataset['sha'] ?? '');
-      const file = d?.files.find((f) => f.path === el?.dataset['path']);
+    case 'openDiff':
+    case 'openFileDiff':
+      openFile(el?.dataset['sha'] ?? '', el?.dataset['path'] ?? '');
+      break;
+    case 'openInEditorDiff': {
+      const d = diffView && details.get(diffView.sha);
+      const file = d?.files.find((f) => f.path === diffView?.path);
       if (d && file) post({ type: 'openDiff', sha: d.sha, parent: d.parent, file });
       return;
     }
+    case 'backToLog':
+      diffView = null;
+      break;
     case 'filter':
       filter = (el?.dataset['filter'] as BranchFilter | undefined) ?? 'all';
       keep();
@@ -474,6 +511,7 @@ document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
   if (mergedDialog && !mergedDialog.deleting) mergedDialog = null;
   else if (branchDialog && !branchDialog.busy) branchDialog = null;
+  else if (diffView && !popover && !branchMenu && !menuOpen) diffView = null;
   else if (popover) popover = null;
   else if (branchMenu) branchMenu = null;
   else if (menuOpen) menuOpen = false;
@@ -501,6 +539,9 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
     }
     case 'commitDetails':
       for (const d of message.details) details.set(d.sha, d);
+      break;
+    case 'fileDiff':
+      if (diffView?.sha === message.diff.sha && diffView.path === message.diff.path) diffView = { ...diffView, diff: message.diff };
       break;
     case 'openDeleteMerged':
       openMerged();

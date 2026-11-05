@@ -1,4 +1,4 @@
-import type { Branch, CommitDetails, CommitLine, CommitView, FileChange, KeptBranch, MergedBranch } from './core/types';
+import type { Branch, CommitDetails, CommitLine, CommitView, FileChange, FileDiff, KeptBranch, MergedBranch } from './core/types';
 
 /** A push, pull, publish or sync that is running, on `ref`; null `ref` for the current branch's sync. */
 export interface BusyView {
@@ -69,8 +69,10 @@ export type ClientMessage =
   | { type: 'switchCommit'; sha: string }
   | { type: 'cherryPick'; shas: string[] }
   | { type: 'revert'; sha: string }
-  /** Opens a changed file side by side: as it was in `parent` and as it is in `sha`. */
-  | { type: 'openDiff'; sha: string; parent: string | null; file: FileChange };
+  /** Opens a changed file in VS Code's diff editor: as it was in `parent` and as it is in `sha`. */
+  | { type: 'openDiff'; sha: string; parent: string | null; file: FileChange }
+  /** Asks for a changed file side by side, for the page's own diff (`02`). */
+  | { type: 'fileDiff'; sha: string; parent: string | null; file: FileChange };
 
 export type HostMessage =
   | { type: 'state'; state: StateView }
@@ -88,6 +90,7 @@ export type HostMessage =
   | { type: 'branchDone' }
   | { type: 'log'; commits: CommitView[]; hasMore: boolean; me: string | null }
   | { type: 'commitDetails'; details: CommitDetails[] }
+  | { type: 'fileDiff'; diff: FileDiff }
   | { type: 'error'; text: string };
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -141,9 +144,10 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
     case 'switchCommit':
     case 'revert':
       return nonEmpty(raw['sha']) ? { type: raw['type'], sha: raw['sha'] } : null;
-    case 'openDiff': {
+    case 'openDiff':
+    case 'fileDiff': {
       const { sha, parent, file } = raw;
-      return nonEmpty(sha) && (parent === null || nonEmpty(parent)) && isFileChange(file) ? { type: 'openDiff', sha, parent, file } : null;
+      return nonEmpty(sha) && (parent === null || nonEmpty(parent)) && isFileChange(file) ? { type: raw['type'], sha, parent, file } : null;
     }
     case 'pin':
       return nonEmpty(raw['ref']) && typeof raw['pinned'] === 'boolean' ? { type: 'pin', ref: raw['ref'], pinned: raw['pinned'] } : null;

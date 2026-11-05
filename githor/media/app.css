@@ -412,3 +412,13 @@ html, body { height: 100%; margin: 0; padding: 0; background: var(--gt-bg-app); 
 .gt-detail__pick { display: flex; flex-direction: column; gap: 2px; }
 .gt-detail__meta .gt-icon-btn { width: 20px; height: 20px; }
 .gt-file:disabled { cursor: default; }
+
+/* ---------- side-by-side diff (02) ---------- */
+.gt-body[hidden] { display: none; }
+.gt-diff-back { align-self: flex-start; margin-left: -8px; }
+.gt-diff-files__subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gt-diff-file { display: flex; align-items: center; gap: 6px; height: 36px; padding: 0 12px; flex: none; border-bottom: 1px solid var(--gt-border); }
+.gt-diff-file .gt-file__stat { margin-left: 4px; }
+.gt-diff__row > .gt-diff__hunk { grid-column: 1 / -1; }
+.gt-diff__num.gt-cell--del, .gt-diff__num.gt-cell--add { background-image: none; }
+.gt-cell--none { background-image: none; background: var(--gt-bg-subtle); }

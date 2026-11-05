@@ -152,6 +152,9 @@ export class BranchesView implements vscode.Disposable {
         return this.toast(this.actions.revert(message.sha));
       case 'openDiff':
         return this.openDiff(message);
+      case 'fileDiff':
+        this.post({ type: 'fileDiff', diff: await this.actions.fileDiff(message) });
+        return;
       case 'copyName':
         await vscode.env.clipboard.writeText(message.name);
         this.post({ type: 'toast', text: `Copied ${message.name}`, undo: null });
