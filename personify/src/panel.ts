@@ -70,7 +70,10 @@ export class PersonifyPanel {
     vscode.workspace.onDidChangeConfiguration(
       (e) => {
         if (WATCHED_KEYS.some((k) => e.affectsConfiguration(k))) this.schedule('state', () => this.pushState());
-        if (e.affectsConfiguration('personify.keybindingsPath')) this.watchKeybindings();
+        if (e.affectsConfiguration('personify.keybindingsPath')) {
+          this.watchKeybindings();
+          void this.pushKeybindings();
+        }
       },
       null,
       this.disposables
