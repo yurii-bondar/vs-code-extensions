@@ -26,6 +26,10 @@ Screens are numbered by the order they were designed, not by the order a user me
 | | `10 Push` | Commit-and-push screen with the commits to send |
 | | `11 Push states` | Push menu, force-push, `Push tags`, new branch on origin |
 | | `44 Synced` | After `Sync`: branch in sync, `Push` disabled |
+| | `49 Commit, unversioned files` | The file list in two sections, `Changes` and `Unversioned Files`, ungrouped |
+| | `50 Commit, group by menu` | The `Group by` button's menu: `Directory`, `Repository`, `Ungroup` |
+| | `51 Commit, grouped by directory` | Each section as a tree of directories |
+| | `52 Commit, grouped by repository` | Several repositories in one commit, each on its own branch |
 | Squash | `12 Squash`, `13 Squash states` | Squash screen and its variants |
 | | `15 Log after squash` | Result, with `Undo` |
 | | `16 Squash conflict` | Paused at a conflict |
@@ -141,6 +145,19 @@ Commits only on this branch, for the warning in `34`: `git log <branch> --not --
 - `Also delete them on origin` is off by default. Its text names which branches are affected.
 - `Undo` restores local branches from remembered shas.
 
+### Commit file list: sections and grouping
+
+`04` draws a flat list. `49`–`52` replace its file list; the composer and the diff stay as they are.
+
+- **Sections.** `Changes` holds tracked files, `Unversioned Files` the untracked ones, each with a count. From `git status --porcelain=v2 -z`: entries `1` and `2` (renames) go to `Changes`, entries `?` to `Unversioned Files`, `!` (ignored) to neither. Unmerged entries `u` belong to the conflict screens, not here.
+- **Status letters.** `A` added, `M` modified, `D` deleted, `R` renamed in `Changes`; `U` in `Unversioned Files`.
+- **Ticking.** A ticked file goes into the commit. Unversioned files start unticked, so a stray file never slips in; ticking one means `git add` at commit time. A section, directory or repository row has a three-state box: all, some (the dash), none. Ticking it ticks everything under it.
+- **Group by.** The icon button before `Stash…` opens a menu with `Directory` and `Repository`. Both can be on at once, repository first, then directory. `Ungroup` turns both off. The button is highlighted while a grouping is on. The choice is Githor's own state, in `workspaceState`, like `Pin`.
+- **Directory** (`51`): a row per directory with a folder icon and a count, files indented under it without their directory. One level per directory path, not one per path segment: `src/core` is one row. Each section is grouped on its own.
+- **Repository** (`52`): a row per repository with its name, count and branch, for a workspace with several repositories. One message is committed in each repository that has ticked files, on that repository's current branch, and `Commit to` says how many. This needs the model to hold every open repository, not only the active one; until then `Repository` is hidden when one repository is open.
+- **Counts.** `3 of 4 files in this commit` counts ticked files across sections and repositories.
+- Collapsing a section or directory with its chevron is drawn expanded only; collapsed rows show the same row with the chevron pointing right.
+
 ### Conflicts
 
 Merge and squash share one flow: find conflicts, show a side-by-side, resolve, continue or abort.
@@ -185,6 +202,8 @@ Not designed yet:
 - Several conflicts or several files, only one of each is drawn
 - `Cherry-pick 2`, which has a button and no screen
 - Pull rejected because of local changes
+- Collapsed state of a section or directory in the commit list (`49`–`52` show them expanded)
+- A commit across repositories where one repository fails, such as a hook rejecting it
 - Long branch names in `Accept {branch}` buttons; I would truncate in the middle and show the full name in a tooltip
 
 Prototype gaps, not product gaps:
