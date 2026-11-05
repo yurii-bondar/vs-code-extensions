@@ -1,5 +1,5 @@
-// The menu on a branch, opened with `⋯` on its row (design `31`, `32`). Items whose screens are not built yet (Compare
-// with remote, Merge into, Rebase onto) are left out rather than shown dead.
+// The menu on a branch, opened with `⋯` on its row (design `31`, `32`). Merge into and Rebase onto another branch
+// are left out until they have a confirmation (a gap in the design), rather than shown dead.
 import { cannotPull, cannotPush } from '../src/core/sync-rules.js';
 import type { Branch } from '../src/core/types.js';
 import { icon } from './icons.js';
@@ -39,6 +39,7 @@ export function branchMenuHtml(branch: Branch, { defaultBranch }: { defaultBranc
       parts.push(item({ action: 'pull', ref, label: `Pull${branch.behind ? ` ${branch.behind}` : ''}`, why: cannotPull(branch) }));
       parts.push(item({ action: 'push', ref, label: `Push${branch.ahead ? ` ${branch.ahead}` : ''}`, why: cannotPush(branch) }));
       parts.push(item({ action: 'syncBranch', ref, label: 'Sync', why: cannotPull(branch) }));
+      parts.push(item({ action: 'compare', ref, label: 'Compare with remote', why: branch.ahead || branch.behind ? null : 'Nothing differs: the branch is in sync.' }));
     }
     parts.push(SEP);
     parts.push(item({ action: 'renameBranch', ref, label: 'Rename…' }));

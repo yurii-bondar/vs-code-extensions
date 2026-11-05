@@ -55,8 +55,23 @@ ${syncButtonsHtml({ state, popover, compact: true })}`;
 
 export const sidebarFooterHtml = (): string => `<button class="gt-footer-link" data-action="openEditor">${icon('file')}Open in editor</button>`;
 
-/** Shown while the last fetch failed: the list may be behind origin. */
-export function fetchBannerHtml(state: StateView): string {
+/** Shown while a merge or rebase is paused (design `08`, Merge in progress). */
+function operationBannerHtml(op: NonNullable<StateView['operation']>, place: 'editor' | 'sidebar'): string {
+  const files = op.conflicted.length + op.staged.length;
+  const what = op.kind === 'merge' ? `Merging ${esc(op.remote)} into this branch` : `Rebasing this branch onto ${esc(op.remote)}`;
+  const state = op.conflicted.length ? `${op.conflicted.length} of ${files} files conflict.` : 'Every conflict is resolved.';
+  return `<div class="gt-fetch-failed">
+  <div class="gt-banner"><span class="gt-banner__icon">${icon('warn')}</span><span>${what}: ${state}</span></div>
+  <div class="gt-pane__row">
+    ${place === 'sidebar' ? '<button class="gt-btn gt-btn--primary" data-action="openEditor">Resolve side by side</button>' : ''}
+    <button class="gt-btn gt-btn--danger" data-action="abortOperation">Abort ${op.kind}</button>
+  </div>
+</div>`;
+}
+
+/** Shown while the last fetch failed (the list may be behind origin), or while a merge or rebase is paused. */
+export function fetchBannerHtml(state: StateView, place: 'editor' | 'sidebar' = 'sidebar'): string {
+  if (state.operation) return operationBannerHtml(state.operation, place);
   if (!state.fetchError) return '';
   const since = state.fetchedAt === null ? 'never fetched' : fetchedAgo(state.fetchedAt).replace(/^Fetched /, 'from ');
   return `<div class="gt-fetch-failed">

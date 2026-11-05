@@ -34,7 +34,7 @@ function marksHtml(branch: Branch): string {
     end === 'in-sync'
       ? `<span class="gt-insync">${icon('check', 'gt-i--sm')}in sync</span>`
       : end === 'diverged'
-        ? `<span class="gt-diverged" title="Local and remote both moved: ${ahead} to push, ${behind} to pull">${icon('diverge', 'gt-i--sm')}</span>`
+        ? `<button class="gt-diverged" data-action="compare" data-ref="${esc(branch.ref)}" title="Local and remote both moved: ${ahead} to push, ${behind} to pull. Compare them" aria-label="Compare ${esc(branch.name)} with its remote">${icon('diverge', 'gt-i--sm')}</button>`
         : '';
   return `<span class="gt-marks">${parts.join('')}</span>${tail}`;
 }

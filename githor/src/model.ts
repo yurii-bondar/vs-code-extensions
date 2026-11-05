@@ -3,10 +3,11 @@ import * as path from 'path';
 import { defaultBranch, listBranches, sortBranches } from './core/branches';
 import { lastFetchedAt } from './core/remote';
 import { pickRepo } from './core/repos';
+import { readOperation } from './core/operation';
 import { readWorking } from './core/working';
 import type { Grouping } from './core/commit-groups';
 import type { GitRunner } from './core/git';
-import type { Branch, RepoRoot, WorkingFile } from './core/types';
+import type { Branch, OperationView, RepoRoot, WorkingFile } from './core/types';
 import type { API, Repository } from './git-api';
 import type { BusyView, StateView } from './protocol';
 
@@ -36,6 +37,8 @@ export class RepoModel implements vscode.Disposable {
   head: string | null = null;
   /** What the working copy changed since the last commit. */
   working: WorkingFile[] = [];
+  /** The merge or rebase in progress, if any. */
+  operation: OperationView | null = null;
 
   private readonly changed = new vscode.EventEmitter<void>();
   /** Fires after the state changed. */
@@ -95,6 +98,7 @@ export class RepoModel implements vscode.Disposable {
       head: this.head,
       working: this.working,
       grouping: this.grouping(),
+      operation: this.operation,
     };
   }
 
@@ -121,11 +125,11 @@ export class RepoModel implements vscode.Disposable {
     const root = (this.root = pickRepo({ roots: this.roots(), current: this.root }));
     try {
       const head = (root: RepoRoot): Promise<string | null> => this.git.run(root, ['rev-parse', '--verify', '--quiet', 'HEAD']).then((s) => s.trim(), () => null);
-      const [branches, fetchedAt, main, headSha, working] = root
-        ? await Promise.all([listBranches(this.git, root), lastFetchedAt(this.git, root), defaultBranch(this.git, root), head(root), readWorking(this.git, root)])
-        : [[], null, null, null, []];
+      const [branches, fetchedAt, main, headSha, working, operation] = root
+        ? await Promise.all([listBranches(this.git, root), lastFetchedAt(this.git, root), defaultBranch(this.git, root), head(root), readWorking(this.git, root), readOperation(this.git, root)])
+        : [[], null, null, null, [], null];
       if (generation !== this.generation) return;
-      Object.assign(this, { branches: root ? sortBranches(branches, this.pins(root)) : [], fetchedAt, defaultBranch: main, head: headSha, working, loaded: true });
+      Object.assign(this, { branches: root ? sortBranches(branches, this.pins(root)) : [], fetchedAt, defaultBranch: main, head: headSha, working, operation, loaded: true });
       this.changed.fire();
     } catch (e) {
       if (generation === this.generation) this.failed.fire(errorText(e));

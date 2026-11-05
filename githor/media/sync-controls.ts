@@ -27,10 +27,11 @@ export function syncButtonsHtml({ state, popover, compact }: { state: StateView;
   if (!branch) return '';
   const busy = state.busy;
   const running = (action: BusyView['action']): boolean => busy?.action === action && (busy.ref === null || busy.ref === branch.ref);
-  const anyBusy = busy !== null;
+  const blocked = state.operation ? `Finish or abort the ${state.operation.kind} first.` : busy ? 'Busy…' : null;
+  const anyBusy = blocked !== null;
 
-  const pullWhy = anyBusy ? 'Busy…' : cannotPull(branch);
-  const syncWhy = anyBusy ? 'Busy…' : isNew(branch) ? null : cannotPull(branch);
+  const pullWhy = blocked ?? cannotPull(branch);
+  const syncWhy = blocked ?? (isNew(branch) ? null : cannotPull(branch));
   const pull = `<button class="gt-btn" data-action="pull" data-ref="${esc(branch.ref)}"${attr(pullWhy)}>${spinOr(running('pull'), 'pull')}Pull${branch.behind ? ` ${branch.behind}` : ''}</button>`;
   const sync = compact
     ? `<button class="gt-icon-btn" data-action="sync" title="${esc(syncWhy ?? 'Sync: pull, then push')}" aria-label="Sync"${syncWhy ? ' disabled' : ''}>${spinOr(running('sync'), 'diverge')}</button>`
@@ -38,9 +39,9 @@ export function syncButtonsHtml({ state, popover, compact }: { state: StateView;
 
   let push: string;
   if (isNew(branch)) {
-    push = `<button class="gt-btn gt-btn--primary" data-action="publishCard" data-ref="${esc(branch.ref)}"${attr(anyBusy ? 'Busy…' : null)}>${spinOr(running('publish'), 'push')}Publish</button>`;
+    push = `<button class="gt-btn gt-btn--primary" data-action="publishCard" data-ref="${esc(branch.ref)}"${attr(blocked)}>${spinOr(running('publish'), 'push')}Publish</button>`;
   } else {
-    const pushWhy = anyBusy ? 'Busy…' : cannotPush(branch);
+    const pushWhy = blocked ?? cannotPush(branch);
     const label = `${spinOr(running('push'), 'push')}Push${branch.ahead ? ` ${branch.ahead}` : ''}`;
     const tone = branch.ahead && !pushWhy ? ' gt-btn--primary' : '';
     push = `<span class="gt-split">

@@ -32,8 +32,10 @@ export class BranchesView implements vscode.Disposable {
   private readonly webview: vscode.Webview;
   private readonly model: RepoModel;
   private readonly actions: Actions;
+  private readonly place: Place;
 
   constructor({ webview, extensionUri, model, actions, place }: BranchesViewArgs) {
+    this.place = place;
     this.webview = webview;
     this.model = model;
     this.actions = actions;
@@ -64,6 +66,12 @@ export class BranchesView implements vscode.Disposable {
   private async toast(outcome: Promise<{ text: string; undo: number | null }>): Promise<void> {
     const { text, undo } = await outcome;
     this.post({ type: 'toast', text, undo });
+  }
+
+  /** An operation that may pause at a conflict: a toast only when it finished. */
+  private async toastIf(outcome: Promise<{ text: string; undo: number | null } | null>): Promise<void> {
+    const done = await outcome;
+    if (done) this.post({ type: 'toast', text: done.text, undo: done.undo });
   }
 
   /** A dialog's action: on success the dialog closes and the toast says what happened. */
@@ -171,6 +179,24 @@ export class BranchesView implements vscode.Disposable {
         this.post({ type: 'toast', text: outcome.text, undo: outcome.undo });
         return;
       }
+      case 'compare':
+        // the sidebar has no room for it: the editor tab opens on the compare screen
+        if (this.place === 'sidebar') await vscode.commands.executeCommand('githor.compare', message.ref);
+        else this.post({ type: 'compare', view: await this.actions.compare(message.ref) });
+        return;
+      case 'bringTogether':
+        return this.toastIf(this.actions.bringTogether(message));
+      case 'conflictFile':
+        this.post({ type: 'conflictFile', path: message.path, parts: await this.actions.conflictFile(message.path) });
+        return;
+      case 'resolveConflict':
+        return this.actions.resolveConflict(message);
+      case 'reopenConflict':
+        return this.actions.reopenConflict(message.path);
+      case 'continueOperation':
+        return this.toastIf(this.actions.continueOperation());
+      case 'abortOperation':
+        return this.toast(this.actions.abortOperation());
       case 'pushReview':
         this.post({ type: 'pushReview', ref: message.ref, ...(await this.actions.pushReview(message.ref)) });
         return;

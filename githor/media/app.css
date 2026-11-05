@@ -443,3 +443,27 @@ html, body { height: 100%; margin: 0; padding: 0; background: var(--gt-bg-app); 
 .gt-review-commit { display: flex; flex-direction: column; gap: 2px; padding: 8px 12px 4px; }
 .gt-file--nested { padding-left: 24px; }
 .gt-composer p { margin: 0; font-size: var(--gt-text-sm); }
+
+/* ---------- compare (03) and conflicts (23–29) ---------- */
+.gt-pane[hidden] { display: none; }
+.gt-compare-pane { grid-column: 2 / -1; overflow: auto; }
+.gt-compare { padding: var(--gt-space-4) var(--gt-space-6); }
+.gt-compare .gt-pane__row { flex-wrap: nowrap; }
+.gt-compare .gt-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gt-compare__head .gt-count { margin-left: 4px; }
+.gt-choice__note { display: block; margin-top: 2px; color: var(--gt-fg-muted); font-size: var(--gt-text-xs); }
+.gt-banner--ok { --tone: var(--gt-sync-ok); }
+.gt-banner--quiet { background: transparent; }
+.gt-diverged { border: 0; cursor: pointer; position: relative; z-index: 1; pointer-events: auto; }
+.gt-diverged:hover { background: color-mix(in srgb, var(--gt-sync-diverged) 36%, transparent); }
+.gt-conflict { border-top: 1px solid var(--gt-border); }
+.gt-conflict__bar { display: flex; align-items: center; gap: var(--gt-space-2); padding: 8px 12px; border-top: 1px solid var(--gt-border); border-bottom: 1px solid var(--gt-border); background: color-mix(in srgb, var(--gt-sync-behind) 12%, transparent); font-family: var(--gt-font-ui); font-size: var(--gt-text-sm); }
+.gt-conflict__bar > span:first-child { display: inline-flex; align-items: center; gap: 6px; }
+.gt-conflict__bar.is-done { background: color-mix(in srgb, var(--gt-sync-ok) 10%, transparent); }
+.gt-conflict__actions { display: flex; flex-wrap: wrap; gap: var(--gt-space-2); padding: 10px 12px; font-family: var(--gt-font-ui); }
+.gt-conflict__actions .gt-btn { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+.gt-conflict__result { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; font-family: var(--gt-font-ui); }
+.gt-conflict__lines { margin: 0; padding: 8px 10px; border: 1px solid var(--gt-border); border-radius: var(--gt-radius-md); background: var(--gt-bg-subtle); font-family: var(--gt-font-mono); font-size: var(--gt-text-sm); white-space: pre-wrap; }
+.gt-conflict__result .gt-textarea { min-height: 120px; font-family: var(--gt-font-mono); font-size: var(--gt-text-sm); }
+.gt-conflict__count { padding: 8px 12px; font-family: var(--gt-font-ui); }
+.gt-diff__side-label .gt-i { margin-right: 2px; }

@@ -18,6 +18,11 @@ import { diffFilesHtml, diffPaneHtml } from './diff-view.js';
 import { pushReviewHtml } from './push-review.js';
 import type { PushReview } from './push-review.js';
 import { nextTicked } from '../src/core/commit-groups.js';
+import type { Resolution } from '../src/core/conflict.js';
+import { compareHtml } from './compare-view.js';
+import type { CompareState } from './compare-view.js';
+import { conflictPaneHtml, conflictRailHtml, emptyConflict } from './conflict-view.js';
+import type { ConflictState } from './conflict-view.js';
 import type { DiffState } from './diff-view.js';
 import { emptyLog, LOG_PAGE, logHeadHtml, logRowsHtml } from './commit-log.js';
 import type { LogState } from './commit-log.js';
@@ -36,7 +41,7 @@ const place = document.body.dataset['place'] === 'sidebar' ? 'sidebar' : 'editor
 // ---------- state ----------
 
 const saved = restore();
-let state: StateView = { repo: null, branches: [], loaded: false, fetchedAt: null, fetching: false, fetchError: null, defaultBranch: null, busy: null, head: null, working: [], grouping: 'none' };
+let state: StateView = { repo: null, branches: [], loaded: false, fetchedAt: null, fetching: false, fetchError: null, defaultBranch: null, busy: null, head: null, working: [], grouping: 'none', operation: null };
 let filter: BranchFilter = BRANCH_FILTERS.includes(saved.filter ?? 'all') ? (saved.filter ?? 'all') : 'all';
 let query = saved.query ?? '';
 /** The Git menu under `⋯` in the toolbar. */
@@ -65,6 +70,12 @@ let commitDiff: DiffState | null = null;
 let pushReview: PushReview | null = null;
 let pushDiff: DiffState | null = null;
 const WORKTREE = 'WORKTREE';
+/** The compare screen (`03`), over the log and details while open. */
+let compare: CompareState | null = null;
+/** The conflict screens (`23`–`29`): the editor tab shows them while a merge or rebase is paused. */
+let conflict: ConflictState = emptyConflict();
+/** After Edit again on a resolved file: reopen it, then edit this conflict with this text. */
+let pendingEdit: { path: string; index: number; text: string } | null = null;
 
 const keep = (): void => persist({ filter, query });
 const branchOf = (ref: string): StateView['branches'][number] | undefined => state.branches.find((b) => b.ref === ref);
@@ -90,6 +101,11 @@ app.innerHTML =
     <section class="gt-pane gt-pane--rail gt-list-pane" aria-label="Branches">${listPane}</section>
     <section class="gt-pane" aria-label="Commits"><div class="gt-pane__head" data-region="logHead"></div><div class="gt-scroll" data-region="log"></div></section>
     <section class="gt-pane gt-details" aria-label="Commit details" data-region="details"></section>
+    <section class="gt-pane gt-compare-pane" aria-label="Compare with remote" data-region="compare" hidden></section>
+  </div>
+  <div class="gt-body gt-body--diff gt-body--conflict" hidden>
+    <section class="gt-pane gt-pane--rail" aria-label="Files of the merge" data-region="conflictRail"></section>
+    <section class="gt-pane" aria-label="Conflict" data-region="conflictPane"></section>
   </div>
   <div class="gt-body gt-body--diff" hidden>
     <section class="gt-pane gt-pane--rail" aria-label="Changed files" data-region="diffFiles"></section>
@@ -128,7 +144,7 @@ function render(): void {
   const caret = role ? [active?.selectionStart ?? null, active?.selectionEnd ?? null] : null;
 
   fill('top', place === 'sidebar' ? sidebarHeaderHtml(state, popover) : toolbarHtml(state, { menuOpen, popover, tab }));
-  fill('banner', fetchBannerHtml(state));
+  fill('banner', fetchBannerHtml(state, place));
   fill('filters', state.repo && state.branches.length ? filtersHtml(state.branches, filter) : '');
   const selectedRef = place === 'editor' ? (highlighted()?.ref ?? null) : undefined;
   fill('list', listHtml({ loaded: state.loaded, hasRepo: state.repo !== null, branches: state.branches, filter, query, busy: state.busy, menuRef: branchMenu?.ref ?? null, ...(selectedRef === undefined ? {} : { selectedRef }) }));
@@ -154,7 +170,7 @@ function highlighted(): StateView['branches'][number] | undefined {
 
 /** Which set of panes the editor tab shows: the push screen over everything, else the tab, the log's diff inside Log. */
 function renderBodies(): void {
-  const view = pushReview ? 'push' : tab === 'commit' ? 'commit' : diffView ? 'diff' : 'log';
+  const view = state.operation ? 'conflict' : pushReview ? 'push' : tab === 'commit' ? 'commit' : diffView ? 'diff' : 'log';
   // the commit and push bodies share the diff body's grid class, so the plain diff body is matched as the first one
   const show = (cls: string, on: boolean): void => {
     const body = app.querySelector<HTMLElement>(`.gt-body--${cls}`);
@@ -164,6 +180,19 @@ function renderBodies(): void {
   show('diff', view === 'diff');
   show('commit', view === 'commit');
   show('push', view === 'push');
+  show('conflict', view === 'conflict');
+  // the compare screen takes the log's and details' place, beside the branch list
+  for (const name of ['log', 'logHead', 'details']) {
+    const el = region(name)?.closest<HTMLElement>('.gt-pane');
+    if (el) el.hidden = compare !== null;
+  }
+  const comparePane = region('compare');
+  if (comparePane) comparePane.hidden = compare === null;
+  if (compare) fill('compare', compareHtml(compare, { me: log.me, current: state.branches.find((b) => b.current)?.name ?? null, defaultBranch: state.defaultBranch, busy: state.busy !== null }));
+  if (view === 'conflict' && state.operation) {
+    fill('conflictRail', conflictRailHtml(state.operation, conflict));
+    fill('conflictPane', conflictPaneHtml(state.operation, conflict));
+  }
   if (view === 'diff' && diffView) {
     fill('diffFiles', diffFilesHtml(diffView, details.get(diffView.sha)));
     fill('diffPane', diffPaneHtml(diffView));
@@ -179,6 +208,52 @@ function renderBodies(): void {
   }
   // HTML has no attribute for a half-ticked box
   for (const el of app.querySelectorAll<HTMLInputElement>('input[data-mixed]')) el.indeterminate = true;
+}
+
+function openCompare(ref: string): void {
+  compare = { ref, view: null, confirmForce: false };
+  diffView = null;
+  tab = 'log';
+  post({ type: 'compare', ref });
+}
+
+function selectConflictFile(path: string): void {
+  conflict = { ...conflict, path, parts: null, choices: [], editing: null, draft: '' };
+  if (state.operation?.conflicted.includes(path)) post({ type: 'conflictFile', path });
+}
+
+/** Records a choice; when every conflict of the file has one, the file is written and marked resolved. */
+function choose(index: number, resolution: Resolution): void {
+  const choices = [...conflict.choices];
+  choices[index] = resolution;
+  conflict = { ...conflict, choices, editing: null };
+  const parts = conflict.parts;
+  const path = conflict.path;
+  if (!parts || !path || choices.length < parts.filter((p) => p.kind === 'conflict').length || choices.some((c) => !c)) return;
+  const all = choices as Resolution[];
+  const resolved = new Map(conflict.resolved).set(path, { parts, choices: all });
+  conflict = { ...conflict, resolved };
+  post({ type: 'resolveConflict', path, resolutions: all });
+}
+
+/** Back to choosing one conflict of a file: a resolved file is put back in conflict first. */
+function reopen(index: number, edit: string | null): void {
+  const path = conflict.path;
+  if (!path) return;
+  const kept = conflict.resolved.get(path);
+  if (kept && !state.operation?.conflicted.includes(path)) {
+    const resolved = new Map(conflict.resolved);
+    resolved.delete(path);
+    const choices: (Resolution | null)[] = [...kept.choices];
+    choices[index] = null;
+    conflict = { ...conflict, resolved, parts: null, choices };
+    if (edit !== null) pendingEdit = { path, index, text: edit };
+    post({ type: 'reopenConflict', path });
+    return;
+  }
+  const choices = [...conflict.choices];
+  choices[index] = null;
+  conflict = { ...conflict, choices, editing: edit === null ? null : index, draft: edit ?? '' };
 }
 
 function openPushReview(ref: string): void {
@@ -210,6 +285,22 @@ function renderLog(): void {
   fill('log', state.repo ? logRowsHtml({ log, head: state.head, highlight }) : '');
   const onHead = state.head ? reachable(commits, state.head) : new Set<string>();
   fill('details', state.repo ? detailsHtml({ selected: log.selected, commits, details, me: log.me, head: state.head, onHead, current: state.branches.find((b) => b.current)?.name ?? null }) : '');
+}
+
+/** Keeps the conflict screens on a file of the operation, and reads its conflicts when they are not read yet. */
+function followOperation(): void {
+  const op = state.operation;
+  if (!op) {
+    if (conflict.path) conflict = emptyConflict();
+    return;
+  }
+  const files = [...op.conflicted, ...op.staged];
+  if (!conflict.path || !files.includes(conflict.path)) {
+    const first = op.conflicted[0] ?? op.staged[0];
+    if (first) selectConflictFile(first);
+    return;
+  }
+  if (op.conflicted.includes(conflict.path) && conflict.parts === null) post({ type: 'conflictFile', path: conflict.path });
 }
 
 /** Asks for the log again when HEAD or a branch tip moved since it was read. */
@@ -270,6 +361,13 @@ input.addEventListener('input', () => {
   query = input.value;
   keep();
   render();
+});
+
+/** A conflict's result written by hand: kept as typed; the Reset button shows once it differs. */
+app.addEventListener('input', (event) => {
+  const field = event.target as HTMLTextAreaElement;
+  if (field.dataset['role'] !== 'conflictDraft') return;
+  conflict = { ...conflict, draft: field.value };
 });
 
 /** The commit message: kept as typed, and the buttons follow whether it is empty. */
@@ -430,6 +528,68 @@ document.addEventListener('click', (event) => {
       break;
     case 'tabLog':
       tab = 'log';
+      break;
+    case 'compare':
+      if (place === 'editor') openCompare(ref);
+      else post({ type: 'compare', ref });
+      break;
+    case 'closeCompare':
+      compare = null;
+      break;
+    case 'rebaseRemote':
+    case 'mergeRemote':
+      post({ type: 'bringTogether', ref, how: action === 'rebaseRemote' ? 'rebase' : 'merge' });
+      compare = null;
+      break;
+    case 'askForceCompare':
+      if (compare) compare = { ...compare, confirmForce: true };
+      break;
+    case 'cancelForceCompare':
+      if (compare) compare = { ...compare, confirmForce: false };
+      break;
+    case 'forcePushCompare':
+      post({ type: 'push', ref, force: true, tags: false });
+      compare = null;
+      break;
+    case 'selectConflictFile':
+      selectConflictFile(el?.dataset['path'] ?? '');
+      break;
+    case 'accept': {
+      const take = el?.dataset['take'];
+      if (take === 'local' || take === 'remote' || take === 'both') choose(Number(el?.dataset['index']), { take });
+      break;
+    }
+    case 'editResult': {
+      const index = Number(el?.dataset['index']);
+      const part = conflict.parts?.filter((p) => p.kind === 'conflict')[index];
+      conflict = { ...conflict, editing: index, draft: part && part.kind === 'conflict' ? part.local.join('\n') : '' };
+      break;
+    }
+    case 'cancelEdit':
+      conflict = { ...conflict, editing: null };
+      break;
+    case 'resetEdit': {
+      const part = conflict.editing === null ? undefined : conflict.parts?.filter((p) => p.kind === 'conflict')[conflict.editing];
+      conflict = { ...conflict, draft: part && part.kind === 'conflict' ? part.local.join('\n') : '' };
+      break;
+    }
+    case 'saveEdit':
+      choose(Number(el?.dataset['index']), { take: 'edit', text: conflict.draft });
+      break;
+    case 'changeChoice':
+      reopen(Number(el?.dataset['index']), null);
+      break;
+    case 'editAgain': {
+      const index = Number(el?.dataset['index']);
+      const kept = conflict.path ? conflict.resolved.get(conflict.path)?.choices[index] : conflict.choices[index];
+      reopen(index, kept?.take === 'edit' ? kept.text : '');
+      break;
+    }
+    case 'continueOperation':
+      post({ type: 'continueOperation' });
+      break;
+    case 'abortOperation':
+      post({ type: 'abortOperation' });
       break;
     case 'tabCommit': {
       tab = 'commit';
@@ -638,6 +798,8 @@ document.addEventListener('keydown', (event) => {
   if (mergedDialog && !mergedDialog.deleting) mergedDialog = null;
   else if (branchDialog && !branchDialog.busy) branchDialog = null;
   else if (commit.groupMenu) commit = { ...commit, groupMenu: false };
+  else if (conflict.editing !== null) conflict = { ...conflict, editing: null };
+  else if (compare && !popover && !branchMenu && !menuOpen) compare = null;
   else if (pushReview && !popover && !branchMenu && !menuOpen) pushReview = null;
   else if (diffView && !popover && !branchMenu && !menuOpen) diffView = null;
   else if (popover) popover = null;
@@ -655,6 +817,7 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
       if (branchMenu && !branchOf(branchMenu.ref)) branchMenu = null;
       if (highlightRef && !branchOf(highlightRef)) highlightRef = null;
       refreshLog();
+      followOperation();
       commit = { ...commit, ticked: nextTicked({ files: state.working, ticked: commit.ticked, known: commit.known }), known: new Set(state.working.map((f) => f.path)) };
       if (commit.selected && !state.working.some((f) => f.path === commit.selected)) {
         commit = { ...commit, selected: null };
@@ -684,6 +847,23 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
       if (matches(pushDiff)) pushDiff = { ...pushDiff, diff };
       break;
     }
+    case 'openCompare':
+      openCompare(message.ref);
+      break;
+    case 'compare':
+      if (compare?.ref === message.view.ref) compare = { ...compare, view: message.view };
+      break;
+    case 'conflictFile':
+      if (conflict.path === message.path) {
+        const count = message.parts.filter((p) => p.kind === 'conflict').length;
+        const choices = conflict.choices.length === count ? conflict.choices : new Array<Resolution | null>(count).fill(null);
+        conflict = { ...conflict, parts: message.parts, choices };
+        if (pendingEdit?.path === message.path) {
+          conflict = { ...conflict, editing: pendingEdit.index, draft: pendingEdit.text };
+          pendingEdit = null;
+        }
+      }
+      break;
     case 'committed':
       commit = { ...commit, committing: false, message: '', selected: null };
       commitDiff = null;

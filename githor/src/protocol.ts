@@ -1,5 +1,6 @@
 import type { Grouping } from './core/commit-groups';
-import type { Branch, CommitDetails, CommitLine, CommitView, FileChange, FileDiff, KeptBranch, MergedBranch, WorkingFile } from './core/types';
+import type { ConflictPart, Resolution } from './core/conflict';
+import type { Branch, CommitDetails, CommitLine, CommitView, CompareView, FileChange, FileDiff, KeptBranch, MergedBranch, OperationView, WorkingFile } from './core/types';
 
 /** A push, pull, publish or sync that is running, on `ref`; null `ref` for the current branch's sync. */
 export interface BusyView {
@@ -30,6 +31,8 @@ export interface StateView {
   /** What the working copy changed since the last commit. */
   working: WorkingFile[];
   grouping: Grouping;
+  /** The merge or rebase in progress, if any. */
+  operation: OperationView | null;
 }
 
 /** The "Delete all merged branches" dialog for one target. */
@@ -82,12 +85,21 @@ export type ClientMessage =
   | { type: 'workingDiff'; path: string }
   | { type: 'commit'; paths: string[]; message: string; push: boolean }
   /** Asks for what a push of `ref` would send, for the push screen (`10`). */
-  | { type: 'pushReview'; ref: string };
+  | { type: 'pushReview'; ref: string }
+  | { type: 'compare'; ref: string }
+  | { type: 'bringTogether'; ref: string; how: 'merge' | 'rebase' }
+  | { type: 'conflictFile'; path: string }
+  | { type: 'resolveConflict'; path: string; resolutions: Resolution[] }
+  | { type: 'reopenConflict'; path: string }
+  | { type: 'continueOperation' }
+  | { type: 'abortOperation' };
 
 export type HostMessage =
   | { type: 'state'; state: StateView }
   /** Opens the dialog, when a command asked for it. */
   | { type: 'openDeleteMerged' }
+  /** Opens the compare screen (`03`) for a branch, when the sidebar asked for it. */
+  | { type: 'openCompare'; ref: string }
   | { type: 'merged'; view: MergedView }
   /** The dialog's work is done: it closes. */
   | { type: 'mergedDone' }
@@ -104,6 +116,8 @@ export type HostMessage =
   /** A commit is made; with `push`, the push screen opens for `ref`. */
   | { type: 'committed'; push: boolean; ref: string | null }
   | { type: 'pushReview'; ref: string; commits: CommitDetails[]; to: string; creates: boolean }
+  | { type: 'compare'; view: CompareView }
+  | { type: 'conflictFile'; path: string; parts: ConflictPart[] }
   | { type: 'error'; text: string };
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -116,11 +130,18 @@ function isFileChange(v: unknown): v is FileChange {
   return typeof status === 'string' && STATUSES.includes(status) && nonEmpty(path) && (oldPath === null || nonEmpty(oldPath)) && typeof add === 'number' && typeof del === 'number' && typeof binary === 'boolean';
 }
 
+function isResolution(v: unknown): v is Resolution {
+  if (!isRecord(v)) return false;
+  return v['take'] === 'local' || v['take'] === 'remote' || v['take'] === 'both' || (v['take'] === 'edit' && typeof v['text'] === 'string');
+}
+
 /** What the webview posted, narrowed once at the edge; null for anything that is not a known message. */
 export function parseClientMessage(raw: unknown): ClientMessage | null {
   if (!isRecord(raw)) return null;
   switch (raw['type']) {
     case 'ready':
+    case 'continueOperation':
+    case 'abortOperation':
     case 'pickBranch':
     case 'openEditor':
     case 'showOutput':
@@ -165,7 +186,17 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
     case 'setGrouping':
       return raw['grouping'] === 'none' || raw['grouping'] === 'directory' ? { type: 'setGrouping', grouping: raw['grouping'] } : null;
     case 'workingDiff':
-      return nonEmpty(raw['path']) ? { type: 'workingDiff', path: raw['path'] } : null;
+    case 'conflictFile':
+    case 'reopenConflict':
+      return nonEmpty(raw['path']) ? { type: raw['type'], path: raw['path'] } : null;
+    case 'compare':
+      return nonEmpty(raw['ref']) ? { type: 'compare', ref: raw['ref'] } : null;
+    case 'bringTogether':
+      return nonEmpty(raw['ref']) && (raw['how'] === 'merge' || raw['how'] === 'rebase') ? { type: 'bringTogether', ref: raw['ref'], how: raw['how'] } : null;
+    case 'resolveConflict': {
+      const { path, resolutions } = raw;
+      return nonEmpty(path) && Array.isArray(resolutions) && resolutions.length > 0 && resolutions.every(isResolution) ? { type: 'resolveConflict', path, resolutions } : null;
+    }
     case 'pushReview':
       return nonEmpty(raw['ref']) ? { type: 'pushReview', ref: raw['ref'] } : null;
     case 'commit': {

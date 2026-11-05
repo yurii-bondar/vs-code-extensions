@@ -100,6 +100,11 @@
         "category": "Githor"
       },
       {
+        "command": "githor.compare",
+        "title": "Compare the Current Branch with Its Remote",
+        "category": "Githor"
+      },
+      {
         "command": "githor.deleteMerged",
         "title": "Delete All Merged Branches…",
         "category": "Githor",

@@ -52,7 +52,16 @@ The editor toolbar and the sidebar have **Sync**, **Pull** and **Push** for the 
 - **Push**'s arrow opens its options: **Force-push with lease** (turned off on the default branch, and confirmed first with what it removes from origin) and **Push tags**.
 - A branch on no remote yet says **Publish**, and gets a remote branch it tracks.
 - **Sync** pulls, then pushes.
-- A branch where local and remote both moved cannot be pulled or synced: there is no automatic merge that could stop at a conflict. Compare them, or force-push.
+- A branch where local and remote both moved cannot be pulled or synced plainly. Its `⇅` (or **Compare with remote** in its menu) opens the compare screen: what only each side has, where they start from, the files that will conflict, and three ways to bring them together: **Rebase on remote**, **Merge remote**, or **Force-push…**, which asks first with whose commits leave origin. A branch that is not checked out is switched to first.
+
+### Conflicts
+
+A merge or rebase that stops at a conflict opens the conflict screens in the editor tab (the sidebar says so, with **Resolve side by side** and **Abort**). Your branch is always on the left and the other side on the right, whether git calls them "ours" or "theirs": in a rebase git swaps the two, Githor does not.
+
+- For each conflict: **Accept** your branch, **Accept** the other, **Accept both** (yours first), or **Edit result…** to write the lines yourself. The result is shown under it; **Change** chooses again.
+- Files are listed as **Files with conflicts**, **Resolved by you** and **Merged on their own**.
+- **Continue** makes the merge commit, or replays the rest of the rebase, which may stop at the next conflict. **Abort** puts the branch back exactly as it was. Pull, Push and Sync wait until it is done.
+- A finished merge offers **Undo merge** when Githor started it.
 
 Githor uses the credentials git already has (SSH keys, the system keychain); it never asks for a password.
 
@@ -91,10 +100,10 @@ VS Code's built-in Git extension (`git.enabled`). Githor runs the same `git` it 
 
 ## How it works
 
-- `src/core/` is pure logic with no `vscode` import, tested against real repositories: `branches.ts` reads `git for-each-ref`, `marks.ts` is the sync language of the design (also imported by the webview), `merged.ts` decides what is merged, `cleanup.ts` deletes and restores, `remote.ts` fetches, `sync.ts` pushes and pulls (`sync-rules.ts` says when they are offered), `branch-ops.ts` creates, renames and deletes one branch, `log.ts` reads the log and one commit, `graph.ts` lays out the lanes (also imported by the webview), `commit-ops.ts` switches to, cherry-picks and reverts commits, `side-by-side.ts` pairs a diff's lines and marks changed words, `file-diff.ts` reads one file's diff, `working.ts` reads and commits the working copy, `commit-groups.ts` builds the commit list's sections and groups, `tasks.ts` reads Claudestrator's task records, `repos.ts` picks the repository.
+- `src/core/` is pure logic with no `vscode` import, tested against real repositories: `branches.ts` reads `git for-each-ref`, `marks.ts` is the sync language of the design (also imported by the webview), `merged.ts` decides what is merged, `cleanup.ts` deletes and restores, `remote.ts` fetches, `sync.ts` pushes and pulls (`sync-rules.ts` says when they are offered), `branch-ops.ts` creates, renames and deletes one branch, `log.ts` reads the log and one commit, `graph.ts` lays out the lanes (also imported by the webview), `commit-ops.ts` switches to, cherry-picks and reverts commits, `side-by-side.ts` pairs a diff's lines and marks changed words, `file-diff.ts` reads one file's diff, `working.ts` reads and commits the working copy, `commit-groups.ts` builds the commit list's sections and groups, `compare.ts` compares a branch with its remote, `operation.ts` runs a merge or rebase and resolves its files, `conflict.ts` reads conflict markers with your side on the left, `tasks.ts` reads Claudestrator's task records, `repos.ts` picks the repository.
 - `src/model.ts` reads the repository once for every view and re-reads when the Git extension reports a change. `src/actions.ts` runs the git operations and logs failures to the **Githor** output channel.
 - `src/branches-view.ts` drives one webview page; `src/sidebar.ts` puts it in the sidebar, `src/panel.ts` in an editor tab. `src/status-bar.ts` and `src/quick-pick.ts` are the status bar item and the branch switcher; `src/git-content.ts` serves files at a commit to VS Code's diff editor.
-- `media/*.ts` are the page's ES modules: `main.ts` (state and events), `branch-list.ts`, `sync-controls.ts` (Sync, Pull, Push and its menu), `branch-menu.ts`, `branch-dialogs.ts` (new, rename, delete), `commit-log.ts`, `commit-details.ts`, `diff-view.ts`, `syntax.ts` (the diff's colours), `commit-view.ts`, `push-review.ts`, `chrome.ts` (toolbar, menu, banner, toast), `merged-dialog.ts`, `icons.ts` (the design's icons). `media/app.css` holds the design tokens and components.
+- `media/*.ts` are the page's ES modules: `main.ts` (state and events), `branch-list.ts`, `sync-controls.ts` (Sync, Pull, Push and its menu), `branch-menu.ts`, `branch-dialogs.ts` (new, rename, delete), `commit-log.ts`, `commit-details.ts`, `diff-view.ts`, `syntax.ts` (the diff's colours), `commit-view.ts`, `push-review.ts`, `compare-view.ts`, `conflict-view.ts`, `chrome.ts` (toolbar, menu, banner, toast), `merged-dialog.ts`, `icons.ts` (the design's icons). `media/app.css` holds the design tokens and components.
 
 ## Develop
 

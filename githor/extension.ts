@@ -44,6 +44,13 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('githor.fetch', withServices((s) => s.actions.fetch({ all: false }))),
     vscode.commands.registerCommand('githor.fetchAll', withServices((s) => s.actions.fetch({ all: true }))),
     vscode.commands.registerCommand('githor.deleteMerged', withServices((s) => openEditor(s, { type: 'openDeleteMerged' }))),
+    vscode.commands.registerCommand('githor.compare', (ref: unknown) =>
+      withServices((s) => {
+        const branch = typeof ref === 'string' ? s.model.branches.find((b) => b.ref === ref) : s.model.branches.find((b) => b.current && b.sync === 'diverged');
+        if (branch) openEditor(s, { type: 'openCompare', ref: branch.ref });
+        else void vscode.window.showInformationMessage('Githor: the current branch has not moved on both sides.');
+      })()
+    ),
     vscode.commands.registerCommand('githor.showOutput', () => output.show())
   );
   // The status bar item belongs on screen from the start, so the services are built now rather than on first use.

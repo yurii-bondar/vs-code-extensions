@@ -2,6 +2,9 @@ import * as vscode from 'vscode';
 import { createBranch, deleteBranch, deleteOnRemote, nameProblem, onlyHere, renameBranch } from './core/branch-ops';
 import { switchBranch } from './core/branches';
 import { cherryPick, ConflictError, resetTo, revertCommit, switchToCommit } from './core/commit-ops';
+import { compareWithRemote } from './core/compare';
+import { abortOperation, bringTogether, continueOperation, readConflict, reopenConflict, resolveFile } from './core/operation';
+import type { ConflictPart, Resolution } from './core/conflict';
 import { fileDiff } from './core/file-diff';
 import { commitFiles, commitsToPush, uncommit, workingDiff } from './core/working';
 import { commitDetails, readLog, userEmail } from './core/log';
@@ -10,7 +13,7 @@ import { isMergedInto, mergeTargets, scanMerged } from './core/merged';
 import { fetchRemotes } from './core/remote';
 import { publish, publishRemote, pull, push, remoteOnlyCommits } from './core/sync';
 import { cannotPull, cannotPush } from './core/sync-rules';
-import type { Branch, CommitDetails, CommitLine, CommitView, FileChange, FileDiff, MergedBranch, RepoRoot } from './core/types';
+import type { Branch, CommitDetails, CommitLine, CommitView, CompareView, FileChange, FileDiff, MergedBranch, RepoRoot } from './core/types';
 import type { RepoModel } from './model';
 import type { BusyView, MergedView } from './protocol';
 
@@ -35,6 +38,8 @@ export class Actions {
   private nextUndo = 1;
   /** The scan each dialog opened, by target, so a delete acts on what was checked, not on what a page sends. */
   private readonly scans = new Map<string, MergedBranch[]>();
+  /** Where the branch was before a merge Githor started, for Undo merge (design `30`). */
+  private mergedFrom: { root: RepoRoot; sha: string } | null = null;
 
   constructor(
     private readonly model: RepoModel,
@@ -90,6 +95,7 @@ export class Actions {
 
   /** Runs one sync operation: marks the model busy, logs a failure, re-reads the repository when done. */
   private async syncing<T>(busy: BusyView, what: string, run: () => Promise<T>): Promise<T> {
+    if (this.model.operation) throw new Error(`Finish or abort the ${this.model.operation.kind} first.`);
     this.model.setBusy(busy);
     try {
       return await run();
@@ -397,5 +403,104 @@ export class Actions {
       await resetTo(this.model.git, root, sha);
       return `${branch} is back at ${sha.slice(0, 7)}`;
     });
+  }
+
+  // ---------- compare and merge (03, 23–30) ----------
+
+  private operation(): NonNullable<RepoModel['operation']> {
+    const op = this.model.operation;
+    if (!op) throw new Error('No merge or rebase is in progress any more.');
+    return op;
+  }
+
+  compare(ref: string): Promise<CompareView> {
+    return compareWithRemote(this.model.git, this.root(), this.branch(ref));
+  }
+
+  /**
+   * Merges the branch's remote into it, or rebases it onto its remote; a branch that is not checked out is switched
+   * to first. A conflict leaves the operation paused, which the state shows; otherwise the toast says it is done.
+   */
+  async bringTogether({ ref, how }: { ref: string; how: 'merge' | 'rebase' }): Promise<Outcome | null> {
+    const branch = this.branch(ref);
+    if (!branch.upstream) throw new Error(`${branch.name} has no remote branch.`);
+    if (this.model.operation) throw new Error('A merge or rebase is already in progress.');
+    const root = this.root();
+    const { git } = this.model;
+    try {
+      if (!branch.current) await switchBranch(git, root, branch);
+      const before = (await git.run(root, ['rev-parse', 'HEAD'])).trim();
+      this.mergedFrom = { root, sha: before };
+      const { paused } = await bringTogether(git, root, { how, other: branch.upstream });
+      if (paused) return null;
+    } catch (e) {
+      this.log(`${how === 'merge' ? 'Merge' : 'Rebase'} ${branch.name}`, e);
+      throw e;
+    } finally {
+      await this.model.refresh();
+    }
+    return this.finished(how, branch.upstream, branch.name);
+  }
+
+  /** The toast after a merge or rebase is done, with Undo when Githor knows where the branch was. */
+  private finished(how: 'merge' | 'rebase', remote: string, local: string): Outcome {
+    const ahead = this.model.current?.ahead ?? 0;
+    const from = this.mergedFrom;
+    this.mergedFrom = null;
+    const undo = from
+      ? this.remember(async () => {
+          await resetTo(this.model.git, from.root, from.sha);
+          return how === 'merge' ? 'The merge is undone' : 'The rebase is undone';
+        })
+      : null;
+    const verb = how === 'merge' ? `Merged ${remote} into ${local}` : `Rebased ${local} onto ${remote}`;
+    return { text: `${verb}. ${ahead ? `${commits(ahead)} to push` : 'Nothing to push'}`, undo };
+  }
+
+  conflictFile(file: string): Promise<ConflictPart[]> {
+    return readConflict(this.model.git, this.root(), { file, kind: this.operation().kind });
+  }
+
+  async resolveConflict({ path, resolutions }: { path: string; resolutions: readonly Resolution[] }): Promise<void> {
+    try {
+      await resolveFile(this.model.git, this.root(), { file: path, kind: this.operation().kind, resolutions });
+    } finally {
+      await this.model.refresh();
+    }
+  }
+
+  async reopenConflict(path: string): Promise<void> {
+    try {
+      await reopenConflict(this.model.git, this.root(), path);
+    } finally {
+      await this.model.refresh();
+    }
+  }
+
+  /** Continue: the merge commit, or the rest of the rebase, which can pause at the next conflict. */
+  async continueOperation(): Promise<Outcome | null> {
+    const op = this.operation();
+    if (op.conflicted.length) throw new Error('Resolve every conflict first.');
+    let paused: boolean;
+    try {
+      ({ paused } = await continueOperation(this.model.git, this.root(), op.kind));
+    } catch (e) {
+      this.log(`Continue the ${op.kind}`, e);
+      throw e;
+    } finally {
+      await this.model.refresh();
+    }
+    return paused ? null : this.finished(op.kind, op.remote, op.local);
+  }
+
+  async abortOperation(): Promise<Outcome> {
+    const op = this.operation();
+    try {
+      await abortOperation(this.model.git, this.root(), op.kind);
+    } finally {
+      this.mergedFrom = null;
+      await this.model.refresh();
+    }
+    return { text: `${op.kind === 'merge' ? 'Merge' : 'Rebase'} aborted: ${op.local} is back as it was`, undo: null };
   }
 }
