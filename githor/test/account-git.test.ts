@@ -54,7 +54,7 @@ test("every command carries the account's identity; only those that talk to the 
   await git.run('/repo' as RepoRoot, ['push', 'origin', 'main']);
   assert.deepEqual(base.calls[0]?.args, ['-c', 'user.name=Work', '-c', 'user.email=work@example.com', 'commit', '-m', 'x']);
   assert.deepEqual(base.calls[0]?.env, {});
-  assert.equal(base.calls[1]?.env?.['GIT_CONFIG_KEY_0'], 'http.https://github.com/.extraHeader');
+  assert.equal(base.calls[1]?.env?.['GIT_CONFIG_KEY_1'], 'http.https://github.com/.extraHeader');
   // the header is in the environment, never in the arguments
   assert.ok(!base.calls[1]?.args.join(' ').includes('AUTHORIZATION'));
 });

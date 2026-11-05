@@ -88,13 +88,25 @@ const tokenUser = (provider: Account['provider']): string => (provider === 'gitl
 /**
  * What git needs to talk to `remote` as `account`: over HTTPS the token as an Authorization header for that host only,
  * over SSH the account's key. Empty when the account brings nothing for this remote (another host, no token).
+ *
+ * Over HTTPS nothing else may answer for the account: when the host refuses the header (401), git asks the credential
+ * helpers and askpass, and the keychain or `gh auth git-credential` would push as whoever they hold. An empty
+ * `credential.helper`, set last, clears the helpers of every file and URL scope; an empty `GIT_ASKPASS` turns off
+ * askpass (VS Code's own included), so git fails as unauthorized instead.
  */
 export function remoteEnv({ account, remote, token }: { account: Account; remote: RemoteInfo; token: string | null }): Record<string, string> {
   if (remote.host !== account.host) return {};
   if (remote.https) {
     if (!token) return {};
     const basic = Buffer.from(`${tokenUser(account.provider)}:${token}`).toString('base64');
-    return configEnv([[`http.https://${remote.host}/.extraHeader`, `AUTHORIZATION: basic ${basic}`]]);
+    return {
+      ...configEnv([
+        ['credential.helper', ''],
+        [`http.https://${remote.host}/.extraHeader`, `AUTHORIZATION: basic ${basic}`],
+      ]),
+      GIT_ASKPASS: '',
+      SSH_ASKPASS: '',
+    };
   }
   if (account.auth.kind === 'ssh') return configEnv([['core.sshCommand', `ssh -i '${account.auth.keyPath.replace(/'/g, "'\\''")}' -o IdentitiesOnly=yes`]]);
   return {};

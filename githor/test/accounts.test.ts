@@ -49,8 +49,8 @@ test('remoteEnv gives git a header for the token account over HTTPS, the key ove
   const https = parseRemote('https://gitlab.acme-client.example/group/app.git');
   assert.ok(https);
   const env = remoteEnv({ account: client, remote: https, token: 'tok' });
-  assert.equal(env['GIT_CONFIG_KEY_0'], 'http.https://gitlab.acme-client.example/.extraHeader');
-  assert.equal(env['GIT_CONFIG_VALUE_0'], `AUTHORIZATION: basic ${Buffer.from('oauth2:tok').toString('base64')}`);
+  assert.equal(env['GIT_CONFIG_KEY_1'], 'http.https://gitlab.acme-client.example/.extraHeader');
+  assert.equal(env['GIT_CONFIG_VALUE_1'], `AUTHORIZATION: basic ${Buffer.from('oauth2:tok').toString('base64')}`);
   const ssh = parseRemote('git@github.com:northwind/billing.git');
   assert.ok(ssh);
   assert.deepEqual(remoteEnv({ account: work, remote: ssh, token: null }), { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.sshCommand', GIT_CONFIG_VALUE_0: "ssh -i '/Users/a/.ssh/id_north'\\''wind' -o IdentitiesOnly=yes" });
