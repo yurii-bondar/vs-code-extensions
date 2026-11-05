@@ -47,6 +47,17 @@ export function kindOf(file: string): FileKind {
   return KINDS[ext] ?? kind(ext ? ext.toUpperCase() : 'Executable', ext ? ext.slice(0, 3).toUpperCase() : 'EXE', 'orange', () => null);
 }
 
+const COMMAND: FileKind = kind('Command', 'CMD', 'violet', () => null);
+
+/** What the card and the tree show for a script: the kind of its file, or `Command`. */
+export const scriptKind = (script: Pick<Script, 'type' | 'path'>): FileKind => (script.type === 'command' ? COMMAND : kindOf(script.path));
+
+/** The path that has to be on disk for the script to run: the file, or the folder of a command. */
+export const locationOf = (script: Pick<Script, 'type' | 'path' | 'cwd'>): string => (script.type === 'command' ? script.cwd : script.path);
+
+/** The folder the terminal opens in. */
+export const workDirOf = (script: Pick<Script, 'path' | 'cwd'>): string => script.cwd || path.dirname(script.path);
+
 export function shellKind(shellPath: string): ShellKind {
   const name = path.basename(shellPath.replace(/\\/g, '/')).toLowerCase().replace(/\.exe$/, '');
   if (name === 'cmd') return 'cmd';
@@ -66,13 +77,14 @@ export function interpreterOf(script: Pick<Script, 'path' | 'interpreter'>, plat
 }
 
 export interface BuildOptions {
-  script: Pick<Script, 'path' | 'interpreter' | 'args'>;
+  script: Pick<Script, 'type' | 'path' | 'command' | 'interpreter' | 'args'>;
   shell: ShellKind;
   platform: NodeJS.Platform;
 }
 
-/** The line typed into the terminal. */
+/** The line typed into the terminal: a command as it was written, a file with its interpreter and arguments. */
 export function buildCommand({ script, shell, platform }: BuildOptions): string {
+  if (script.type === 'command') return script.command.trim();
   const interpreter = interpreterOf(script, platform);
   const file = quote(script.path, shell);
   const head = interpreter ?? (shell === 'powershell' ? `& ${file}` : file);

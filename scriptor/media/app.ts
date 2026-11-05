@@ -11,7 +11,9 @@
   let query = '';
   const collapsed = new Set<string>(api.getState()?.collapsed ?? []);
 
-  type Modal = { kind: 'script'; script: ScriptView | null; groupId: string | null } | { kind: 'group'; group: GroupView | null };
+  /** What the script dialog holds; kept across a switch between a file and a command. */
+  type ScriptForm = Omit<ScriptDraft, 'id'>;
+  type Modal = { kind: 'script'; script: ScriptView | null; form: ScriptForm } | { kind: 'group'; group: GroupView | null };
   let modal: Modal | null = null;
 
   // ---------- helpers ----------
@@ -59,12 +61,13 @@
 
   function matches(s: ScriptView): boolean {
     const q = query.trim().toLowerCase();
-    return !q || `${s.name} ${s.description} ${s.path} ${s.kind.label}`.toLowerCase().includes(q);
+    return !q || `${s.name} ${s.description} ${s.path} ${s.command} ${s.cwd} ${s.kind.label}`.toLowerCase().includes(q);
   }
 
   function cardHtml(s: ScriptView): string {
+    const isFile = s.type === 'file';
     const run = s.missing
-      ? `<button class="run" disabled title="The file is not on disk">${icon('play')}Run</button>`
+      ? `<button class="run" disabled title="${isFile ? 'The file is not on disk' : 'The folder is not on disk'}">${icon('play')}Run</button>`
       : `<button class="run" data-action="run" data-id="${esc(s.id)}" title="Run in a terminal">${icon('play')}Run</button>`;
     return `<article class="card h-${s.kind.hue}${s.missing ? ' missing' : ''}">
   <div class="card-top">
@@ -74,12 +77,12 @@
       <div class="tip" role="tooltip">
         <strong>${esc(s.name)}</strong>
         ${s.description ? `<p class="tip-desc">${esc(s.description)}</p>` : ''}
-        <code>${esc(s.path)}</code>
+        ${isFile ? `<code>${esc(s.path)}</code>` : `<code class="cmd">$ ${esc(s.command)}</code><code>${esc(s.cwd)}</code>`}
       </div>
     </div>
     <div class="tools">
-      ${iconButton('open-file', s.id, 'open', 'Open the file')}
-      ${iconButton('reveal', s.id, 'reveal', 'Reveal in file manager')}
+      ${isFile ? iconButton('open-file', s.id, 'open', 'Open the file') : ''}
+      ${iconButton('reveal', s.id, 'reveal', isFile ? 'Reveal in file manager' : 'Reveal the folder in file manager')}
       ${iconButton('edit-script', s.id, 'edit', 'Edit')}
       ${iconButton('remove-script', s.id, 'trash', 'Remove from Scriptor', 'danger')}
     </div>
@@ -129,7 +132,7 @@
     </svg>
   </div>
   <h2>Your scripts, one click away</h2>
-  <p>Add any <code>.sh</code>, <code>.js</code>, <code>.py</code> or other script, put related ones in a group, and run them in a terminal as if you had opened them yourself.</p>
+  <p>Add any <code>.sh</code>, <code>.js</code>, <code>.py</code> or other script, or a command like <code>npm run dev</code> in a folder, put related ones in a group, and run them in a terminal as if you had typed them yourself.</p>
   <div class="empty-actions">
     <button class="btn primary lg" data-action="add-script">${icon('plus')}Add script</button>
     <button class="btn ghost lg" data-action="add-group">${icon('folderPlus')}New group</button>
@@ -169,26 +172,67 @@
     return `<div class="field"><label>${label}${note ? `<i>${note}</i>` : ''}</label>${control}</div>`;
   }
 
-  function scriptModalHtml(script: ScriptView | null, groupId: string | null): string {
-    const detected = script ? (script.detected ? `Detected: ${esc(script.detected)}` : 'Runs the file itself') : 'Picked by the file extension';
-    const groupOptions = [`<option value="">No group</option>`, ...groups.map((g) => `<option value="${esc(g.id)}"${g.id === (script?.groupId ?? groupId) ? ' selected' : ''}>${esc(g.name)}</option>`)].join('');
-    const advanced = !!script && !!(script.interpreter || script.args || script.cwd);
+  function formOf(script: ScriptView | null, groupId: string | null): ScriptForm {
+    if (!script) return { type: 'file', name: '', path: '', command: '', description: '', groupId, interpreter: '', args: '', cwd: '' };
+    const { type, name, path, command, description, interpreter, args, cwd } = script;
+    return { type, name, path, command, description, groupId: script.groupId, interpreter, args, cwd };
+  }
+
+  /** The dialog as filled in; fields the current layout does not show keep what the form had. */
+  function readForm(form: ScriptForm): ScriptForm {
+    const read = (id: string, fallback: string): string => document.getElementById(id) instanceof HTMLInputElement ? value(id) : fallback;
+    return {
+      type: form.type,
+      name: value('f-name'),
+      path: read('f-path', form.path),
+      command: read('f-command', form.command),
+      description: el<HTMLTextAreaElement>('f-description').value,
+      groupId: value('f-group') || null,
+      interpreter: read('f-interpreter', form.interpreter),
+      args: read('f-args', form.args),
+      cwd: value('f-cwd'),
+    };
+  }
+
+  const namePlaceholder = (form: Pick<ScriptForm, 'type' | 'path' | 'command'>): string =>
+    form.type === 'file' ? basename(form.path) || 'Defaults to the file name' : form.command.trim() || 'Defaults to the command';
+
+  const folderField = (form: ScriptForm, label: string, placeholder: string, note: string): string =>
+    field(label, `<div class="row"><input id="f-cwd" type="text" spellcheck="false" autocomplete="off" placeholder="${placeholder}" value="${esc(form.cwd)}"><button class="btn ghost" data-action="browse-folder">${icon('folder')}Browse…</button></div>`, note);
+
+  function scriptModalHtml(script: ScriptView | null, form: ScriptForm): string {
+    const isFile = form.type === 'file';
+    const detected = script?.type === 'file' && script.path === form.path ? (script.detected ? `Detected: ${esc(script.detected)}` : 'Runs the file itself') : 'Picked by the file extension';
+    const groupOptions = [`<option value="">No group</option>`, ...groups.map((g) => `<option value="${esc(g.id)}"${g.id === form.groupId ? ' selected' : ''}>${esc(g.name)}</option>`)].join('');
+    const advanced = !!(form.interpreter || form.args || form.cwd);
+    const tab = (type: ScriptType, label: string, name: string): string =>
+      `<button class="${form.type === type ? 'on' : ''}" data-action="set-type" data-id="${type}" aria-pressed="${form.type === type}">${icon(name)}${label}</button>`;
+    const what = isFile
+      ? field('Script file', `<div class="row"><input id="f-path" type="text" spellcheck="false" autocomplete="off" placeholder="/path/to/script.sh   or   ~/bin/backup.py" value="${esc(form.path)}"><button class="btn ghost" data-action="browse-file">${icon('folder')}Browse…</button></div>`)
+      : `${field('Command', `<input id="f-command" class="mono" type="text" spellcheck="false" autocomplete="off" placeholder="npm run dev   or   docker compose up -d" value="${esc(form.command)}">`)}
+  ${folderField(form, 'Folder', '/path/to/project   or   ~/code/app', 'runs here')}`;
+    const subtitle = isFile ? 'Choose a file on this computer, or type its path.' : 'Any command line, run in the folder you choose.';
     return `<div class="modal-head">
   <div class="modal-ico">${icon(script ? 'edit' : 'plus')}</div>
-  <div><h2 id="modal-title">${script ? 'Edit script' : 'Add script'}</h2><p>${script ? 'Change how this script is shown and run.' : 'Choose a file on this computer, or type its path.'}</p></div>
+  <div><h2 id="modal-title">${script ? 'Edit script' : 'Add script'}</h2><p>${script ? 'Change how this script is shown and run.' : subtitle}</p></div>
   <button class="icon-btn" data-action="close" aria-label="Close">${icon('close')}</button>
 </div>
 <div class="modal-body">
-  ${field('Script file', `<div class="row"><input id="f-path" type="text" spellcheck="false" autocomplete="off" placeholder="/path/to/script.sh   or   ~/bin/backup.py" value="${esc(script?.path ?? '')}"><button class="btn ghost" data-action="browse-file">${icon('folder')}Browse…</button></div>`)}
-  ${field('Name', `<input id="f-name" type="text" autocomplete="off" placeholder="${esc(basename(script?.path ?? '') || 'Defaults to the file name')}" value="${esc(script?.name ?? '')}">`, 'optional')}
-  ${field('Description', `<textarea id="f-description" rows="2" placeholder="What does this script do?">${esc(script?.description ?? '')}</textarea>`, 'optional')}
+  <div class="seg" role="group" aria-label="What to run">${tab('file', 'Script file', 'script')}${tab('command', 'Command', 'terminal')}</div>
+  ${what}
+  ${field('Name', `<input id="f-name" type="text" autocomplete="off" placeholder="${esc(namePlaceholder(form))}" value="${esc(form.name)}">`, 'optional')}
+  ${field('Description', `<textarea id="f-description" rows="2" placeholder="What does this script do?">${esc(form.description)}</textarea>`, 'optional')}
   ${field('Group', `<div class="select"><select id="f-group">${groupOptions}</select>${icon('chevron')}</div>`)}
-  <details class="adv"${advanced ? ' open' : ''}>
+  ${
+    isFile
+      ? `<details class="adv"${advanced ? ' open' : ''}>
     <summary>${icon('chevron')}Advanced</summary>
-    ${field('Interpreter', `<input id="f-interpreter" type="text" spellcheck="false" autocomplete="off" placeholder="${detected}" value="${esc(script?.interpreter ?? '')}">`, 'optional')}
-    ${field('Arguments', `<input id="f-args" type="text" spellcheck="false" autocomplete="off" placeholder="--env prod --verbose" value="${esc(script?.args ?? '')}">`, 'optional')}
-    ${field('Working directory', `<div class="row"><input id="f-cwd" type="text" spellcheck="false" autocomplete="off" placeholder="The folder of the script" value="${esc(script?.cwd ?? '')}"><button class="btn ghost" data-action="browse-folder">${icon('folder')}Browse…</button></div>`, 'optional')}
-  </details>
+    ${field('Interpreter', `<input id="f-interpreter" type="text" spellcheck="false" autocomplete="off" placeholder="${detected}" value="${esc(form.interpreter)}">`, 'optional')}
+    ${field('Arguments', `<input id="f-args" type="text" spellcheck="false" autocomplete="off" placeholder="--env prod --verbose" value="${esc(form.args)}">`, 'optional')}
+    ${folderField(form, 'Working directory', 'The folder of the script', 'optional')}
+  </details>`
+      : ''
+  }
 </div>
 <div class="modal-foot">
   <button class="btn ghost" data-action="close">Cancel</button>
@@ -218,9 +262,9 @@
     modal = next;
     const root = el('modal-root');
     root.innerHTML = `<div class="overlay" data-action="backdrop"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">${
-      next.kind === 'script' ? scriptModalHtml(next.script, next.groupId) : groupModalHtml(next.group)
+      next.kind === 'script' ? scriptModalHtml(next.script, next.form) : groupModalHtml(next.group)
     }</div></div>`;
-    const first = next.kind === 'script' && !next.script ? el<HTMLInputElement>('f-path') : el<HTMLInputElement>(next.kind === 'script' ? 'f-path' : 'f-name');
+    const first = el<HTMLInputElement>(next.kind === 'group' ? 'f-name' : next.form.type === 'file' ? 'f-path' : 'f-command');
     first.focus();
     first.select();
   }
@@ -235,19 +279,7 @@
   function save(): void {
     if (!modal) return;
     if (modal.kind === 'script') {
-      api.postMessage({
-        type: 'saveScript',
-        draft: {
-          id: modal.script?.id ?? null,
-          name: value('f-name'),
-          path: value('f-path'),
-          description: el<HTMLTextAreaElement>('f-description').value,
-          groupId: value('f-group') || null,
-          interpreter: value('f-interpreter'),
-          args: value('f-args'),
-          cwd: value('f-cwd'),
-        },
-      });
+      api.postMessage({ type: 'saveScript', draft: { id: modal.script?.id ?? null, ...readForm(modal.form) } });
     } else {
       const hue = HUES.find((h) => h === document.querySelector<HTMLInputElement>('input[name="hue"]:checked')?.value) ?? 'violet';
       api.postMessage({ type: 'saveGroup', draft: { id: modal.group?.id ?? null, name: value('f-name'), hue } });
@@ -268,11 +300,11 @@
   // ---------- events ----------
 
   const actions: Record<string, (target: HTMLElement) => void> = {
-    'add-script': (t) => openModal({ kind: 'script', script: null, groupId: t.dataset['id'] ?? null }),
+    'add-script': (t) => openModal({ kind: 'script', script: null, form: formOf(null, t.dataset['id'] ?? null) }),
     'add-group': () => openModal({ kind: 'group', group: null }),
     'edit-script': (t) => {
       const script = scripts.find((s) => s.id === t.dataset['id']);
-      if (script) openModal({ kind: 'script', script, groupId: null });
+      if (script) openModal({ kind: 'script', script, form: formOf(script, null) });
     },
     'edit-group': (t) => {
       const group = groups.find((g) => g.id === t.dataset['id']);
@@ -286,6 +318,10 @@
     'remove-group': (t) => api.postMessage({ type: 'removeGroup', id: t.dataset['id'] ?? '' }),
     'browse-file': () => api.postMessage({ type: 'pick', target: 'file' }),
     'browse-folder': () => api.postMessage({ type: 'pick', target: 'folder' }),
+    'set-type': (t) => {
+      const type = t.dataset['id'] === 'command' ? 'command' : 'file';
+      if (modal?.kind === 'script' && modal.form.type !== type) openModal({ ...modal, form: { ...readForm(modal.form), type } });
+    },
     fold: (t) => {
       const id = t.dataset['id'] ?? '';
       if (!collapsed.delete(id)) collapsed.add(id);
@@ -309,7 +345,8 @@
   });
 
   document.addEventListener('input', (e) => {
-    if (e.target instanceof HTMLInputElement && e.target.id === 'f-path') el<HTMLInputElement>('f-name').placeholder = basename(e.target.value) || 'Defaults to the file name';
+    if (e.target instanceof HTMLInputElement && e.target.id === 'f-path') el<HTMLInputElement>('f-name').placeholder = namePlaceholder({ type: 'file', path: e.target.value, command: '' });
+    if (e.target instanceof HTMLInputElement && e.target.id === 'f-command') el<HTMLInputElement>('f-name').placeholder = namePlaceholder({ type: 'command', path: '', command: e.target.value });
     if (e.target instanceof HTMLInputElement && e.target.id === 'q') {
       query = e.target.value;
       renderList();
@@ -343,12 +380,12 @@
         }
         return;
       case 'addScript':
-        return openModal({ kind: 'script', script: null, groupId: m.groupId });
+        return openModal({ kind: 'script', script: null, form: formOf(null, m.groupId) });
       case 'addGroup':
         return openModal({ kind: 'group', group: null });
       case 'editScript': {
         const script = scripts.find((s) => s.id === m.id);
-        return script ? openModal({ kind: 'script', script, groupId: null }) : undefined;
+        return script ? openModal({ kind: 'script', script, form: formOf(script, null) }) : undefined;
       }
       case 'editGroup': {
         const group = groups.find((g) => g.id === m.id);

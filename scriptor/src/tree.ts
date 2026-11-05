@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { kindOf } from './core/command';
+import { scriptKind } from './core/command';
 import type { Group, Hue, Script } from './core/types';
 import type { Store } from './store';
 
@@ -49,13 +49,14 @@ export class ScriptTree implements vscode.TreeDataProvider<TreeNode>, vscode.Dis
       return item;
     }
     const { script } = node;
-    const kind = kindOf(script.path);
+    const kind = scriptKind(script);
     const item = new vscode.TreeItem(script.name, vscode.TreeItemCollapsibleState.None);
     item.id = `s:${script.id}`;
     item.description = kind.label;
-    item.tooltip = new vscode.MarkdownString([`**${script.name}**`, script.description, `\`${script.path}\``].filter(Boolean).join('\n\n'));
-    item.iconPath = new vscode.ThemeIcon('play-circle', tint(kind.hue));
-    item.contextValue = 'script';
+    const where = script.type === 'file' ? `\`${script.path}\`` : `\`${script.command}\` in \`${script.cwd}\``;
+    item.tooltip = new vscode.MarkdownString([`**${script.name}**`, script.description, where].filter(Boolean).join('\n\n'));
+    item.iconPath = new vscode.ThemeIcon(script.type === 'file' ? 'play-circle' : 'terminal', tint(kind.hue));
+    item.contextValue = script.type === 'file' ? 'script' : 'command';
     return item;
   }
 

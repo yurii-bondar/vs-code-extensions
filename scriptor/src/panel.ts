@@ -2,8 +2,7 @@ import * as vscode from 'vscode';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
-import * as path from 'path';
-import { expandHome, interpreterOf, kindOf } from './core/command';
+import { expandHome, interpreterOf, locationOf, scriptKind } from './core/command';
 import { saveGroup, saveScript, validateGroup, validateScript } from './core/library';
 import type { GroupId, ScriptId } from './core/types';
 import { parseClientMessage } from './protocol';
@@ -63,15 +62,16 @@ export class DashboardPanel {
 
   private async sendState(): Promise<void> {
     const { groups, scripts } = this.store.get();
-    const missing = await Promise.all(scripts.map(async (s) => !(await exists(s.path))));
+    const missing = await Promise.all(scripts.map(async (s) => !(await exists(locationOf(s)))));
     const groupViews: GroupView[] = groups.map((g) => ({ id: g.id, name: g.name, hue: g.hue }));
     const scriptViews: ScriptView[] = scripts.map((s, i) => {
-      const kind = kindOf(s.path);
+      const kind = scriptKind(s);
       return {
         id: s.id,
+        type: s.type,
         name: s.name,
         path: s.path,
-        dir: path.dirname(s.path),
+        command: s.command,
         description: s.description,
         groupId: s.groupId,
         interpreter: s.interpreter,
@@ -80,7 +80,7 @@ export class DashboardPanel {
         lastRunAt: s.lastRunAt,
         missing: missing[i] ?? false,
         kind: { label: kind.label, short: kind.short, hue: kind.hue },
-        detected: interpreterOf({ path: s.path, interpreter: '' }, process.platform) ?? '',
+        detected: s.type === 'file' ? interpreterOf({ path: s.path, interpreter: '' }, process.platform) ?? '' : '',
       };
     });
     this.post({ type: 'state', groups: groupViews, scripts: scriptViews });

@@ -1,7 +1,7 @@
 {
   "name": "scriptor",
   "displayName": "Scriptor",
-  "description": "A launchpad for your scripts. Add any .sh, .js, .py or other script, group them, and run each one in a terminal with a click.",
+  "description": "A launchpad for your scripts and commands. Add any .sh, .js, .py or other script, or a command like npm run dev in a folder, group them, and run each one in a terminal with a click.",
   "version": "0.0.0",
   "publisher": "bondevn",
   "license": "MIT",
@@ -26,6 +26,7 @@
     "python",
     "node",
     "terminal",
+    "npm scripts",
     "automation"
   ],
   "icon": "media/icon.png",
@@ -158,7 +159,7 @@
       "view/item/context": [
         {
           "command": "scriptor.run",
-          "when": "view == scriptor.scripts && viewItem == script",
+          "when": "view == scriptor.scripts && viewItem =~ /^(script|command)$/",
           "group": "inline@1"
         },
         {
@@ -168,7 +169,7 @@
         },
         {
           "command": "scriptor.run",
-          "when": "view == scriptor.scripts && viewItem == script",
+          "when": "view == scriptor.scripts && viewItem =~ /^(script|command)$/",
           "group": "1_run@1"
         },
         {
@@ -183,7 +184,7 @@
         },
         {
           "command": "scriptor.editScript",
-          "when": "view == scriptor.scripts && viewItem == script",
+          "when": "view == scriptor.scripts && viewItem =~ /^(script|command)$/",
           "group": "2_edit@1"
         },
         {
@@ -193,7 +194,7 @@
         },
         {
           "command": "scriptor.reveal",
-          "when": "view == scriptor.scripts && viewItem == script",
+          "when": "view == scriptor.scripts && viewItem =~ /^(script|command)$/",
           "group": "2_edit@3"
         },
         {
@@ -203,7 +204,7 @@
         },
         {
           "command": "scriptor.removeScript",
-          "when": "view == scriptor.scripts && viewItem == script",
+          "when": "view == scriptor.scripts && viewItem =~ /^(script|command)$/",
           "group": "9_danger@1"
         },
         {

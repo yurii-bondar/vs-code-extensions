@@ -1,7 +1,7 @@
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { HUES } from './types';
-import type { Group, GroupDraft, GroupId, Hue, Library, Script, ScriptDraft, ScriptId } from './types';
+import type { Group, GroupDraft, GroupId, Hue, Library, Script, ScriptDraft, ScriptId, ScriptType } from './types';
 
 export const emptyLibrary = (): Library => ({ groups: [], scripts: [] });
 
@@ -11,6 +11,8 @@ const uuid: MakeId = () => randomUUID().slice(0, 8);
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const text = (v: unknown): string => (typeof v === 'string' ? v : '');
 const isHue = (v: unknown): v is Hue => HUES.some((h) => h === v);
+/** Libraries saved before commands existed have no `type`: those are all files. */
+const typeOf = (v: unknown): ScriptType => (v === 'command' ? 'command' : 'file');
 
 /** The library as stored: whatever was saved becomes one valid shape, and what cannot be used is dropped. */
 export function parseLibrary(raw: unknown): Library {
@@ -22,17 +24,24 @@ export function parseLibrary(raw: unknown): Library {
   }
   const scripts: Script[] = [];
   for (const s of Array.isArray(raw['scripts']) ? raw['scripts'] : []) {
-    if (!isRecord(s) || !text(s['id']) || !text(s['path']) || scripts.some((x) => x.id === s['id'])) continue;
+    if (!isRecord(s) || !text(s['id']) || scripts.some((x) => x.id === s['id'])) continue;
+    const type = typeOf(s['type']);
+    const file = type === 'file' ? text(s['path']) : '';
+    const command = type === 'command' ? text(s['command']) : '';
+    const cwd = text(s['cwd']);
+    if (type === 'file' ? !file : !command || !cwd) continue;
     const groupId = text(s['groupId']);
     scripts.push({
       id: text(s['id']) as ScriptId,
-      name: text(s['name']) || path.basename(text(s['path'])),
-      path: text(s['path']),
+      type,
+      name: text(s['name']) || (type === 'file' ? path.basename(file) : command),
+      path: file,
+      command,
       description: text(s['description']),
       groupId: groups.some((g) => g.id === groupId) ? (groupId as GroupId) : null,
-      interpreter: text(s['interpreter']),
-      args: text(s['args']),
-      cwd: text(s['cwd']),
+      interpreter: type === 'file' ? text(s['interpreter']) : '',
+      args: type === 'file' ? text(s['args']) : '',
+      cwd,
       lastRunAt: typeof s['lastRunAt'] === 'number' && Number.isFinite(s['lastRunAt']) ? s['lastRunAt'] : 0,
     });
   }
@@ -41,6 +50,12 @@ export function parseLibrary(raw: unknown): Library {
 
 /** Why a draft cannot be saved, or null. */
 export function validateScript(draft: ScriptDraft): string | null {
+  if (draft.type === 'command') {
+    if (!draft.command.trim()) return 'Type the command to run, e.g. npm run dev.';
+    if (!draft.cwd.trim()) return 'Choose the folder the command runs in.';
+    if (!path.isAbsolute(draft.cwd.trim())) return 'The folder must be an absolute path (or start with ~).';
+    return null;
+  }
   const file = draft.path.trim();
   if (!file) return 'Choose the script file or type its path.';
   if (!path.isAbsolute(file)) return 'The path must be absolute (or start with ~).';
@@ -55,15 +70,19 @@ export function validateGroup(draft: GroupDraft): string | null {
 /** Adds the script, or replaces the one with the draft's id. */
 export function saveScript(lib: Library, draft: ScriptDraft, makeId: MakeId = uuid): Library {
   const existing = lib.scripts.find((s) => s.id === draft.id);
-  const file = draft.path.trim();
+  const isFile = draft.type === 'file';
+  const file = isFile ? draft.path.trim() : '';
+  const command = isFile ? '' : draft.command.trim();
   const script: Script = {
     id: existing?.id ?? (makeId() as ScriptId),
-    name: draft.name.trim() || path.basename(file),
+    type: draft.type,
+    name: draft.name.trim() || (isFile ? path.basename(file) : command),
     path: file,
+    command,
     description: draft.description.trim(),
     groupId: lib.groups.find((g) => g.id === draft.groupId)?.id ?? null,
-    interpreter: draft.interpreter.trim(),
-    args: draft.args.trim(),
+    interpreter: isFile ? draft.interpreter.trim() : '',
+    args: isFile ? draft.args.trim() : '',
     cwd: draft.cwd.trim(),
     lastRunAt: existing?.lastRunAt ?? 0,
   };

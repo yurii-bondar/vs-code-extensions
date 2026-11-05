@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildCommand, expandHome, interpreterOf, kindOf, quote, shellKind } from '../src/core/command';
+import { buildCommand, expandHome, interpreterOf, kindOf, locationOf, quote, scriptKind, shellKind, workDirOf } from '../src/core/command';
 
-const script = (path: string, extra: { interpreter?: string; args?: string } = {}) => ({ path, interpreter: '', args: '', ...extra });
+const script = (path: string, extra: { interpreter?: string; args?: string } = {}) => ({ type: 'file' as const, path, command: '', interpreter: '', args: '', ...extra });
+const command = (line: string, cwd: string) => ({ type: 'command' as const, path: '', command: line, interpreter: '', args: '', cwd });
 
 test('shellKind tells the shells apart by name', () => {
   assert.equal(shellKind('/bin/zsh'), 'posix');
@@ -52,4 +53,20 @@ test('expandHome only touches a leading ~', () => {
   assert.equal(expandHome('~/bin/a.sh', '/home/me'), '/home/me/bin/a.sh');
   assert.equal(expandHome('  ~ ', '/home/me'), '/home/me');
   assert.equal(expandHome('/a/~b', '/home/me'), '/a/~b');
+});
+
+test('buildCommand types a command as it was written', () => {
+  assert.equal(buildCommand({ script: command(' npm run dev -- --port 3000 ', '/app'), shell: 'posix', platform: 'darwin' }), 'npm run dev -- --port 3000');
+  assert.equal(buildCommand({ script: command('npm test', 'C:\\app'), shell: 'powershell', platform: 'win32' }), 'npm test');
+});
+
+test('a command runs in its folder, is checked by it and shows as Command', () => {
+  const c = command('npm run dev', '/code/app');
+  assert.equal(workDirOf(c), '/code/app');
+  assert.equal(locationOf(c), '/code/app');
+  assert.equal(scriptKind(c).short, 'CMD');
+  const f = { ...script('/x/a.py'), cwd: '' };
+  assert.equal(workDirOf(f), '/x');
+  assert.equal(locationOf(f), '/x/a.py');
+  assert.equal(scriptKind(f).label, 'Python');
 });

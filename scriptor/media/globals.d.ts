@@ -5,6 +5,8 @@ type ScriptView = import('../src/protocol').ScriptView;
 type HostMessage = import('../src/protocol').HostMessage;
 type ClientMessage = import('../src/protocol').ClientMessage;
 type Hue = import('../src/core/types').Hue;
+type ScriptType = import('../src/core/types').ScriptType;
+type ScriptDraft = import('../src/core/types').ScriptDraft;
 
 /** What survives a reload of the page. */
 interface PersistedState {
