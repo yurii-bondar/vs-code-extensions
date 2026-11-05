@@ -84,8 +84,8 @@ function keybindingEdit(raw: unknown): KeybindingEdit | null {
       return { op: 'disableDefault', command, key, when };
     case 'replaceDefault':
       return { op: 'replaceDefault', command, oldKey: str(raw.oldKey) ?? '', oldWhen: str(raw.oldWhen) ?? '', key, when, args: raw.args };
-    case 'restoreDefault':
-      return at === null ? null : { op: 'restoreDefault', index: at, command };
+    case 'restore':
+      return at === null ? null : { op: 'restore', index: at, command };
     case 'resetCommand':
       return { op: 'resetCommand', command };
     default:

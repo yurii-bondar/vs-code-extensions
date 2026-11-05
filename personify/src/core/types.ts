@@ -67,12 +67,12 @@ interface RowBase {
   /** Empty: always. */
   readonly when: string;
   readonly args: unknown;
+  /** Index of the `-command` entry in keybindings.json that switches this shortcut off; null while it is on. */
+  readonly removalIndex: number | null;
 }
 
 export interface DefaultRow extends RowBase {
   readonly source: 'default';
-  /** Index of the `-command` entry in keybindings.json that switches this default off; null while it is on. */
-  readonly removalIndex: number | null;
 }
 
 export interface UserRow extends RowBase {
@@ -105,5 +105,6 @@ export type KeybindingEdit =
   | { readonly op: 'remove'; readonly index: number; readonly command: string }
   | { readonly op: 'disableDefault'; readonly command: string; readonly key: string; readonly when: string }
   | { readonly op: 'replaceDefault'; readonly command: string; readonly oldKey: string; readonly oldWhen: string; readonly key: string; readonly when: string; readonly args: unknown }
-  | { readonly op: 'restoreDefault'; readonly index: number; readonly command: string }
+  /** Removes the `-command` entry at `index`, which brings back the shortcuts it switched off. */
+  | { readonly op: 'restore'; readonly index: number; readonly command: string }
   | { readonly op: 'resetCommand'; readonly command: string };

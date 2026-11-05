@@ -1003,7 +1003,7 @@
 
   function computeKb(kb: KeybindingsState): void {
     const rows = kb.rows
-      .map((r): ViewRow => ({ ...r, nk: normKey(r.key), removed: r.source === 'default' && r.removalIndex !== null, conflicts: [] }))
+      .map((r): ViewRow => ({ ...r, nk: normKey(r.key), removed: r.removalIndex !== null, conflicts: [] }))
       .sort((a, b) => a.title.localeCompare(b.title) || a.key.localeCompare(b.key));
     const groups = new Map<string, ViewRow[]>();
     for (const r of rows) {
@@ -1065,7 +1065,10 @@
       actions = btn('add', '＋ Assign', 'Assign a shortcut', 'text-btn');
     } else if (r.removed) {
       badge = '<span class="badge badge-removed">Removed</span>';
-      actions = btn('restore', '↺ Restore', 'Bring this default shortcut back', 'text-btn');
+      actions =
+        r.source === 'user'
+          ? btn('restore', '↺ Restore', 'Delete the entry that switches this shortcut off', 'text-btn') + btn('remove', '🗑', 'Delete this shortcut')
+          : btn('restore', '↺ Restore', 'Bring this default shortcut back', 'text-btn');
     } else if (r.source === 'user') {
       badge = '<span class="badge badge-user">Custom</span>';
       actions = btn('edit', '✎', 'Edit shortcut') + btn('add', '＋', 'Add another shortcut for this command') + btn('remove', '🗑', 'Delete this shortcut') + (kbView.withDefault.has(r.command) ? btn('reset', '↺', 'Reset command to defaults') : '');
@@ -1208,7 +1211,7 @@
           else if (row.source === 'default') kbOp({ op: 'disableDefault', command: row.command, key: row.key, when: row.when });
           return;
         case 'restore':
-          if (row.source === 'default' && row.removalIndex !== null) kbOp({ op: 'restoreDefault', index: row.removalIndex, command: row.command });
+          if (row.source !== 'unbound' && row.removalIndex !== null) kbOp({ op: 'restore', index: row.removalIndex, command: row.command });
           return;
         case 'reset':
           return kbOp({ op: 'resetCommand', command: row.command });

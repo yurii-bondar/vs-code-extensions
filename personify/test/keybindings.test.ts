@@ -48,7 +48,7 @@ test('buildRows marks switched-off defaults and lists the user entries that have
     ]
   );
   const removed = buildRows({ defaults, user: [{ key: 'cmd+p', command: '-quickOpen' }], title: (id) => id });
-  assert.equal(removed[1]?.source === 'default' && removed[1].removalIndex, 0);
+  assert.equal(removed[1]?.removalIndex, 0);
 });
 
 test('add, disable and replace append entries; when and args only when set', () => {
@@ -67,7 +67,7 @@ test('update, remove and restore keep the comments and check the entry did not m
   assert.match(updated, /\/\/ keep me/);
   assert.deepEqual(parseKeybindings(updated), [{ key: 'c', command: 'x' }, { key: 'b', command: '-y' }]);
   assert.deepEqual(apply(text, { op: 'remove', index: 0, command: 'x' }), [{ key: 'b', command: '-y' }]);
-  assert.deepEqual(apply(text, { op: 'restoreDefault', index: 1, command: 'y' }), [{ key: 'a', command: 'x', when: 'w' }]);
+  assert.deepEqual(apply(text, { op: 'restore', index: 1, command: 'y' }), [{ key: 'a', command: 'x', when: 'w' }]);
   assert.throws(() => applyEdit(text, parseKeybindings(text) ?? [], { op: 'remove', index: 1, command: 'x' }), /changed outside Personify/);
 });
 
@@ -79,6 +79,21 @@ test('resetCommand drops every entry of a command and its removals', () => {
 test('removing the last entry of a one-line file leaves valid JSON', () => {
   const text = JSON.stringify([{ key: 'a', command: 'x' }, { key: 'b', command: 'y' }, { key: 'c', command: '-x' }]);
   assert.deepEqual(apply(text, { op: 'resetCommand', command: 'x' }), [{ key: 'b', command: 'y' }]);
-  assert.deepEqual(apply(text, { op: 'restoreDefault', index: 2, command: 'x' }), [{ key: 'a', command: 'x' }, { key: 'b', command: 'y' }]);
+  assert.deepEqual(apply(text, { op: 'restore', index: 2, command: 'x' }), [{ key: 'a', command: 'x' }, { key: 'b', command: 'y' }]);
   assert.deepEqual(apply('[{"key":"a","command":"x"},{"key":"b","command":"y"}] // mine', { op: 'remove', index: 1, command: 'y' }), [{ key: 'a', command: 'x' }]);
+});
+
+test('a removal switches off the user entries above it, not the ones after it', () => {
+  const user = [{ key: 'cmd+j', command: 'x' }, { key: 'shift+cmd+j', command: '-x' }, { key: 'Cmd+Shift+J', command: 'x' }, { command: '-y' }];
+  const rows = buildRows({ defaults: [{ key: 'cmd+y', command: 'y', when: 'a', args: undefined }], user, title: (id) => id });
+  assert.deepEqual(
+    rows.map((r) => [r.id, r.removalIndex]),
+    [
+      ['d0', 3],
+      ['u0', null],
+      ['u2', null],
+    ]
+  );
+  const before = buildRows({ defaults: [], user: [{ key: 'shift+cmd+j', command: 'x' }, { key: 'cmd+shift+j', command: '-x' }], title: (id) => id });
+  assert.equal(before[0]?.removalIndex, 1);
 });
