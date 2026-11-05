@@ -83,17 +83,26 @@ Screens are numbered by the order they were designed, not by the order a user me
 
 ## Where the code stands
 
-Already in `githor/`: the sidebar and editor webview, `listBranches`, `switchBranch`, repository picking, `refresh` and `switch` messages. See `README.md`.
+Built in `githor/`, following the build order below (see `README.md` for what each does):
 
-These differ from the design and need changing first:
+| Step | Screens | State |
+|---|---|---|
+| 1 | `01`, `05`, `06`, `07`, `08` | Branch row marks, filters, status bar, quick pick, empty and fetch-failed states |
+| 2 | `11`, `44` | Pull (fast-forward only), Push with its menu (force-push with lease, tags), Publish, Sync, row actions |
+| 3 | `31`–`37`, `43` | Branch menu, new, rename, delete with Undo, pin, copy name; create from the filter and the quick pick |
+| 4 | `38`–`42` | Git menu, Delete all merged branches with the checks of `delete-merged-main-branches.sh`, so squash and rebase merges count |
+| 5 | `01`, `14` | Log with graph, search, Only mine, highlighting, details, Switch, Cherry-pick, Revert with Undo |
+| 6 | `02` | Side-by-side diff with changed words marked |
+| 7 | `04`, `10`, `49`–`51` | Commit tab with sections and directory grouping, Commit and push, the push screen |
 
-| In the code now | In the design |
-|---|---|
-| `media/app.ts` and `app.css` show state labels (`↑ ahead`, `Upstream gone`, and so on), and `README.md` describes them | Counts beside chips, per the table above |
-| `Branch.sync` is the main input to the row | `ahead` and `behind` decide the marks. `sync` stays useful for logic. `Branch` already has both |
-| `design/tokens-and-components.css` was written before these changes | Regenerate or edit: row marks, icon-only `⇅`, menu, dialog, checkbox, select, toast |
+Left out on purpose, with their reason:
 
-`src/core/git.ts` sets `GIT_TERMINAL_PROMPT=0`, so a command that needs credentials fails instead of waiting. Push and pull need a real sign-in path first, see Accounts below.
+- **Menu items whose screens come later** are not shown dead: `Compare with remote`, `Merge into`, `Rebase onto` (step 8), `Squash` (step 9), `Stash` (step 10), `Accounts…` (step 11), `Open settings` (Githor has no settings).
+- **Conflicts.** A cherry-pick or revert that stops at a conflict is aborted at once, so nothing changes; Pull is fast-forward only and Sync is off for a diverged branch, until the conflict screens exist.
+- **`52 Grouped by repository`.** Githor shows one repository at a time; `Repository` joins the Group by menu once the model holds every open repository.
+- **Search** covers the commits loaded (300 at a time), and the graph draws up to 8 lanes.
+
+`src/core/git.ts` sets `GIT_TERMINAL_PROMPT=0`: push and pull use the credentials git already has (SSH, the keychain), and fail instead of asking. Choosing between accounts is step 11.
 
 ## Suggested build order
 
