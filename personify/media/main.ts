@@ -20,7 +20,6 @@
   const app = $('#app');
   const send = (msg: ClientMessage): void => vscode.postMessage(msg);
 
-  const SEMANTIC_KEY = 'editor.semanticHighlighting.enabled';
   const TABS: readonly { id: Tab; label: string; icon: string }[] = [
     { id: 'hotkeys', label: 'Hotkeys', icon: '⌨' },
     { id: 'appearance', label: 'Appearance', icon: '◐' },
@@ -769,9 +768,10 @@
 
     const sem = $opt('#tab-syntax [data-semantic]');
     if (sem) {
-      const v = S.syntax.semanticHighlighting;
-      const val = v === true ? 'true' : v === false ? 'false' : '';
+      const { value, effective } = S.syntax.semanticHighlighting;
+      const val = value === null ? '' : String(value);
       $$('button', sem).forEach((b) => b.classList.toggle('active', b.dataset.val === val));
+      $('[data-val=""]', sem).textContent = `Default (${effective === null ? 'theme' : effective ? 'on' : 'off'})`;
     }
 
     if (S.lang === 'custom') return syncCustom();
@@ -881,9 +881,10 @@
         if (!S.syntax) return;
         const v = semBtn.dataset.val;
         const value = v === '' ? null : v === 'true';
-        S.syntax.semanticHighlighting = value;
+        S.syntax.semanticHighlighting.value = value;
+        if (value !== null) S.syntax.semanticHighlighting.effective = value;
         syncSyntax();
-        return send({ type: 'setSettings', changes: { [SEMANTIC_KEY]: value } });
+        return send({ type: 'setSemanticHighlighting', value });
       }
       const styleBtn = t.closest<HTMLElement>('.style-btn');
       if (styleBtn) {

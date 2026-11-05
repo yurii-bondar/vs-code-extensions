@@ -43,12 +43,19 @@ export interface CustomRule extends TokenStyle {
   scope: string;
 }
 
+/** `editor.semanticHighlighting.enabled`; null where the theme decides. */
+export interface SemanticState {
+  /** Written at the current scope. */
+  value: boolean | null;
+  /** What applies right now, from any level. */
+  effective: boolean | null;
+}
+
 export interface SyntaxState {
   /** By `langId/itemId`. */
   items: Record<string, TokenStyle>;
   custom: CustomRule[];
-  /** null: the theme decides. */
-  semanticHighlighting: boolean | null;
+  semanticHighlighting: SemanticState;
 }
 
 export interface SyntaxChange {

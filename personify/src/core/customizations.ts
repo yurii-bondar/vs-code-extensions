@@ -12,9 +12,10 @@ const RULE_PREFIX = 'personify:';
 const CUSTOM_PREFIX = 'personify:custom:';
 const STYLES = ['bold', 'italic', 'underline', 'strikethrough'];
 const SCOPES: readonly Scope[] = ['user', 'workspace'];
-const COLOR_KEYS: ReadonlySet<string> = new Set(catalog.COLOR_KEYS);
 // The webview and profiles may write these and nothing else.
-const SETTING_KEYS: ReadonlySet<string> = new Set([...catalog.SETTING_KEYS, SEMANTIC_ENABLED]);
+const COLOR_KEYS: ReadonlySet<string> = new Set(catalog.COLOR_KEYS);
+const SETTING_KEYS: ReadonlySet<string> = new Set(catalog.SETTING_KEYS);
+const bool = (v: unknown): boolean | null => (typeof v === 'boolean' ? v : null);
 
 /** VS Code settings, as far as Personify needs them. */
 export interface Config {
@@ -190,8 +191,13 @@ export class Customizations {
       if (name.startsWith(CUSTOM_PREFIX)) custom.push({ id: name.slice(CUSTOM_PREFIX.length), scope: scopeList(rule.scope).join(', '), ...style });
       else items[name.slice(RULE_PREFIX.length)] = style;
     }
-    const semantic = this.config.effective(SEMANTIC_ENABLED);
-    return { items, custom, semanticHighlighting: typeof semantic === 'boolean' ? semantic : null };
+    const semanticHighlighting = { value: bool(this.config.read(SEMANTIC_ENABLED, target.scope)), effective: bool(this.config.effective(SEMANTIC_ENABLED)) };
+    return { items, custom, semanticHighlighting };
+  }
+
+  /** null removes the setting at the target's scope. It is not per theme: VS Code has no such block for it. */
+  setSemanticHighlighting(target: Target, value: boolean | null): Promise<void> {
+    return this.enqueue(() => this.writeIfChanged(SEMANTIC_ENABLED, value ?? undefined, target.scope));
   }
 
   setSyntax(target: Target, changes: readonly SyntaxChange[]): Promise<void> {

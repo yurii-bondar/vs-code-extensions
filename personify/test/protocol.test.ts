@@ -13,6 +13,8 @@ test('parseClientMessage drops unknown messages and values of the wrong type', (
   assert.equal(parseClientMessage(null), null);
   assert.equal(parseClientMessage({ type: 'eval', code: '1' }), null);
   assert.deepEqual(parseClientMessage({ type: 'ready', extra: 1 }), { type: 'ready' });
+  assert.deepEqual(parseClientMessage({ type: 'setSemanticHighlighting', value: 'yes' }), { type: 'setSemanticHighlighting', value: null });
+  assert.deepEqual(parseClientMessage({ type: 'setSemanticHighlighting', value: false }), { type: 'setSemanticHighlighting', value: false });
   assert.deepEqual(parseClientMessage({ type: 'setColors', changes: { a: '#fff', b: '', c: 5 } }), { type: 'setColors', changes: { a: '#fff', b: null, c: null } });
   assert.deepEqual(parseClientMessage({ type: 'setSettings', changes: { a: 3, b: true, c: { x: 1 } } }), { type: 'setSettings', changes: { a: 3, b: true, c: null } });
   assert.deepEqual(parseClientMessage({ type: 'setSyntax', changes: [{ langId: 'go', itemId: 'x', style: { fg: '#f00' } }, { langId: 1 }] }), {

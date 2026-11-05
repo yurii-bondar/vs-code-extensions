@@ -23,6 +23,8 @@ export type ClientMessage =
   | ({ type: 'prefs' } & Prefs)
   | { type: 'setColors'; changes: Record<string, string | null> }
   | { type: 'setSettings'; changes: Record<string, SettingValue | null> }
+  /** null leaves it to the theme. */
+  | { type: 'setSemanticHighlighting'; value: boolean | null }
   | { type: 'setSyntax'; changes: SyntaxChange[] }
   | { type: 'setCustom'; list: CustomRule[] }
   | { type: 'kb'; edit: KeybindingEdit }
@@ -111,6 +113,8 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
       return { type: 'setColors', changes: record(raw.changes, (v) => str(v) || null) };
     case 'setSettings':
       return { type: 'setSettings', changes: record(raw.changes, settingValue) };
+    case 'setSemanticHighlighting':
+      return { type: 'setSemanticHighlighting', value: typeof raw.value === 'boolean' ? raw.value : null };
     case 'setSyntax':
       return { type: 'setSyntax', changes: records(raw.changes).flatMap(syntaxChange) };
     case 'setCustom':

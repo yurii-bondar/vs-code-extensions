@@ -165,6 +165,8 @@ export class PersonifyPanel {
         return this.customizations.setColors(this.target, msg.changes);
       case 'setSettings':
         return this.customizations.setSettings(this.target, msg.changes);
+      case 'setSemanticHighlighting':
+        return this.customizations.setSemanticHighlighting(this.target, msg.value);
       case 'setSyntax':
         return this.customizations.setSyntax(this.target, msg.changes);
       case 'setCustom':

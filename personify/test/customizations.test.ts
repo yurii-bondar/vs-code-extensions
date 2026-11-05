@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { COLORS, Customizations, SEMANTIC, TOKENS } from '../src/core/customizations';
+import { COLORS, Customizations, SEMANTIC, SEMANTIC_ENABLED, TOKENS } from '../src/core/customizations';
 import type { Config } from '../src/core/customizations';
 import type { Scope, Target } from '../src/core/types';
 
@@ -157,4 +157,15 @@ test('a write that changes nothing is skipped', async () => {
   await c.setSettings(USER, { 'editor.fontSize': 15 });
   await c.setColors(USER, { 'sideBar.background': null });
   assert.equal(config.writes, 1);
+});
+
+test('semantic highlighting reports the value at the scope apart from the one that applies', async () => {
+  const { config, c } = setup();
+  await config.write(SEMANTIC_ENABLED, false, 'workspace');
+  await c.setSemanticHighlighting(USER, true);
+  assert.deepEqual(c.syntaxState(USER).semanticHighlighting, { value: true, effective: false });
+  await c.setSemanticHighlighting(USER, null);
+  assert.equal(config.read(SEMANTIC_ENABLED, 'user'), undefined);
+  await c.setSettings(USER, { [SEMANTIC_ENABLED]: true });
+  assert.equal(config.read(SEMANTIC_ENABLED, 'user'), undefined, 'not a catalog setting');
 });
