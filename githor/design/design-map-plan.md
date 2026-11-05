@@ -94,11 +94,13 @@ Built in `githor/`, following the build order below (see `README.md` for what ea
 | 5 | `01`, `14` | Log with graph, search, Only mine, highlighting, details, Switch, Cherry-pick, Revert with Undo |
 | 6 | `02` | Side-by-side diff with changed words marked |
 | 7 | `04`, `10`, `49`–`51` | Commit tab with sections and directory grouping, Commit and push, the push screen |
+| 8 | `03`, `23`–`30` | Compare with remote (rebase, merge, force-push), conflict screens with your branch always on the left, Continue, Abort, Undo merge |
 
 Left out on purpose, with their reason:
 
-- **Menu items whose screens come later** are not shown dead: `Compare with remote`, `Merge into`, `Rebase onto` (step 8), `Squash` (step 9), `Stash` (step 10), `Accounts…` (step 11), `Open settings` (Githor has no settings).
-- **Conflicts.** A cherry-pick or revert that stops at a conflict is aborted at once, so nothing changes; Pull is fast-forward only and Sync is off for a diverged branch, until the conflict screens exist.
+- **Menu items whose screens come later** are not shown dead: `Merge into` and `Rebase onto` another branch (they still lack the confirmation listed in the gaps), `Squash` (step 9), `Stash` (step 10), `Accounts…` (step 11), `Open settings` (Githor has no settings).
+- **Conflicts outside merge and rebase.** A cherry-pick or revert that stops at a conflict is aborted at once, so nothing changes. Pull stays fast-forward only: a diverged branch goes through the compare screen.
+- **Rebase wording** is a gap of the design; the screens say `Rebase paused at a conflict`, `Abort rebase`, and that Continue replays the rest of your commits.
 - **`52 Grouped by repository`.** Githor shows one repository at a time; `Repository` joins the Group by menu once the model holds every open repository.
 - **Search** covers the commits loaded (300 at a time), and the graph draws up to 8 lanes.
 
