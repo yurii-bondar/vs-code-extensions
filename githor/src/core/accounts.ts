@@ -38,7 +38,7 @@ export function ruleMatches(pattern: string, remote: RemoteInfo): boolean {
 
 export type PickReason = 'repo' | 'rule' | 'last' | 'none';
 
-export interface Pick {
+export interface AccountPick {
   account: Account | null;
   why: PickReason;
   /** The rule that picked it, when one did. */
@@ -49,7 +49,7 @@ export interface Pick {
  * The account a repository uses: the repository's own choice, else the first rule matching its remote, else the
  * account last used. None when there is no account at all.
  */
-export function pickAccount({ accounts, rules, repoChoice, remote, lastUsed }: { accounts: readonly Account[]; rules: readonly AccountRule[]; repoChoice: AccountId | null; remote: RemoteInfo | null; lastUsed: AccountId | null }): Pick {
+export function pickAccount({ accounts, rules, repoChoice, remote, lastUsed }: { accounts: readonly Account[]; rules: readonly AccountRule[]; repoChoice: AccountId | null; remote: RemoteInfo | null; lastUsed: AccountId | null }): AccountPick {
   const byId = (id: AccountId | null): Account | undefined => accounts.find((a) => a.id === id);
   const chosen = byId(repoChoice);
   if (chosen) return { account: chosen, why: 'repo', rule: null };

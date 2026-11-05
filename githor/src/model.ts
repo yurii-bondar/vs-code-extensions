@@ -41,6 +41,8 @@ export class RepoModel implements vscode.Disposable {
   /** The merge or rebase in progress, if any. */
   operation: OperationView | null = null;
   stashes = 0;
+  /** The remote the current branch talks to (its upstream's, else origin), for picking the account. */
+  remote: { name: string; url: string } | null = null;
 
   private readonly changed = new vscode.EventEmitter<void>();
   /** Fires after the state changed. */
@@ -131,7 +133,10 @@ export class RepoModel implements vscode.Disposable {
       const [branches, fetchedAt, main, headSha, working, operation, stashes] = root
         ? await Promise.all([listBranches(this.git, root), lastFetchedAt(this.git, root), defaultBranch(this.git, root), head(root), readWorking(this.git, root), readOperation(this.git, root), stashCount(this.git, root)])
         : [[], null, null, null, [], null, 0];
+      const remoteName = (branches.find((b) => b.current)?.upstream ?? 'origin/').split('/')[0] || 'origin';
+      const url = root ? await this.git.run(root, ['remote', 'get-url', remoteName]).then((s) => s.trim(), () => null) : null;
       if (generation !== this.generation) return;
+      this.remote = url ? { name: remoteName, url } : null;
       Object.assign(this, { branches: root ? sortBranches(branches, this.pins(root)) : [], fetchedAt, defaultBranch: main, head: headSha, working, operation, stashes, loaded: true });
       this.changed.fire();
     } catch (e) {

@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import { AccountStore } from './account-store';
+import { accountGit } from './account-git';
 import { Actions } from './actions';
 import { createGitRunner } from './core/git';
 import { RepoModel } from './model';
@@ -9,6 +11,7 @@ import { gitApi } from './vscode-git';
 export interface Services {
   model: RepoModel;
   actions: Actions;
+  accounts: AccountStore;
 }
 
 /**
@@ -21,10 +24,12 @@ export function lazyServices(context: vscode.ExtensionContext, output: vscode.Ou
     (services ??= (async () => {
       const api = await gitApi();
       if (!api) return undefined;
-      const model = new RepoModel(api, createGitRunner(api.git.path), context.workspaceState);
-      const actions = new Actions(model, output);
-      context.subscriptions.push(model, new BranchStatusBar(model));
+      const base = createGitRunner(api.git.path);
+      const model = new RepoModel(api, base, context.workspaceState);
+      const accounts = new AccountStore(context);
+      const actions = new Actions(model, output, accountGit({ base, store: accounts, model, fetch }));
+      context.subscriptions.push(model, accounts, new BranchStatusBar(model));
       void model.refresh();
-      return { model, actions };
+      return { model, actions, accounts };
     })());
 }
