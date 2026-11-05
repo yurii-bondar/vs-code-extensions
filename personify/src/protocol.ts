@@ -1,4 +1,4 @@
-import { isRecord, str } from './core/json';
+import { isRecord, records, settingValue, str } from './core/json';
 import type { Area, Language } from './catalog/types';
 import type { JsonObject } from './core/json';
 import type { AppearanceState, CustomRule, KeybindingEdit, KeybindingsState, Prefs, Scope, SettingValue, SyntaxChange, SyntaxState, Tab, ThemeMode, TokenStyle } from './core/types';
@@ -45,7 +45,6 @@ export function parsePrefs(raw: unknown): Prefs {
   return { scope: SCOPES.find((s) => s === r.scope) ?? 'user', themeMode: THEME_MODES.find((m) => m === r.themeMode) ?? 'all' };
 }
 
-const settingValue = (v: unknown): SettingValue | null => (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean' ? v : null);
 const index = (v: unknown): number | null => (typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : null);
 const style = (v: unknown): TokenStyle => (isRecord(v) ? { fg: str(v.fg) || null, fontStyle: str(v.fontStyle) } : { fg: null, fontStyle: null });
 
@@ -54,8 +53,6 @@ function record<T extends SettingValue | null>(raw: unknown, value: (v: unknown)
   if (isRecord(raw)) for (const [k, v] of Object.entries(raw)) out[k] = value(v);
   return out;
 }
-
-const records = (raw: unknown): JsonObject[] => (Array.isArray(raw) ? raw.filter(isRecord) : []);
 
 function syntaxChange(r: JsonObject): SyntaxChange[] {
   const langId = str(r.langId);

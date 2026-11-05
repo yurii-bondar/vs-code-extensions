@@ -1,6 +1,6 @@
 // What Personify writes to settings: colors, plain settings and syntax rules, read and changed at one target.
 import * as catalog from '../catalog';
-import { isRecord, str } from './json';
+import { isRecord, settingValue, str } from './json';
 import type { JsonObject } from './json';
 import type { AppearanceState, CustomRule, Scope, SettingState, SettingValue, SyntaxChange, SyntaxState, Target, TokenStyle } from './types';
 
@@ -38,7 +38,6 @@ export interface Customization {
 /** Raw values of every key Personify touches, at both levels, so a session can be reverted. */
 export type Snapshot = Record<Scope, Record<string, unknown>>;
 
-export const settingValue = (v: unknown): SettingValue | null => (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean' ? v : null);
 const clone = (v: unknown): unknown => (v === undefined ? undefined : (JSON.parse(JSON.stringify(v)) as unknown));
 const rulesOf = (blk: JsonObject): unknown[] => (Array.isArray(blk.textMateRules) ? blk.textMateRules : []);
 const nameOf = (rule: unknown): string | null => (isRecord(rule) ? str(rule.name) : null);
@@ -130,12 +129,12 @@ export class Customizations {
   appearanceState(target: Target): AppearanceState {
     const blk = this.blockAt(COLORS, target);
     const colors: Record<string, string> = {};
-    for (const key of catalog.colorKeys()) {
+    for (const key of catalog.COLOR_KEYS) {
       const value = blk[key];
       if (typeof value === 'string') colors[key] = value;
     }
     const settings: Record<string, SettingState> = {};
-    for (const key of catalog.settingKeys()) {
+    for (const key of catalog.SETTING_KEYS) {
       settings[key] = {
         value: settingValue(this.config.read(key, target.scope)),
         effective: settingValue(this.config.effective(key)),
@@ -237,9 +236,8 @@ export class Customizations {
 
   exportState(target: Target): Customization {
     const semBlk = this.blockAt(SEMANTIC, target);
-    const managed = catalog.allSemanticSelectors();
-    const semanticRules: JsonObject = {};
-    for (const [sel, value] of Object.entries(isRecord(semBlk.rules) ? semBlk.rules : {})) if (managed.has(sel)) semanticRules[sel] = value;
+        const semanticRules: JsonObject = {};
+    for (const [sel, value] of Object.entries(isRecord(semBlk.rules) ? semBlk.rules : {})) if (catalog.SEMANTIC_SELECTORS.has(sel)) semanticRules[sel] = value;
 
     const { colors, settings } = this.appearanceState(target);
     const plainSettings: Record<string, SettingValue> = {};
@@ -257,11 +255,11 @@ export class Customizations {
   importState(target: Target, data: Customization, { replace }: { replace: boolean }): Promise<void> {
     return this.enqueue(async () => {
       await this.updateObject(COLORS, target, (blk) => {
-        if (replace) for (const key of catalog.colorKeys()) delete blk[key];
+        if (replace) for (const key of catalog.COLOR_KEYS) delete blk[key];
         Object.assign(blk, data.colors);
       });
       const settings: Record<string, SettingValue | undefined> = { ...data.settings };
-      if (replace) for (const key of catalog.settingKeys()) if (!(key in settings)) settings[key] = undefined;
+      if (replace) for (const key of catalog.SETTING_KEYS) if (!(key in settings)) settings[key] = undefined;
       for (const [key, value] of Object.entries(settings)) await this.config.write(key, value, target.scope);
 
       const incoming = data.textMateRules.filter((r) => nameOf(r)?.startsWith(RULE_PREFIX));
@@ -276,7 +274,7 @@ export class Customizations {
       });
       await this.updateObject(SEMANTIC, target, (blk) => {
         const rules = isRecord(blk.rules) ? blk.rules : {};
-        if (replace) for (const sel of catalog.allSemanticSelectors()) delete rules[sel];
+        if (replace) for (const sel of catalog.SEMANTIC_SELECTORS) delete rules[sel];
         Object.assign(rules, data.semanticRules);
         setSemanticRules(blk, rules);
       });
@@ -288,7 +286,7 @@ export class Customizations {
   }
 
   private static snapshotKeys(): string[] {
-    return [COLORS, TOKENS, SEMANTIC, SEMANTIC_ENABLED, ...catalog.settingKeys()];
+    return [COLORS, TOKENS, SEMANTIC, SEMANTIC_ENABLED, ...catalog.SETTING_KEYS];
   }
 
   snapshot(): Snapshot {

@@ -5,7 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as catalog from './catalog';
 import { Customizations, SEMANTIC_ENABLED } from './core/customizations';
-import { str } from './core/json';
+import { errorMessage, str } from './core/json';
 import { parseProfile, profileFile } from './core/profile';
 import { parseClientMessage, parsePrefs } from './protocol';
 import { vscodeConfig } from './settings';
@@ -15,10 +15,9 @@ import type { Prefs, Tab, Target } from './core/types';
 import type { ClientMessage, HostMessage, ToastKind } from './protocol';
 
 const PREFS_KEY = 'personify.prefs';
-const WATCHED_KEYS = ['workbench.colorCustomizations', 'editor.tokenColorCustomizations', 'editor.semanticTokenColorCustomizations', 'workbench.colorTheme', SEMANTIC_ENABLED, ...catalog.settingKeys()];
+const WATCHED_KEYS = ['workbench.colorCustomizations', 'editor.tokenColorCustomizations', 'editor.semanticTokenColorCustomizations', 'workbench.colorTheme', SEMANTIC_ENABLED, ...catalog.SETTING_KEYS];
 
 const activeTheme = (): string => str(vscode.workspace.getConfiguration('workbench').get<unknown>('colorTheme')) ?? '';
-const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 export class PersonifyPanel {
   private static current: PersonifyPanel | undefined;

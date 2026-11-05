@@ -3,7 +3,7 @@ import { promises as fs } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { applyEdit, buildRows, humanize, parseDefaultKeybindings, parseKeybindings, toBinding } from './core/keybindings';
-import { isRecord, str } from './core/json';
+import { errorMessage, isRecord, str } from './core/json';
 import type { Binding } from './core/keybindings';
 import type { KeybindingEdit, KeybindingsState } from './core/types';
 
@@ -23,8 +23,6 @@ function contributed(packageJSON: unknown, point: string): unknown[] {
   const value = isRecord(contributes) ? contributes[point] : undefined;
   return Array.isArray(value) ? value : value === undefined || value === null ? [] : [value];
 }
-
-const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /** The user's keybindings.json, edited in place, plus the defaults it overrides. */
 export class KeybindingStore {

@@ -1,6 +1,5 @@
 // The file that Export writes and Import reads: { personify: 1, exportedAt, colors, settings, textMateRules, semanticRules, keybindings? }.
-import { settingValue } from './customizations';
-import { isRecord, str } from './json';
+import { isRecord, records, settingValue, str } from './json';
 import type { Customization } from './customizations';
 import type { JsonObject } from './json';
 import type { SettingValue } from './types';
@@ -33,7 +32,6 @@ export function parseProfile(raw: unknown): Profile | null {
       if (value !== null) settings[k] = value;
     }
   }
-  const records = (v: unknown): JsonObject[] => (Array.isArray(v) ? v.filter(isRecord) : []);
   return {
     colors,
     settings,
