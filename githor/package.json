@@ -1,0 +1,137 @@
+{
+  "name": "githor",
+  "displayName": "Githor",
+  "description": "Your git branches at a glance: what to push, what to pull, what is merged. Switch with a click and clear out merged branches, squash and rebase merges included.",
+  "version": "0.0.0",
+  "publisher": "bondevn",
+  "license": "MIT",
+  "author": "Yurii Bondar",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yurii-bondar/vs-code-extensions.git",
+    "directory": "githor"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "SCM Providers",
+    "Other"
+  ],
+  "keywords": [
+    "git",
+    "branches",
+    "branch",
+    "ahead",
+    "behind",
+    "upstream",
+    "switch branch",
+    "delete merged branches",
+    "squash merge",
+    "status bar"
+  ],
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#171812",
+    "theme": "dark"
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "extensionDependencies": [
+    "vscode.git"
+  ],
+  "scripts": {
+    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json && tsc -p tsconfig.webview.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.webview.json",
+    "lint": "eslint .",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "package": "npx @vscode/vsce package",
+    "vscode:prepublish": "npm run build"
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "githor",
+          "title": "Githor",
+          "icon": "media/activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "githor": [
+        {
+          "type": "webview",
+          "id": "githor.branches",
+          "name": "Branches",
+          "icon": "media/activity.svg"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "githor.open",
+        "title": "Open in Editor",
+        "category": "Githor",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "githor.switchBranch",
+        "title": "Switch Branch…",
+        "category": "Githor",
+        "icon": "$(git-branch)"
+      },
+      {
+        "command": "githor.fetch",
+        "title": "Fetch",
+        "category": "Githor",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "githor.fetchAll",
+        "title": "Fetch All Remotes",
+        "category": "Githor"
+      },
+      {
+        "command": "githor.deleteMerged",
+        "title": "Delete All Merged Branches…",
+        "category": "Githor",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "githor.showOutput",
+        "title": "Show Git Output",
+        "category": "Githor"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "githor.open",
+          "when": "view == githor.branches",
+          "group": "navigation@1"
+        },
+        {
+          "command": "githor.deleteMerged",
+          "when": "view == githor.branches",
+          "group": "1_branches@1"
+        },
+        {
+          "command": "githor.fetchAll",
+          "when": "view == githor.branches",
+          "group": "1_branches@2"
+        }
+      ]
+    }
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/node": "^22.20.5",
+    "@types/vscode": "~1.85.0",
+    "eslint": "^9.39.5",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.72.1"
+  }
+}
