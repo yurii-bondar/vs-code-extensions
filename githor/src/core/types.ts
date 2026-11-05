@@ -114,3 +114,41 @@ export interface CommitDetails {
   body: string;
   files: FileChange[];
 }
+
+/** A piece of a diff line; `changed` marks the words that differ from the line's pair. */
+export interface DiffSegment {
+  text: string;
+  changed: boolean;
+}
+
+export interface DiffSide {
+  /** The line number on this side. */
+  n: number;
+  segs: DiffSegment[];
+}
+
+/** One row of the side-by-side diff: a line on each side, or on one side with nothing across. */
+export interface DiffRow {
+  kind: 'same' | 'change' | 'del' | 'add';
+  left: DiffSide | null;
+  right: DiffSide | null;
+}
+
+export interface DiffHunk {
+  /** The `@@ -21,14 +21,16 @@ function …` line. */
+  header: string;
+  rows: DiffRow[];
+}
+
+/** One file of a commit, side by side. */
+export interface FileDiff {
+  sha: string;
+  path: string;
+  /** What the left side is: the parent's short hash, or null for the first commit. */
+  before: string | null;
+  after: string;
+  hunks: DiffHunk[];
+  binary: boolean;
+  /** More lines than the page draws; VS Code's diff editor can still open it. */
+  tooLarge: boolean;
+}
