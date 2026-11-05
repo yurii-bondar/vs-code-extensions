@@ -32,7 +32,11 @@ Two routes were tried:
 
 What this needs in the code: `GitRunner.run` takes an optional `env` per call, and the operations that talk to a remote (fetch, pull, push, delete on origin) get the account's header.
 
-**Not verified yet, needs a real remote:** that a push with the header succeeds; and what happens when the token is refused. A `401` makes git fall back to credential helpers, which could answer with another account's stored token; a `403` does not. Test both against a test repository with a throwaway token, with the person at the keyboard.
+**When the token is refused** (checked 2026-11-05, `test/credentials.test.ts`, real git against a local HTTP server, with fake helpers): a `401` makes git ask the credential helpers and askpass, which could answer with another account's token (on this machine the keychain, and `gh auth git-credential` for github.com). So the account's environment also sets an empty `credential.helper`, which clears the helpers of every config file and URL scope (`credential.https://github.com.helper` included), and an empty `GIT_ASKPASS` and `SSH_ASKPASS`, which turn off askpass, VS Code's own included. Git then fails with `could not read Username`, read as unauthorized: the account is marked expired and Sign in again is offered. A `403` asks nothing. Both hold for Homebrew's git 2.54 and Apple's git 2.54.
+
+Why route 1 failed in the first probe is not explained: in isolated runs on the same git the reset clears every helper. The header stays the route either way, because it keeps the token out of every helper's reach.
+
+**Not verified yet, needs a real remote:** that GitHub and GitLab accept the header on a push. Test against a test repository with a throwaway token, with the person at the keyboard.
 
 ## SSH accounts and commit identity
 

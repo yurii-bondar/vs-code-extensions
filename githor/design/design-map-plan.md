@@ -111,7 +111,7 @@ Left out on purpose, with their reason:
 
 `src/core/git.ts` sets `GIT_TERMINAL_PROMPT=0`: push and pull use the repository's account (step 11), or without one the credentials git already has (SSH, the keychain), and fail instead of asking.
 
-**Not yet checked against a real remote:** a push with the account's header, and what git does after a 401 (whether it falls back to the keychain). It needs a test repository and a throwaway token.
+**Not yet checked against a real remote:** that GitHub and GitLab accept the account's header on a push. What git does after a 401 is checked against a local server (`test/credentials.test.ts`).
 
 ## Suggested build order
 
@@ -200,15 +200,15 @@ Merge and squash share one flow: find conflicts, show a side-by-side, resolve, c
 
 **Spike done: see `accounts-spike.md`.** Several GitHub accounts need VS Code 1.93 (`getAccounts`, `getSession` with `account`), so the engine has to move from `^1.85`; tokens reach git as an `Authorization` header through `GIT_CONFIG_*` environment variables, since a credential helper of our own cannot keep the system's out. The screens fix what people see, not how sign-in works.
 
-- **Identity:** `git config --local user.name` and `user.email`, or `git -c user.name=... commit` per call.
+- **Identity:** `-c user.name=… -c user.email=…` on every call, nothing written to the repository's config.
 - **Credentials, by account type:**
-  - Browser sign-in: `vscode.authentication.getSession`. Check whether the GitHub provider's multi-account support works on `engines.vscode` `^1.85`.
+  - Browser sign-in: `vscode.authentication.getSession` with the account (VS Code 1.93), GitHub only.
   - Token: `context.secrets`, never settings or `globalState`.
-  - SSH: `core.sshCommand` per repository.
-- **Passing a token to git:** open question, since `GIT_TERMINAL_PROMPT=0` blocks prompts. A likely route is a credential helper or askpass per call.
-- **Picking the account:** the repository's own choice wins, then the first rule matching the remote URL, then the last rule. Rules live in settings, the repository's choice in `workspaceState`.
-- **Check before commit** (`48`): warn when the active account differs from what the rules pick.
-- **Push rejected** (`48`): recognise 403 and offer an account that has access. How to know which one has access is also part of the spike.
+  - SSH: `core.sshCommand` per call.
+- **Passing a token to git:** an `Authorization` header for the remote's host, through `GIT_CONFIG_*`; credential helpers and askpass are cleared for that call, so a refused token never falls back to another account's (see the spike).
+- **Picking the account:** the repository's own choice wins, then the first rule matching the remote URL, then the account used last. Rules live in settings, the repository's choice in `workspaceState`.
+- **Check before commit** (`48`): asks when the active account differs from what the rules pick.
+- **Push rejected** (`48`): a 403 or 404 asks GitHub or GitLab which other account can push (GitHub's `permissions.push`, GitLab's access level), only after the refusal.
 
 ## Known gaps in the design
 
