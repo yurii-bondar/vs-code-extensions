@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { AccountProblem } from './account-git';
 import { createBranch, deleteBranch, deleteOnRemote, nameProblem, onlyHere, renameBranch } from './core/branch-ops';
 import { switchBranch } from './core/branches';
 import { cherryPick, ConflictError, resetTo, revertCommit, switchToCommit } from './core/commit-ops';
@@ -78,6 +79,11 @@ export class Actions {
     } catch (e) {
       this.log(all ? 'git fetch --all' : 'git fetch', e);
       this.model.setFetch({ fetching: false, error: errorText(e) });
+      // a refused account is the person's to fix, not a network failure: whoever asked for the fetch explains it
+      if (e instanceof AccountProblem) {
+        await this.model.refresh();
+        throw e;
+      }
     }
     await this.model.refresh();
   }

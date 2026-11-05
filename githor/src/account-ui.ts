@@ -5,7 +5,7 @@ import * as path from 'path';
 import { parseRemote, remoteKey } from './core/accounts';
 import { whoAmI } from './core/hosting';
 import type { Account, AccountId, Provider } from './core/types';
-import { activePick } from './account-git';
+import { AccountProblem, activePick } from './account-git';
 import { providerId } from './account-store';
 import type { AccountStore } from './account-store';
 import type { RepoModel } from './model';
@@ -165,4 +165,36 @@ export async function signInAgain({ store, id }: { store: AccountStore; id: Acco
   }
   await store.setExpired(id, false);
   return true;
+}
+
+/**
+ * An account problem outside the page (design `48`, as a notification): the status bar's push or pull, a fetch
+ * command. Offers what the page's dialog offers; `retry` runs what was refused again, `addAccount` opens Add account.
+ */
+export async function explainProblem({ problem, store, model, retry, addAccount }: {
+  problem: AccountProblem;
+  store: AccountStore;
+  model: RepoModel;
+  retry: () => Promise<void>;
+  addAccount: () => void;
+}): Promise<void> {
+  const { account, suggestion } = problem;
+  const remoteName = model.remote?.name ?? 'The remote';
+  if (problem.kind === 'unauthorized') {
+    const pick = await vscode.window.showWarningMessage(`Githor: ${account.label} needs a new sign-in. Pull and push for this repo stop until you sign in.`, 'Sign in again', 'Later');
+    if (pick === 'Sign in again' && (await signInAgain({ store, id: account.id }))) await retry();
+    return;
+  }
+  const why = problem.kind === 'forbidden' ? 'no write access' : 'this account cannot see the repository';
+  if (suggestion) {
+    const action = `Switch to ${suggestion.label} and retry`;
+    const pick = await vscode.window.showWarningMessage(`Githor: ${remoteName} rejected ${account.label} (${why}). ${suggestion.label} can push to ${problem.remote}.`, action, 'Cancel');
+    if (pick !== action) return;
+    const { text, undo } = await useAccount({ store, model, id: suggestion.id });
+    void vscode.window.showInformationMessage(`Githor: ${text}`, 'Undo').then((p) => p && undo());
+    await retry();
+    return;
+  }
+  const pick = await vscode.window.showWarningMessage(`Githor: ${remoteName} rejected ${account.label} (${why}). None of your other accounts can push to ${problem.remote}.`, 'Add account…', 'Cancel');
+  if (pick === 'Add account…') addAccount();
 }

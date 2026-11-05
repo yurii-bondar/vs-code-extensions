@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { GIT_SCHEME, GitContentProvider } from './src/git-content';
-import { accountMenu } from './src/account-ui';
+import { AccountProblem } from './src/account-git';
+import { accountMenu, explainProblem } from './src/account-ui';
 import { BranchesPanel } from './src/panel';
 import { pickBranch } from './src/quick-pick';
 import { lazyServices } from './src/services';
@@ -21,6 +22,17 @@ export function activate(context: vscode.ExtensionContext): void {
   };
   const openEditor = (s: Services, request?: HostMessage): void => BranchesPanel.show({ extensionUri: context.extensionUri, ...s, ...(request ? { request } : {}) });
 
+  /** Runs a command's git work; a refused account is explained with what can fix it, anything else is an error. */
+  const reporting = (s: Services, run: () => Promise<string | null>): Promise<void> =>
+    run().then(
+      (text) => void (text && vscode.window.setStatusBarMessage(`Githor: ${text}`, 5000)),
+      (e: unknown) => {
+        if (e instanceof AccountProblem) return explainProblem({ problem: e, store: s.accounts, model: s.model, retry: () => reporting(s, run), addAccount: () => openEditor(s, { type: 'openAccounts', add: true }) });
+        void vscode.window.showErrorMessage(`Githor: ${e instanceof Error ? e.message : String(e)}`, 'Show Git Output').then((pick) => pick && output.show());
+        return undefined;
+      }
+    );
+
   let git: Services['model']['git'] | undefined;
   void services().then((s) => (git = s?.model.git));
 
@@ -35,15 +47,11 @@ export function activate(context: vscode.ExtensionContext): void {
       withServices(async (s) => {
         const action = s.actions.primary();
         if (!action) return pickBranch(s.model, s.actions);
-        try {
-          vscode.window.setStatusBarMessage(`Githor: ${(await action()).text}`, 5000);
-        } catch (e) {
-          void vscode.window.showErrorMessage(`Githor: ${e instanceof Error ? e.message : String(e)}`, 'Show Git Output').then((pick) => pick && output.show());
-        }
+        return reporting(s, async () => (await action()).text);
       })
     ),
-    vscode.commands.registerCommand('githor.fetch', withServices((s) => s.actions.fetch({ all: false }))),
-    vscode.commands.registerCommand('githor.fetchAll', withServices((s) => s.actions.fetch({ all: true }))),
+    vscode.commands.registerCommand('githor.fetch', withServices((s) => reporting(s, () => s.actions.fetch({ all: false }).then(() => null)))),
+    vscode.commands.registerCommand('githor.fetchAll', withServices((s) => reporting(s, () => s.actions.fetch({ all: true }).then(() => null)))),
     vscode.commands.registerCommand('githor.deleteMerged', withServices((s) => openEditor(s, { type: 'openDeleteMerged' }))),
     vscode.commands.registerCommand('githor.compare', (ref: unknown) =>
       withServices((s) => {
