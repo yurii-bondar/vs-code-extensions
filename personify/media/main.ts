@@ -87,16 +87,15 @@
 
   // ---------- small helpers ----------
 
-  const timers = new Map<string, ReturnType<typeof setTimeout>>();
+  const timers = new Map<string, { timer: ReturnType<typeof setTimeout>; run: () => void }>();
   function debounce(key: string, fn: () => void, ms = 180): void {
-    clearTimeout(timers.get(key));
-    timers.set(
-      key,
-      setTimeout(() => {
-        timers.delete(key);
-        fn();
-      }, ms)
-    );
+    const old = timers.get(key);
+    if (old) clearTimeout(old.timer);
+    const run = (): void => {
+      timers.delete(key);
+      fn();
+    };
+    timers.set(key, { timer: setTimeout(run, ms), run });
   }
   // Like debounce, but the key stays "pending" so stale state echoes don't overwrite local edits.
   function queueSend(key: string, fn: () => void, ms?: number): void {
@@ -109,6 +108,22 @@
       },
       ms
     );
+  }
+  /** Sends every queued write now: the host writes it to the target it has when the message arrives. */
+  function flushPending(): void {
+    for (const key of [...S.pending]) {
+      const t = timers.get(key);
+      if (!t) continue;
+      clearTimeout(t.timer);
+      t.run();
+    }
+  }
+  /** Drops a queued write; true when there was one. */
+  function cancelPending(key: string): boolean {
+    const t = timers.get(key);
+    if (t) clearTimeout(t.timer);
+    timers.delete(key);
+    return S.pending.delete(key);
   }
 
   function toast(text: string, kind: ToastKind = 'info'): void {
@@ -315,6 +330,8 @@
   }
 
   function sendPrefs(): void {
+    // Writes still queued belong to the old target, so they go out before the switch.
+    flushPending();
     S.custom = [];
     send({
       type: 'prefs',
@@ -544,16 +561,15 @@
     if (!area || !state) return;
     const colors: Record<string, string | null> = {};
     const settings: Record<string, SettingValue | null> = {};
+    // A queued write would land after the reset and bring the value back, so it is dropped and its key reset too.
     for (const item of area.groups.flatMap((g) => g.items)) {
-      if (item.kind === 'color' && state.colors[item.key]) {
-        colors[item.key] = null;
+      if (item.kind === 'color') {
+        if (cancelPending(`c:${item.key}`) || state.colors[item.key]) colors[item.key] = null;
         delete state.colors[item.key];
       } else if (item.kind === 'setting') {
         const st = state.settings[item.key];
-        if (st && st.value !== null) {
-          settings[item.key] = null;
-          st.value = null;
-        }
+        if (cancelPending(`s:${item.key}`) || (st && st.value !== null)) settings[item.key] = null;
+        if (st) st.value = null;
       }
     }
     if (!Object.keys(colors).length && !Object.keys(settings).length) return toast('Nothing to reset here');
@@ -908,7 +924,11 @@
           if (!lang || !syntax) return;
           const changes = lang.groups
             .flatMap((g) => g.items)
-            .filter((i) => hasStyle(syntax.items[styleKey(lang.id, i.id)]))
+            .filter((i) => {
+              const key = styleKey(lang.id, i.id);
+              const pending = cancelPending(`t:${key}`);
+              return pending || hasStyle(syntax.items[key]);
+            })
             .map((i) => {
               delete syntax.items[styleKey(lang.id, i.id)];
               return { langId: lang.id, itemId: i.id, style: null };
