@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-// Builds Claudestrator for release: the VS Code extension (.vsix) and the JetBrains plugin (.zip), each versioned as
-// semantic-release versions it in CI (release.config.base.cjs), while releases are made by hand:
+// Builds the extensions of this repo for release: each VS Code extension (.vsix) and Claudestrator's JetBrains plugin
+// (.zip), each versioned as semantic-release versions it in CI (release.config.base.cjs), while releases are made by hand:
 //
-// - The last release of each is its git tag: `claudestrator-v<version>` (semantic-release-monorepo's name for the
-//   extension) and `jetbrains-claudestrator-v<version>`.
+// - The last release of each is its git tag: `<folder>-v<version>` for an extension (semantic-release-monorepo's name,
+//   e.g. `claudestrator-v0.14.1`, `scriptor-v0.1.0`) and `jetbrains-claudestrator-v<version>`. A target with no tag yet
+//   is skipped: tag the commit its published version was built from once.
 // - The commits since then that touch its folders decide the next version, read by semantic-release's own commit
 //   analyzer with the conventionalcommits preset: `feat` → minor, `fix`/`perf` → patch, `!` or `BREAKING CHANGE` → major,
 //   `refactor`/`test`/`docs`/`chore`/`ci`/`build`/`style` → no release. The JetBrains plugin bundles the extension's
@@ -15,11 +16,11 @@
 //   builds and verifies the artifact, then commits `chore(release): <tag> [skip ci]` and tags it, as semantic-release
 //   does, so the next run (or CI, once turned back on) starts from there. Nothing is pushed or published.
 //
-// Usage (from the repo root): node scripts/release.mjs [build|test|live] [--only vscode|jetbrains] [--dry-run] [--force]
+// Usage (from the repo root): node scripts/release.mjs [build|test|live] [--only <target>] [--dry-run] [--force]
 //   build      build and verify what is due (the default)
-//   test       typecheck, lint and every test first (extension, sidecar, plugin), then build
-//   live       the tests, then one real task on haiku at low effort (npm run test:live, a few cents), then build
-//   --only     one target
+//   test       typecheck, lint and every test first (of each extension due, the sidecar and plugin), then build
+//   live       the tests, then one real Claudestrator task on haiku at low effort (npm run test:live, a few cents), then build
+//   --only     one target: vscode (Claudestrator), jetbrains, scriptor, personify, claude-ctx-man or go-to-project
 //   --dry-run  build and verify, then put the version files back: no commit, no tag
 //   --force    build a target with nothing due at its last released version (no commit, no tag)
 import { spawnSync } from 'node:child_process';
@@ -39,21 +40,33 @@ const WIN = process.platform === 'win32';
 const PRESET = { preset: 'conventionalcommits' };
 const SILENT = { log() {}, error() {}, warn() {}, success() {} };
 
+/** A VS Code extension in its own folder: versioned in package.json, packaged by vsce into `<folder>/vsix/`. */
+const extension = (dir, label, ships = []) => ({
+  kind: 'vscode',
+  label,
+  dir,
+  tagPrefix: `${dir}-v`,
+  paths: [dir],
+  versionFiles: [`${dir}/package.json`, `${dir}/package-lock.json`],
+  changelog: `${dir}/CHANGELOG.md`,
+  /** Files the .vsix must hold besides its main script, icon and readme. */
+  ships,
+});
+
 const TARGETS = {
-  vscode: {
-    label: 'VS Code extension',
-    tagPrefix: 'claudestrator-v',
-    paths: ['claudestrator'],
-    versionFiles: ['claudestrator/package.json', 'claudestrator/package-lock.json'],
-    changelog: 'claudestrator/CHANGELOG.md',
-  },
+  vscode: extension('claudestrator', 'Claudestrator (VS Code)', ['extension/dist/media/app.js', 'extension/dist/media/task.js', 'extension/dist/media/config.js', 'extension/dist/media/markdown.js', 'extension/dist/media/stream.js', 'extension/media/app.css']),
   jetbrains: {
-    label: 'JetBrains plugin',
+    kind: 'jetbrains',
+    label: 'Claudestrator (JetBrains)',
     tagPrefix: 'jetbrains-claudestrator-v',
     paths: ['jetbrains/claudestrator', 'claudestrator'],
     versionFiles: ['jetbrains/claudestrator/gradle.properties'],
     changelog: 'jetbrains/claudestrator/CHANGELOG.md',
   },
+  scriptor: extension('scriptor', 'Scriptor', ['extension/dist/media/app.js']),
+  personify: extension('personify', 'Personify', ['extension/dist/media/main.js']),
+  'claude-ctx-man': extension('claude-ctx-man', 'Claude Ctx Man', ['extension/dist/statusline/render.js']),
+  'go-to-project': extension('go-to-project', 'Go to Project'),
 };
 
 // ---------- command line ----------
@@ -121,7 +134,7 @@ function increment(version, type) {
 /** What a target's folders hold at a commit: their git tree hashes, which change with any file in them. */
 const contentAt = (commit, paths) => paths.map((p) => spawnSync('git', ['rev-parse', `${commit}:${p}`], { cwd: ROOT, encoding: 'utf8' }).stdout.trim() || '-').join(' ');
 
-/** The target's last release: its newest tag by version. */
+/** The target's last release: its newest tag by version. Null: it has none yet. */
 function lastRelease(target) {
   const tags = git('tag', '--list', `${target.tagPrefix}*`)
     .split('\n')
@@ -129,9 +142,7 @@ function lastRelease(target) {
     .map((tag) => ({ tag, version: tag.slice(target.tagPrefix.length) }))
     .filter((t) => parseVersion(t.version))
     .sort((a, b) => compareVersions(b.version, a.version));
-  if (!tags.length) {
-    throw new Error(`${target.label}: no release tag ${target.tagPrefix}<version>. Tag the commit its published version was built from once, e.g.\n  git tag -a ${target.tagPrefix}1.2.3 <commit> -m "${target.tagPrefix}1.2.3"`);
-  }
+  if (!tags.length) return null;
   const { tag, version } = tags[0];
   return { tag, version, commit: git('rev-list', '-n', '1', tag) };
 }
@@ -176,6 +187,7 @@ function tally(commits) {
 async function plan(name, opts) {
   const target = { name, ...TARGETS[name] };
   const release = lastRelease(target);
+  if (!release) return { target, due: false, why: `no release tag ${target.tagPrefix}<version> yet: tag the commit its published version was built from once, git tag -a ${target.tagPrefix}1.2.3 <commit> -m ${target.tagPrefix}1.2.3` };
   const head = git('rev-parse', 'HEAD');
   const unchanged = contentAt('HEAD', target.paths) === contentAt(release.commit, target.paths);
   const base = { target, release, head };
@@ -221,9 +233,9 @@ function restore(saved) {
 }
 
 function writeVersion(target, version) {
-  if (target.name === 'vscode') {
+  if (target.kind === 'vscode') {
     // package.json and package-lock.json together, as semantic-release-vsce does (npm version, no git).
-    out(npm, ['version', version, '--no-git-tag-version', '--allow-same-version'], { cwd: EXTENSION });
+    out(npm, ['version', version, '--no-git-tag-version', '--allow-same-version'], { cwd: path.join(ROOT, target.dir) });
   } else {
     const file = path.join(PLUGIN, 'gradle.properties');
     const text = fs.readFileSync(file, 'utf8');
@@ -266,22 +278,24 @@ function notesHtml(markdown) {
 const zipEntries = (file) => out('unzip', ['-Z1', file]).split('\n').filter(Boolean);
 const zipFile = (file, entry) => out('unzip', ['-p', file, entry]);
 
-function buildExtension(version) {
-  const vsix = path.join(EXTENSION, 'vsix', `claudestrator-${version}.vsix`);
+function buildExtension(target, version) {
+  const dir = path.join(ROOT, target.dir);
+  const vsix = path.join(dir, 'vsix', `${target.dir}-${version}.vsix`);
   fs.mkdirSync(path.dirname(vsix), { recursive: true });
   // vsce runs vscode:prepublish (a clean build) and checks the manifest.
-  step('Package the VS Code extension', path.join(ROOT, 'node_modules', '.bin', WIN ? 'vsce.cmd' : 'vsce'), ['package', '--out', vsix], { cwd: EXTENSION });
+  step(`Package ${target.label}`, path.join(ROOT, 'node_modules', '.bin', WIN ? 'vsce.cmd' : 'vsce'), ['package', '--out', vsix], { cwd: dir });
   return vsix;
 }
 
-function verifyExtension(vsix, version) {
+function verifyExtension(target, vsix, version) {
   const entries = zipEntries(vsix);
   const manifest = JSON.parse(zipFile(vsix, 'extension/package.json'));
   const problems = [];
   if (manifest.version !== version) problems.push(`its package.json says ${manifest.version}, not ${version}`);
-  const needed = ['extension/dist/extension.js', 'extension/dist/media/app.js', 'extension/dist/media/task.js', 'extension/dist/media/config.js', 'extension/dist/media/markdown.js', 'extension/dist/media/stream.js', 'extension/media/app.css', 'extension/media/icon.png', 'extension/readme.md'];
+  const inPackage = (file) => `extension/${path.posix.normalize(file)}`;
+  const needed = [inPackage(manifest.main), ...(manifest.icon ? [inPackage(manifest.icon)] : []), 'extension/readme.md', ...target.ships];
   // The Marketplace shows the changelog of a release; a rebuild before the first one (--force) has none yet.
-  if (fs.existsSync(path.join(EXTENSION, 'CHANGELOG.md'))) needed.push('extension/changelog.md');
+  if (fs.existsSync(path.join(ROOT, target.changelog))) needed.push('extension/changelog.md');
   for (const need of needed) {
     if (!entries.some((e) => e.toLowerCase() === need.toLowerCase())) problems.push(`${need} is missing`);
   }
@@ -363,24 +377,31 @@ function withOwnTemp(fn) {
   }
 }
 
+/** The extension folders whose tests a release of these targets needs: the plugin bundles Claudestrator's engine and page. */
+const extensionDirs = (targets) => [...new Set(targets.map((t) => (t.kind === 'vscode' ? t.dir : 'claudestrator')))];
+
 function runTests(opts, due) {
+  const targets = due.map((d) => d.target);
   withOwnTemp((env) => {
-    // The plugin bundles the extension's engine and page: its tests count for both.
-    step('Typecheck the extension', npm, ['run', 'typecheck'], { cwd: EXTENSION, env });
-    step('Lint the extension', npm, ['run', 'lint'], { cwd: EXTENSION, env });
-    step('Test the extension', npm, ['test'], { cwd: EXTENSION, env });
-    if (due.some((d) => d.target.name === 'jetbrains')) {
+    for (const dir of extensionDirs(targets)) {
+      const cwd = path.join(ROOT, dir);
+      step(`Typecheck ${dir}`, npm, ['run', 'typecheck'], { cwd, env });
+      step(`Lint ${dir}`, npm, ['run', 'lint'], { cwd, env });
+      step(`Test ${dir}`, npm, ['test'], { cwd, env });
+    }
+    if (targets.some((t) => t.kind === 'jetbrains')) {
       step('Typecheck the plugin sidecar', npm, ['run', 'typecheck'], { cwd: SIDECAR, env });
       step('Check the JetBrains plugin', gradlew, ['check', '--console=plain'], { cwd: PLUGIN, env });
     }
-    if (opts.mode === 'live') step('Run one real task on haiku, low effort (npm run test:live)', npm, ['run', 'test:live'], { cwd: EXTENSION, env });
+    if (opts.mode === 'live' && extensionDirs(targets).includes('claudestrator')) step('Run one real task on haiku, low effort (npm run test:live)', npm, ['run', 'test:live'], { cwd: EXTENSION, env });
   });
 }
 
 // ---------- the run ----------
 
 function preflight(targets, opts) {
-  for (const dir of [EXTENSION, ...(targets.includes('jetbrains') ? [SIDECAR] : [])]) {
+  const dirs = extensionDirs(targets.map((t) => TARGETS[t])).map((d) => path.join(ROOT, d));
+  for (const dir of [...dirs, ...(targets.includes('jetbrains') ? [SIDECAR] : [])]) {
     if (!fs.existsSync(path.join(dir, 'node_modules'))) throw new Error(`${path.relative(ROOT, dir)} has no node_modules: run npm ci there first`);
   }
   if (!fs.existsSync(path.join(ROOT, 'node_modules', '@semantic-release'))) throw new Error('the release tooling is not installed: run npm ci in the repo root');
@@ -401,10 +422,10 @@ async function main() {
   for (const name of names) plans.push(await plan(name, opts));
   console.log('\nRelease plan:');
   for (const p of plans) {
-    console.log(p.due ? `  ${p.target.label}: ${p.release.tag} → ${p.tag}  (${p.why})` : `  ${p.target.label}: nothing to release, ${p.why}${opts.force ? `; rebuilt at ${p.release.version} (--force)` : ''}`);
+    console.log(p.due ? `  ${p.target.label}: ${p.release.tag} → ${p.tag}  (${p.why})` : `  ${p.target.label}: nothing to release, ${p.why}${opts.force && p.release ? `; rebuilt at ${p.release.version} (--force)` : ''}`);
   }
   const due = plans.filter((p) => p.due);
-  const builds = opts.force ? plans : due;
+  const builds = opts.force ? plans.filter((p) => p.release) : due;
   if (!builds.length) {
     console.log('\nNothing to build.');
     return;
@@ -419,10 +440,11 @@ async function main() {
       const version = p.due ? p.version : p.release.version;
       writeVersion(p.target, version);
       if (p.due) writeChangelog(p.target, p.notes);
-      if (p.target.name === 'vscode') {
-        const vsix = buildExtension(version);
-        verifyExtension(vsix, version);
+      if (p.target.kind === 'vscode') {
+        const vsix = buildExtension(p.target, version);
+        verifyExtension(p.target, vsix, version);
         artifacts.push(vsix);
+        p.vsix = vsix;
       } else {
         const zip = buildPlugin(version, p.due ? p.notes : null);
         verifyPlugin(zip, version);
@@ -454,7 +476,7 @@ async function main() {
   if (recorded.length) {
     console.log(`\nRecorded ${recorded.join(', ')} (a chore(release) commit and a tag each). Next:`);
     console.log(`  git push --follow-tags        # the release commits and their tags`);
-    if (recorded.some((t) => t.startsWith(TARGETS.vscode.tagPrefix))) console.log(`  npx @vscode/vsce publish --packagePath ${path.relative(ROOT, artifacts.find((a) => a.endsWith('.vsix')))}`);
+    for (const vsix of builds.filter((p) => recorded.includes(p.tag) && p.vsix).map((p) => p.vsix)) console.log(`  npx @vscode/vsce publish --packagePath ${path.relative(ROOT, vsix)}`);
     if (recorded.some((t) => t.startsWith(TARGETS.jetbrains.tagPrefix))) console.log('  (cd jetbrains/claudestrator && ./gradlew signPlugin publishPlugin), or upload the .zip at plugins.jetbrains.com');
   }
 }
