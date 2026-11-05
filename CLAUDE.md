@@ -1,6 +1,6 @@
 # vs-code-extensions
 
-Monorepo of five VS Code extensions, each a self-contained folder with its own `package.json`, `release.config.cjs`, README and LICENSE:
+Monorepo of six VS Code extensions, each a self-contained folder with its own `package.json`, `release.config.cjs`, README and LICENSE:
 
 | Folder | Extension | Notes |
 |---|---|---|
@@ -9,10 +9,11 @@ Monorepo of five VS Code extensions, each a self-contained folder with its own `
 | `claudestrator/` | Claudestrator | orchestrator; engine in `src/core/`, hook in `hook/`, tests in `test/`; `scripts/design-sync/` rebuilds the Penpot design file's Screens page from the dashboard (its README) |
 | `go-to-project/` | Go to Project | quick pick in `src/`, pure logic (cross-window state, git branch, icons) in `src/core/`, tests in `test/` |
 | `scriptor/` | Scriptor | script launcher: groups of `.sh`/`.js`/`.py` scripts run in a terminal; pure logic in `src/core/`, dashboard webview in `media/` |
+| `githor/` | Githor | branch list with sync marks, status bar, quick pick, delete merged branches; pure logic in `src/core/` (`merged.ts` ports `delete-merged-main-branches.sh`), one `RepoModel` for every view, webview ES modules in `media/`, design map in `design/design-map-plan.md`; tests run against real repos in a temp dir |
 
 The root `package.json` is release tooling only (semantic-release + `semantic-release-monorepo`). It has no app code.
 
-**Current state.** All five extensions are TypeScript (strict, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`): host code in `extension.ts` and `src/`, webview scripts in `media/*.ts` (plain scripts with their own `tsconfig.webview.json`), tests in `test/`. Compiler options live in the root `tsconfig.base.json`; each extension's `tsconfig.json` extends it and sets only `outDir`, `rootDir`, `include` and `exclude` (paths in a config resolve against the file that sets them, so they cannot move to the base). Build output goes to `dist/` (git-ignored, `main` is `./dist/extension.js`). In each: `npm run build`, `npm run typecheck`, `npm run lint`, `npm test` (builds, then `node --test dist/test/*.test.js`).
+**Current state.** All six extensions are TypeScript (strict, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`): host code in `extension.ts` and `src/`, webview scripts in `media/*.ts` (plain scripts with their own `tsconfig.webview.json`), tests in `test/`. Compiler options live in the root `tsconfig.base.json`; each extension's `tsconfig.json` extends it and sets only `outDir`, `rootDir`, `include` and `exclude` (paths in a config resolve against the file that sets them, so they cannot move to the base). Build output goes to `dist/` (git-ignored, `main` is `./dist/extension.js`). In each: `npm run build`, `npm run typecheck`, `npm run lint`, `npm test` (builds, then `node --test dist/test/*.test.js`).
 
 `claude-ctx-man/statusline/render.ts` is special: Install copies its compiled `dist/statusline/render.js` to `~/.ctx-man/statusline.js`, where Claude Code runs it alone. It must stay one self-contained file that loads only Node's own modules; its imports from `statusline/types.ts` are `import type` (erased).
 

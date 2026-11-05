@@ -2,7 +2,7 @@
 
 One commit = one logical change. No mixing refactor and feature.
 
-- Format: `type(scope): short description`. `scope` is the extension folder (`personify`, `claude-ctx-man`, `claudestrator`, `go-to-project`); omit it only for repo-wide changes (root tooling, `.github`, `.claude`).
+- Format: `type(scope): short description`. `scope` is the extension folder (`personify`, `claude-ctx-man`, `claudestrator`, `go-to-project`, `scriptor`, `githor`); omit it only for repo-wide changes (root tooling, `.github`, `.claude`).
 - Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`. The type drives the release, so pick it deliberately (see below).
 - No unrelated changes in one commit, even if small. One commit touches one extension unless the change is truly shared: `semantic-release-monorepo` releases every folder a commit touches.
 - Before commit: `git diff --staged` — re-read exactly what goes in.

@@ -85,7 +85,7 @@ function openSession({ id, dir, resume = false, newWindow = false }: OpenSession
 - Every piece of logic exists in one place. Duplication is a source of bugs.
 - But: do not abstract prematurely. Three similar lines do not always require a function — wait for the fourth.
 - DRY applies to *knowledge and logic*, not syntax. Similar-looking code may express different things.
-- Across extensions: the five folders ship independently, so there is no shared runtime package. Duplicating a small helper (for example reading `oauthAccount` from `.claude.json`) between extensions is acceptable. Extract it only when the copies must change together; then decide deliberately where the shared code lives, because it has to be bundled into each `.vsix`.
+- Across extensions: the six folders ship independently, so there is no shared runtime package. Duplicating a small helper (for example reading `oauthAccount` from `.claude.json`) between extensions is acceptable. Extract it only when the copies must change together; then decide deliberately where the shared code lives, because it has to be bundled into each `.vsix`.
 
 ---
 
