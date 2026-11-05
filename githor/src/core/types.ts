@@ -238,3 +238,35 @@ export interface StashView {
   createdAt: number;
   files: FileChange[];
 }
+
+export type AccountId = string & { readonly __brand: 'AccountId' };
+
+/** Where an account lives: GitHub (or GitHub Enterprise), GitLab, or another host reached by SSH or a token. */
+export type Provider = 'github' | 'gitlab' | 'other';
+
+/** How an account signs in: through VS Code's GitHub sign-in, a token Githor keeps, or an SSH key. */
+export type AccountAuth = { kind: 'browser'; sessionAccount: string } | { kind: 'token' } | { kind: 'ssh'; keyPath: string };
+
+/** An account Githor commits and pushes as (design `45`–`48`). Its token, if any, is kept apart, in secret storage. */
+export interface Account {
+  id: AccountId;
+  /** What the person calls it: `Personal`, `Work`. */
+  label: string;
+  provider: Provider;
+  /** `github.com`, `gitlab.acme-client.example`. */
+  host: string;
+  /** The user or organisation it shows with: `alex-moroz`. */
+  login: string;
+  /** The identity of its commits. */
+  name: string;
+  email: string;
+  auth: AccountAuth;
+}
+
+/** Picks an account by remote: the first rule whose pattern matches the remote wins. */
+export interface AccountRule {
+  /** `github.com/northwind/*`, or `*` for everything else. */
+  remote: string;
+  /** The account's label. */
+  account: string;
+}
