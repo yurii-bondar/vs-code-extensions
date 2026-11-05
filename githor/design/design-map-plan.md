@@ -95,14 +95,16 @@ Built in `githor/`, following the build order below (see `README.md` for what ea
 | 6 | `02` | Side-by-side diff with changed words marked |
 | 7 | `04`, `10`, `49`–`51` | Commit tab with sections and directory grouping, Commit and push, the push screen |
 | 8 | `03`, `23`–`30` | Compare with remote (rebase, merge, force-push), conflict screens with your branch always on the left, Continue, Abort, Undo merge |
-| 9 | `12`–`22` | Squash from the log's selection, its states, the conflict screens in squash wording, Undo |
+| 9 | `12`–`22` | Squash from the log's selection, its states, the conflict screens in squash wording, Undo; merges, the first commit and another branch's commits included |
+| 10 | `09` | Stash tab, Apply, Rename, Delete with Undo, Stash changes from the Git menu and of the ticked files from the Commit tab |
 
 Left out on purpose, with their reason:
 
-- **Menu items whose screens come later** are not shown dead: `Merge into` and `Rebase onto` another branch (they still lack the confirmation listed in the gaps), `Stash` (step 10), `Accounts…` (step 11), `Open settings` (Githor has no settings).
+- **Menu items whose screens come later** are not shown dead: `Merge into` and `Rebase onto` another branch (they still lack the confirmation listed in the gaps), `Accounts…` (step 11), `Open settings` (Githor has no settings).
 - **Conflicts outside merge and rebase.** A cherry-pick or revert that stops at a conflict is aborted at once, so nothing changes. Pull stays fast-forward only: a diverged branch goes through the compare screen.
 - **Rebase wording** is a gap of the design; the screens say `Rebase paused at a conflict`, `Abort rebase`, and that Continue replays the rest of your commits.
 - **`52 Grouped by repository`.** Githor shows one repository at a time; `Repository` joins the Group by menu once the model holds every open repository.
+- **The Stash changes and Rename stash dialogs** are not drawn in the design; they are built like the branch dialogs (`33`). A stash applied with a conflict leaves the files unmerged in the Commit tab, which holds the commit until they are resolved; there are no conflict screens for it.
 - **Squash conflicts are rare.** The squashed commit has the newest selected commit's tree, so the commits after it are put back on the same content; `16`–`22` are reached only when a merge among them has to be flattened.
 - **Search** covers the commits loaded (300 at a time), and the graph draws up to 8 lanes.
 
