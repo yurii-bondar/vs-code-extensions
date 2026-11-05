@@ -12,12 +12,17 @@ import { filtersHtml, listHtml } from './branch-list.js';
 import { branchMenuHtml } from './branch-menu.js';
 import type { BranchMenu } from './branch-menu.js';
 import { detailsHtml } from './commit-details.js';
+import { commitListHtml, emptyCommit } from './commit-view.js';
+import type { CommitState } from './commit-view.js';
 import { diffFilesHtml, diffPaneHtml } from './diff-view.js';
+import { pushReviewHtml } from './push-review.js';
+import type { PushReview } from './push-review.js';
+import { nextTicked } from '../src/core/commit-groups.js';
 import type { DiffState } from './diff-view.js';
 import { emptyLog, LOG_PAGE, logHeadHtml, logRowsHtml } from './commit-log.js';
 import type { LogState } from './commit-log.js';
 import { fetchBannerHtml, sidebarFooterHtml, sidebarHeaderHtml, toastHtml, toolbarHtml } from './chrome.js';
-import type { Toast } from './chrome.js';
+import type { Tab, Toast } from './chrome.js';
 import { icon } from './icons.js';
 import { dialogHtml, openDialog, remoteCopies, withView } from './merged-dialog.js';
 import type { MergedDialog } from './merged-dialog.js';
@@ -31,7 +36,7 @@ const place = document.body.dataset['place'] === 'sidebar' ? 'sidebar' : 'editor
 // ---------- state ----------
 
 const saved = restore();
-let state: StateView = { repo: null, branches: [], loaded: false, fetchedAt: null, fetching: false, fetchError: null, defaultBranch: null, busy: null, head: null };
+let state: StateView = { repo: null, branches: [], loaded: false, fetchedAt: null, fetching: false, fetchError: null, defaultBranch: null, busy: null, head: null, working: [], grouping: 'none' };
 let filter: BranchFilter = BRANCH_FILTERS.includes(saved.filter ?? 'all') ? (saved.filter ?? 'all') : 'all';
 let query = saved.query ?? '';
 /** The Git menu under `⋯` in the toolbar. */
@@ -52,6 +57,14 @@ let highlightRef: string | null = null;
 let logFor = '';
 /** The side-by-side diff (`02`) that replaces the log while a file is open. */
 let diffView: DiffState | null = null;
+let tab: Tab = 'log';
+let commit: CommitState = emptyCommit();
+/** The working-copy file open beside the commit list. */
+let commitDiff: DiffState | null = null;
+/** The push screen (`10`), over the tabs while open. */
+let pushReview: PushReview | null = null;
+let pushDiff: DiffState | null = null;
+const WORKTREE = 'WORKTREE';
 
 const keep = (): void => persist({ filter, query });
 const branchOf = (ref: string): StateView['branches'][number] | undefined => state.branches.find((b) => b.ref === ref);
@@ -82,6 +95,14 @@ app.innerHTML =
     <section class="gt-pane gt-pane--rail" aria-label="Changed files" data-region="diffFiles"></section>
     <section class="gt-pane" aria-label="Diff" data-region="diffPane"></section>
   </div>
+  <div class="gt-body gt-body--diff gt-body--commit" hidden>
+    <section class="gt-pane gt-pane--rail" aria-label="Changes to commit" data-region="commitList"></section>
+    <section class="gt-pane" aria-label="Diff" data-region="commitDiff"></section>
+  </div>
+  <div class="gt-body gt-body--diff gt-body--push" hidden>
+    <section class="gt-pane gt-pane--rail" aria-label="Commits to push" data-region="pushList"></section>
+    <section class="gt-pane" aria-label="Diff" data-region="pushDiff"></section>
+  </div>
   <div data-region="overlay"></div>
   <div data-region="toast"></div>`;
 
@@ -106,14 +127,14 @@ function render(): void {
   const role = active?.dataset?.['role'] && active.dataset['role'] !== 'query' ? active.dataset['role'] : null;
   const caret = role ? [active?.selectionStart ?? null, active?.selectionEnd ?? null] : null;
 
-  fill('top', place === 'sidebar' ? sidebarHeaderHtml(state, popover) : toolbarHtml(state, { menuOpen, popover }));
+  fill('top', place === 'sidebar' ? sidebarHeaderHtml(state, popover) : toolbarHtml(state, { menuOpen, popover, tab }));
   fill('banner', fetchBannerHtml(state));
   fill('filters', state.repo && state.branches.length ? filtersHtml(state.branches, filter) : '');
   const selectedRef = place === 'editor' ? (highlighted()?.ref ?? null) : undefined;
   fill('list', listHtml({ loaded: state.loaded, hasRepo: state.repo !== null, branches: state.branches, filter, query, busy: state.busy, menuRef: branchMenu?.ref ?? null, ...(selectedRef === undefined ? {} : { selectedRef }) }));
   if (place === 'editor') {
     renderLog();
-    renderDiff();
+    renderBodies();
   }
   fill('overlay', overlayHtml());
   fill('toast', toastHtml(toast));
@@ -131,14 +152,45 @@ function highlighted(): StateView['branches'][number] | undefined {
   return (highlightRef ? branchOf(highlightRef) : undefined) ?? state.branches.find((b) => b.current);
 }
 
-function renderDiff(): void {
-  const logBody = app.querySelector<HTMLElement>('.gt-body--log');
-  const diffBody = app.querySelector<HTMLElement>('.gt-body--diff');
-  if (logBody) logBody.hidden = diffView !== null;
-  if (diffBody) diffBody.hidden = diffView === null;
-  if (!diffView) return;
-  fill('diffFiles', diffFilesHtml(diffView, details.get(diffView.sha)));
-  fill('diffPane', diffPaneHtml(diffView));
+/** Which set of panes the editor tab shows: the push screen over everything, else the tab, the log's diff inside Log. */
+function renderBodies(): void {
+  const view = pushReview ? 'push' : tab === 'commit' ? 'commit' : diffView ? 'diff' : 'log';
+  // the commit and push bodies share the diff body's grid class, so the plain diff body is matched as the first one
+  const show = (cls: string, on: boolean): void => {
+    const body = app.querySelector<HTMLElement>(`.gt-body--${cls}`);
+    if (body) body.hidden = !on;
+  };
+  show('log', view === 'log');
+  show('diff', view === 'diff');
+  show('commit', view === 'commit');
+  show('push', view === 'push');
+  if (view === 'diff' && diffView) {
+    fill('diffFiles', diffFilesHtml(diffView, details.get(diffView.sha)));
+    fill('diffPane', diffPaneHtml(diffView));
+  }
+  if (view === 'commit') {
+    fill('commitList', commitListHtml(state, commit));
+    fill('commitDiff', commitDiff ? diffPaneHtml(commitDiff, { before: 'Last commit (HEAD)', after: 'Your working copy' }) : '<div class="gt-empty"><span>Pick a file to see its changes.</span></div>');
+  }
+  if (view === 'push' && pushReview) {
+    const branch = branchOf(pushReview.ref)?.name ?? '';
+    fill('pushList', pushReviewHtml(pushReview, { branch, me: log.me, busy: state.busy !== null }));
+    fill('pushDiff', pushDiff ? diffPaneHtml(pushDiff) : '<div class="gt-empty"><span>Pick a file to see what it changes.</span></div>');
+  }
+  // HTML has no attribute for a half-ticked box
+  for (const el of app.querySelectorAll<HTMLInputElement>('input[data-mixed]')) el.indeterminate = true;
+}
+
+function openPushReview(ref: string): void {
+  pushReview = { ref, commits: null, to: '', creates: false, selected: null };
+  pushDiff = null;
+  post({ type: 'pushReview', ref });
+}
+
+function selectWorking(path: string): void {
+  commit = { ...commit, selected: path };
+  commitDiff = { sha: WORKTREE, path, diff: null };
+  post({ type: 'workingDiff', path });
 }
 
 /** Opens one file of a commit side by side and asks for it. */
@@ -218,6 +270,15 @@ input.addEventListener('input', () => {
   query = input.value;
   keep();
   render();
+});
+
+/** The commit message: kept as typed, and the buttons follow whether it is empty. */
+app.addEventListener('input', (event) => {
+  const field = event.target as HTMLTextAreaElement;
+  if (field.dataset['role'] !== 'commitMessage') return;
+  const was = commit.message.trim() === '';
+  commit = { ...commit, message: field.value };
+  if (was !== (field.value.trim() === '')) render();
 });
 
 /** Searching the log re-renders the rows; the field keeps its focus and caret. */
@@ -310,7 +371,8 @@ document.addEventListener('click', (event) => {
   const action = el?.dataset['action'] ?? '';
   // a click inside a dialog box never reaches its backdrop's close
   if ((action === 'closeDialog' || action === 'closeBranchDialog') && el?.classList.contains('gt-backdrop') && target?.closest('[data-stop]')) return;
-  const closedSomething = menuOpen || branchMenu !== null || popover !== null;
+  const closedSomething = menuOpen || branchMenu !== null || popover !== null || commit.groupMenu;
+  if (commit.groupMenu && action !== 'groupMenu' && !target?.closest('[data-stop]')) commit = { ...commit, groupMenu: false };
   if (menuOpen && action !== 'menu') menuOpen = false;
   if (branchMenu && action !== 'branchMenu') branchMenu = null;
   if (popover && !target?.closest('[data-stop]') && action !== 'pushMenu' && action !== 'publishCard') popover = null;
@@ -366,6 +428,54 @@ document.addEventListener('click', (event) => {
     case 'backToLog':
       diffView = null;
       break;
+    case 'tabLog':
+      tab = 'log';
+      break;
+    case 'tabCommit': {
+      tab = 'commit';
+      const first = state.working.find((f) => !f.conflicted);
+      if (!commit.selected && first) selectWorking(first.path);
+      break;
+    }
+    case 'selectWorking':
+      selectWorking(el?.dataset['path'] ?? '');
+      break;
+    case 'groupMenu':
+      commit = { ...commit, groupMenu: !commit.groupMenu };
+      break;
+    case 'groupDirectory':
+    case 'ungroup':
+      commit = { ...commit, groupMenu: false };
+      post({ type: 'setGrouping', grouping: action === 'groupDirectory' ? 'directory' : 'none' });
+      break;
+    case 'commitNow':
+    case 'commitAndPush': {
+      const paths = state.working.filter((f) => commit.ticked.has(f.path) && !f.conflicted).map((f) => f.path);
+      if (paths.length && commit.message.trim()) {
+        post({ type: 'commit', paths, message: commit.message.trim(), push: action === 'commitAndPush' });
+        commit = { ...commit, committing: true };
+      }
+      break;
+    }
+    case 'reviewFile': {
+      const c = pushReview?.commits?.find((x) => x.sha === el?.dataset['sha']);
+      const file = c?.files.find((f) => f.path === el?.dataset['path']);
+      if (pushReview && c && file) {
+        pushReview = { ...pushReview, selected: { sha: c.sha, path: file.path } };
+        pushDiff = { sha: c.sha, path: file.path, diff: null };
+        post({ type: 'fileDiff', sha: c.sha, parent: c.parent, file });
+      }
+      break;
+    }
+    case 'pushReviewed':
+      if (pushReview) post(pushReview.creates ? { type: 'publish', ref: pushReview.ref } : { type: 'push', ref: pushReview.ref, force: false, tags: false });
+      pushReview = null;
+      pushDiff = null;
+      break;
+    case 'closePushReview':
+      pushReview = null;
+      pushDiff = null;
+      break;
     case 'filter':
       filter = (el?.dataset['filter'] as BranchFilter | undefined) ?? 'all';
       keep();
@@ -386,8 +496,12 @@ document.addEventListener('click', (event) => {
     case 'sync':
       post({ type: 'sync', ref: null });
       break;
-    case 'push':
     case 'pushNow':
+      // the editor tab reviews first (design `10`); the sidebar has no room for that and pushes
+      if (place === 'editor') openPushReview(ref);
+      else post({ type: 'push', ref, force: false, tags: false });
+      break;
+    case 'push':
       post({ type: 'push', ref, force: false, tags: false });
       break;
     case 'publish':
@@ -470,6 +584,18 @@ document.addEventListener('change', (event) => {
     case 'toggleTags':
       if (popover) popover = { ...popover, tags: checked };
       return;
+    case 'tickFile':
+    case 'tickGroup': {
+      const paths: unknown = el.dataset['action'] === 'tickFile' ? [el.dataset['path']] : JSON.parse(el.dataset['paths'] ?? '[]');
+      const ticked = new Set(commit.ticked);
+      for (const p of Array.isArray(paths) ? paths : []) {
+        if (typeof p !== 'string') continue;
+        if (checked) ticked.add(p);
+        else ticked.delete(p);
+      }
+      commit = { ...commit, ticked };
+      break;
+    }
     case 'pickStart':
       if (branchDialog?.kind === 'new') branchDialog = { ...branchDialog, start: el.value };
       return;
@@ -511,6 +637,8 @@ document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
   if (mergedDialog && !mergedDialog.deleting) mergedDialog = null;
   else if (branchDialog && !branchDialog.busy) branchDialog = null;
+  else if (commit.groupMenu) commit = { ...commit, groupMenu: false };
+  else if (pushReview && !popover && !branchMenu && !menuOpen) pushReview = null;
   else if (diffView && !popover && !branchMenu && !menuOpen) diffView = null;
   else if (popover) popover = null;
   else if (branchMenu) branchMenu = null;
@@ -527,6 +655,14 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
       if (branchMenu && !branchOf(branchMenu.ref)) branchMenu = null;
       if (highlightRef && !branchOf(highlightRef)) highlightRef = null;
       refreshLog();
+      commit = { ...commit, ticked: nextTicked({ files: state.working, ticked: commit.ticked, known: commit.known }), known: new Set(state.working.map((f) => f.path)) };
+      if (commit.selected && !state.working.some((f) => f.path === commit.selected)) {
+        commit = { ...commit, selected: null };
+        commitDiff = null;
+      } else if (commit.selected && tab === 'commit') {
+        // the file may have changed since its diff was read
+        post({ type: 'workingDiff', path: commit.selected });
+      }
       break;
     case 'log': {
       const known = new Set(message.commits.map((c) => c.sha));
@@ -540,8 +676,30 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
     case 'commitDetails':
       for (const d of message.details) details.set(d.sha, d);
       break;
-    case 'fileDiff':
-      if (diffView?.sha === message.diff.sha && diffView.path === message.diff.path) diffView = { ...diffView, diff: message.diff };
+    case 'fileDiff': {
+      const { diff } = message;
+      const matches = (v: DiffState | null): v is DiffState => v !== null && v.sha === diff.sha && v.path === diff.path;
+      if (matches(diffView)) diffView = { ...diffView, diff };
+      if (matches(commitDiff)) commitDiff = { ...commitDiff, diff };
+      if (matches(pushDiff)) pushDiff = { ...pushDiff, diff };
+      break;
+    }
+    case 'committed':
+      commit = { ...commit, committing: false, message: '', selected: null };
+      commitDiff = null;
+      if (message.push && message.ref) openPushReview(message.ref);
+      break;
+    case 'pushReview':
+      if (pushReview?.ref === message.ref) {
+        pushReview = { ...pushReview, commits: message.commits, to: message.to, creates: message.creates };
+        const first = message.commits[0];
+        const file = first?.files[0];
+        if (first && file) {
+          pushReview = { ...pushReview, selected: { sha: first.sha, path: file.path } };
+          pushDiff = { sha: first.sha, path: file.path, diff: null };
+          post({ type: 'fileDiff', sha: first.sha, parent: first.parent, file });
+        }
+      }
       break;
     case 'openDeleteMerged':
       openMerged();
@@ -573,6 +731,7 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
       // the merged dialog cannot go on after a failed check; a branch dialog stays, to be corrected or cancelled
       mergedDialog = null;
       if (branchDialog) branchDialog = { ...branchDialog, busy: false };
+      commit = { ...commit, committing: false };
       showToast({ text: message.text, undo: null, error: true });
       break;
     default: {

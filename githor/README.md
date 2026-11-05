@@ -32,6 +32,18 @@ The editor tab shows the log of every branch, remote branch and tag between the 
 - Click a file to open it **side by side**: before on the left, after on the right, one row per line pair so the sides never drift apart, removed and added lines tinted and the changed words inside a line marked, with keywords, strings and comments coloured. The commit's other files are listed beside it; **Back to log** (or Escape) returns. A binary or very large file, and any file on request, opens in VS Code's diff editor instead.
 - **Switch** checks a commit out on no branch. **Cherry-pick** applies commits onto the current branch, oldest first; **Revert** adds a commit that undoes one. Both offer **Undo**. A cherry-pick or revert that stops at a conflict is aborted at once, so nothing changes: resolving conflicts comes with the merge screens.
 
+### Commit
+
+The **Commit** tab of the editor lists what the working copy changed since the last commit, in two sections: **Changes** (tracked files) and **Unversioned Files** (new files git does not track yet). Tracked files start ticked, unversioned ones unticked, so a stray file never slips into a commit; a section's or directory's box ticks everything under it.
+
+- The **Group by** button switches between a flat list and one grouped by **Directory**; **Ungroup** goes back. The choice stays in the workspace.
+- Click a file to see it side by side: the last commit on the left, your working copy on the right.
+- **Commit** commits exactly the ticked files as they are now; anything else you had staged stays staged and out of the commit. **Undo** puts the commit's changes back in the working copy.
+- **Commit and push** commits, then opens the push screen.
+- Files left in a conflict are listed above, and committing waits until they are resolved.
+
+The editor's **Push** opens the push screen first: where the commits go, each commit with its files (click one to see it side by side), and **Push** or **Cancel**. The sidebar's Push pushes at once.
+
 ### Push, pull and sync
 
 The editor toolbar and the sidebar have **Sync**, **Pull** and **Push** for the current branch; a row offers **Push 2**, **Pull 3** or **Publish** on hover, for any branch.
@@ -79,10 +91,10 @@ VS Code's built-in Git extension (`git.enabled`). Githor runs the same `git` it 
 
 ## How it works
 
-- `src/core/` is pure logic with no `vscode` import, tested against real repositories: `branches.ts` reads `git for-each-ref`, `marks.ts` is the sync language of the design (also imported by the webview), `merged.ts` decides what is merged, `cleanup.ts` deletes and restores, `remote.ts` fetches, `sync.ts` pushes and pulls (`sync-rules.ts` says when they are offered), `branch-ops.ts` creates, renames and deletes one branch, `log.ts` reads the log and one commit, `graph.ts` lays out the lanes (also imported by the webview), `commit-ops.ts` switches to, cherry-picks and reverts commits, `side-by-side.ts` pairs a diff's lines and marks changed words, `file-diff.ts` reads one file's diff, `tasks.ts` reads Claudestrator's task records, `repos.ts` picks the repository.
+- `src/core/` is pure logic with no `vscode` import, tested against real repositories: `branches.ts` reads `git for-each-ref`, `marks.ts` is the sync language of the design (also imported by the webview), `merged.ts` decides what is merged, `cleanup.ts` deletes and restores, `remote.ts` fetches, `sync.ts` pushes and pulls (`sync-rules.ts` says when they are offered), `branch-ops.ts` creates, renames and deletes one branch, `log.ts` reads the log and one commit, `graph.ts` lays out the lanes (also imported by the webview), `commit-ops.ts` switches to, cherry-picks and reverts commits, `side-by-side.ts` pairs a diff's lines and marks changed words, `file-diff.ts` reads one file's diff, `working.ts` reads and commits the working copy, `commit-groups.ts` builds the commit list's sections and groups, `tasks.ts` reads Claudestrator's task records, `repos.ts` picks the repository.
 - `src/model.ts` reads the repository once for every view and re-reads when the Git extension reports a change. `src/actions.ts` runs the git operations and logs failures to the **Githor** output channel.
 - `src/branches-view.ts` drives one webview page; `src/sidebar.ts` puts it in the sidebar, `src/panel.ts` in an editor tab. `src/status-bar.ts` and `src/quick-pick.ts` are the status bar item and the branch switcher; `src/git-content.ts` serves files at a commit to VS Code's diff editor.
-- `media/*.ts` are the page's ES modules: `main.ts` (state and events), `branch-list.ts`, `sync-controls.ts` (Sync, Pull, Push and its menu), `branch-menu.ts`, `branch-dialogs.ts` (new, rename, delete), `commit-log.ts`, `commit-details.ts`, `diff-view.ts`, `syntax.ts` (the diff's colours), `chrome.ts` (toolbar, menu, banner, toast), `merged-dialog.ts`, `icons.ts` (the design's icons). `media/app.css` holds the design tokens and components.
+- `media/*.ts` are the page's ES modules: `main.ts` (state and events), `branch-list.ts`, `sync-controls.ts` (Sync, Pull, Push and its menu), `branch-menu.ts`, `branch-dialogs.ts` (new, rename, delete), `commit-log.ts`, `commit-details.ts`, `diff-view.ts`, `syntax.ts` (the diff's colours), `commit-view.ts`, `push-review.ts`, `chrome.ts` (toolbar, menu, banner, toast), `merged-dialog.ts`, `icons.ts` (the design's icons). `media/app.css` holds the design tokens and components.
 
 ## Develop
 

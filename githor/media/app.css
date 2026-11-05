@@ -422,3 +422,24 @@ html, body { height: 100%; margin: 0; padding: 0; background: var(--gt-bg-app); 
 .gt-diff__row > .gt-diff__hunk { grid-column: 1 / -1; }
 .gt-diff__num.gt-cell--del, .gt-diff__num.gt-cell--add { background-image: none; }
 .gt-cell--none { background-image: none; background: var(--gt-bg-subtle); }
+
+/* ---------- Commit tab (04, 49–52) and the push screen (10) ---------- */
+.gt-toolbar .gt-tabs { margin-left: var(--gt-space-2); }
+.gt-tab .gt-count { margin-left: 2px; }
+.gt-commit-head { flex-direction: row; align-items: center; }
+.gt-commit-banner { padding: 8px 12px 0; }
+.gt-stage { gap: 6px; }
+.gt-stage--d1 { padding-left: 28px; }
+.gt-stage--d2 { padding-left: 44px; }
+.gt-stage--group { min-height: 26px; }
+.gt-stage--group > .gt-i { color: var(--gt-fg-muted); flex: none; }
+.gt-stage__section { font-weight: var(--gt-weight-strong); }
+.gt-stage .gt-file__path { min-width: 0; }
+.gt-composer__target { display: flex; align-items: center; gap: 6px; color: var(--gt-fg-muted); font-size: var(--gt-text-xs); }
+.gt-composer__target strong { color: var(--gt-fg); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gt-menu--group { right: 0; top: calc(100% + 4px); min-width: 200px; }
+.gt-icon-btn.is-on { background: var(--gt-bg-subtle); color: var(--gt-fg); }
+.gt-review-title { padding: 10px 12px 4px; }
+.gt-review-commit { display: flex; flex-direction: column; gap: 2px; padding: 8px 12px 4px; }
+.gt-file--nested { padding-left: 24px; }
+.gt-composer p { margin: 0; font-size: var(--gt-text-sm); }

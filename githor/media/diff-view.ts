@@ -47,7 +47,8 @@ function rowHtml(row: DiffRow, plain: boolean): string {
   return `<div class="gt-diff__row">${cell(row.left, left, plain)}${cell(row.right, right, plain, ' gt-diff__num--right')}</div>`;
 }
 
-export function diffPaneHtml(state: DiffState): string {
+/** `labels` names the two sides; by default the parent's and the commit's hashes. */
+export function diffPaneHtml(state: DiffState, labels?: { before: string; after: string }): string {
   const d = state.diff;
   const file = d ? d.path : state.path;
   if (!d) return `<div class="gt-empty"><span class="gt-dialog__loading">${icon('spinner', 'gt-spin')}Reading ${esc(nameOf(file))}…</span></div>`;
@@ -66,7 +67,7 @@ export function diffPaneHtml(state: DiffState): string {
   const plain = isPlain(file);
   const body = d.hunks.map((h) => `<div class="gt-diff__row"><span class="gt-diff__hunk">${esc(h.header)}</span></div>${h.rows.map((r) => rowHtml(r, plain)).join('')}`).join('');
   return `${head}<div class="gt-diff">
-  <div class="gt-diff__head"><span class="gt-diff__side-label">Before: ${d.before ? esc(d.before) : 'nothing (first commit)'}</span><span class="gt-diff__side-label">After: ${esc(d.after)}</span></div>
+  <div class="gt-diff__head"><span class="gt-diff__side-label">${esc(labels?.before ?? `Before: ${d.before ?? 'nothing (first commit)'}`)}</span><span class="gt-diff__side-label">${esc(labels?.after ?? `After: ${d.after}`)}</span></div>
   ${body || '<div class="gt-empty"><span>No line changed: the file was only renamed or its mode changed.</span></div>'}
 </div>`;
 }

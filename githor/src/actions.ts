@@ -3,11 +3,12 @@ import { createBranch, deleteBranch, deleteOnRemote, nameProblem, onlyHere, rena
 import { switchBranch } from './core/branches';
 import { cherryPick, ConflictError, resetTo, revertCommit, switchToCommit } from './core/commit-ops';
 import { fileDiff } from './core/file-diff';
+import { commitFiles, commitsToPush, uncommit, workingDiff } from './core/working';
 import { commitDetails, readLog, userEmail } from './core/log';
 import { deleteBranches, restoreBranches } from './core/cleanup';
 import { isMergedInto, mergeTargets, scanMerged } from './core/merged';
 import { fetchRemotes } from './core/remote';
-import { publish, pull, push, remoteOnlyCommits } from './core/sync';
+import { publish, publishRemote, pull, push, remoteOnlyCommits } from './core/sync';
 import { cannotPull, cannotPush } from './core/sync-rules';
 import type { Branch, CommitDetails, CommitLine, CommitView, FileChange, FileDiff, MergedBranch, RepoRoot } from './core/types';
 import type { RepoModel } from './model';
@@ -303,6 +304,50 @@ export class Actions {
 
   commitDetails(shas: readonly string[]): Promise<CommitDetails[]> {
     return Promise.all(shas.map((sha) => commitDetails(this.model.git, this.root(), sha)));
+  }
+
+  // ---------- commit (04, 49–52) and the push screen (10) ----------
+
+  workingDiff(path: string): Promise<FileDiff> {
+    const file = this.model.working.find((f) => f.path === path);
+    if (!file) throw new Error(`${path} has no change any more.`);
+    return workingDiff(this.model.git, this.root(), file);
+  }
+
+  /** Commits the chosen files as they are now; Undo puts the commit's changes back in the working copy. */
+  async commit({ paths, message }: { paths: readonly string[]; message: string }): Promise<Outcome> {
+    const root = this.root();
+    const files = this.model.working.filter((f) => paths.includes(f.path) && !f.conflicted);
+    if (!files.length) throw new Error('None of these files has a change any more.');
+    if (this.model.working.some((f) => f.conflicted)) throw new Error('Some files still conflict. Resolve them first.');
+    const onto = this.model.current?.name ?? 'HEAD';
+    let made: { sha: string; parent: string | null };
+    try {
+      made = await commitFiles(this.model.git, root, { files, message });
+    } catch (e) {
+      this.log('Commit', e);
+      throw e;
+    } finally {
+      await this.model.refresh();
+    }
+    const { parent } = made;
+    const undo = parent
+      ? this.remember(async () => {
+          await uncommit(this.model.git, root, parent);
+          return 'The commit is undone; its changes are back in the working copy';
+        })
+      : null;
+    return { text: `Committed ${plural(files.length, 'file', 'files')} to ${onto}`, undo };
+  }
+
+  /** What a push of `ref` sends (design `10`): its commits with their files, and where they go. */
+  async pushReview(ref: string): Promise<{ commits: CommitDetails[]; to: string; creates: boolean }> {
+    const branch = this.branch(ref);
+    const root = this.root();
+    const shas = await commitsToPush(this.model.git, root, branch);
+    const creates = !branch.upstream || branch.sync === 'gone';
+    const remote = creates ? ((await publishRemote(this.model.git, root)) ?? 'origin') : null;
+    return { commits: await this.commitDetails(shas), to: creates ? `${remote}/${branch.name}` : (branch.upstream ?? ''), creates };
   }
 
   fileDiff(args: { sha: string; parent: string | null; file: FileChange }): Promise<FileDiff> {

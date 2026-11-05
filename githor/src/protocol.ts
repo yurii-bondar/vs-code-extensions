@@ -1,4 +1,5 @@
-import type { Branch, CommitDetails, CommitLine, CommitView, FileChange, FileDiff, KeptBranch, MergedBranch } from './core/types';
+import type { Grouping } from './core/commit-groups';
+import type { Branch, CommitDetails, CommitLine, CommitView, FileChange, FileDiff, KeptBranch, MergedBranch, WorkingFile } from './core/types';
 
 /** A push, pull, publish or sync that is running, on `ref`; null `ref` for the current branch's sync. */
 export interface BusyView {
@@ -26,6 +27,9 @@ export interface StateView {
   busy: BusyView | null;
   /** The commit checked out; null before the first commit. */
   head: string | null;
+  /** What the working copy changed since the last commit. */
+  working: WorkingFile[];
+  grouping: Grouping;
 }
 
 /** The "Delete all merged branches" dialog for one target. */
@@ -72,7 +76,13 @@ export type ClientMessage =
   /** Opens a changed file in VS Code's diff editor: as it was in `parent` and as it is in `sha`. */
   | { type: 'openDiff'; sha: string; parent: string | null; file: FileChange }
   /** Asks for a changed file side by side, for the page's own diff (`02`). */
-  | { type: 'fileDiff'; sha: string; parent: string | null; file: FileChange };
+  | { type: 'fileDiff'; sha: string; parent: string | null; file: FileChange }
+  | { type: 'setGrouping'; grouping: Grouping }
+  /** Asks for one working-copy file side by side, against the last commit. */
+  | { type: 'workingDiff'; path: string }
+  | { type: 'commit'; paths: string[]; message: string; push: boolean }
+  /** Asks for what a push of `ref` would send, for the push screen (`10`). */
+  | { type: 'pushReview'; ref: string };
 
 export type HostMessage =
   | { type: 'state'; state: StateView }
@@ -91,6 +101,9 @@ export type HostMessage =
   | { type: 'log'; commits: CommitView[]; hasMore: boolean; me: string | null }
   | { type: 'commitDetails'; details: CommitDetails[] }
   | { type: 'fileDiff'; diff: FileDiff }
+  /** A commit is made; with `push`, the push screen opens for `ref`. */
+  | { type: 'committed'; push: boolean; ref: string | null }
+  | { type: 'pushReview'; ref: string; commits: CommitDetails[]; to: string; creates: boolean }
   | { type: 'error'; text: string };
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -148,6 +161,16 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
     case 'fileDiff': {
       const { sha, parent, file } = raw;
       return nonEmpty(sha) && (parent === null || nonEmpty(parent)) && isFileChange(file) ? { type: raw['type'], sha, parent, file } : null;
+    }
+    case 'setGrouping':
+      return raw['grouping'] === 'none' || raw['grouping'] === 'directory' ? { type: 'setGrouping', grouping: raw['grouping'] } : null;
+    case 'workingDiff':
+      return nonEmpty(raw['path']) ? { type: 'workingDiff', path: raw['path'] } : null;
+    case 'pushReview':
+      return nonEmpty(raw['ref']) ? { type: 'pushReview', ref: raw['ref'] } : null;
+    case 'commit': {
+      const { paths, message, push } = raw;
+      return Array.isArray(paths) && paths.length > 0 && paths.every(nonEmpty) && nonEmpty(message) && typeof push === 'boolean' ? { type: 'commit', paths, message, push } : null;
     }
     case 'pin':
       return nonEmpty(raw['ref']) && typeof raw['pinned'] === 'boolean' ? { type: 'pin', ref: raw['ref'], pinned: raw['pinned'] } : null;

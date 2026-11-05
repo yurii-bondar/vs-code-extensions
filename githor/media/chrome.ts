@@ -9,9 +9,19 @@ import { esc, fetchedAgo } from './text.js';
 const fetchButton = (fetching: boolean): string =>
   `<button class="gt-icon-btn" data-action="fetch" title="Fetch" aria-label="Fetch"${fetching ? ' disabled' : ''}>${icon('refresh', fetching ? 'gt-spin' : '')}</button>`;
 
-export function toolbarHtml(state: StateView, { menuOpen, popover }: { menuOpen: boolean; popover: PushPopover | null }): string {
+export type Tab = 'log' | 'commit';
+
+export function toolbarHtml(state: StateView, { menuOpen, popover, tab }: { menuOpen: boolean; popover: PushPopover | null; tab: Tab }): string {
+  const changes = state.working.filter((f) => !f.conflicted).length;
+  const tabs = state.repo
+    ? `<span class="gt-tabs" role="tablist">
+    <button class="gt-tab${tab === 'log' ? ' is-on' : ''}" role="tab" aria-selected="${tab === 'log'}" data-action="tabLog">Log</button>
+    <button class="gt-tab${tab === 'commit' ? ' is-on' : ''}" role="tab" aria-selected="${tab === 'commit'}" data-action="tabCommit">Commit${changes ? ` <span class="gt-count">${changes}</span>` : ''}</button>
+  </span>`
+    : '';
   return `<div class="gt-toolbar">
   <span class="gt-toolbar__repo">${icon('folder')}${esc(state.repo?.name ?? 'Githor')}</span>
+  ${tabs}
   <span class="gt-spacer"></span>
   ${state.repo ? `<span class="gt-toolbar__meta">${fetchedAgo(state.fetchedAt)}</span>${fetchButton(state.fetching)}` : ''}
   <span class="gt-menu-anchor">

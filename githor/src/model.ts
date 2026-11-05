@@ -3,8 +3,10 @@ import * as path from 'path';
 import { defaultBranch, listBranches, sortBranches } from './core/branches';
 import { lastFetchedAt } from './core/remote';
 import { pickRepo } from './core/repos';
+import { readWorking } from './core/working';
+import type { Grouping } from './core/commit-groups';
 import type { GitRunner } from './core/git';
-import type { Branch, RepoRoot } from './core/types';
+import type { Branch, RepoRoot, WorkingFile } from './core/types';
 import type { API, Repository } from './git-api';
 import type { BusyView, StateView } from './protocol';
 
@@ -32,6 +34,8 @@ export class RepoModel implements vscode.Disposable {
   busy: BusyView | null = null;
   /** The commit checked out; null in a repository with no commit yet. */
   head: string | null = null;
+  /** What the working copy changed since the last commit. */
+  working: WorkingFile[] = [];
 
   private readonly changed = new vscode.EventEmitter<void>();
   /** Fires after the state changed. */
@@ -89,6 +93,8 @@ export class RepoModel implements vscode.Disposable {
       defaultBranch: this.defaultBranch,
       busy: this.busy,
       head: this.head,
+      working: this.working,
+      grouping: this.grouping(),
     };
   }
 
@@ -115,9 +121,11 @@ export class RepoModel implements vscode.Disposable {
     const root = (this.root = pickRepo({ roots: this.roots(), current: this.root }));
     try {
       const head = (root: RepoRoot): Promise<string | null> => this.git.run(root, ['rev-parse', '--verify', '--quiet', 'HEAD']).then((s) => s.trim(), () => null);
-      const [branches, fetchedAt, main, headSha] = root ? await Promise.all([listBranches(this.git, root), lastFetchedAt(this.git, root), defaultBranch(this.git, root), head(root)]) : [[], null, null, null];
+      const [branches, fetchedAt, main, headSha, working] = root
+        ? await Promise.all([listBranches(this.git, root), lastFetchedAt(this.git, root), defaultBranch(this.git, root), head(root), readWorking(this.git, root)])
+        : [[], null, null, null, []];
       if (generation !== this.generation) return;
-      Object.assign(this, { branches: root ? sortBranches(branches, this.pins(root)) : [], fetchedAt, defaultBranch: main, head: headSha, loaded: true });
+      Object.assign(this, { branches: root ? sortBranches(branches, this.pins(root)) : [], fetchedAt, defaultBranch: main, head: headSha, working, loaded: true });
       this.changed.fire();
     } catch (e) {
       if (generation === this.generation) this.failed.fire(errorText(e));
@@ -137,6 +145,16 @@ export class RepoModel implements vscode.Disposable {
     else pins.delete(name);
     await this.memento.update(`githor.pins:${this.root}`, [...pins]);
     await this.refresh();
+  }
+
+  /** How the commit list groups its files (design `50`): the workspace's choice. */
+  grouping(): Grouping {
+    return this.memento.get('githor.commitGrouping') === 'directory' ? 'directory' : 'none';
+  }
+
+  async setGrouping(grouping: Grouping): Promise<void> {
+    await this.memento.update('githor.commitGrouping', grouping);
+    this.changed.fire();
   }
 
   private roots(): RepoRoot[] {

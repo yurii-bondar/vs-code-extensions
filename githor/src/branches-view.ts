@@ -1,10 +1,14 @@
 import * as vscode from 'vscode';
 import * as crypto from 'crypto';
+import * as path from 'path';
 import { gitUri } from './git-content';
 import { parseClientMessage } from './protocol';
 import type { Actions } from './actions';
 import type { RepoModel } from './model';
 import type { ClientMessage, HostMessage } from './protocol';
+
+/** The `sha` the page uses for the working copy. */
+const WORKTREE = 'WORKTREE';
 
 const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
@@ -74,7 +78,8 @@ export class BranchesView implements vscode.Disposable {
     const root = this.model.root;
     if (!root) return;
     const left = gitUri({ root, ref: file.status === 'A' ? null : parent, path: file.oldPath ?? file.path });
-    const right = gitUri({ root, ref: file.status === 'D' ? null : sha, path: file.path });
+    // the working copy opens as the file itself, so it can be edited right there
+    const right = sha === WORKTREE ? vscode.Uri.file(path.join(root, file.path)) : gitUri({ root, ref: file.status === 'D' ? null : sha, path: file.path });
     await vscode.commands.executeCommand('vscode.diff', left, right, `${file.path} (${sha.slice(0, 7)})`, { preview: true });
   }
 
@@ -154,6 +159,20 @@ export class BranchesView implements vscode.Disposable {
         return this.openDiff(message);
       case 'fileDiff':
         this.post({ type: 'fileDiff', diff: await this.actions.fileDiff(message) });
+        return;
+      case 'workingDiff':
+        this.post({ type: 'fileDiff', diff: await this.actions.workingDiff(message.path) });
+        return;
+      case 'setGrouping':
+        return this.model.setGrouping(message.grouping);
+      case 'commit': {
+        const outcome = await this.actions.commit(message);
+        this.post({ type: 'committed', push: message.push, ref: this.model.current?.ref ?? null });
+        this.post({ type: 'toast', text: outcome.text, undo: outcome.undo });
+        return;
+      }
+      case 'pushReview':
+        this.post({ type: 'pushReview', ref: message.ref, ...(await this.actions.pushReview(message.ref)) });
         return;
       case 'copyName':
         await vscode.env.clipboard.writeText(message.name);
