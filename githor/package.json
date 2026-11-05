@@ -84,6 +84,11 @@
         "icon": "$(git-branch)"
       },
       {
+        "command": "githor.statusAction",
+        "title": "Push, Pull or Publish the Current Branch",
+        "category": "Githor"
+      },
+      {
         "command": "githor.fetch",
         "title": "Fetch",
         "category": "Githor",

@@ -2,12 +2,14 @@
 // banner (`08`) and the toast.
 import type { StateView } from '../src/protocol.js';
 import { icon } from './icons.js';
+import { syncButtonsHtml } from './sync-controls.js';
+import type { PushPopover } from './sync-controls.js';
 import { esc, fetchedAgo } from './text.js';
 
 const fetchButton = (fetching: boolean): string =>
   `<button class="gt-icon-btn" data-action="fetch" title="Fetch" aria-label="Fetch"${fetching ? ' disabled' : ''}>${icon('refresh', fetching ? 'gt-spin' : '')}</button>`;
 
-export function toolbarHtml(state: StateView, menuOpen: boolean): string {
+export function toolbarHtml(state: StateView, { menuOpen, popover }: { menuOpen: boolean; popover: PushPopover | null }): string {
   return `<div class="gt-toolbar">
   <span class="gt-toolbar__repo">${icon('folder')}${esc(state.repo?.name ?? 'Githor')}</span>
   <span class="gt-spacer"></span>
@@ -16,6 +18,7 @@ export function toolbarHtml(state: StateView, menuOpen: boolean): string {
     <button class="gt-icon-btn" data-action="menu" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="${menuOpen}"${state.repo ? '' : ' disabled'}>${icon('more')}</button>
     ${menuOpen ? menuHtml() : ''}
   </span>
+  ${syncButtonsHtml({ state, popover, compact: false })}
 </div>`;
 }
 
@@ -30,12 +33,13 @@ function menuHtml(): string {
 </div>`;
 }
 
-export function sidebarHeaderHtml(state: StateView): string {
+export function sidebarHeaderHtml(state: StateView, popover: PushPopover | null): string {
   const current = state.branches.find((b) => b.current);
   return `<div class="gt-side-head">
   <span class="gt-side-head__branch">${icon('branch')}<span>${esc(current?.name ?? state.repo?.name ?? 'No repository')}</span></span>
   ${state.repo ? fetchButton(state.fetching) : ''}
-</div>`;
+</div>
+${syncButtonsHtml({ state, popover, compact: true })}`;
 }
 
 export const sidebarFooterHtml = (): string => `<button class="gt-footer-link" data-action="openEditor">${icon('file')}Open in editor</button>`;
@@ -65,6 +69,7 @@ export function toastHtml(toast: Toast | null): string {
   return `<div class="gt-toast${toast.error ? ' gt-toast--error' : ''}" role="${toast.error ? 'alert' : 'status'}">
   ${toast.error ? `<span class="gt-banner__icon">${icon('warn')}</span>` : ''}<span class="gt-toast__text">${esc(toast.text)}</span>
   ${toast.undo !== null ? `<button class="gt-link-btn" data-action="undo" data-id="${toast.undo}">Undo</button>` : ''}
+  ${toast.error ? '<button class="gt-link-btn" data-action="showOutput">Show git output</button>' : ''}
   <button class="gt-icon-btn" data-action="dismissToast" title="Dismiss" aria-label="Dismiss">${icon('close', 'gt-i--sm')}</button>
 </div>`;
 }

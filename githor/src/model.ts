@@ -6,7 +6,7 @@ import { pickRepo } from './core/repos';
 import type { GitRunner } from './core/git';
 import type { Branch, RepoRoot } from './core/types';
 import type { API, Repository } from './git-api';
-import type { StateView } from './protocol';
+import type { BusyView, StateView } from './protocol';
 
 /** The Git extension reports a change several times in a row; one refresh follows the last of them. */
 const REFRESH_DELAY_MS = 300;
@@ -29,6 +29,7 @@ export class RepoModel implements vscode.Disposable {
   fetching = false;
   fetchError: string | null = null;
   defaultBranch: string | null = null;
+  busy: BusyView | null = null;
 
   private readonly changed = new vscode.EventEmitter<void>();
   /** Fires after the state changed. */
@@ -82,6 +83,7 @@ export class RepoModel implements vscode.Disposable {
       fetching: this.fetching,
       fetchError: this.fetchError,
       defaultBranch: this.defaultBranch,
+      busy: this.busy,
     };
   }
 
@@ -89,6 +91,11 @@ export class RepoModel implements vscode.Disposable {
   setFetch({ fetching, error }: { fetching: boolean; error: string | null }): void {
     this.fetching = fetching;
     this.fetchError = error;
+    this.changed.fire();
+  }
+
+  setBusy(busy: BusyView | null): void {
+    this.busy = busy;
     this.changed.fire();
   }
 

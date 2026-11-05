@@ -24,6 +24,18 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.registerWebviewViewProvider(BranchesSidebar.viewId, new BranchesSidebar(context.extensionUri, services)),
     vscode.commands.registerCommand('githor.open', withServices((s) => openEditor(s))),
     vscode.commands.registerCommand('githor.switchBranch', withServices((s) => pickBranch(s.model, s.actions))),
+    vscode.commands.registerCommand(
+      'githor.statusAction',
+      withServices(async (s) => {
+        const action = s.actions.primary();
+        if (!action) return pickBranch(s.model, s.actions);
+        try {
+          vscode.window.setStatusBarMessage(`Githor: ${(await action()).text}`, 5000);
+        } catch (e) {
+          void vscode.window.showErrorMessage(`Githor: ${e instanceof Error ? e.message : String(e)}`, 'Show Git Output').then((pick) => pick && output.show());
+        }
+      })
+    ),
     vscode.commands.registerCommand('githor.fetch', withServices((s) => s.actions.fetch({ all: false }))),
     vscode.commands.registerCommand('githor.fetchAll', withServices((s) => s.actions.fetch({ all: true }))),
     vscode.commands.registerCommand('githor.deleteMerged', withServices((s) => openEditor(s, { type: 'openDeleteMerged' }))),

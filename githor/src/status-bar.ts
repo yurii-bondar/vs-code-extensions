@@ -13,14 +13,22 @@ function describe(branch: Branch): string {
   return [ahead ? `${ahead} to push` : '', behind ? `${behind} to pull` : ''].filter(Boolean).join(', ') + '.';
 }
 
-/** The current branch and its sync marks in the status bar (design `06`); a click opens the branch picker. */
+/** What a click does (design `06`). */
+function clickHint(branch: Branch): string {
+  if (branch.sync === 'unpushed' || branch.sync === 'gone') return 'Click to publish it.';
+  if (branch.sync === 'ahead') return 'Click to push.';
+  if (branch.sync === 'behind') return 'Click to pull.';
+  return 'Click to switch to another branch.';
+}
+
+/** The current branch and its sync marks in the status bar (design `06`); a click pushes, pulls or publishes, else opens the branch picker. */
 export class BranchStatusBar implements vscode.Disposable {
   private readonly item = vscode.window.createStatusBarItem('githor.branch', vscode.StatusBarAlignment.Left, 100);
   private readonly listener: vscode.Disposable;
 
   constructor(private readonly model: RepoModel) {
     this.item.name = 'Githor Branch';
-    this.item.command = 'githor.switchBranch';
+    this.item.command = 'githor.statusAction';
     this.listener = model.onDidChange(() => this.update());
     this.update();
   }
@@ -32,8 +40,9 @@ export class BranchStatusBar implements vscode.Disposable {
       return;
     }
     const marks = marksText(branch);
-    this.item.text = `$(git-branch) ${branch.name}${marks === 'in sync' ? ' $(check) in sync' : marks ? ` ${marks}` : ''}`;
-    this.item.tooltip = `${branch.name}: ${describe(branch)}\nClick to switch to another branch.`;
+    const icon = this.model.busy ? '$(sync~spin)' : '$(git-branch)';
+    this.item.text = `${icon} ${branch.name}${marks === 'in sync' ? ' $(check) in sync' : marks ? ` ${marks}` : ''}`;
+    this.item.tooltip = `${branch.name}: ${describe(branch)}\n${clickHint(branch)}`;
     this.item.show();
   }
 

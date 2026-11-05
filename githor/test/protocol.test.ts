@@ -10,6 +10,11 @@ test('parseClientMessage accepts the known messages', () => {
   assert.deepEqual(parseClientMessage({ type: 'scanMerged', target: 'develop' }), { type: 'scanMerged', target: 'develop' });
   assert.deepEqual(parseClientMessage({ type: 'deleteMerged', target: 'main', names: ['a', 'b'], onRemote: false }), { type: 'deleteMerged', target: 'main', names: ['a', 'b'], onRemote: false });
   assert.deepEqual(parseClientMessage({ type: 'undo', id: 3 }), { type: 'undo', id: 3 });
+  assert.deepEqual(parseClientMessage({ type: 'push', ref: 'refs/heads/x', force: true, tags: false }), { type: 'push', ref: 'refs/heads/x', force: true, tags: false });
+  assert.deepEqual(parseClientMessage({ type: 'pull', ref: 'refs/heads/x' }), { type: 'pull', ref: 'refs/heads/x' });
+  assert.deepEqual(parseClientMessage({ type: 'publish', ref: 'refs/heads/x' }), { type: 'publish', ref: 'refs/heads/x' });
+  assert.deepEqual(parseClientMessage({ type: 'sync' }), { type: 'sync' });
+  assert.deepEqual(parseClientMessage({ type: 'forceInfo', ref: 'refs/heads/x' }), { type: 'forceInfo', ref: 'refs/heads/x' });
 });
 
 test('parseClientMessage rejects what is not a known message', () => {
@@ -24,6 +29,9 @@ test('parseClientMessage rejects what is not a known message', () => {
     { type: 'deleteMerged', target: 'main', names: ['a', 3], onRemote: false },
     { type: 'deleteMerged', target: 'main', names: 'a', onRemote: false },
     { type: 'undo', id: '3' },
+    { type: 'push', ref: 'refs/heads/x', force: 'yes', tags: false },
+    { type: 'push', ref: 'refs/heads/x' },
+    { type: 'pull' },
     { type: 'nope' },
   ];
   for (const raw of bad) assert.equal(parseClientMessage(raw), null, JSON.stringify(raw));

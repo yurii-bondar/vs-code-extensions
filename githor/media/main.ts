@@ -10,6 +10,7 @@ import type { Toast } from './chrome.js';
 import { icon } from './icons.js';
 import { dialogHtml, openDialog, remoteCopies, withView } from './merged-dialog.js';
 import type { MergedDialog } from './merged-dialog.js';
+import type { PushPopover } from './sync-controls.js';
 import { persist, post, restore } from './vscode.js';
 
 const TOAST_MS = 10_000;
@@ -18,10 +19,11 @@ const place = document.body.dataset['place'] === 'sidebar' ? 'sidebar' : 'editor
 // ---------- state ----------
 
 const saved = restore();
-let state: StateView = { repo: null, branches: [], loaded: false, fetchedAt: null, fetching: false, fetchError: null, defaultBranch: null };
+let state: StateView = { repo: null, branches: [], loaded: false, fetchedAt: null, fetching: false, fetchError: null, defaultBranch: null, busy: null };
 let filter: BranchFilter = BRANCH_FILTERS.includes(saved.filter ?? 'all') ? (saved.filter ?? 'all') : 'all';
 let query = saved.query ?? '';
 let menuOpen = false;
+let popover: PushPopover | null = null;
 let dialog: MergedDialog | null = null;
 let toast: Toast | null = null;
 let toastTimer: number | undefined;
@@ -50,10 +52,10 @@ const input = app.querySelector('[data-role="query"]') as HTMLInputElement;
 input.value = query;
 
 function render(): void {
-  region('top').innerHTML = place === 'sidebar' ? sidebarHeaderHtml(state) : toolbarHtml(state, menuOpen);
+  region('top').innerHTML = place === 'sidebar' ? sidebarHeaderHtml(state, popover) : toolbarHtml(state, { menuOpen, popover });
   region('banner').innerHTML = fetchBannerHtml(state);
   region('filters').innerHTML = state.repo && state.branches.length ? filtersHtml(state.branches, filter) : '';
-  region('list').innerHTML = listHtml({ loaded: state.loaded, hasRepo: state.repo !== null, branches: state.branches, filter, query });
+  region('list').innerHTML = listHtml({ loaded: state.loaded, hasRepo: state.repo !== null, branches: state.branches, filter, query, busy: state.busy });
   region('overlay').innerHTML = dialog ? dialogHtml(dialog) : '';
   region('toast').innerHTML = toastHtml(toast);
 }
@@ -89,6 +91,9 @@ document.addEventListener('click', (event) => {
   if (action === 'closeDialog' && el?.classList.contains('gt-backdrop') && target?.closest('[data-stop]')) return;
   const menuWasOpen = menuOpen;
   if (menuOpen && action !== 'menu') menuOpen = false;
+  const popoverWasOpen = popover !== null;
+  if (popover && !target?.closest('[data-stop]') && action !== 'pushMenu' && action !== 'publishCard') popover = null;
+  const ref = el?.dataset['ref'] ?? '';
   switch (action) {
     case 'filter':
       filter = (el?.dataset['filter'] as BranchFilter | undefined) ?? 'all';
@@ -103,6 +108,46 @@ document.addEventListener('click', (event) => {
       break;
     case 'fetch':
       post({ type: 'fetch', all: false });
+      break;
+    case 'pull':
+      post({ type: 'pull', ref });
+      break;
+    case 'sync':
+      post({ type: 'sync' });
+      break;
+    case 'push':
+    case 'pushNow':
+      post({ type: 'push', ref, force: false, tags: false });
+      break;
+    case 'publish':
+      popover = null;
+      post({ type: 'publish', ref });
+      break;
+    case 'pushMenu':
+      popover = popover?.ref === ref && popover.mode === 'menu' ? null : { ref, mode: 'menu', force: false, tags: false, removes: null };
+      break;
+    case 'publishCard':
+      popover = popover?.ref === ref && popover.mode === 'publish' ? null : { ref, mode: 'publish', force: false, tags: false, removes: null };
+      break;
+    case 'pushOption':
+      if (popover) popover = { ...popover, force: el?.dataset['force'] === 'true' };
+      break;
+    case 'pushChosen':
+      if (popover) post({ type: 'push', ref, force: false, tags: popover.tags });
+      popover = null;
+      break;
+    case 'confirmForce':
+      if (popover) {
+        popover = { ...popover, mode: 'confirm', removes: null };
+        post({ type: 'forceInfo', ref });
+      }
+      break;
+    case 'forcePush':
+      if (popover) post({ type: 'push', ref, force: true, tags: popover.tags });
+      popover = null;
+      break;
+    case 'closePopover':
+      popover = null;
       break;
     case 'fetchAll':
       post({ type: 'fetch', all: true });
@@ -141,7 +186,7 @@ document.addEventListener('click', (event) => {
     default:
       // Checkboxes and the select are handled on change. Re-rendering here would replace them before their change
       // event fires, so only a click that closed the menu renders.
-      if (menuWasOpen) break;
+      if (menuWasOpen || (popoverWasOpen && !popover)) break;
       return;
   }
   render();
@@ -149,6 +194,10 @@ document.addEventListener('click', (event) => {
 
 document.addEventListener('change', (event) => {
   const el = event.target as HTMLInputElement | HTMLSelectElement;
+  if (el.dataset['action'] === 'toggleTags' && popover) {
+    popover = { ...popover, tags: (el as HTMLInputElement).checked };
+    return;
+  }
   if (!dialog) return;
   switch (el.dataset['action']) {
     case 'toggleMerged': {
@@ -175,6 +224,7 @@ document.addEventListener('change', (event) => {
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
   if (dialog && !dialog.deleting) dialog = null;
+  else if (popover) popover = null;
   else if (menuOpen) menuOpen = false;
   else return;
   render();
@@ -198,6 +248,9 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
       break;
     case 'toast':
       showToast({ text: message.text, undo: message.undo, error: false });
+      break;
+    case 'forceInfo':
+      if (popover?.ref === message.ref && popover.mode === 'confirm') popover = { ...popover, removes: { count: message.count, authors: message.authors } };
       break;
     case 'error':
       // a failed check or delete leaves the dialog: it cannot go on

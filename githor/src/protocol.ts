@@ -1,5 +1,11 @@
 import type { Branch, KeptBranch, MergedBranch } from './core/types';
 
+/** A push, pull, publish or sync that is running, on `ref`; null `ref` for the current branch's sync. */
+export interface BusyView {
+  action: 'push' | 'pull' | 'publish' | 'sync';
+  ref: string | null;
+}
+
 export interface RepoView {
   name: string;
   root: string;
@@ -17,6 +23,7 @@ export interface StateView {
   /** git's message when the last fetch failed. */
   fetchError: string | null;
   defaultBranch: string | null;
+  busy: BusyView | null;
 }
 
 /** The "Delete all merged branches" dialog for one target. */
@@ -38,7 +45,13 @@ export type ClientMessage =
   /** Lists the merged branches; a null target means the default branch. */
   | { type: 'scanMerged'; target: string | null }
   | { type: 'deleteMerged'; target: string; names: string[]; onRemote: boolean }
-  | { type: 'undo'; id: number };
+  | { type: 'undo'; id: number }
+  | { type: 'push'; ref: string; force: boolean; tags: boolean }
+  | { type: 'pull'; ref: string }
+  | { type: 'publish'; ref: string }
+  | { type: 'sync' }
+  /** Asks what a force-push of `ref` would remove from its remote, for the confirmation. */
+  | { type: 'forceInfo'; ref: string };
 
 export type HostMessage =
   | { type: 'state'; state: StateView }
@@ -48,6 +61,7 @@ export type HostMessage =
   /** The dialog's work is done: it closes. */
   | { type: 'mergedDone' }
   | { type: 'toast'; text: string; undo: number | null }
+  | { type: 'forceInfo'; ref: string; count: number; authors: string[] }
   | { type: 'error'; text: string };
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -58,6 +72,7 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
   if (!isRecord(raw)) return null;
   switch (raw['type']) {
     case 'ready':
+    case 'sync':
     case 'pickBranch':
     case 'openEditor':
     case 'showOutput':
@@ -65,7 +80,14 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
     case 'fetch':
       return typeof raw['all'] === 'boolean' ? { type: 'fetch', all: raw['all'] } : null;
     case 'switch':
-      return nonEmpty(raw['ref']) ? { type: 'switch', ref: raw['ref'] } : null;
+    case 'pull':
+    case 'publish':
+    case 'forceInfo':
+      return nonEmpty(raw['ref']) ? { type: raw['type'], ref: raw['ref'] } : null;
+    case 'push': {
+      const { ref, force, tags } = raw;
+      return nonEmpty(ref) && typeof force === 'boolean' && typeof tags === 'boolean' ? { type: 'push', ref, force, tags } : null;
+    }
     case 'scanMerged':
       return raw['target'] === null || nonEmpty(raw['target']) ? { type: 'scanMerged', target: raw['target'] } : null;
     case 'deleteMerged': {

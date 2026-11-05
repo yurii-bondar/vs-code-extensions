@@ -3,12 +3,15 @@ import { switchBranch } from './core/branches';
 import { deleteBranches, restoreBranches } from './core/cleanup';
 import { mergeTargets, scanMerged } from './core/merged';
 import { fetchRemotes } from './core/remote';
-import type { DeletedBranch, MergedBranch, RepoRoot } from './core/types';
+import { publish, pull, push, remoteOnlyCommits } from './core/sync';
+import { cannotPull, cannotPush } from './core/sync-rules';
+import type { Branch, DeletedBranch, MergedBranch, RepoRoot } from './core/types';
 import type { RepoModel } from './model';
-import type { MergedView } from './protocol';
+import type { BusyView, MergedView } from './protocol';
 
 const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 const plural = (n: number, one: string, many = `${one}es`): string => `${n} ${n === 1 ? one : many}`;
+const commits = (n: number): string => plural(n, 'commit', 'commits');
 
 /** What a finished action tells the person, and what Undo can bring back. */
 export interface Outcome {
@@ -65,6 +68,89 @@ export class Actions {
     } finally {
       await this.model.refresh();
     }
+  }
+
+  private branch(ref: string): Branch {
+    const branch = this.model.branches.find((b) => b.ref === ref);
+    if (!branch) throw new Error('That branch is gone. The list is up to date now.');
+    return branch;
+  }
+
+  /** Runs one sync operation: marks the model busy, logs a failure, re-reads the repository when done. */
+  private async syncing<T>(busy: BusyView, what: string, run: () => Promise<T>): Promise<T> {
+    this.model.setBusy(busy);
+    try {
+      return await run();
+    } catch (e) {
+      this.log(what, e);
+      throw e;
+    } finally {
+      this.model.setBusy(null);
+      await this.model.refresh();
+    }
+  }
+
+  async push({ ref, force, tags }: { ref: string; force: boolean; tags: boolean }): Promise<Outcome> {
+    const branch = this.branch(ref);
+    if (!force) {
+      const why = cannotPush(branch);
+      if (why) throw new Error(why);
+    }
+    await this.syncing({ action: 'push', ref }, `${force ? 'Force-push' : 'Push'} ${branch.name}`, () => push(this.model.git, this.root(), { branch, force, tags }));
+    const where = branch.upstream ?? '';
+    const text = force ? `Force-pushed ${branch.name} to ${where}` : `Pushed ${commits(branch.ahead)} to ${where}`;
+    return { text: tags ? `${text}, with tags` : text, undo: null };
+  }
+
+  async pull(ref: string): Promise<Outcome> {
+    const branch = this.branch(ref);
+    const why = cannotPull(branch);
+    if (why) throw new Error(why);
+    const n = await this.syncing({ action: 'pull', ref }, `Pull ${branch.name}`, () => pull(this.model.git, this.root(), branch));
+    return { text: n ? `Pulled ${commits(n)} into ${branch.name}` : `${branch.name} is already up to date`, undo: null };
+  }
+
+  async publish(ref: string): Promise<Outcome> {
+    const branch = this.branch(ref);
+    const upstream = await this.syncing({ action: 'publish', ref }, `Publish ${branch.name}`, () => publish(this.model.git, this.root(), branch));
+    return { text: `Published ${branch.name} to ${upstream}`, undo: null };
+  }
+
+  /** Pull, then push, on the current branch (design `44`). A branch on no remote yet is published. */
+  async sync(): Promise<Outcome> {
+    const current = this.model.current;
+    if (!current) throw new Error('No branch is checked out.');
+    if (current.sync === 'unpushed' || current.sync === 'gone') return this.publish(current.ref);
+    const why = cannotPull(current);
+    if (why) throw new Error(why);
+    const { pulled, pushed } = await this.syncing({ action: 'sync', ref: null }, `Sync ${current.name}`, async () => {
+      const pulled = await pull(this.model.git, this.root(), current);
+      await this.model.refresh();
+      const after = this.model.current;
+      if (!after?.ahead || after.ref !== current.ref) return { pulled, pushed: 0 };
+      await push(this.model.git, this.root(), { branch: after });
+      return { pulled, pushed: after.ahead };
+    });
+    const parts = [pulled ? `pulled ${commits(pulled)}` : '', pushed ? `pushed ${commits(pushed)}` : ''].filter(Boolean);
+    return { text: parts.length ? `Synced: ${parts.join(' and ')}` : `${current.name} is in sync`, undo: null };
+  }
+
+  /** What a force-push of `ref` removes from its remote. */
+  forceInfo(ref: string): Promise<{ count: number; authors: string[] }> {
+    return remoteOnlyCommits(this.model.git, this.root(), this.branch(ref));
+  }
+
+  /**
+   * The status bar's click (design `06`): push what is ahead, pull what is behind, publish a new branch. Null when the
+   * click has nothing to do but open the branch picker.
+   */
+  primary(): (() => Promise<Outcome>) | null {
+    const branch = this.model.current;
+    if (!branch) return null;
+    if (branch.sync === 'unpushed' || branch.sync === 'gone') return () => this.publish(branch.ref);
+    if (branch.sync === 'ahead') return () => this.push({ ref: branch.ref, force: false, tags: false });
+    if (branch.sync === 'behind') return () => this.pull(branch.ref);
+    return null;
   }
 
   /** The merged branches for the dialog; a null target means the default branch. */

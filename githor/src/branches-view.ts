@@ -56,6 +56,11 @@ export class BranchesView implements vscode.Disposable {
     void this.webview.postMessage(message);
   }
 
+  private async toast(outcome: Promise<{ text: string; undo: number | null }>): Promise<void> {
+    const { text, undo } = await outcome;
+    this.post({ type: 'toast', text, undo });
+  }
+
   private sendState(): void {
     if (this.ready) this.post({ type: 'state', state: this.model.state() });
   }
@@ -91,6 +96,17 @@ export class BranchesView implements vscode.Disposable {
         this.post({ type: 'toast', text: outcome.text, undo: outcome.undo });
         return;
       }
+      case 'push':
+        return this.toast(this.actions.push(message));
+      case 'pull':
+        return this.toast(this.actions.pull(message.ref));
+      case 'publish':
+        return this.toast(this.actions.publish(message.ref));
+      case 'sync':
+        return this.toast(this.actions.sync());
+      case 'forceInfo':
+        this.post({ type: 'forceInfo', ref: message.ref, ...(await this.actions.forceInfo(message.ref)) });
+        return;
       case 'undo': {
         const outcome = await this.actions.undo(message.id);
         this.post({ type: 'toast', text: outcome.text, undo: outcome.undo });

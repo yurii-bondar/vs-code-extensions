@@ -22,9 +22,21 @@ Each row shows where the branch lives and how far it is from its remote copy:
 
 Filter by name, or by **All**, **Attention** (something to push, pull or clean up), **Local** (on this machine only) and **Remote** (on a remote only). Hover a row and click **Switch** to check the branch out; a remote-only branch gets a local branch that tracks it.
 
+### Push, pull and sync
+
+The editor toolbar and the sidebar have **Sync**, **Pull** and **Push** for the current branch; a row offers **Push 2**, **Pull 3** or **Publish** on hover, for any branch.
+
+- **Pull** is fast-forward only. The checked-out branch pulls; another branch moves without switching to it (`git fetch origin main:main`).
+- **Push**'s arrow opens its options: **Force-push with lease** (turned off on the default branch, and confirmed first with what it removes from origin) and **Push tags**.
+- A branch on no remote yet says **Publish**, and gets a remote branch it tracks.
+- **Sync** pulls, then pushes.
+- A branch where local and remote both moved cannot be pulled or synced: there is no automatic merge that could stop at a conflict. Compare them, or force-push.
+
+Githor uses the credentials git already has (SSH keys, the system keychain); it never asks for a password.
+
 ### Status bar
 
-The current branch with the same marks: `↑2`, `↓3`, `↑1 ↓2`, `✓ in sync`. Click it to switch branches.
+The current branch with the same marks: `↑2`, `↓3`, `↑1 ↓2`, `✓ in sync`. A click pushes what is ahead, pulls what is behind and publishes a new branch; otherwise it opens the branch picker.
 
 ### Delete all merged branches
 
@@ -48,10 +60,10 @@ VS Code's built-in Git extension (`git.enabled`). Githor runs the same `git` it 
 
 ## How it works
 
-- `src/core/` is pure logic with no `vscode` import, tested against real repositories: `branches.ts` reads `git for-each-ref`, `marks.ts` is the sync language of the design (also imported by the webview), `merged.ts` decides what is merged, `cleanup.ts` deletes and restores, `remote.ts` fetches, `tasks.ts` reads Claudestrator's task records, `repos.ts` picks the repository.
+- `src/core/` is pure logic with no `vscode` import, tested against real repositories: `branches.ts` reads `git for-each-ref`, `marks.ts` is the sync language of the design (also imported by the webview), `merged.ts` decides what is merged, `cleanup.ts` deletes and restores, `remote.ts` fetches, `sync.ts` pushes and pulls (`sync-rules.ts` says when they are offered), `tasks.ts` reads Claudestrator's task records, `repos.ts` picks the repository.
 - `src/model.ts` reads the repository once for every view and re-reads when the Git extension reports a change. `src/actions.ts` runs the git operations and logs failures to the **Githor** output channel.
 - `src/branches-view.ts` drives one webview page; `src/sidebar.ts` puts it in the sidebar, `src/panel.ts` in an editor tab. `src/status-bar.ts` and `src/quick-pick.ts` are the status bar item and the branch switcher.
-- `media/*.ts` are the page's ES modules: `main.ts` (state and events), `branch-list.ts`, `chrome.ts` (toolbar, menu, banner, toast), `merged-dialog.ts`, `icons.ts` (the design's icons). `media/app.css` holds the design tokens and components.
+- `media/*.ts` are the page's ES modules: `main.ts` (state and events), `branch-list.ts`, `sync-controls.ts` (Sync, Pull, Push and its menu), `chrome.ts` (toolbar, menu, banner, toast), `merged-dialog.ts`, `icons.ts` (the design's icons). `media/app.css` holds the design tokens and components.
 
 ## Develop
 

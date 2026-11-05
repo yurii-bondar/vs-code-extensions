@@ -2,7 +2,9 @@
 import { BRANCH_FILTERS, inFilter, marksOf } from '../src/core/marks.js';
 import type { BranchFilter } from '../src/core/marks.js';
 import type { Branch } from '../src/core/types.js';
+import type { BusyView } from '../src/protocol.js';
 import { icon } from './icons.js';
+import { rowActionHtml } from './sync-controls.js';
 import { age, esc } from './text.js';
 
 const FILTER_LABELS: Record<BranchFilter, string> = { all: 'All', attention: 'Attention', local: 'Local', remote: 'Remote' };
@@ -37,7 +39,7 @@ function marksHtml(branch: Branch): string {
   return `<span class="gt-marks">${parts.join('')}</span>${tail}`;
 }
 
-function rowHtml(branch: Branch): string {
+function rowHtml(branch: Branch, busy: BusyView | null): string {
   const action = branch.current ? '' : `<button class="gt-branch__quick" data-action="switch" data-ref="${esc(branch.ref)}">Switch</button>`;
   return `<div class="gt-branch${branch.current ? ' is-current' : ''}">
   <div class="gt-branch__top">
@@ -45,7 +47,7 @@ function rowHtml(branch: Branch): string {
     <span class="gt-branch__name" title="${esc(branch.name)}">${nameHtml(branch.name)}</span>
     <span class="gt-branch__age${action ? ' has-quick' : ''}">${age(branch.committedAt)}</span>${action}
   </div>
-  <div class="gt-branch__bot">${marksHtml(branch)}</div>
+  <div class="gt-branch__bot">${marksHtml(branch)}${rowActionHtml(branch, busy)}</div>
 </div>`;
 }
 
@@ -60,14 +62,15 @@ export interface ListArgs {
   branches: readonly Branch[];
   filter: BranchFilter;
   query: string;
+  busy: BusyView | null;
 }
 
-export function listHtml({ loaded, hasRepo, branches, filter, query }: ListArgs): string {
+export function listHtml({ loaded, hasRepo, branches, filter, query, busy }: ListArgs): string {
   if (!loaded) return SKELETON.repeat(4);
   if (!hasRepo) return empty({ glyph: icon('folder'), title: 'This folder is not a git repository', text: 'Open a folder that is a git repository.' });
   if (!branches.length) return empty({ glyph: icon('branch'), title: 'No branches yet', text: 'Make the first commit to start one.' });
   const shown = branches.filter((b) => inFilter(b, filter) && matchesQuery(b, query));
-  if (shown.length) return shown.map(rowHtml).join('');
+  if (shown.length) return shown.map((b) => rowHtml(b, busy)).join('');
   if (query.trim()) return empty({ glyph: icon('search'), title: `No branch matches “${esc(query.trim())}”`, text: 'Clear the filter to see every branch.', actions: '<button class="gt-btn" data-action="clearQuery">Clear</button>' });
   return empty({ glyph: icon('check'), title: `No ${FILTER_LABELS[filter].toLowerCase()} branches`, text: 'Nothing here needs you.', actions: '<button class="gt-btn" data-action="filter" data-filter="all">Show all</button>' });
 }
