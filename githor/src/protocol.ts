@@ -1,6 +1,6 @@
 import type { Grouping } from './core/commit-groups';
 import type { ConflictPart, Resolution } from './core/conflict';
-import type { Branch, CommitDetails, CommitLine, CommitView, CompareView, FileChange, FileDiff, KeptBranch, MergedBranch, OperationView, WorkingFile } from './core/types';
+import type { Branch, CommitDetails, CommitLine, CommitView, CompareView, FileChange, FileDiff, KeptBranch, MergedBranch, OperationView, SquashPlan, WorkingFile } from './core/types';
 
 /** A push, pull, publish or sync that is running, on `ref`; null `ref` for the current branch's sync. */
 export interface BusyView {
@@ -92,7 +92,10 @@ export type ClientMessage =
   | { type: 'resolveConflict'; path: string; resolutions: Resolution[] }
   | { type: 'reopenConflict'; path: string }
   | { type: 'continueOperation' }
-  | { type: 'abortOperation' };
+  | { type: 'abortOperation' }
+  /** Asks what squashing these commits would do (design `12`, `13`). */
+  | { type: 'squashPlan'; shas: string[] }
+  | { type: 'squash'; shas: string[]; message: string };
 
 export type HostMessage =
   | { type: 'state'; state: StateView }
@@ -118,6 +121,9 @@ export type HostMessage =
   | { type: 'pushReview'; ref: string; commits: CommitDetails[]; to: string; creates: boolean }
   | { type: 'compare'; view: CompareView }
   | { type: 'conflictFile'; path: string; parts: ConflictPart[] }
+  | { type: 'squashPlan'; shas: string[]; plan: SquashPlan }
+  /** The squash is done or paused at a conflict: its screen closes. */
+  | { type: 'squashDone' }
   | { type: 'error'; text: string };
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -174,7 +180,10 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
       return Number.isInteger(raw['limit']) && (raw['limit'] as number) > 0 ? { type: 'log', limit: raw['limit'] as number } : null;
     case 'commitDetails':
     case 'cherryPick':
+    case 'squashPlan':
       return Array.isArray(raw['shas']) && raw['shas'].length > 0 && raw['shas'].every(nonEmpty) ? { type: raw['type'], shas: raw['shas'] } : null;
+    case 'squash':
+      return Array.isArray(raw['shas']) && raw['shas'].length > 1 && raw['shas'].every(nonEmpty) && nonEmpty(raw['message']) ? { type: 'squash', shas: raw['shas'], message: raw['message'] } : null;
     case 'switchCommit':
     case 'revert':
       return nonEmpty(raw['sha']) ? { type: raw['type'], sha: raw['sha'] } : null;

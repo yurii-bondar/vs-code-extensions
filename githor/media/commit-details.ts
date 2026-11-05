@@ -1,5 +1,5 @@
 // The details pane (design `01`, `14`): one commit's message, actions and changed files, or the commits selected
-// together. Squash (in `14`) comes with the squash screens.
+// together, to squash or cherry-pick them (`14`).
 import type { CommitDetails, CommitView, FileChange } from '../src/core/types.js';
 import { icon } from './icons.js';
 import { authorName, avatar } from './commit-log.js';
@@ -88,7 +88,7 @@ export function detailsHtml(args: DetailsArgs): string {
   return `<div class="gt-detail">
   <div><h2 class="gt-title">${selected.length} commits selected</h2><p class="gt-muted">Cmd-click adds or removes a commit.</p></div>
   ${items}
-  <div class="gt-pane__row"><button class="gt-btn" data-action="cherryPickAll"${attr(pickWhy)}>Cherry-pick ${selected.length}</button></div>
+  <div class="gt-pane__row"><button class="gt-btn gt-btn--primary" data-action="openSquash">Squash ${selected.length} commits…</button><button class="gt-btn" data-action="cherryPickAll"${attr(pickWhy)}>Cherry-pick ${selected.length}</button></div>
 </div>
 <div class="gt-pane__head"><span class="gt-section-title">Files changed <span class="gt-count">${files.length}</span></span></div>
 <div class="gt-scroll">${ready.length === list.length ? files.map((f) => fileRow(f, null)).join('') : loading}</div>`;

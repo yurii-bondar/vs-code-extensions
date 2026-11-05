@@ -58,7 +58,7 @@ export const sidebarFooterHtml = (): string => `<button class="gt-footer-link" d
 /** Shown while a merge or rebase is paused (design `08`, Merge in progress). */
 function operationBannerHtml(op: NonNullable<StateView['operation']>, place: 'editor' | 'sidebar'): string {
   const files = op.conflicted.length + op.staged.length;
-  const what = op.kind === 'merge' ? `Merging ${esc(op.remote)} into this branch` : `Rebasing this branch onto ${esc(op.remote)}`;
+  const what = op.kind === 'merge' ? `Merging ${esc(op.remote)} into this branch` : op.kind === 'rebase' ? `Rebasing this branch onto ${esc(op.remote)}` : `Squashing, putting ${esc(op.remote)} back on top`;
   const state = op.conflicted.length ? `${op.conflicted.length} of ${files} files conflict.` : 'Every conflict is resolved.';
   return `<div class="gt-fetch-failed">
   <div class="gt-banner"><span class="gt-banner__icon">${icon('warn')}</span><span>${what}: ${state}</span></div>

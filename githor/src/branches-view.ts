@@ -197,6 +197,15 @@ export class BranchesView implements vscode.Disposable {
         return this.toastIf(this.actions.continueOperation());
       case 'abortOperation':
         return this.toast(this.actions.abortOperation());
+      case 'squashPlan':
+        this.post({ type: 'squashPlan', shas: message.shas, plan: await this.actions.squashPlan(message.shas) });
+        return;
+      case 'squash': {
+        const outcome = await this.actions.squash(message);
+        this.post({ type: 'squashDone' });
+        if (outcome) this.post({ type: 'toast', text: outcome.text, undo: outcome.undo });
+        return;
+      }
       case 'pushReview':
         this.post({ type: 'pushReview', ref: message.ref, ...(await this.actions.pushReview(message.ref)) });
         return;

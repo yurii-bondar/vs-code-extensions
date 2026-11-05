@@ -27,15 +27,18 @@ const dirOf = (p: string): string => p.slice(0, Math.max(0, p.lastIndexOf('/')))
 const nameOf = (p: string): string => p.slice(p.lastIndexOf('/') + 1);
 const lineOf = (text: string, plain: boolean): string => lineHtml([{ text, changed: false }], plain) || ' ';
 
+/** How the screens name the left side: a branch, or for a squash "the squashed commits" (design `16`–`22`). */
+const leftName = (op: OperationView): string => (op.kind === 'squash' ? 'the squashed commits' : op.local);
+
 /** What a choice is called on the bar and over the result, in the design's words. */
 function chosen(resolution: Resolution, op: OperationView): { using: string; result: string } {
   switch (resolution.take) {
     case 'local':
-      return { using: `using ${op.local}`, result: `from ${op.local}` };
+      return { using: `using ${leftName(op)}`, result: `from ${leftName(op)}` };
     case 'remote':
       return { using: `using ${op.remote}`, result: `from ${op.remote}` };
     case 'both':
-      return { using: 'using both sides', result: `both sides, ${op.local} first` };
+      return { using: 'using both sides', result: `both sides, ${leftName(op)} first` };
     case 'edit':
       return { using: 'using your edit', result: 'your edit' };
     default: {
@@ -56,15 +59,30 @@ function fileList(title: string, paths: readonly string[], selected: string | nu
   return `<div class="gt-section-title gt-review-title">${title}</div>${rows}`;
 }
 
+/** The rail's words for each operation: merge and rebase name branches, a squash names the commit being put back. */
+function railWords(op: OperationView): { paused: string; why: string; next: string } {
+  switch (op.kind) {
+    case 'merge':
+      return { paused: 'Merge paused at a conflict', why: 'Both sides changed the same line. Nothing is committed until you press Continue.', next: 'Continue creates the merge commit on this branch.' };
+    case 'rebase':
+      return { paused: 'Rebase paused at a conflict', why: 'Both sides changed the same line. Nothing is committed until you press Continue.', next: 'Continue replays the rest of your commits, and may stop at the next conflict.' };
+    case 'squash':
+      return { paused: 'Squash paused at a conflict', why: `Your commits are squashed. Git stopped while putting ${op.remote} back on top of them.`, next: `Continue puts ${op.remote} back on top and finishes the squash.` };
+    default: {
+      const unreachable: never = op.kind;
+      return unreachable;
+    }
+  }
+}
+
 export function conflictRailHtml(op: OperationView, c: ConflictState): string {
-  const word = op.kind === 'merge' ? 'Merge' : 'Rebase';
+  const words = railWords(op);
   const resolvedHere = op.staged.filter((p) => c.resolved.has(p));
   const own = op.staged.filter((p) => !c.resolved.has(p));
   const done = op.conflicted.length === 0;
-  const lead = done
-    ? `<h2 class="gt-title">Conflict resolved</h2><p class="gt-muted">${op.kind === 'merge' ? 'Continue creates the merge commit on this branch.' : 'Continue replays the rest of your commits, and may stop at the next conflict.'}</p>`
-    : `<h2 class="gt-title">${word} paused at a conflict</h2><p class="gt-muted">Both sides changed the same line. Nothing is committed until you press Continue.</p>`;
-  return `<div class="gt-pane__head">${lead}<div class="gt-detail__meta">On <strong>${esc(op.local)}</strong></div></div>
+  const lead = done ? `<h2 class="gt-title">Conflict resolved</h2><p class="gt-muted">${esc(words.next)}</p>` : `<h2 class="gt-title">${words.paused}</h2><p class="gt-muted">${esc(words.why)}</p>`;
+  const on = op.kind === 'squash' ? '' : `<div class="gt-detail__meta">On <strong>${esc(op.local)}</strong></div>`;
+  return `<div class="gt-pane__head">${lead}${on}</div>
 <div class="gt-scroll">
   ${fileList('Files with conflicts', op.conflicted, c.path, 'D')}
   ${fileList('Resolved by you', resolvedHere, c.path, 'A')}
@@ -144,7 +162,7 @@ export function conflictPaneHtml(op: OperationView, c: ConflictState): string {
         <button class="gt-btn" data-action="cancelEdit">Cancel</button>
         ${c.draft !== part.local.join('\n') ? '<button class="gt-btn" data-action="resetEdit">Reset</button>' : ''}
         <button class="gt-btn gt-btn--primary" data-action="saveEdit" data-index="${index}">Save result</button></div>`;
-      result = `<div class="gt-conflict__result"><div class="gt-section-title">Result: ${c.draft === part.local.join('\n') ? `starts with ${esc(op.local)}` : 'edited by you, not saved yet'}</div><textarea class="gt-textarea gt-mono" data-role="conflictDraft" spellcheck="false">${esc(c.draft)}</textarea></div>`;
+      result = `<div class="gt-conflict__result"><div class="gt-section-title">Result: ${c.draft === part.local.join('\n') ? `starts with ${esc(leftName(op))}` : 'edited by you, not saved yet'}</div><textarea class="gt-textarea gt-mono" data-role="conflictDraft" spellcheck="false">${esc(c.draft)}</textarea></div>`;
     } else if (choice) {
       const words = chosen(choice, op);
       const again = choice.take === 'edit'
@@ -155,7 +173,7 @@ export function conflictPaneHtml(op: OperationView, c: ConflictState): string {
     } else {
       bar = `<div class="gt-conflict__bar"><span>${icon('warn', 'gt-i--sm')}${label}: both sides changed line ${line}</span></div>
       <div class="gt-conflict__actions">
-        <button class="gt-btn" data-action="accept" data-take="local" data-index="${index}" title="${esc(op.local)}">Accept ${esc(op.local)}</button>
+        <button class="gt-btn" data-action="accept" data-take="local" data-index="${index}" title="${esc(op.local)}">Accept ${esc(op.kind === 'squash' ? 'squashed' : op.local)}</button>
         <button class="gt-btn" data-action="accept" data-take="remote" data-index="${index}" title="${esc(op.remote)}">Accept ${esc(op.remote)}</button>
         <button class="gt-btn" data-action="accept" data-take="both" data-index="${index}">Accept both</button>
         <button class="gt-btn gt-btn--ghost" data-action="editResult" data-index="${index}">Edit result…</button>
@@ -164,7 +182,11 @@ export function conflictPaneHtml(op: OperationView, c: ConflictState): string {
     return `<div class="gt-conflict">${rows}</div>${bar}${result}`;
   });
   return `${header}<div class="gt-diff">
-  <div class="gt-diff__head"><span class="gt-diff__side-label">${icon('laptop', 'gt-i--sm')}${esc(op.local)}</span><span class="gt-diff__side-label">${icon('cloud', 'gt-i--sm')}${esc(op.remote)}</span></div>
+  <div class="gt-diff__head">${
+    op.kind === 'squash'
+      ? `<span class="gt-diff__side-label">Squashed commits</span><span class="gt-diff__side-label">Being put back: ${esc(op.remote)}</span>`
+      : `<span class="gt-diff__side-label">${icon('laptop', 'gt-i--sm')}${esc(op.local)}</span><span class="gt-diff__side-label">${icon('cloud', 'gt-i--sm')}${esc(op.remote)}</span>`
+  }</div>
   ${blocks.join('')}
   ${total > 1 ? `<p class="gt-muted gt-conflict__count">${plural(choices.filter(Boolean).length, 'conflict', 'conflicts')} of ${total} chosen; the file is written when all are.</p>` : ''}
 </div>`;

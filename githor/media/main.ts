@@ -20,6 +20,8 @@ import type { PushReview } from './push-review.js';
 import { nextTicked } from '../src/core/commit-groups.js';
 import type { Resolution } from '../src/core/conflict.js';
 import { compareHtml } from './compare-view.js';
+import { defaultMessage, squashRailHtml } from './squash-view.js';
+import type { SquashState } from './squash-view.js';
 import type { CompareState } from './compare-view.js';
 import { conflictPaneHtml, conflictRailHtml, emptyConflict } from './conflict-view.js';
 import type { ConflictState } from './conflict-view.js';
@@ -75,6 +77,9 @@ let compare: CompareState | null = null;
 /** The conflict screens (`23`–`29`): the editor tab shows them while a merge or rebase is paused. */
 let conflict: ConflictState = emptyConflict();
 /** After Edit again on a resolved file: reopen it, then edit this conflict with this text. */
+/** The squash screen (`12`), over the tabs while open. */
+let squashView: SquashState | null = null;
+let squashDiff: DiffState | null = null;
 let pendingEdit: { path: string; index: number; text: string } | null = null;
 
 const keep = (): void => persist({ filter, query });
@@ -114,6 +119,10 @@ app.innerHTML =
   <div class="gt-body gt-body--diff gt-body--commit" hidden>
     <section class="gt-pane gt-pane--rail" aria-label="Changes to commit" data-region="commitList"></section>
     <section class="gt-pane" aria-label="Diff" data-region="commitDiff"></section>
+  </div>
+  <div class="gt-body gt-body--diff gt-body--squash" hidden>
+    <section class="gt-pane gt-pane--rail" aria-label="Commits to squash" data-region="squashRail"></section>
+    <section class="gt-pane" aria-label="Diff" data-region="squashDiff"></section>
   </div>
   <div class="gt-body gt-body--diff gt-body--push" hidden>
     <section class="gt-pane gt-pane--rail" aria-label="Commits to push" data-region="pushList"></section>
@@ -170,7 +179,7 @@ function highlighted(): StateView['branches'][number] | undefined {
 
 /** Which set of panes the editor tab shows: the push screen over everything, else the tab, the log's diff inside Log. */
 function renderBodies(): void {
-  const view = state.operation ? 'conflict' : pushReview ? 'push' : tab === 'commit' ? 'commit' : diffView ? 'diff' : 'log';
+  const view = state.operation ? 'conflict' : squashView ? 'squash' : pushReview ? 'push' : tab === 'commit' ? 'commit' : diffView ? 'diff' : 'log';
   // the commit and push bodies share the diff body's grid class, so the plain diff body is matched as the first one
   const show = (cls: string, on: boolean): void => {
     const body = app.querySelector<HTMLElement>(`.gt-body--${cls}`);
@@ -181,6 +190,12 @@ function renderBodies(): void {
   show('commit', view === 'commit');
   show('push', view === 'push');
   show('conflict', view === 'conflict');
+  show('squash', view === 'squash');
+  if (view === 'squash' && squashView) {
+    fill('squashRail', squashRailHtml(squashView, { branch: state.branches.find((b) => b.current)?.name ?? 'HEAD', me: log.me }));
+    const base = squashView.plan?.baseShort;
+    fill('squashDiff', squashDiff ? diffPaneHtml(squashDiff, { before: `Before: ${base ?? ''}`, after: 'After squash' }) : '<div class="gt-empty"><span>Pick a file to see the squashed change.</span></div>');
+  }
   // the compare screen takes the log's and details' place, beside the branch list
   for (const name of ['log', 'logHead', 'details']) {
     const el = region(name)?.closest<HTMLElement>('.gt-pane');
@@ -254,6 +269,23 @@ function reopen(index: number, edit: string | null): void {
   const choices = [...conflict.choices];
   choices[index] = null;
   conflict = { ...conflict, choices, editing: edit === null ? null : index, draft: edit ?? '' };
+}
+
+function openSquash(): void {
+  // the branch's order, oldest last in the list: the host sorts them, the page only passes the selection
+  squashView = { shas: [...log.selected], plan: null, message: '', selected: null, busy: false };
+  squashDiff = null;
+  post({ type: 'squashPlan', shas: squashView.shas });
+}
+
+function selectSquashFile(path: string): void {
+  const plan = squashView?.plan;
+  const newest = plan?.commits[0];
+  const file = plan?.files.find((f) => f.path === path);
+  if (!squashView || !plan?.base || !newest || !file) return;
+  squashView = { ...squashView, selected: path };
+  squashDiff = { sha: newest.sha, path, diff: null };
+  post({ type: 'fileDiff', sha: newest.sha, parent: plan.base, file });
 }
 
 function openPushReview(ref: string): void {
@@ -361,6 +393,15 @@ input.addEventListener('input', () => {
   query = input.value;
   keep();
   render();
+});
+
+/** The squash's message: kept as typed; the button follows whether it is empty. */
+app.addEventListener('input', (event) => {
+  const field = event.target as HTMLTextAreaElement;
+  if (field.dataset['role'] !== 'squashMessage' || !squashView) return;
+  const was = squashView.message.trim() === '';
+  squashView = { ...squashView, message: field.value };
+  if (was !== (field.value.trim() === '')) render();
 });
 
 /** A conflict's result written by hand: kept as typed; the Reset button shows once it differs. */
@@ -528,6 +569,24 @@ document.addEventListener('click', (event) => {
       break;
     case 'tabLog':
       tab = 'log';
+      break;
+    case 'openSquash':
+      openSquash();
+      break;
+    case 'squashFile':
+      selectSquashFile(el?.dataset['path'] ?? '');
+      break;
+    case 'squashNow':
+      if (squashView?.plan && !squashView.plan.problem && squashView.message.trim()) {
+        post({ type: 'squash', shas: squashView.shas, message: squashView.message.trim() });
+        squashView = { ...squashView, busy: true };
+      }
+      break;
+    case 'closeSquash':
+      if (!squashView?.busy) {
+        squashView = null;
+        squashDiff = null;
+      }
       break;
     case 'compare':
       if (place === 'editor') openCompare(ref);
@@ -800,6 +859,7 @@ document.addEventListener('keydown', (event) => {
   else if (commit.groupMenu) commit = { ...commit, groupMenu: false };
   else if (conflict.editing !== null) conflict = { ...conflict, editing: null };
   else if (compare && !popover && !branchMenu && !menuOpen) compare = null;
+  else if (squashView && !squashView.busy && !popover && !branchMenu && !menuOpen) squashView = null;
   else if (pushReview && !popover && !branchMenu && !menuOpen) pushReview = null;
   else if (diffView && !popover && !branchMenu && !menuOpen) diffView = null;
   else if (popover) popover = null;
@@ -845,8 +905,21 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
       if (matches(diffView)) diffView = { ...diffView, diff };
       if (matches(commitDiff)) commitDiff = { ...commitDiff, diff };
       if (matches(pushDiff)) pushDiff = { ...pushDiff, diff };
+      if (matches(squashDiff)) squashDiff = { ...squashDiff, diff };
       break;
     }
+    case 'squashPlan':
+      if (squashView && squashView.shas.join() === message.shas.join()) {
+        squashView = { ...squashView, plan: message.plan, message: squashView.message || defaultMessage(message.plan) };
+        const first = message.plan.files[0];
+        if (first && !message.plan.problem) selectSquashFile(first.path);
+      }
+      break;
+    case 'squashDone':
+      squashView = null;
+      squashDiff = null;
+      log = { ...log, selected: [] };
+      break;
     case 'openCompare':
       openCompare(message.ref);
       break;
@@ -912,6 +985,7 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
       mergedDialog = null;
       if (branchDialog) branchDialog = { ...branchDialog, busy: false };
       commit = { ...commit, committing: false };
+      if (squashView) squashView = { ...squashView, busy: false };
       showToast({ text: message.text, undo: null, error: true });
       break;
     default: {

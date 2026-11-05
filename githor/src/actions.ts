@@ -6,6 +6,7 @@ import { compareWithRemote } from './core/compare';
 import { abortOperation, bringTogether, continueOperation, readConflict, reopenConflict, resolveFile } from './core/operation';
 import type { ConflictPart, Resolution } from './core/conflict';
 import { fileDiff } from './core/file-diff';
+import { squash, squashPlan } from './core/squash';
 import { commitFiles, commitsToPush, uncommit, workingDiff } from './core/working';
 import { commitDetails, readLog, userEmail } from './core/log';
 import { deleteBranches, restoreBranches } from './core/cleanup';
@@ -13,7 +14,7 @@ import { isMergedInto, mergeTargets, scanMerged } from './core/merged';
 import { fetchRemotes } from './core/remote';
 import { publish, publishRemote, pull, push, remoteOnlyCommits } from './core/sync';
 import { cannotPull, cannotPush } from './core/sync-rules';
-import type { Branch, CommitDetails, CommitLine, CommitView, CompareView, FileChange, FileDiff, MergedBranch, RepoRoot } from './core/types';
+import type { Branch, CommitDetails, CommitLine, CommitView, CompareView, FileChange, FileDiff, MergedBranch, RepoRoot, SquashPlan } from './core/types';
 import type { RepoModel } from './model';
 import type { BusyView, MergedView } from './protocol';
 
@@ -506,5 +507,32 @@ export class Actions {
     }
     const word = { merge: 'Merge', rebase: 'Rebase', squash: 'Squash' }[op.kind];
     return { text: `${word} aborted: the branch is back as it was`, undo: null };
+  }
+
+  // ---------- squash (12–22) ----------
+
+  squashPlan(shas: readonly string[]): Promise<SquashPlan> {
+    const { model } = this;
+    return squashPlan({ git: model.git, root: this.root(), shas, branch: model.current?.name ?? null, defaultBranch: model.defaultBranch });
+  }
+
+  /** Squashes the commits; a conflict while putting later ones back pauses it, and Continue finishes it. */
+  async squash({ shas, message }: { shas: readonly string[]; message: string }): Promise<Outcome | null> {
+    if (this.model.operation) throw new Error(`Finish or abort the ${this.model.operation.kind} first.`);
+    const root = this.root();
+    const plan = await this.squashPlan(shas);
+    if (plan.problem) throw new Error(plan.problem);
+    this.squashed = plan.commits.length;
+    try {
+      const { oldHead, paused } = await squash(this.model.git, root, { plan, message });
+      this.mergedFrom = { root, sha: oldHead };
+      if (paused) return null;
+    } catch (e) {
+      this.log('Squash', e);
+      throw e;
+    } finally {
+      await this.model.refresh();
+    }
+    return this.finished('squash', '', this.model.current?.name ?? 'HEAD');
   }
 }
