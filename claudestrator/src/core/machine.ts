@@ -118,6 +118,8 @@ function created(e: Ev<'task_created'>): TaskState {
     effort: e.effort ?? {},
     /** Model per agent for this task (a custom scenario's own); it wins over the agents' configured model. */
     model: e.model ?? {},
+    /** What a custom scenario's steps add to their agents' instructions. */
+    stepInstructions: e.stepInstructions ?? {},
     limits: e.limits,
     status: 'active',
     phase: 'intake',

@@ -155,8 +155,11 @@ const AGENT_LAYER: Record<string, Check> = {
   'instructions?': instructions,
 };
 
-/** A step of a custom scenario: an agent name, or the agent with the model and effort it runs with in this scenario. */
-const SCENARIO_STEP = T.any(agentName, T.obj({ agent: agentName, 'model?': T.str(1), 'effort?': T.oneOf(EFFORTS) }));
+/**
+ * A step of a custom scenario: an agent name, or the agent with the model and effort it runs with in this scenario and
+ * what it does there, after its own instructions (the text, or a file of it).
+ */
+const SCENARIO_STEP = T.any(agentName, T.obj({ agent: agentName, 'model?': T.str(1), 'effort?': T.oneOf(EFFORTS), 'instructions?': T.any(T.str(1), T.obj({ file: T.str(1) })) }));
 const CUSTOM_SCENARIO = T.obj({ 'label?': T.str(1, 60), 'description?': T.str(), agents: T.arr(SCENARIO_STEP) });
 
 /** `readiness` and `audit` list their agents, or are `false` when removed; any other name is a custom scenario. */

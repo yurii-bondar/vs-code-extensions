@@ -748,6 +748,12 @@ class DashboardPanel implements RpcHandlers {
     await vscode.window.showTextDocument(vscode.Uri.file(file), { viewColumn: vscode.ViewColumn.Beside });
   }
 
+  /** Opens what a scenario's step adds to its agent's instructions, moved into a file of its own first. */
+  async $editStepInstructions({ scenario, agent }: { scenario: string; agent: string }) {
+    const file = await cfg.ensureStepInstructionsFile({ workspace: this.root, scenario, agent });
+    await vscode.window.showTextDocument(vscode.Uri.file(file), { viewColumn: vscode.ViewColumn.Beside });
+  }
+
   async $setValue({ keyPath, value }: { keyPath: string[]; value: unknown }) {
     // The value itself is checked by the config validator when it is written.
     if (!Array.isArray(keyPath) || !keyPath.length || !keyPath.every((k) => typeof k === 'string' && k.length > 0)) throw new Error('invalid config path');

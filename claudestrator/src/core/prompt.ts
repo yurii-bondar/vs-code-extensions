@@ -59,6 +59,15 @@ interface PromptArgs {
   checkEnv?: string[] | undefined;
 }
 
+/**
+ * An agent's instructions with what a custom scenario's step adds to them: the agent's own come first, the step's
+ * follow under a heading of their own, so they read as this scenario's part of the job.
+ */
+function withStepInstructions(own: string, step: string, scenario: string | undefined): string {
+  const heading = `## In this scenario${scenario ? ` (${scenario})` : ''}`;
+  return own.trim() ? `${own.trim()}\n\n${heading}\n\n${step.trim()}` : `${heading}\n\n${step.trim()}`;
+}
+
 /** The files of a repo agents never write, as a prompt names them. */
 const SETTINGS_FILES = "A repo's Claude Code and VS Code settings (.claude/, .mcp.json, .vscode/)";
 
@@ -207,4 +216,4 @@ function workReport(text: string, structured?: unknown): WorkReport {
 }
 
 export type { StageReport };
-export { buildAgentPrompt, lastJsonBlock, parseStageReport, reportLanguage, workReport, workTurn };
+export { buildAgentPrompt, lastJsonBlock, parseStageReport, reportLanguage, withStepInstructions, workReport, workTurn };

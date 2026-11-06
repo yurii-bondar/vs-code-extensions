@@ -179,6 +179,8 @@ scenarios:                      # read-only agents of the report scenarios (buil
     agents:
       - developer
       - { agent: reviewer, model: sonnet, effort: low }
+      - agent: docs-writer       # what it does in this scenario, after its own instructions: text, or { file: ./prompts/hotfix/docs-writer.md }
+        instructions: Note the fix in CHANGELOG.md under Unreleased.
 limits: { reviewRounds: 2, gateAttempts: 3, budgetUsd: 20, parallelTasks: 2 }
 language: Ukrainian
 baseBranch: main

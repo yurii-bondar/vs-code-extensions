@@ -219,6 +219,10 @@ export interface ScenarioStep {
   name: string;
   model?: string;
   effort?: Effort;
+  /** What the agent does in this scenario, after its own instructions: the text, read from `instructionsFile` when it has one. */
+  instructions?: string;
+  /** The file those instructions are kept in, as an absolute path. */
+  instructionsFile?: string;
 }
 
 export interface CustomScenario {
@@ -444,6 +448,8 @@ export interface TaskState {
   gitMode: GitMode;
   effort: Record<string, Effort>;
   model: Record<string, string>;
+  /** Per agent, what its custom scenario's step adds to its instructions, as it was when the task started. */
+  stepInstructions: Record<string, string>;
   limits: Pick<Limits, 'reviewRounds' | 'gateAttempts'>;
   status: TaskStatus;
   phase: TaskPhase;
@@ -514,6 +520,7 @@ export type OrchEvent = EventBase &
         gitMode?: GitMode;
         effort?: Record<string, Effort> | undefined;
         model?: Record<string, string> | undefined;
+        stepInstructions?: Record<string, string> | undefined;
         limits: Pick<Limits, 'reviewRounds' | 'gateAttempts'>;
       }
     | { type: 'intake_completed'; spec: Spec; repos?: PlanRepo[]; plan?: PlanMeta }

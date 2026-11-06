@@ -837,6 +837,7 @@ export interface Rpc {
   setScenario: { params: { scenario: string; agents: string[] }; result: Void };
   newAgent: { params: NewAgentParams; result: Void };
   editInstructions: { params: { name: string }; result: Void };
+  editStepInstructions: { params: { scenario: string; agent: string }; result: Void };
   setValue: { params: { keyPath: string[]; value: unknown }; result: Void };
   openConfig: { params: { which: string }; result: Void };
   openFile: { params: { taskId?: string; file: string; preview?: boolean }; result: unknown };

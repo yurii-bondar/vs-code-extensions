@@ -6,10 +6,10 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as YAML from 'yaml';
-import { CONFIG_DIR, LIBRARY_FILE, PROMPTS_DIR, editProjectConfig, editYamlFile, libraryFile, libraryLabel, projectConfigFile, readProjectLayer, userConfigFile, withConfigRollback, writeIn } from './config';
+import { CONFIG_DIR, LIBRARY_FILE, PROMPTS_DIR, editProjectConfig, editYamlFile, libraryFile, libraryLabel, projectConfigFile, readProjectLayer, userConfigFile, withConfigRollback, withStepTexts, writeIn } from './config';
 import { exists, writeAtomic } from './files';
 import { validateConfigLayer, validateLibraryLayer } from './protocol';
-import type { AgentLayer, ConfigLayer } from './config';
+import type { AgentLayer, ConfigLayer, CustomScenarioLayer } from './config';
 import type { LibraryView as LibraryInfo } from './wire';
 
 type Scope = LibraryInfo['scope'];
@@ -175,6 +175,8 @@ async function moveToLibrary({ library, agents = [], scenarios = [], ...where }:
       }
       moved[name] = def;
     }
+    // A step's instructions file is named from the project's folder: in the library they go as their text.
+    const movedScenarios = await Promise.all(scenarios.map(async (id) => [id, await withStepTexts(project.scenarios![id] as CustomScenarioLayer, projectDir)] as const));
     await editYamlFile(
       target.file,
       (doc) => {
@@ -185,7 +187,7 @@ async function moveToLibrary({ library, agents = [], scenarios = [], ...where }:
         }
         // Into what the library has there already, so its comments stay.
         for (const [name, def] of Object.entries(moved)) writeIn(doc, ['agents', name], defined(def));
-        for (const id of scenarios) writeIn(doc, ['scenarios', id], project.scenarios![id]);
+        for (const [id, entry] of movedScenarios) writeIn(doc, ['scenarios', id], entry);
       },
       { validate: validateLibraryLayer, what: `library ${target.label}` }
     );

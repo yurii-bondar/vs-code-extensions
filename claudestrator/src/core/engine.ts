@@ -15,7 +15,7 @@ import { TaskService, type DispatchResult } from './store';
 import { AS_TEXT, exec, getChildEnv, GitRepo, branchAt, taskRepos, prepareRepos, taskDiff, removeWorktrees, SLOW_GIT_MS } from './git';
 import { runGates, runShell, sandboxNote, withoutCredentials } from './gates';
 import { guardBash, inGitMetadata, inside, outsideLabel } from './guard';
-import { buildAgentPrompt, parseStageReport, lastJsonBlock, workReport, workTurn, type StageReport } from './prompt';
+import { buildAgentPrompt, parseStageReport, lastJsonBlock, withStepInstructions, workReport, workTurn, type StageReport } from './prompt';
 import { commitSubject, prTitle, prBody } from './pr';
 import { renderReport, jiraText } from './report';
 import type { Live, PermissionRequest, RepoStatus } from './wire';
@@ -467,12 +467,16 @@ class Engine extends EventEmitter {
     return { scenario: kind, name, ...(custom[name] && { label: custom[name]!.label }), detected: !explicit && name !== 'deliver', source };
   }
 
-  /** A custom scenario's own model and effort per agent, as `{ model: { agent: m }, effort: { agent: level } }`. */
-  scenarioDefaults(config: Config, name: string): { model: Record<string, string>; effort: Record<string, Effort> } {
+  /**
+   * A custom scenario's own model, effort and instructions per agent, as `{ model: { agent: m }, effort: { agent: level },
+   * instructions: { agent: text } }`.
+   */
+  scenarioDefaults(config: Config, name: string): { model: Record<string, string>; effort: Record<string, Effort>; instructions: Record<string, string> } {
     const steps = (config.custom && config.custom[name] && config.custom[name]!.agents) || [];
     return {
       model: Object.fromEntries(steps.filter((st) => st.model).map((st) => [st.name, st.model])) as Record<string, string>,
       effort: Object.fromEntries(steps.filter((st) => st.effort).map((st) => [st.name, st.effort])) as Record<string, Effort>,
+      instructions: Object.fromEntries(steps.filter((st) => st.instructions).map((st) => [st.name, st.instructions])) as Record<string, string>,
     };
   }
 
@@ -620,7 +624,9 @@ class Engine extends EventEmitter {
     if (!repos.ok) throw new EngineError('repos_required', repos.error);
     const defaults = this.scenarioDefaults(config, sc.name);
     const taskEffort = this.effortFor(config, pipeline, inv.effort, effort, defaults.effort);
-    const taskModel: Record<string, string> = Object.fromEntries(Object.entries(defaults.model).filter(([name]) => pipeline.stages.some((st) => st.agent === name)));
+    const inPipeline = ([name]: [string, string]): boolean => pipeline.stages.some((st) => st.agent === name);
+    const taskModel: Record<string, string> = Object.fromEntries(Object.entries(defaults.model).filter(inPipeline));
+    const stepInstructions: Record<string, string> = Object.fromEntries(Object.entries(defaults.instructions).filter(inPipeline));
     const extras = this.extras(config, group, instructions);
     const extra = [...(no.length ? [`--no ${no.join(',')}`] : []), ...(auto && !inv.auto ? ['--auto'] : []), ...(scenario && scenario !== 'auto' && !inv.scenario ? [`--scenario ${scenario}`] : [])].join(' ');
     const started = await this.svc.start({
@@ -634,6 +640,7 @@ class Engine extends EventEmitter {
       config,
       effort: taskEffort as Record<string, Effort>,
       model: taskModel,
+      stepInstructions,
       ...((key || inv.key) && { taskId: key || inv.key }),
     });
     await this.svc.setCurrent(started.taskId);
@@ -1137,7 +1144,9 @@ class Engine extends EventEmitter {
     // The task's own model and effort for this agent (from its scenario or the composer) win over the configured ones.
     const override = s.effort && s.effort[step.agent];
     const model = s.model && s.model[step.agent];
-    const agent = configured && (override || model) ? { ...configured, ...(override && { effort: override }), ...(model && { model }) } : configured;
+    // What the scenario's step adds goes after the agent's own instructions, as the task started with it.
+    const extra = s.stepInstructions && s.stepInstructions[step.agent];
+    const agent = configured && (override || model || extra) ? { ...configured, ...(override && { effort: override }), ...(model && { model }), ...(extra && { instructions: withStepInstructions(configured.instructions, extra, s.scenarioLabel) }) } : configured;
     const label = stepLabel(step);
 
     const budget = config.limits.budgetUsd;

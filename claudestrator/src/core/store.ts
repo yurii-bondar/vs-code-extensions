@@ -186,6 +186,7 @@ interface StartRequest {
   config: Pick<Config, 'limits' | 'repos' | 'context' | 'git'>;
   effort?: Record<string, Effort> | undefined;
   model?: Record<string, string> | undefined;
+  stepInstructions?: Record<string, string> | undefined;
 }
 
 type DispatchResult =
@@ -349,6 +350,7 @@ class TaskService {
       gitMode: (req.config.git && req.config.git.mode) || 'branch',
       ...(req.effort && Object.keys(req.effort).length && { effort: req.effort }),
       ...(req.model && Object.keys(req.model).length && { model: req.model }),
+      ...(req.stepInstructions && Object.keys(req.stepInstructions).length && { stepInstructions: req.stepInstructions }),
       at: this.now().toISOString(),
     };
     const r = transition(null, event);

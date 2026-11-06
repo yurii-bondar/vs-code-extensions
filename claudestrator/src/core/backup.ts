@@ -8,7 +8,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as YAML from 'yaml';
-import { CONFIG_DIR, PROMPTS_DIR, loadConfig, projectConfigFile, readProjectLayer, removeScenario, setAgentLayer, setCustomScenario, setPipeline, setScenario, withConfigRollback } from './config';
+import { CONFIG_DIR, PROMPTS_DIR, loadConfig, projectConfigFile, readProjectLayer, removeScenario, setAgentLayer, setCustomScenario, setPipeline, setScenario, withConfigRollback, withStepTexts } from './config';
 import { validateConfigLayer } from './protocol';
 import { writeAtomic } from './files';
 import type { AgentLayer, ConfigLayer } from './config';
@@ -111,7 +111,8 @@ async function createBackup({ workspace, now }: { workspace: string; now: Date }
     agents[name] = { ...def, instructions: rel ? { ...own, file: rel } : { ...(own.mode && { mode: own.mode }), text: content } };
     if (rel) files[rel] = content;
   }
-  const scenarios = layer.scenarios ?? {};
+  // A step's instructions travel as their text: a backup carries only the agents' files.
+  const scenarios: Scenarios = Object.fromEntries(await Promise.all(Object.entries(layer.scenarios ?? {}).map(async ([id, entry]) => [id, entry && typeof entry === 'object' && !Array.isArray(entry) ? await withStepTexts(entry, dir) : entry] as const)));
   const pipeline = layer.pipeline && layer.pipeline.length ? layer.pipeline : undefined;
   const counts = { agents: Object.keys(agents).length, scenarios: Object.keys(scenarios).length, pipeline: pipeline !== undefined };
   if (!counts.agents && !counts.scenarios && !counts.pipeline) throw new Error('There is nothing to back up yet: agents, the pipeline and scenarios are saved in config.yaml once you change one');
@@ -269,7 +270,7 @@ async function writeScenario(workspace: string, id: string, entry: ScenarioEntry
   if (entry === false) await removeScenario(workspace, id);
   else if (Array.isArray(entry)) await setScenario(workspace, id, entry);
   else {
-    const agents = entry.agents.map((step): ScenarioStep => (typeof step === 'string' ? { name: step } : { name: step.agent, ...(step.model && { model: step.model }), ...(step.effort && { effort: step.effort }) }));
+    const agents = entry.agents.map((step): ScenarioStep => (typeof step === 'string' ? { name: step } : { name: step.agent, ...(step.model && { model: step.model }), ...(step.effort && { effort: step.effort }), ...(typeof step.instructions === 'string' && { instructions: step.instructions }) }));
     await setCustomScenario(workspace, id, { label: entry.label || id, description: entry.description, agents });
   }
 }
