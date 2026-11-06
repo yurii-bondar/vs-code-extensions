@@ -2201,7 +2201,8 @@ class Engine extends EventEmitter {
         // After a Parallel: every member's report.
         const group = s.pipeline.stages[step.stage]!.group;
         const agents = group === undefined ? [step.agent] : s.pipeline.stages.filter((st) => st.group === group).map((st) => st.agent);
-        const mine = s.artifacts.filter((a) => agents.includes(a.agent) && a.round === s.review.round);
+        // A step run again ("Run it again") counts with its latest report only.
+        const mine = s.artifacts.filter((a, i, all) => agents.includes(a.agent) && a.round === s.review.round && !all.slice(i + 1).some((b) => b.agent === a.agent && b.repo === a.repo && b.round === a.round));
         const texts = await Promise.all(mine.map((a) => read(a.path)));
         const last = mine[mine.length - 1];
         return { format: 'markdown', text: `${ask ? `**${ask}**\n\n` : ''}${texts.join('\n\n---\n\n')}`, ...(last && { file: last.path }) };

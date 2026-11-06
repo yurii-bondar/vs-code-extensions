@@ -16,7 +16,7 @@ const approved = { status: 'approved' as const, summary: 'ok', findings: [] };
 const changes = { status: 'changes_requested' as const, summary: 'no', findings: [{ severity: 'major' as const, repo: 'api', problem: 'p' }] };
 
 /** A task driven event by event: each must apply, and the events are kept to replay. */
-function task(pipeline: StoredPipeline) {
+function task(pipeline: StoredPipeline, { repos = ['api'] }: { repos?: string[] } = {}) {
   const events: OrchEvent[] = [];
   let s: TaskState | null = null;
   const apply = (e: EventBody): TaskState => {
@@ -32,8 +32,8 @@ function task(pipeline: StoredPipeline) {
     assert.ok(!r.ok, `${e.type} should be refused`);
     return r.error.code;
   };
-  apply({ type: 'task_created', taskId: 'T-1', input: 'x', source: { kind: 'text', text: 'x' }, auto: false, pipeline, limits: { reviewRounds: 2, gateAttempts: 3 }, knownRepos: ['api'] });
-  apply({ type: 'intake_completed', spec, repos: [{ name: 'api', mode: 'full' }] });
+  apply({ type: 'task_created', taskId: 'T-1', input: 'x', source: { kind: 'text', text: 'x' }, auto: false, pipeline, limits: { reviewRounds: 2, gateAttempts: 3 }, knownRepos: repos });
+  apply({ type: 'intake_completed', spec, repos: repos.map((name) => ({ name, mode: 'full' as const })) });
   return { apply, refused, state: () => s!, events };
 }
 
@@ -178,6 +178,26 @@ test('you approve: the task waits after the step, goes on once you approve, and 
   t.apply({ type: 'stage_completed', agent: 'developer', repo: 'api', artifact: 'd2', gates: 'pass' });
   t.apply({ type: 'checkpoint_answered', id: 'approve-step', option: 'approve' });
   assert.equal(t.state().next!.agent, 'reviewer');
+  assert.deepEqual(replay(t.events), t.state());
+});
+
+test('you approve: run again after a per-repo step runs it in every repo, each with your words, then asks again', () => {
+  const t = task({ mode: 'custom', stages: [st('developer', 'code', { approve: {} }), st('reviewer', 'verdict')], reviewLoop: null }, { repos: ['api', 'web'] });
+  for (const repo of ['api', 'web']) {
+    t.apply({ type: 'stage_started', agent: 'developer', repo });
+    t.apply({ type: 'stage_completed', agent: 'developer', repo, artifact: `d-${repo}`, gates: 'pass' });
+  }
+  assert.equal(t.state().checkpoint!.step!.repo, 'web', 'it waits after the last repo');
+  t.apply({ type: 'checkpoint_answered', id: 'approve-step', option: 'retry', feedback: 'keep the old column' });
+  for (const repo of ['api', 'web']) {
+    assert.deepEqual([t.state().next!.repo, t.state().nextMode, t.state().feedback], [repo, 'retry', 'keep the old column']);
+    t.apply({ type: 'stage_started', agent: 'developer', repo });
+    t.apply({ type: 'stage_completed', agent: 'developer', repo, artifact: `d2-${repo}`, gates: 'pass' });
+  }
+  assert.equal(t.state().checkpoint!.id, 'approve-step');
+  assert.equal(t.state().rerun, undefined);
+  t.apply({ type: 'checkpoint_answered', id: 'approve-step', option: 'approve' });
+  assert.deepEqual([t.state().next!.agent, t.state().nextMode, t.state().feedback], ['reviewer', 'initial', null]);
   assert.deepEqual(replay(t.events), t.state());
 });
 

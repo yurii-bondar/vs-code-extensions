@@ -515,6 +515,11 @@ export interface TaskState {
    * runs; a failure then asks you about it, one at a time.
    */
   parallel?: GroupProgress;
+  /**
+   * "Run it again" at You approve after a per-repo stage: each of its repos runs again with your words, until the task
+   * waits for you there again.
+   */
+  rerun?: { stage: number; feedback: string | null };
   checkpoint: Checkpoint | null;
   review: ReviewState;
   finishStep: 'commit' | 'confirm' | 'publish' | null;

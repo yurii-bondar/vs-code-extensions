@@ -280,7 +280,10 @@ function checkpointAnswered(s: TaskState, e: Ev<'checkpoint_answered'>): Transit
       if (e.option === 'retry') {
         // Its result goes, so the run again is the one that counts.
         s.review.verdicts = s.review.verdicts.filter((v) => v.agent !== step.agent);
-        setNext(s, step, 'retry', feedback);
+        // A per-repo stage waited after its last repo: it runs again from its first one, each repo with your words.
+        const first = passSteps(s).find((p) => p.stage === step.stage) ?? step;
+        if (step.repo) s.rerun = { stage: step.stage, feedback };
+        setNext(s, first, 'retry', feedback);
       } else if (loop && [step, ...groupSteps(s, step)].some((m) => m.stage === loop.end)) passReview(s, false);
       else advance(s, step, e.at, true);
       break;
@@ -465,7 +468,10 @@ function advance(s: TaskState, from: Step, at: string, approved = false): void {
   const pass = passSteps(s);
   const i = pass.findIndex((p) => p.stage === from.stage && sameStep(p, from));
   if (!approved && i >= 0 && waitsForYou(s, from, pass.slice(i + 1))) return openApproval(s, from, at);
-  setNext(s, i >= 0 ? firstRunnable(s, pass, i + 1) : null, s.review.fixing ? 'fix' : 'initial');
+  if (approved) delete s.rerun;
+  const next = i >= 0 ? firstRunnable(s, pass, i + 1) : null;
+  if (next && s.rerun && next.stage === s.rerun.stage) setNext(s, next, 'retry', s.rerun.feedback);
+  else setNext(s, next, s.review.fixing ? 'fix' : 'initial');
 }
 
 /**
@@ -479,6 +485,7 @@ function waitsForYou(s: TaskState, step: Step, rest: readonly Step[]): boolean {
 
 /** You approve: go on, run the step again with your words (not one of a Parallel, which runs as one), or stop. */
 function openApproval(s: TaskState, step: Step, at: string): void {
+  delete s.rerun;
   openCheckpoint(s, 'approve-step', { at, step });
   if (s.pipeline.stages[step.stage]!.group !== undefined) s.checkpoint!.options = s.checkpoint!.options.filter((o) => o !== 'retry');
 }
