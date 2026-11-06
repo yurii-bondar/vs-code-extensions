@@ -48,7 +48,6 @@ export type AreaItem = ColorItem | SettingItem | NoteItem;
 export interface Area {
   readonly id: string;
   readonly title: string;
-  readonly icon: string;
   readonly desc: string;
   readonly groups: readonly { readonly title: string; readonly items: readonly AreaItem[] }[];
 }

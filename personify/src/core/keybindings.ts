@@ -72,20 +72,45 @@ interface RowsArgs {
   title: (command: string) => string;
 }
 
-/** Every default shortcut (marked when the user switched it off) followed by the user's own. */
-export function buildRows({ defaults, user, title }: RowsArgs): KeybindingRow[] {
-  const removals = user.flatMap((entry, index) => {
-    if (!isRecord(entry) || typeof entry.command !== 'string' || !entry.command.startsWith('-')) return [];
-    return [{ index, command: entry.command.slice(1), key: str(entry.key), when: str(entry.when) }];
-  });
+interface Removal {
+  readonly index: number;
+  readonly command: string;
+  /** Normalized; null switches off every key of the command. */
+  readonly key: string | null;
+  /** null matches every context. */
+  readonly when: string | null;
+}
 
-  const rows: KeybindingRow[] = defaults.map((d, i) => {
-    const removal = removals.find((r) => r.command === d.command && (!r.key || normalizeKey(r.key) === normalizeKey(d.key)) && (r.when === null || r.when === d.when));
-    return { id: `d${i}`, source: 'default', command: d.command, title: title(d.command), key: d.key, when: d.when, args: d.args, removalIndex: removal ? removal.index : null };
+/**
+ * Every default shortcut followed by the user's own, each marked when a `-command` entry switches it off.
+ * As in VS Code, such an entry switches off the defaults and the user entries above it.
+ */
+export function buildRows({ defaults, user, title }: RowsArgs): KeybindingRow[] {
+  const removals: Removal[] = user.flatMap((entry, index) => {
+    if (!isRecord(entry) || typeof entry.command !== 'string' || !entry.command.startsWith('-')) return [];
+    const key = str(entry.key);
+    return [{ index, command: entry.command.slice(1), key: key ? normalizeKey(key) : null, when: str(entry.when) }];
   });
+  const removalOf = (command: string, key: string, when: string, after: number): number | null => {
+    if (!removals.length) return null;
+    const nk = normalizeKey(key);
+    return removals.find((r) => r.index > after && r.command === command && (r.key === null || r.key === nk) && (r.when === null || r.when === when))?.index ?? null;
+  };
+
+  const rows: KeybindingRow[] = defaults.map((d, i) => ({
+    id: `d${i}`,
+    source: 'default',
+    command: d.command,
+    title: title(d.command),
+    key: d.key,
+    when: d.when,
+    args: d.args,
+    removalIndex: removalOf(d.command, d.key, d.when, -1),
+  }));
   user.forEach((u, index) => {
     if (!isRecord(u) || typeof u.command !== 'string' || u.command.startsWith('-') || typeof u.key !== 'string' || !u.key) return;
-    rows.push({ id: `u${index}`, source: 'user', command: u.command, title: title(u.command), key: u.key, when: str(u.when) || '', args: u.args, index });
+    const when = str(u.when) || '';
+    rows.push({ id: `u${index}`, source: 'user', command: u.command, title: title(u.command), key: u.key, when, args: u.args, index, removalIndex: removalOf(u.command, u.key, when, index) });
   });
   return rows;
 }
@@ -117,6 +142,21 @@ function checkEntry(list: readonly unknown[], index: number, command: string): v
   if (!isRecord(found) || found.command !== command) throw new Error('keybindings.json changed outside Personify. The list has been refreshed, please try again.');
 }
 
+/** keybindings.json text with each of `entries` appended unless `list` (that text parsed) already has it, and how many were. */
+export function addMissing(text: string, list: readonly unknown[], entries: readonly JsonObject[]): { text: string; added: number } {
+  const existing = new Set(list.map((k) => JSON.stringify(k)));
+  let next = text;
+  let added = 0;
+  for (const kb of entries) {
+    const json = JSON.stringify(kb);
+    if (existing.has(json)) continue;
+    existing.add(json);
+    next = append(next, entry({ key: str(kb.key) ?? '', command: str(kb.command) ?? '', when: str(kb.when) ?? '', args: kb.args }));
+    added++;
+  }
+  return { text: next, added };
+}
+
 /** keybindings.json text after `change`; `list` is that text parsed. Throws when an indexed entry moved. */
 export function applyEdit(text: string, list: readonly unknown[], change: KeybindingEdit): string {
   switch (change.op) {
@@ -136,7 +176,7 @@ export function applyEdit(text: string, list: readonly unknown[], change: Keybin
       const removal = entry({ key: change.oldKey, command: `-${change.command}`, when: change.oldWhen });
       return append(append(text, removal), entry(change));
     }
-    case 'restoreDefault':
+    case 'restore':
       return applyEdit(text, list, { op: 'remove', index: change.index, command: `-${change.command}` });
     case 'resetCommand': {
       let next = text;

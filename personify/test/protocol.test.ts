@@ -13,6 +13,8 @@ test('parseClientMessage drops unknown messages and values of the wrong type', (
   assert.equal(parseClientMessage(null), null);
   assert.equal(parseClientMessage({ type: 'eval', code: '1' }), null);
   assert.deepEqual(parseClientMessage({ type: 'ready', extra: 1 }), { type: 'ready' });
+  assert.deepEqual(parseClientMessage({ type: 'setSemanticHighlighting', value: 'yes' }), { type: 'setSemanticHighlighting', value: null });
+  assert.deepEqual(parseClientMessage({ type: 'setSemanticHighlighting', value: false }), { type: 'setSemanticHighlighting', value: false });
   assert.deepEqual(parseClientMessage({ type: 'setColors', changes: { a: '#fff', b: '', c: 5 } }), { type: 'setColors', changes: { a: '#fff', b: null, c: null } });
   assert.deepEqual(parseClientMessage({ type: 'setSettings', changes: { a: 3, b: true, c: { x: 1 } } }), { type: 'setSettings', changes: { a: 3, b: true, c: null } });
   assert.deepEqual(parseClientMessage({ type: 'setSyntax', changes: [{ langId: 'go', itemId: 'x', style: { fg: '#f00' } }, { langId: 1 }] }), {
@@ -52,4 +54,12 @@ test('catalog: keys are unique, and every token in a sample is an item of its la
   const item = jsts?.groups[0]?.items[0];
   assert.ok(jsts && item);
   assert.deepEqual(textMateScopes(jsts, item).slice(0, 2), [`source.js ${item.scopes[0]}`, `source.ts ${item.scopes[0]}`]);
+});
+
+test('import and snapshot messages carry only what they need', () => {
+  assert.deepEqual(parseClientMessage({ type: 'importApply', replace: 'yes', keybindings: true }), { type: 'importApply', replace: false, keybindings: true });
+  assert.deepEqual(parseClientMessage({ type: 'importCancel', file: 'x' }), { type: 'importCancel' });
+  assert.deepEqual(parseClientMessage({ type: 'restoreSnapshot', id: 'abc' }), { type: 'restoreSnapshot', id: 'abc' });
+  assert.equal(parseClientMessage({ type: 'restoreSnapshot', id: '' }), null);
+  assert.equal(parseClientMessage({ type: 'restoreSnapshot' }), null);
 });

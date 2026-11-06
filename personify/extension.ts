@@ -11,7 +11,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('personify.open', () => open()),
     vscode.commands.registerCommand('personify.openHotkeys', () => open('hotkeys')),
     vscode.commands.registerCommand('personify.openAppearance', () => open('appearance')),
-    vscode.commands.registerCommand('personify.openSyntax', () => open('syntax'))
+    vscode.commands.registerCommand('personify.openSyntax', () => open('syntax')),
+    vscode.extensions.onDidChange(() => store.invalidate()),
+    PersonifyPanel.owner
   );
 
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
@@ -31,5 +33,3 @@ export function activate(context: vscode.ExtensionContext): void {
     })
   );
 }
-
-export function deactivate(): void {}

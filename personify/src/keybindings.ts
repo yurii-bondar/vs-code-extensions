@@ -2,13 +2,22 @@ import * as vscode from 'vscode';
 import { promises as fs } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { applyEdit, buildRows, humanize, parseDefaultKeybindings, parseKeybindings, toBinding } from './core/keybindings';
-import { isRecord, str } from './core/json';
+import { addMissing, applyEdit, buildRows, humanize, parseDefaultKeybindings, toBinding } from './core/keybindings';
+import { errorMessage, isRecord, str } from './core/json';
+import { KeybindingsFile } from './core/keybindingsFile';
 import type { Binding } from './core/keybindings';
+import type { JsonObject } from './core/json';
+import type { FileSystem } from './core/keybindingsFile';
 import type { KeybindingEdit, KeybindingsState } from './core/types';
 
 const DEFAULTS_URI = 'vscode://defaultsettings/keybindings.json';
 const PLATFORM_KEY = process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'win' : 'linux';
+
+/** Every command and the titles extensions give them; they change only when extensions do. */
+interface Commands {
+  readonly ids: readonly string[];
+  readonly titles: ReadonlyMap<string, string>;
+}
 
 interface Defaults {
   readonly list: readonly Binding[];
@@ -24,14 +33,28 @@ function contributed(packageJSON: unknown, point: string): unknown[] {
   return Array.isArray(value) ? value : value === undefined || value === null ? [] : [value];
 }
 
-const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+const nodeFs: FileSystem = {
+  readFile: (file) => fs.readFile(file, 'utf8'),
+  writeFile: (file, text) => fs.writeFile(file, text),
+  rename: (from, to) => fs.rename(from, to),
+  copyFile: (from, to) => fs.copyFile(from, to),
+  mkdir: async (dir) => {
+    await fs.mkdir(dir, { recursive: true });
+  },
+  realpath: (file) => fs.realpath(file),
+};
 
 /** The user's keybindings.json, edited in place, plus the defaults it overrides. */
 export class KeybindingStore {
   private defaults: Defaults | undefined;
-  private backedUp = false;
+  private commands: Commands | undefined;
+  /** The text the last state was built from; null when the file could not be read. */
+  private shownText: string | null = null;
+  readonly disk: KeybindingsFile;
 
-  constructor(private readonly globalStorage: vscode.Uri) {}
+  constructor(private readonly globalStorage: vscode.Uri) {
+    this.disk = new KeybindingsFile(nodeFs, () => this.file);
+  }
 
   get file(): string {
     const custom = str(vscode.workspace.getConfiguration('personify').get<unknown>('keybindingsPath'));
@@ -40,40 +63,34 @@ export class KeybindingStore {
     return path.join(this.globalStorage.fsPath, '..', '..', 'keybindings.json');
   }
 
-  async readText(): Promise<string> {
+  apply(edit: KeybindingEdit): Promise<void> {
+    return this.disk.update(({ text, list }) => applyEdit(text, list, edit));
+  }
+
+  /** Adds the entries the file does not have yet, in one write; how many were added. */
+  async addMissing(entries: readonly JsonObject[]): Promise<number> {
+    let added = 0;
+    await this.disk.update(({ text, list }) => {
+      const next = addMissing(text, list, entries);
+      added = next.added;
+      return next.text;
+    });
+    return added;
+  }
+
+  /** Drops what was read from extensions, after one was installed, removed or switched. */
+  invalidate(): void {
+    this.defaults = undefined;
+    this.commands = undefined;
+  }
+
+  /** True while the file still holds what the last state showed, e.g. when the watcher sees Personify's own write. */
+  async showsCurrentFile(): Promise<boolean> {
     try {
-      const text = await fs.readFile(this.file, 'utf8');
-      return text.trim() ? text : '[]';
+      return this.shownText !== null && (await this.disk.readText()) === this.shownText;
     } catch {
-      return '[]';
+      return false;
     }
-  }
-
-  async read(): Promise<{ text: string; list: unknown[] }> {
-    const text = await this.readText();
-    const list = parseKeybindings(text);
-    if (!list) throw new Error('keybindings.json has syntax errors. Open it, fix them, then try again.');
-    return { text, list };
-  }
-
-  /** The first write of a session saves a copy next to the file. */
-  async writeText(text: string): Promise<void> {
-    const file = this.file;
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    if (!this.backedUp) {
-      try {
-        await fs.copyFile(file, `${file}.personify-backup`);
-        this.backedUp = true;
-      } catch {
-        // no file yet, nothing to back up
-      }
-    }
-    await fs.writeFile(file, text);
-  }
-
-  async apply(edit: KeybindingEdit): Promise<void> {
-    const { text, list } = await this.read();
-    await this.writeText(applyEdit(text, list, edit));
   }
 
   private extensionDefaults(): Binding[] {
@@ -102,6 +119,13 @@ export class KeybindingStore {
     return this.defaults;
   }
 
+  private async loadCommands(force: boolean): Promise<Commands> {
+    if (this.commands && !force) return this.commands;
+    const ids = (await vscode.commands.getCommands(true)).filter((c) => !c.startsWith('_'));
+    this.commands = { ids, titles: this.commandTitles() };
+    return this.commands;
+  }
+
   private commandTitles(): Map<string, string> {
     const titles = new Map<string, string>();
     for (const ext of vscode.extensions.all) {
@@ -119,18 +143,21 @@ export class KeybindingStore {
 
   async state(force = false): Promise<KeybindingsState> {
     const defaults = await this.loadDefaults(force);
+    const known = await this.loadCommands(force);
     let user: unknown[] = [];
     let error: string | null = null;
     try {
-      user = (await this.read()).list;
+      const read = await this.disk.read();
+      user = read.list;
+      this.shownText = read.text;
     } catch (e) {
       error = errorMessage(e);
+      this.shownText = null;
     }
-    const titles = this.commandTitles();
-    const title = (id: string): string => titles.get(id) || humanize(id);
+    const title = (id: string): string => known.titles.get(id) || humanize(id);
     const rows = buildRows({ defaults: defaults.list, user, title });
 
-    const all = new Set([...(await vscode.commands.getCommands(true)).filter((c) => !c.startsWith('_')), ...defaults.unbound]);
+    const all = new Set([...known.ids, ...defaults.unbound]);
     const commands = [...all].sort().map((id) => ({ id, title: title(id) }));
     return { rows, commands, file: this.file, error, defaultsFromVscode: defaults.fromVscode };
   }

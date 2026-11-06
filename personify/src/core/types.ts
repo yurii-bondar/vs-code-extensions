@@ -18,6 +18,9 @@ export interface Target {
 /** What the catalog's settings hold: numbers, enum strings, font names and booleans. */
 export type SettingValue = string | number | boolean;
 
+/** Why the active theme's syntax colors are not known; null when they are. */
+export type ThemeProblem = 'notFound' | 'tmTheme' | 'unreadable' | null;
+
 export interface SettingState {
   /** Written at the current scope; null when not set there. */
   value: SettingValue | null;
@@ -43,12 +46,19 @@ export interface CustomRule extends TokenStyle {
   scope: string;
 }
 
+/** `editor.semanticHighlighting.enabled`; null where the theme decides. */
+export interface SemanticState {
+  /** Written at the current scope. */
+  value: boolean | null;
+  /** What applies right now, from any level. */
+  effective: boolean | null;
+}
+
 export interface SyntaxState {
   /** By `langId/itemId`. */
   items: Record<string, TokenStyle>;
   custom: CustomRule[];
-  /** null: the theme decides. */
-  semanticHighlighting: boolean | null;
+  semanticHighlighting: SemanticState;
 }
 
 export interface SyntaxChange {
@@ -67,12 +77,12 @@ interface RowBase {
   /** Empty: always. */
   readonly when: string;
   readonly args: unknown;
+  /** Index of the `-command` entry in keybindings.json that switches this shortcut off; null while it is on. */
+  readonly removalIndex: number | null;
 }
 
 export interface DefaultRow extends RowBase {
   readonly source: 'default';
-  /** Index of the `-command` entry in keybindings.json that switches this default off; null while it is on. */
-  readonly removalIndex: number | null;
 }
 
 export interface UserRow extends RowBase {
@@ -105,5 +115,6 @@ export type KeybindingEdit =
   | { readonly op: 'remove'; readonly index: number; readonly command: string }
   | { readonly op: 'disableDefault'; readonly command: string; readonly key: string; readonly when: string }
   | { readonly op: 'replaceDefault'; readonly command: string; readonly oldKey: string; readonly oldWhen: string; readonly key: string; readonly when: string; readonly args: unknown }
-  | { readonly op: 'restoreDefault'; readonly index: number; readonly command: string }
+  /** Removes the `-command` entry at `index`, which brings back the shortcuts it switched off. */
+  | { readonly op: 'restore'; readonly index: number; readonly command: string }
   | { readonly op: 'resetCommand'; readonly command: string };

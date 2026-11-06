@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { COLORS, Customizations, SEMANTIC, TOKENS } from '../src/core/customizations';
+import { COLORS, Customizations, SEMANTIC, SEMANTIC_ENABLED, TOKENS } from '../src/core/customizations';
 import type { Config } from '../src/core/customizations';
 import type { Scope, Target } from '../src/core/types';
 
@@ -9,6 +9,7 @@ class FakeConfig implements Config {
   readonly values: Record<Scope, Map<string, unknown>> = { user: new Map(), workspace: new Map() };
   readonly defaults = new Map<string, unknown>();
   workspaceOpen = true;
+  writes = 0;
 
   read(key: string, scope: Scope): unknown {
     return this.values[scope].get(key);
@@ -20,6 +21,7 @@ class FakeConfig implements Config {
     return this.defaults.get(key);
   }
   async write(key: string, value: unknown, scope: Scope): Promise<void> {
+    this.writes++;
     if (value === undefined) this.values[scope].delete(key);
     else this.values[scope].set(key, JSON.parse(JSON.stringify(value)));
   }
@@ -123,4 +125,47 @@ test('restoreSnapshot puts back both levels, and skips the workspace when none i
   await c.restoreSnapshot(snap);
   assert.equal(config.read('editor.fontSize', 'user'), 13);
   assert.equal(config.read('editor.fontSize', 'workspace'), 18);
+});
+
+test('only catalog keys are written, from the webview and from a profile', async () => {
+  const { config, c } = setup();
+  await c.setColors(USER, { 'sideBar.background': '#111111', 'not.in.catalog': '#222222' });
+  await c.setSettings(USER, { 'editor.fontSize': 15, 'git.path': '/tmp/evil' });
+  await c.importState(
+    USER,
+    {
+      colors: { 'evil.color': '#333333' },
+      settings: { 'python.defaultInterpreterPath': '/tmp/evil', 'editor.fontSize': 16 },
+      textMateRules: [{ name: 'someone-else', scope: 'x', settings: {} }],
+      semanticRules: { 'evil:go': { bold: true } },
+    },
+    { replace: false }
+  );
+  assert.deepEqual(config.read(COLORS, 'user'), { 'sideBar.background': '#111111' });
+  assert.equal(config.read('editor.fontSize', 'user'), 16);
+  assert.equal(config.read('git.path', 'user'), undefined);
+  assert.equal(config.read('python.defaultInterpreterPath', 'user'), undefined);
+  assert.equal(config.read(SEMANTIC, 'user'), undefined);
+  assert.equal(config.read(TOKENS, 'user'), undefined);
+});
+
+test('a write that changes nothing is skipped', async () => {
+  const { config, c } = setup();
+  await c.resetAll(USER);
+  assert.equal(config.writes, 0);
+  await c.setSettings(USER, { 'editor.fontSize': 15 });
+  await c.setSettings(USER, { 'editor.fontSize': 15 });
+  await c.setColors(USER, { 'sideBar.background': null });
+  assert.equal(config.writes, 1);
+});
+
+test('semantic highlighting reports the value at the scope apart from the one that applies', async () => {
+  const { config, c } = setup();
+  await config.write(SEMANTIC_ENABLED, false, 'workspace');
+  await c.setSemanticHighlighting(USER, true);
+  assert.deepEqual(c.syntaxState(USER).semanticHighlighting, { value: true, effective: false });
+  await c.setSemanticHighlighting(USER, null);
+  assert.equal(config.read(SEMANTIC_ENABLED, 'user'), undefined);
+  await c.setSettings(USER, { [SEMANTIC_ENABLED]: true });
+  assert.equal(config.read(SEMANTIC_ENABLED, 'user'), undefined, 'not a catalog setting');
 });

@@ -21,7 +21,6 @@ export const AREAS: readonly Area[] = [
   {
     id: 'sidebar',
     title: 'Sidebar',
-    icon: '▤',
     desc: 'Explorer with your project files, the activity bar and the other side panels.',
     groups: [
       {
@@ -84,7 +83,6 @@ export const AREAS: readonly Area[] = [
   {
     id: 'editor',
     title: 'Editor',
-    icon: '✎',
     desc: 'The text area where you write code, plus its tabs, gutter and widgets.',
     groups: [
       {
@@ -158,7 +156,6 @@ export const AREAS: readonly Area[] = [
   {
     id: 'terminal',
     title: 'Terminal',
-    icon: '›_',
     desc: 'The integrated terminal and the bottom panel it lives in.',
     groups: [
       {

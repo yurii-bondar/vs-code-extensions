@@ -1,6 +1,6 @@
 // What Personify writes to settings: colors, plain settings and syntax rules, read and changed at one target.
 import * as catalog from '../catalog';
-import { isRecord, str } from './json';
+import { isRecord, settingValue, str } from './json';
 import type { JsonObject } from './json';
 import type { AppearanceState, CustomRule, Scope, SettingState, SettingValue, SyntaxChange, SyntaxState, Target, TokenStyle } from './types';
 
@@ -8,10 +8,14 @@ export const COLORS = 'workbench.colorCustomizations';
 export const TOKENS = 'editor.tokenColorCustomizations';
 export const SEMANTIC = 'editor.semanticTokenColorCustomizations';
 export const SEMANTIC_ENABLED = 'editor.semanticHighlighting.enabled';
-const RULE_PREFIX = 'personify:';
-const CUSTOM_PREFIX = 'personify:custom:';
+export const RULE_PREFIX = 'personify:';
+export const CUSTOM_PREFIX = 'personify:custom:';
 const STYLES = ['bold', 'italic', 'underline', 'strikethrough'];
 const SCOPES: readonly Scope[] = ['user', 'workspace'];
+// The webview and profiles may write these and nothing else.
+const COLOR_KEYS: ReadonlySet<string> = new Set(catalog.COLOR_KEYS);
+const SETTING_KEYS: ReadonlySet<string> = new Set(catalog.SETTING_KEYS);
+const bool = (v: unknown): boolean | null => (typeof v === 'boolean' ? v : null);
 
 /** VS Code settings, as far as Personify needs them. */
 export interface Config {
@@ -25,25 +29,28 @@ export interface Config {
   canWriteWorkspace(): boolean;
 }
 
-/** What a profile file carries besides keybindings. */
+/** What a profile file carries besides keybindings. Only what the catalog knows is used: its colors, settings and semantic selectors, and rules named `personify:…`. */
 export interface Customization {
   readonly colors: Readonly<Record<string, string>>;
   readonly settings: Readonly<Record<string, SettingValue>>;
-  /** Only rules named `personify:…` are used. */
   readonly textMateRules: readonly JsonObject[];
-  /** By semantic selector; only selectors from the catalog are used. */
+  /** By semantic selector. */
   readonly semanticRules: Readonly<JsonObject>;
 }
 
 /** Raw values of every key Personify touches, at both levels, so a session can be reverted. */
 export type Snapshot = Record<Scope, Record<string, unknown>>;
 
-export const settingValue = (v: unknown): SettingValue | null => (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean' ? v : null);
+/** The entries of `record` whose key is in `keys`. */
+function only<T>(record: Readonly<Record<string, T>>, keys: ReadonlySet<string>): Record<string, T> {
+  return Object.fromEntries(Object.entries(record).filter(([k]) => keys.has(k)));
+}
+
 const clone = (v: unknown): unknown => (v === undefined ? undefined : (JSON.parse(JSON.stringify(v)) as unknown));
 const rulesOf = (blk: JsonObject): unknown[] => (Array.isArray(blk.textMateRules) ? blk.textMateRules : []);
 const nameOf = (rule: unknown): string | null => (isRecord(rule) ? str(rule.name) : null);
 const ruleName = (langId: string, itemId: string): string => `${RULE_PREFIX}${langId}/${itemId}`;
-export const hasStyle = (style: TokenStyle | null): boolean => !!style && (!!style.fg || style.fontStyle !== null);
+const hasStyle = (style: TokenStyle | null): boolean => !!style && (!!style.fg || style.fontStyle !== null);
 const scopeList = (v: unknown): string[] => (typeof v === 'string' ? [v] : Array.isArray(v) ? v.filter((s): s is string => typeof s === 'string') : []);
 
 function setRules(blk: JsonObject, rules: unknown[]): void {
@@ -118,11 +125,16 @@ export class Customizations {
     return isRecord(root) ? block(root, target.theme, false) : {};
   }
 
+  // Every write changes settings.json and wakes every listener, so an unchanged value is not written.
+  private async writeIfChanged(key: string, value: unknown, scope: Scope): Promise<void> {
+    if (JSON.stringify(this.readAt(key, scope)) !== JSON.stringify(value)) await this.config.write(key, value, scope);
+  }
+
   private async updateObject(key: string, target: Target, mutate: (blk: JsonObject) => void): Promise<void> {
     const root = this.readAt(key, target.scope);
     const obj = isRecord(root) ? root : {};
     mutate(block(obj, target.theme, true));
-    await this.config.write(key, pruned(obj, target.theme), target.scope);
+    await this.writeIfChanged(key, pruned(obj, target.theme), target.scope);
   }
 
   // ---------- appearance ----------
@@ -130,12 +142,12 @@ export class Customizations {
   appearanceState(target: Target): AppearanceState {
     const blk = this.blockAt(COLORS, target);
     const colors: Record<string, string> = {};
-    for (const key of catalog.colorKeys()) {
+    for (const key of catalog.COLOR_KEYS) {
       const value = blk[key];
       if (typeof value === 'string') colors[key] = value;
     }
     const settings: Record<string, SettingState> = {};
-    for (const key of catalog.settingKeys()) {
+    for (const key of catalog.SETTING_KEYS) {
       settings[key] = {
         value: settingValue(this.config.read(key, target.scope)),
         effective: settingValue(this.config.effective(key)),
@@ -145,11 +157,11 @@ export class Customizations {
     return { colors, settings };
   }
 
-  /** A null or empty color removes it. */
+  /** A null or empty color removes it. Keys outside the catalog are ignored. */
   setColors(target: Target, changes: Readonly<Record<string, string | null>>): Promise<void> {
     return this.enqueue(() =>
       this.updateObject(COLORS, target, (blk) => {
-        for (const [key, value] of Object.entries(changes)) {
+        for (const [key, value] of Object.entries(only(changes, COLOR_KEYS))) {
           if (value) blk[key] = value;
           else delete blk[key];
         }
@@ -157,11 +169,11 @@ export class Customizations {
     );
   }
 
-  /** A null or empty value removes the setting. */
+  /** A null or empty value removes the setting. Keys outside the catalog are ignored. */
   setSettings(target: Target, changes: Readonly<Record<string, SettingValue | null>>): Promise<void> {
     return this.enqueue(async () => {
-      for (const [key, value] of Object.entries(changes)) {
-        await this.config.write(key, value === null || value === '' ? undefined : value, target.scope);
+      for (const [key, value] of Object.entries(only(changes, SETTING_KEYS))) {
+        await this.writeIfChanged(key, value === null || value === '' ? undefined : value, target.scope);
       }
     });
   }
@@ -179,8 +191,13 @@ export class Customizations {
       if (name.startsWith(CUSTOM_PREFIX)) custom.push({ id: name.slice(CUSTOM_PREFIX.length), scope: scopeList(rule.scope).join(', '), ...style });
       else items[name.slice(RULE_PREFIX.length)] = style;
     }
-    const semantic = this.config.effective(SEMANTIC_ENABLED);
-    return { items, custom, semanticHighlighting: typeof semantic === 'boolean' ? semantic : null };
+    const semanticHighlighting = { value: bool(this.config.read(SEMANTIC_ENABLED, target.scope)), effective: bool(this.config.effective(SEMANTIC_ENABLED)) };
+    return { items, custom, semanticHighlighting };
+  }
+
+  /** null removes the setting at the target's scope. It is not per theme: VS Code has no such block for it. */
+  setSemanticHighlighting(target: Target, value: boolean | null): Promise<void> {
+    return this.enqueue(() => this.writeIfChanged(SEMANTIC_ENABLED, value ?? undefined, target.scope));
   }
 
   setSyntax(target: Target, changes: readonly SyntaxChange[]): Promise<void> {
@@ -237,9 +254,8 @@ export class Customizations {
 
   exportState(target: Target): Customization {
     const semBlk = this.blockAt(SEMANTIC, target);
-    const managed = catalog.allSemanticSelectors();
-    const semanticRules: JsonObject = {};
-    for (const [sel, value] of Object.entries(isRecord(semBlk.rules) ? semBlk.rules : {})) if (managed.has(sel)) semanticRules[sel] = value;
+        const semanticRules: JsonObject = {};
+    for (const [sel, value] of Object.entries(isRecord(semBlk.rules) ? semBlk.rules : {})) if (catalog.SEMANTIC_SELECTORS.has(sel)) semanticRules[sel] = value;
 
     const { colors, settings } = this.appearanceState(target);
     const plainSettings: Record<string, SettingValue> = {};
@@ -257,12 +273,12 @@ export class Customizations {
   importState(target: Target, data: Customization, { replace }: { replace: boolean }): Promise<void> {
     return this.enqueue(async () => {
       await this.updateObject(COLORS, target, (blk) => {
-        if (replace) for (const key of catalog.colorKeys()) delete blk[key];
-        Object.assign(blk, data.colors);
+        if (replace) for (const key of catalog.COLOR_KEYS) delete blk[key];
+        Object.assign(blk, only(data.colors, COLOR_KEYS));
       });
-      const settings: Record<string, SettingValue | undefined> = { ...data.settings };
-      if (replace) for (const key of catalog.settingKeys()) if (!(key in settings)) settings[key] = undefined;
-      for (const [key, value] of Object.entries(settings)) await this.config.write(key, value, target.scope);
+      const settings: Record<string, SettingValue | undefined> = only(data.settings, SETTING_KEYS);
+      if (replace) for (const key of catalog.SETTING_KEYS) if (!(key in settings)) settings[key] = undefined;
+      for (const [key, value] of Object.entries(settings)) await this.writeIfChanged(key, value, target.scope);
 
       const incoming = data.textMateRules.filter((r) => nameOf(r)?.startsWith(RULE_PREFIX));
       await this.updateObject(TOKENS, target, (blk) => {
@@ -276,8 +292,8 @@ export class Customizations {
       });
       await this.updateObject(SEMANTIC, target, (blk) => {
         const rules = isRecord(blk.rules) ? blk.rules : {};
-        if (replace) for (const sel of catalog.allSemanticSelectors()) delete rules[sel];
-        Object.assign(rules, data.semanticRules);
+        if (replace) for (const sel of catalog.SEMANTIC_SELECTORS) delete rules[sel];
+        Object.assign(rules, only(data.semanticRules, catalog.SEMANTIC_SELECTORS));
         setSemanticRules(blk, rules);
       });
     });
@@ -288,7 +304,7 @@ export class Customizations {
   }
 
   private static snapshotKeys(): string[] {
-    return [COLORS, TOKENS, SEMANTIC, SEMANTIC_ENABLED, ...catalog.settingKeys()];
+    return [COLORS, TOKENS, SEMANTIC, SEMANTIC_ENABLED, ...catalog.SETTING_KEYS];
   }
 
   snapshot(): Snapshot {
@@ -302,7 +318,7 @@ export class Customizations {
       for (const scope of SCOPES) {
         if (scope === 'workspace' && !this.config.canWriteWorkspace()) continue;
         for (const key of Customizations.snapshotKeys()) {
-          if (JSON.stringify(this.readAt(key, scope)) !== JSON.stringify(snap[scope][key])) await this.config.write(key, snap[scope][key], scope);
+          await this.writeIfChanged(key, snap[scope][key], scope);
         }
       }
     });

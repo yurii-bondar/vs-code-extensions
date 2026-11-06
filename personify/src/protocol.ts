@@ -1,7 +1,9 @@
-import { isRecord, str } from './core/json';
+import { isRecord, records, settingValue, str } from './core/json';
 import type { Area, Language } from './catalog/types';
 import type { JsonObject } from './core/json';
-import type { AppearanceState, CustomRule, KeybindingEdit, KeybindingsState, Prefs, Scope, SettingValue, SyntaxChange, SyntaxState, Tab, ThemeMode, TokenStyle } from './core/types';
+import type { ProfileDiff } from './core/profile';
+import type { SnapshotId, SnapshotInfo } from './core/snapshots';
+import type { AppearanceState, CustomRule, KeybindingEdit, KeybindingsState, Prefs, Scope, SettingValue, SyntaxChange, SyntaxState, Tab, ThemeMode, ThemeProblem, TokenStyle } from './core/types';
 
 export interface PrefsView extends Prefs {
   /** The active color theme. */
@@ -11,11 +13,26 @@ export interface PrefsView extends Prefs {
 
 export type ToastKind = 'info' | 'success' | 'error';
 
+/** What an import would do, for the panel to confirm before anything is written. */
+export interface ImportPreview {
+  /** The file's name. */
+  readonly file: string;
+  readonly merge: ProfileDiff;
+  readonly replace: ProfileDiff;
+  /** The file's shortcuts as "key → command", the first few of them. */
+  readonly keybindings: readonly string[];
+  readonly keybindingCount: number;
+}
+
 export type HostMessage =
   | { type: 'init'; tab: Tab | null; platform: string; catalog: { areas: readonly Area[]; languages: readonly Language[] } }
   | { type: 'focusTab'; tab: Tab }
   | { type: 'state'; prefs: PrefsView; appearance: AppearanceState; syntax: SyntaxState }
   | ({ type: 'keybindings' } & KeybindingsState)
+  | { type: 'snapshots'; list: readonly SnapshotInfo[]; sessionStart: number }
+  /** What the active theme (plus the user's own token colors) gives each catalog token, by `langId/itemId`. */
+  | { type: 'themeSyntax'; theme: string; items: Readonly<Record<string, TokenStyle>>; problem: ThemeProblem }
+  | { type: 'importPreview'; preview: ImportPreview }
   | { type: 'toast'; text: string; kind: ToastKind };
 
 export type ClientMessage =
@@ -23,6 +40,8 @@ export type ClientMessage =
   | ({ type: 'prefs' } & Prefs)
   | { type: 'setColors'; changes: Record<string, string | null> }
   | { type: 'setSettings'; changes: Record<string, SettingValue | null> }
+  /** null leaves it to the theme. */
+  | { type: 'setSemanticHighlighting'; value: boolean | null }
   | { type: 'setSyntax'; changes: SyntaxChange[] }
   | { type: 'setCustom'; list: CustomRule[] }
   | { type: 'kb'; edit: KeybindingEdit }
@@ -33,8 +52,13 @@ export type ClientMessage =
   | { type: 'inspectScope'; langId: string }
   | { type: 'export'; includeKeybindings: boolean }
   | { type: 'import' }
+  /** Applies the import the host last previewed. */
+  | { type: 'importApply'; replace: boolean; keybindings: boolean }
+  | { type: 'importCancel' }
+  /** Confirmed in the panel; the host takes a snapshot first. */
   | { type: 'resetAll' }
-  | { type: 'revertSession' };
+  | { type: 'revertSession' }
+  | { type: 'restoreSnapshot'; id: SnapshotId };
 
 const SCOPES: readonly Scope[] = ['user', 'workspace'];
 const THEME_MODES: readonly ThemeMode[] = ['all', 'current'];
@@ -45,7 +69,6 @@ export function parsePrefs(raw: unknown): Prefs {
   return { scope: SCOPES.find((s) => s === r.scope) ?? 'user', themeMode: THEME_MODES.find((m) => m === r.themeMode) ?? 'all' };
 }
 
-const settingValue = (v: unknown): SettingValue | null => (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean' ? v : null);
 const index = (v: unknown): number | null => (typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : null);
 const style = (v: unknown): TokenStyle => (isRecord(v) ? { fg: str(v.fg) || null, fontStyle: str(v.fontStyle) } : { fg: null, fontStyle: null });
 
@@ -54,8 +77,6 @@ function record<T extends SettingValue | null>(raw: unknown, value: (v: unknown)
   if (isRecord(raw)) for (const [k, v] of Object.entries(raw)) out[k] = value(v);
   return out;
 }
-
-const records = (raw: unknown): JsonObject[] => (Array.isArray(raw) ? raw.filter(isRecord) : []);
 
 function syntaxChange(r: JsonObject): SyntaxChange[] {
   const langId = str(r.langId);
@@ -87,8 +108,8 @@ function keybindingEdit(raw: unknown): KeybindingEdit | null {
       return { op: 'disableDefault', command, key, when };
     case 'replaceDefault':
       return { op: 'replaceDefault', command, oldKey: str(raw.oldKey) ?? '', oldWhen: str(raw.oldWhen) ?? '', key, when, args: raw.args };
-    case 'restoreDefault':
-      return at === null ? null : { op: 'restoreDefault', index: at, command };
+    case 'restore':
+      return at === null ? null : { op: 'restore', index: at, command };
     case 'resetCommand':
       return { op: 'resetCommand', command };
     default:
@@ -105,15 +126,24 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
     case 'openKeybindingsJson':
     case 'openSettingsJson':
     case 'import':
+    case 'importCancel':
     case 'resetAll':
     case 'revertSession':
       return { type: raw.type };
+    case 'importApply':
+      return { type: 'importApply', replace: raw.replace === true, keybindings: raw.keybindings === true };
+    case 'restoreSnapshot': {
+      const id = str(raw.id);
+      return id ? { type: 'restoreSnapshot', id: id as SnapshotId } : null;
+    }
     case 'prefs':
       return { type: 'prefs', ...parsePrefs(raw) };
     case 'setColors':
       return { type: 'setColors', changes: record(raw.changes, (v) => str(v) || null) };
     case 'setSettings':
       return { type: 'setSettings', changes: record(raw.changes, settingValue) };
+    case 'setSemanticHighlighting':
+      return { type: 'setSemanticHighlighting', value: typeof raw.value === 'boolean' ? raw.value : null };
     case 'setSyntax':
       return { type: 'setSyntax', changes: records(raw.changes).flatMap(syntaxChange) };
     case 'setCustom':
