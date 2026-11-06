@@ -3,7 +3,7 @@
   "displayName": "Personify",
   "description": "One friendly panel to customize hotkeys, sidebar/editor/terminal colors and fonts, and JS/TS/Go syntax colors.",
   "icon": "media/icon.png",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "bondevn",
   "license": "MIT",
   "author": "Yurii Bondar",
