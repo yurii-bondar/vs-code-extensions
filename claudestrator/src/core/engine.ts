@@ -383,6 +383,8 @@ class Engine extends EventEmitter {
    * edits would go unchecked into the next stage.
    */
   inTurn = new Map<string, number>();
+  /** Each task's report being written: the next write waits for it. */
+  reportWrites = new Map<string, Promise<void>>();
   /** Each running task's run, which settles once it has recorded its last event. */
   runEnds = new Map<string, Promise<void>>();
   running: Set<string>;
@@ -1919,9 +1921,21 @@ class Engine extends EventEmitter {
   }
 
   /** `report.md`: every readiness or audit agent's result in one document. */
+  /**
+   * Writes the task's report from its state as it is when the write's turn comes: the members of a parallel group end
+   * at about the same time, and one after another the last write has every member's report.
+   */
   async writeReport(taskId: string, language?: string): Promise<void> {
-    const text = renderReport(await this.svc.state(taskId), language);
-    if (text) await this.svc.writeArtifact(taskId, TASK_FILES.report, text);
+    const write = (this.reportWrites.get(taskId) ?? Promise.resolve()).catch(() => {}).then(async () => {
+      const text = renderReport(await this.svc.state(taskId), language);
+      if (text) await this.svc.writeArtifact(taskId, TASK_FILES.report, text);
+    });
+    this.reportWrites.set(taskId, write);
+    try {
+      await write;
+    } finally {
+      if (this.reportWrites.get(taskId) === write) this.reportWrites.delete(taskId);
+    }
   }
 
   /**

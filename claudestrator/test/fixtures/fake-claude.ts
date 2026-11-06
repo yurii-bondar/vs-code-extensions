@@ -286,6 +286,7 @@ function main(): void {
         return reply(`Looks good.\n\`\`\`json\n${JSON.stringify({ status: 'approved', summary: 'ok', findings: [{ severity: 'minor', problem: 'nit' }] })}\n\`\`\``, uuid);
       }
       case 'verifier':
+      case 'perf':
       case 'auditor': {
         if (state) fs.writeFileSync(path.join(state, `prompt-${role}.txt`), prompt);
         // A read-only stage may not write; the guard says so.

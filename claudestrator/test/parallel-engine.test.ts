@@ -156,3 +156,24 @@ scenarios:
   }
 });
 
+test('engine: the report of a Parallel of audits has every member\'s, also when they end at about the same time', async () => {
+  const ws = workspace(['api'], `agents:
+  perf: { extends: auditor, description: Performance only }
+scenarios:
+  audits:
+    label: Audits
+    agents:
+      - parallel: [auditor, perf]
+`);
+  const h = await harness(ws, { FAKE_REPOS: 'api' });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Audit the api', scenario: 'audits' });
+    const s = await runTask(h.engine, taskId);
+    assert.equal(s.phase, 'done', JSON.stringify(s.checkpoint || h.engine.lastError(taskId)));
+    const report = await h.engine.svc.readArtifact(taskId, 'report.md');
+    assert.match(report, /\*\*auditor:\*\*/);
+    assert.match(report, /\*\*perf:\*\*/);
+  } finally {
+    h.hooks.dispose();
+  }
+});
