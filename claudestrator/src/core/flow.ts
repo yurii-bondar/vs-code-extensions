@@ -56,7 +56,10 @@ function nodeOf(s: TaskState, i: number): FlowNode {
   const st = s.pipeline.stages[i]!;
   const status = statusOf(s, i);
   const repos = st.scope === 'repo' ? [...new Set(s.artifacts.filter((a) => a.agent === st.agent && a.repo).map((a) => a.repo!))] : [];
-  return { agent: st.agent, output: st.output, status, ...(repos.length && { repos }), ...(st.approve && { approve: { ...(st.approve.text && { text: st.approve.text }), status: approveStatus(s, i, status) } }) };
+  const node: FlowNode = { agent: st.agent, output: st.output, status };
+  if (repos.length) node.repos = repos;
+  if (st.approve) node.approve = { ...(st.approve.text && { text: st.approve.text }), status: approveStatus(s, i, status) };
+  return node;
 }
 
 /** Stages `from..to` as items: a step, a Parallel, a Branch; You approve after a step or a Parallel. */
@@ -72,8 +75,10 @@ function itemsOf(s: TaskState, from: number, to: number): FlowItem[] {
     if (st.when) {
       while (j < to && sameBranch(stages[j]!.when, st.when)) j++;
       const nodes = stages.slice(i, j).map((x, k) => ({ x, node: nodeOf(s, i + k) }));
+      const arm = (otherwise: boolean): FlowNode[] => nodes.filter((n) => Boolean(n.x.when!.else) === otherwise).map((n) => n.node);
       const met = evaluate(s, st.when.on, st.when.if);
-      out.push({ kind: 'branch', on: st.when.on, condition: describeCondition(st.when.on, st.when.if), taken: met === null ? null : met ? 'then' : 'else', then: nodes.filter((n) => !n.x.when!.else).map((n) => n.node), else: nodes.filter((n) => n.x.when!.else).map((n) => n.node) });
+      const taken = met === null ? null : met ? 'then' : 'else';
+      out.push({ kind: 'branch', on: st.when.on, condition: describeCondition(st.when.on, st.when.if), taken, then: arm(false), else: arm(true) });
     } else if (st.group !== undefined) {
       while (j < to && stages[j]!.group === st.group) j++;
       const nodes = stages.slice(i, j).map((_, k) => nodeOf(s, i + k));

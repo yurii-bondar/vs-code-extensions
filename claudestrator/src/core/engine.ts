@@ -403,6 +403,8 @@ class Engine extends EventEmitter {
   stallMs: number;
   /** When each session of a task (`watchKey`) last showed a sign of work: any output, a tool call, a question to you. */
   activity = new Map<string, number>();
+  /** What each member of a task's parallel group is doing; the task shows them together. */
+  memberLives = new Map<string, Map<string, Live>>();
 
   constructor(opts: EngineOptions) {
     super();
@@ -447,9 +449,6 @@ class Engine extends EventEmitter {
     else this.lives.delete(taskId);
     this.emit('live', { taskId, live: this.lives.get(taskId) || null });
   }
-
-  /** What each member of a task's parallel group is doing; the task shows them together. */
-  memberLives = new Map<string, Map<string, Live>>();
 
   setMemberLive(taskId: string, member: string, live: Live | null): void {
     const all = this.memberLives.get(taskId) ?? new Map<string, Live>();
@@ -1216,7 +1215,12 @@ class Engine extends EventEmitter {
     const model = s.model && s.model[step.agent];
     // What the scenario's step adds goes after the agent's own instructions, as the task started with it.
     const extra = s.stepInstructions && s.stepInstructions[step.agent];
-    const agent = configured && (override || model || extra) ? { ...configured, ...(override && { effort: override }), ...(model && { model }), ...(extra && { instructions: withStepInstructions(configured.instructions, extra, s.scenarioLabel) }) } : configured;
+    const agent = configured && {
+      ...configured,
+      ...(override && { effort: override }),
+      ...(model && { model }),
+      ...(extra && { instructions: withStepInstructions(configured.instructions, extra, s.scenarioLabel) }),
+    };
     const label = stepLabel(step);
     const live = (l: Live | null): void => (member ? this.setMemberLive(taskId, label, l) : this.setLive(taskId, l));
 

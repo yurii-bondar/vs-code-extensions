@@ -1,7 +1,7 @@
 // What a branch of a scenario looks at: a result a step before it reported, read from the task's state. Pure and
 // deterministic, so a replayed log takes the same branch without an event of its own.
 
-import type { Audit, Condition, Output, Readiness, ReportSeverity, Severity, StepWhen, TaskState } from './types';
+import type { Condition, Output, ReportSeverity, Severity, StepWhen, TaskState } from './types';
 
 const SEVERITY: Severity[] = ['minor', 'major', 'blocker'];
 const REPORT_SEVERITY: ReportSeverity[] = ['low', 'medium', 'high', 'critical'];
@@ -34,8 +34,10 @@ function evaluate(s: TaskState, on: string, c: Condition): boolean | null {
   if ('readiness' in c || 'audit' in c) {
     const r = (s.reports || []).find((x) => x.agent === on);
     if (!r || !r.value) return null;
-    if ('readiness' in c) return (r.value as Readiness).verdict === c.readiness;
-    return ((r.value as Audit).findings || []).some((f) => REPORT_SEVERITY.indexOf(f.severity) >= REPORT_SEVERITY.indexOf(c.audit));
+    const value = r.value;
+    // A report of the other kind (config refuses that branch) holds nothing.
+    if ('readiness' in c) return 'verdict' in value ? value.verdict === c.readiness : null;
+    return 'findings' in value ? value.findings.some((f) => REPORT_SEVERITY.indexOf(f.severity) >= REPORT_SEVERITY.indexOf(c.audit)) : null;
   }
   if (!s.artifacts.some((a) => a.agent === on)) return null;
   const failed = s.gateFailures.some((st) => st.agent === on);

@@ -1492,7 +1492,11 @@ async function withStepTexts(entry: CustomScenarioLayer, dir: string): Promise<C
       const st = f.step;
       if (typeof st === 'string' || !st.instructions || typeof st.instructions === 'string') return f;
       const text = await readIfThere(path.resolve(dir, st.instructions.file)).catch(() => null);
-      return { ...f, step: text !== null && text.trim() ? { ...st, instructions: text.trim() } : text !== null ? { agent: st.agent, ...(st.model && { model: st.model }), ...(st.effort && { effort: st.effort }) } : st };
+      // Not there: it stays named, and the config that gets it says so.
+      if (text === null) return f;
+      // An empty file adds nothing: the step goes without instructions.
+      const { instructions: _file, ...rest } = st;
+      return { ...f, step: text.trim() ? { ...rest, instructions: text.trim() } : rest };
     })
   );
   return { ...entry, agents: nestSteps(flat) };

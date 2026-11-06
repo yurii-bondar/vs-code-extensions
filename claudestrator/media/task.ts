@@ -874,16 +874,17 @@ interface Views {
         <div class="dg-node-sub">${badge(n.status)}${n.repos && n.repos.length ? `<span class="muted small"> · ${esc(n.repos.join(', '))}</span>` : ''}</div>
       </div>`;
     };
-    const approve = (text: string | undefined, status: string, after: string) => `<div class="dg-line short"></div><div class="dg-node dg-pill dg-approve fl-node fs-${status}">${icon('user')}<b>You approve</b><span class="muted small dg-approve-text">${esc(text || `what ${after} did`)}</span>${badge(status)}</div>`;
+    /** You approve: right under its step (`under`, with a short line), or as an item of the chain, which draws its own. */
+    const approve = (text: string | undefined, status: string, after: string, { under = false }: { under?: boolean } = {}) => `${under ? '<div class="dg-line short"></div>' : ''}<div class="dg-node dg-pill dg-approve fl-node fs-${status}">${icon('user')}<b>You approve</b><span class="muted small dg-approve-text">${esc(text || `what ${after} did`)}</span>${badge(status)}</div>`;
     const line = '<div class="dg-line"></div>';
     const items = (list: FlowItem[]): string =>
       list
         .map((it) => {
           if (it.kind === 'step') return node(it.node);
-          if (it.kind === 'approve') return approve(it.text, it.status, it.after).replace('<div class="dg-line short"></div>', '');
+          if (it.kind === 'approve') return approve(it.text, it.status, it.after);
           if (it.kind === 'parallel') return `<div class="dg-parallel"><div class="dg-parallel-head">${icon('activity')}<b>Parallel</b><span class="muted small">they work at once</span></div><div class="dg-lanes">${it.nodes.map((n) => `<div class="dg-lane">${node(n)}</div>`).join('')}</div></div>`;
           if (it.kind === 'branch') {
-            const arm = (nodes: FlowNode[], label: string, taken: boolean) => `<div class="dg-arm ${it.taken && !taken ? 'fl-not-taken' : ''}"><span class="chip small ${taken ? 'dg-yes' : ''}">${esc(label)}${taken ? ' · taken' : ''}</span>${nodes.map((n) => node(n) + (n.approve ? approve(n.approve.text, n.approve.status, n.agent) : '')).join('<div class="dg-line short"></div>') || '<span class="muted small">nothing</span>'}</div>`;
+            const arm = (nodes: FlowNode[], label: string, taken: boolean) => `<div class="dg-arm ${it.taken && !taken ? 'fl-not-taken' : ''}"><span class="chip small ${taken ? 'dg-yes' : ''}">${esc(label)}${taken ? ' · taken' : ''}</span>${nodes.map((n) => node(n) + (n.approve ? approve(n.approve.text, n.approve.status, n.agent, { under: true }) : '')).join('<div class="dg-line short"></div>') || '<span class="muted small">nothing</span>'}</div>`;
             return `<div class="dg-branch"><div class="dg-branch-head">${icon('branch')}<b>Branch</b><span class="muted small">on ${esc(it.on)}${it.taken ? '' : ' · decided when it reports'}</span></div><div class="dg-arms">${arm(it.then, it.condition, it.taken === 'then')}${arm(it.else, 'otherwise', it.taken === 'else')}</div></div>`;
           }
           return `<div class="dg-loop ${it.explicit ? 'dg-own' : ''}"><div class="dg-loop-head">${icon('refresh')}<b>${it.explicit ? 'Loop' : 'Review loop'}</b><span class="muted small">round ${it.round} of ${it.maxRounds} · until the reviewers approve</span></div>${items(it.items)}<div class="dg-loop-foot">${icon('back')}changes requested → fix round</div></div>`;
