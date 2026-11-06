@@ -5,6 +5,8 @@ import * as assert from 'node:assert/strict';
 
 import { transition, replay, nextAction, groupPending } from '../src/core/machine';
 import { describeCondition, evaluate } from '../src/core/conditions';
+import { flowOf } from '../src/core/flow';
+import type { FlowItem } from '../src/core/flow';
 import type { EventBody, OrchEvent, Spec, Stage, StoredPipeline, TaskState } from '../src/core/types';
 
 const at = (i: number): string => new Date(Date.UTC(2026, 10, 6, 12, 0, i)).toISOString();
@@ -194,4 +196,43 @@ test('you approve: after a Parallel that ends the loop, once both approved; the 
   t.apply({ type: 'checkpoint_answered', id: 'approve-step', option: 'approve' });
   assert.equal(t.state().phase, 'finish');
   assert.deepEqual(replay(t.events), t.state());
+});
+
+test('task diagram: where each step is, the branch taken, the loop\'s round and where you approve', () => {
+  const pipeline: StoredPipeline = {
+    mode: 'custom',
+    stages: [
+      st('developer', 'code'),
+      st('reviewer', 'verdict', { group: 1 }),
+      st('security', 'verdict', { group: 1, approve: { text: 'Check the auth code' } }),
+      st('fixer', 'code', { when: { on: 'security', if: { severity: 'major' } } }),
+      st('notes', 'verdict', { when: { on: 'security', if: { severity: 'major' }, else: true } }),
+    ],
+    reviewLoop: { restartAt: 0, end: 2, fixers: ['developer'], reviewers: ['reviewer', 'security'], maxRounds: 3, explicit: true },
+  };
+  const t = task(pipeline);
+  t.apply({ type: 'stage_started', agent: 'developer', repo: 'api' });
+  let f = flowOf(t.state());
+  assert.equal(f[0]!.kind, 'loop');
+  const loop = f[0] as Extract<FlowItem, { kind: 'loop' }>;
+  assert.deepEqual([loop.round, loop.maxRounds, loop.explicit], [1, 3, true]);
+  assert.equal((loop.items[0] as Extract<FlowItem, { kind: 'step' }>).node.status, 'running');
+  assert.deepEqual((loop.items[1] as Extract<FlowItem, { kind: 'parallel' }>).nodes.map((n) => n.status), ['pending', 'pending']);
+  assert.deepEqual(f[1], { kind: 'approve', after: 'security', text: 'Check the auth code', status: 'pending' }, 'after the loop, not in it');
+  assert.equal((f[2] as Extract<FlowItem, { kind: 'branch' }>).taken, null);
+
+  t.apply({ type: 'stage_completed', agent: 'developer', repo: 'api', artifact: 'd', gates: 'pass' });
+  t.apply({ type: 'stage_started', agent: 'reviewer' });
+  t.apply({ type: 'stage_started', agent: 'security' });
+  t.apply({ type: 'stage_completed', agent: 'reviewer', artifact: 'r', verdict: approved });
+  t.apply({ type: 'stage_completed', agent: 'security', artifact: 's', verdict: approved });
+  f = flowOf(t.state());
+  assert.equal((f[1] as Extract<FlowItem, { kind: 'approve' }>).status, 'waiting');
+  t.apply({ type: 'checkpoint_answered', id: 'approve-step', option: 'approve' });
+  f = flowOf(t.state());
+  assert.equal((f[1] as Extract<FlowItem, { kind: 'approve' }>).status, 'done');
+  const branch = f[2] as Extract<FlowItem, { kind: 'branch' }>;
+  assert.equal(branch.taken, 'else');
+  assert.equal(branch.condition, 'security found major or worse');
+  assert.deepEqual([branch.then[0]!.status, branch.else[0]!.status], ['skipped', 'next']);
 });

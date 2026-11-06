@@ -234,6 +234,7 @@ interface Views {
                 <div class="tab-body" data-tab="activity" data-region="tab-activity"></div>
                 <div class="tab-body" data-tab="files" data-region="tab-files"></div>
                 <div class="tab-body" data-tab="ticket" data-region="tab-ticket"></div>
+                <div class="tab-body" data-tab="flow" data-region="tab-flow"></div>
               </div>
             </div>
             <aside class="task-aside" data-region="task-aside"></aside>
@@ -339,6 +340,7 @@ interface Views {
       if (T.tab === 'activity') patch('tab-activity', activityHtml(d));
       if (T.tab === 'files') patch('tab-files', filesHtml(d));
       if (T.tab === 'ticket') patch('tab-ticket', ticketHtml(d));
+      if (T.tab === 'flow') patch('tab-flow', flowHtml(d));
       patch('task-aside', asideHtml(d));
     },
     onPush(msg) {
@@ -839,7 +841,62 @@ interface Views {
 
   function tabsHtml(d: TaskScreen) {
     const tab = (id: string, label: string, ic: string, count?: number) => `<button class="tab ${T.tab === id ? 'active' : ''}" data-action="tab" data-tab="${id}">${icon(ic)}${label}${count ? `<span class="count">${count}</span>` : ''}</button>`;
-    return `${tab('output', 'Agent output', 'bot')}${tab('activity', 'Activity', 'activity', d.events.length)}${tab('files', 'Files', 'file', d.files.length)}${tab('ticket', 'Ticket & plan', 'doc')}`;
+    return `${tab('output', 'Agent output', 'bot')}${tab('activity', 'Activity', 'activity', d.events.length)}${tab('files', 'Files', 'file', d.files.length)}${tab('ticket', 'Ticket & plan', 'doc')}${d.flow.length ? tab('flow', 'Flow', 'branch') : ''}`;
+  }
+
+  // ---------- the pipeline as a diagram ----------
+
+  const FLOW_STATUS: Record<string, { label: string; icon: string | null }> = {
+    done: { label: 'done', icon: 'check' },
+    running: { label: 'working', icon: null },
+    waiting: { label: 'waits for you', icon: 'bell' },
+    failed: { label: 'failed', icon: 'alert' },
+    next: { label: 'next', icon: 'play' },
+    pending: { label: 'to come', icon: null },
+    skipped: { label: 'skipped', icon: 'x' },
+  };
+
+  /**
+   * The pipeline drawn as the scenario diagram draws it, read-only: where each step is, which arm a branch took, the
+   * loop's round. A step that ran opens its output.
+   */
+  function flowHtml(d: TaskScreen) {
+    const c = colors();
+    const keyOf = (agent: string) => [...d.steps].reverse().find((s) => s.kind === 'agent' && s.agent === agent && s.key)?.key;
+    const badge = (status: string) => {
+      const x = FLOW_STATUS[status] || { label: status, icon: null };
+      return `<span class="fl-status fs-${status}">${status === 'running' ? '<span class="spinner xs"></span>' : x.icon ? icon(x.icon) : '<span class="st-dot"></span>'}${esc(x.label)}</span>`;
+    };
+    const node = (n: FlowNode) => {
+      const key = keyOf(n.agent);
+      return `<div class="dg-node dg-step fl-node fs-${n.status} ${agentColor(c[n.agent])} ${key && key === T.viewKey ? 'selected' : ''}" ${key ? `data-action="select-step" data-key="${key}" role="button" tabindex="0" title="Open its output"` : ''}>
+        <div class="dg-node-head"><span class="adot"></span><b>${esc(n.agent)}</b><span class="chip small">${esc((window.CS.OUTPUT_INFO[n.output] || { label: n.output }).label)}</span></div>
+        <div class="dg-node-sub">${badge(n.status)}${n.repos && n.repos.length ? `<span class="muted small"> · ${esc(n.repos.join(', '))}</span>` : ''}</div>
+      </div>`;
+    };
+    const approve = (text: string | undefined, status: string, after: string) => `<div class="dg-line short"></div><div class="dg-node dg-pill dg-approve fl-node fs-${status}">${icon('user')}<b>You approve</b><span class="muted small dg-approve-text">${esc(text || `what ${after} did`)}</span>${badge(status)}</div>`;
+    const line = '<div class="dg-line"></div>';
+    const items = (list: FlowItem[]): string =>
+      list
+        .map((it) => {
+          if (it.kind === 'step') return node(it.node);
+          if (it.kind === 'approve') return approve(it.text, it.status, it.after).replace('<div class="dg-line short"></div>', '');
+          if (it.kind === 'parallel') return `<div class="dg-parallel"><div class="dg-parallel-head">${icon('activity')}<b>Parallel</b><span class="muted small">they work at once</span></div><div class="dg-lanes">${it.nodes.map((n) => `<div class="dg-lane">${node(n)}</div>`).join('')}</div></div>`;
+          if (it.kind === 'branch') {
+            const arm = (nodes: FlowNode[], label: string, taken: boolean) => `<div class="dg-arm ${it.taken && !taken ? 'fl-not-taken' : ''}"><span class="chip small ${taken ? 'dg-yes' : ''}">${esc(label)}${taken ? ' · taken' : ''}</span>${nodes.map((n) => node(n) + (n.approve ? approve(n.approve.text, n.approve.status, n.agent) : '')).join('<div class="dg-line short"></div>') || '<span class="muted small">nothing</span>'}</div>`;
+            return `<div class="dg-branch"><div class="dg-branch-head">${icon('branch')}<b>Branch</b><span class="muted small">on ${esc(it.on)}${it.taken ? '' : ' · decided when it reports'}</span></div><div class="dg-arms">${arm(it.then, it.condition, it.taken === 'then')}${arm(it.else, 'otherwise', it.taken === 'else')}</div></div>`;
+          }
+          return `<div class="dg-loop ${it.explicit ? 'dg-own' : ''}"><div class="dg-loop-head">${icon('refresh')}<b>${it.explicit ? 'Loop' : 'Review loop'}</b><span class="muted small">round ${it.round} of ${it.maxRounds} · until the reviewers approve</span></div>${items(it.items)}<div class="dg-loop-foot">${icon('back')}changes requested → fix round</div></div>`;
+        })
+        .join(line);
+    // Finish: commit, your push, the PRs; a report scenario ends with its report.
+    const fin = d.steps.filter((s) => s.kind === 'finish');
+    const finishStatus = d.status.group === 'done' ? 'done' : fin.some((s) => s.status === 'running') ? 'running' : fin.some((s) => s.status === 'waiting' || s.status === 'failed') ? 'waiting' : 'pending';
+    return `<div class="fl-wrap"><div class="dg-flow fl-flow">
+      <div class="dg-node dg-pill fs-done">${icon('inbox')}<b>Ticket</b><span class="grow"></span>${badge(d.steps[0] && d.steps[0].status === 'done' ? 'done' : 'running')}</div>${line}
+      ${items(d.flow)}${line}
+      <div class="dg-node dg-pill dg-finish">${icon('commit')}<b>Finish</b><span class="grow"></span>${badge(finishStatus)}</div>
+    </div></div>`;
   }
 
   // ---------- transcript ----------

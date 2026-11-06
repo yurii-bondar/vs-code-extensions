@@ -33,6 +33,7 @@ import type {
   TaskState,
 } from './types';
 import type { Chip } from './pipeline';
+import type { FlowItem } from './flow';
 
 // ---------- where the dashboard is ----------
 
@@ -443,6 +444,8 @@ export type TaskScreen = TaskDetail & {
   fix: FixSource | null;
   ticket: string;
   pipelineEdit: PipelineEdit | null;
+  /** The pipeline as its diagram draws it: where each step is, the branch taken, the round of the loop. */
+  flow: FlowItem[];
 };
 
 export interface CommentResult {

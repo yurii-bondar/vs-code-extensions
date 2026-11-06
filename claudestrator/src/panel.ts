@@ -13,6 +13,7 @@ import * as backups from './core/backup';
 import * as libraries from './core/library';
 import { buildPipeline, fixedFlow, outline, scenarioPipeline, taskPipeline, fitsScenario } from './core/pipeline';
 import { editableFrom } from './core/machine';
+import { flowOf } from './core/flow';
 import { taskRepos, taskDiff, launch, getChildEnv } from './core/git';
 import { findRepos, describeRepo, reposFromFolders, repoLayerOf, WORKSPACE_MAP, safeName } from './core/setup';
 import { expand } from './core/env';
@@ -353,6 +354,7 @@ class DashboardPanel implements RpcHandlers {
       fix: problem ? problem.source : null,
       ticket: await engine.svc.readArtifact(taskId, 'ticket.md'),
       pipelineEdit: await this.pipelineEdit(state),
+      flow: flowOf(state),
     };
   }
 

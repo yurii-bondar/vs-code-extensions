@@ -1271,6 +1271,23 @@ b.err, .lim-pct.err { color: var(--cs-status-err-text); }
 .dg-members { display: flex; flex-wrap: wrap; gap: var(--cs-space-1); }
 .dg-member .adot { margin-right: 4px; }
 .dg-check.bad .ic { color: var(--cs-status-err-text); }
+/* The task's Flow tab: the diagram read-only, each step with where it is. */
+.fl-wrap { overflow: auto; border: 1px solid var(--cs-border-default); border-radius: var(--cs-radius-lg); background: var(--cs-bg-app); background-image: radial-gradient(color-mix(in srgb, var(--cs-text-secondary) 22%, transparent) 1px, transparent 1px); background-size: 16px 16px; }
+.fl-flow { padding: var(--cs-space-6) var(--cs-space-4); }
+.fl-node[role="button"] { cursor: pointer; }
+.fl-node.dg-step { cursor: default; }
+.fl-node.dg-step[role="button"] { cursor: pointer; }
+.fl-status { display: inline-flex; align-items: center; gap: 4px; font-size: var(--cs-font-xs); color: var(--cs-text-secondary); }
+.fl-status .ic { width: 12px; height: 12px; }
+.fl-status.fs-done .ic { color: var(--cs-status-ok-text); }
+.fl-status.fs-running { color: var(--cs-status-run-text); }
+.fl-status.fs-waiting, .fl-status.fs-waiting .ic { color: var(--cs-status-warn-text); }
+.fl-status.fs-failed, .fl-status.fs-failed .ic { color: var(--cs-status-err-text); }
+.fl-node.fs-running { border-color: var(--cs-status-run-border); box-shadow: 0 0 0 1px var(--cs-status-run-border); }
+.fl-node.fs-waiting { border-color: var(--cs-status-warn-border); }
+.fl-node.fs-failed { border-color: var(--cs-status-err-border); }
+.fl-node.fs-skipped, .fl-not-taken { opacity: 0.5; }
+.fl-node.fs-pending { opacity: 0.8; }
 body.vscode-high-contrast .dg-loop, body.vscode-high-contrast .dg-parallel, body.vscode-high-contrast .dg-branch { background: transparent; }
 @media (max-width: 900px) {
   .dg-layout { grid-template-columns: minmax(0, 1fr); }
