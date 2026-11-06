@@ -1351,7 +1351,7 @@ interface Views {
             <div class="sc-card-title"><h2>${esc(x.label)}</h2>${origin(id)}<span class="muted small">${esc(x.hint)}</span></div>
             <div class="sc-card-actions">
               <button class="btn sm" data-action="sc-use" data-id="${esc(id)}" title="Start a task with ${esc(x.label)}">${icon('play')}Use in a new task</button>
-              ${x.custom ? `<button class="btn sm" data-action="nav-diagram" data-id="${esc(id)}" title="Its steps on a canvas, with instructions per step">${icon('branch')}Open as diagram</button>` : ''}
+              ${x.custom ? `<button class="btn sm" data-action="nav-diagram" data-id="${esc(id)}" title="Its steps on a canvas, with instructions per step">${icon('branch')}Open as diagram</button>` : `<button class="btn sm" data-action="diagram-copy" data-id="${esc(id)}" title="A new scenario with these steps, on a canvas; ${esc(x.label)} stays as it is">${icon('branch')}Open a copy as diagram</button>`}
               ${c.custom.find((sc) => sc.id === id)?.source === 'project' ? libraryMove('scenario', id, this.libs) : ''}
               ${id === 'deliver' ? '' : `<button class="icon-btn sc-del" data-action="sc-delete" data-id="${esc(id)}" aria-label="Delete ${esc(x.label)}" title="Delete ${esc(x.label)}">${icon('trash')}</button>`}
             </div>
@@ -1786,6 +1786,17 @@ interface Views {
         name?.focus();
         name?.select();
       }
+    },
+    // A built-in scenario's steps as a new diagram: saved as a scenario of its own only on Save.
+    'diagram-copy': async (el) => {
+      const id = el.dataset.id || '';
+      const c = okConfig();
+      const labels = new Set(((c && c.custom) || []).map((x) => x.label.toLowerCase()));
+      let label = `${scInfo(id).label} copy`;
+      for (let n = 2; labels.has(label.toLowerCase()); n++) label = `${scInfo(id).label} copy ${n}`;
+      const steps = views.home.scenarioAgents(id).map((a) => ({ name: a.name }));
+      S.ui.diagram = { id: null, label, description: `A copy of ${scInfo(id).label}`, steps, intake: {}, dirty: true };
+      await go({ name: 'scenario-diagram' });
     },
     'sc-draft-cancel': () => {
       S.ui.scDraft = null;
