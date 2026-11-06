@@ -502,6 +502,231 @@
     </div>`;
   }
 
+  // ---------- appearance preview ----------
+  // Each preview element names what drives it: data-pv="bg:editor.background fg:editor.foreground".
+  // A customized color is used as is, anything else reads the live theme variable, so the preview is the user's real setup.
+  // `~:key` only marks the element as where that setting shows up.
+
+  const PV_PROPS: Record<string, string> = {
+    bg: 'background-color',
+    fg: 'color',
+    bc: 'border-color',
+    bt: 'border-top-color',
+    bb: 'border-bottom-color',
+    bl: 'border-left-color',
+    br: 'border-right-color',
+    ol: 'outline-color',
+  };
+  const themeVar = (key: string, fallback: string): string => `var(--vscode-${key.replace(/\./g, '-')}${fallback})`;
+  const pvTok = (itemId: string, text: string): string => `<span class="pt" data-item="${itemId}">${esc(text)}</span>`;
+  interface PvOpts {
+    /** What drives the element, e.g. `bg:editor.background fg:editor.foreground`. */
+    spec: string;
+    cls?: string;
+    tag?: 'div' | 'span';
+  }
+  const pv = ({ spec, cls = '', tag = 'div' }: PvOpts, html: string): string => `<${tag} class="${cls}" data-pv="${spec}">${html}</${tag}>`;
+
+  function editorPreview(): string {
+    const ln = (n: number, active = false): string => pv({ spec: active ? 'fg:editorLineNumber.activeForeground' : 'fg:editorLineNumber.foreground', cls: 'pv-ln', tag: 'span' }, String(n));
+    const guide = (active = false): string => pv({ spec: active ? 'bl:editorIndentGuide.activeBackground1' : 'bl:editorIndentGuide.background1', cls: 'pv-guide', tag: 'span' }, '  ');
+    const lines: readonly string[] = [
+      `${pvTok('kw.import', 'import')} { createServer } ${pvTok('kw.import', 'from')} ${pvTok('lit.string', "'node:http'")};`,
+      '',
+      `${pvTok('kw.decl', 'const')} ${pvTok('id.const', 'PORT')} = ${pvTok('lit.number', '8080')};`,
+      '',
+      `${pvTok('kw.import', 'export')} ${pvTok('kw.func', 'function')} ${pvTok('fn.decl', 'start')}(${pvTok('id.param', 'name')}: ${pvTok('type.primitive', 'string')}) ${pv({ spec: 'bg:editorBracketMatch.background', cls: 'pv-mark', tag: 'span' }, '{')}`,
+      `${guide(true)}${pvTok('kw.decl', 'const')} ${pvTok('id.var', 'server')} = ${pvTok('fn.call', 'createServer')}((req, res) ${pvTok('kw.arrow', '=>')} {${pv({ spec: 'bg:editorCursor.foreground', cls: 'pv-cursor', tag: 'span' }, '')}`,
+      `${guide(true)}${guide()}res.${pvTok('fn.call', 'end')}(\`${pv({ spec: 'bg:editor.selectionBackground', cls: 'pv-mark', tag: 'span' }, 'Hello')}, \${${pv({ spec: 'bg:editor.wordHighlightBackground', cls: 'pv-mark', tag: 'span' }, 'name')}}\`);`,
+      `${guide(true)}});`,
+      `${guide(true)}${pv({ spec: 'fg:editorWhitespace.foreground', cls: 'pv-ws', tag: 'span' }, '··')}${pvTok('cmt', '// listen on the shared port')}`,
+      `${guide(true)}${pvTok('id.var', 'server')}.${pvTok('fn.call', 'listen')}(${pv({ spec: 'bg:editor.findMatchBackground', cls: 'pv-mark', tag: 'span' }, 'PORT')});`,
+      `${pv({ spec: 'bg:editorBracketMatch.background', cls: 'pv-mark', tag: 'span' }, '}')}`,
+    ];
+    const CURRENT = 5;
+    const body = lines
+      .map((html, i) => {
+        const cls = i === CURRENT ? 'pv-line pv-current' : 'pv-line';
+        const spec = i === CURRENT ? 'bg:editor.lineHighlightBackground ol:editor.lineHighlightBorder ~:editor.renderLineHighlight' : '';
+        return `<div class="${cls}" data-pv="${spec}">${html || ' '}</div>`;
+      })
+      .join('')
+      // The other match of the search for PORT.
+      .replace(`${pvTok('id.const', 'PORT')}`, pv({ spec: 'bg:editor.findMatchHighlightBackground', cls: 'pv-mark', tag: 'span' }, 'PORT'));
+    return pv({ spec: 'bg:editor.background fg:editor.foreground', cls: 'pv pv-editor' }, `${pv({ spec: 'bg:editorGroupHeader.tabsBackground bb:tab.border', cls: 'pv-tabs' }, `${pv({ spec: 'bg:tab.activeBackground fg:tab.activeForeground bt:tab.activeBorderTop br:tab.border', cls: 'pv-tab active' }, 'server.ts')}${pv({ spec: 'bg:tab.inactiveBackground fg:tab.inactiveForeground br:tab.border', cls: 'pv-tab' }, 'routes.ts')}`)}
+      <div class="pv-body">
+        ${pv({ spec: 'bg:editorGutter.background', cls: 'pv-gutter' }, lines.map((_, i) => ln(i + 1, i === CURRENT)).join(''))}
+        ${pv({ spec: '~:editor.fontFamily ~:editor.fontSize ~:editor.fontWeight ~:editor.lineHeight ~:editor.letterSpacing ~:editor.fontLigatures ~:editor.cursorStyle ~:editor.cursorBlinking ~:editor.bracketPairColorization.enabled', cls: 'pv-code' }, body)}
+        ${pv({ spec: 'bl:editorRuler.foreground', cls: 'pv-ruler', tag: 'span' }, '')}
+        ${pv({ spec: 'bg:minimap.background ~:editor.minimap.enabled', cls: 'pv-minimap' }, '<i></i><i></i><i></i><i></i><i></i><i></i>')}
+      </div>
+      ${pv({ spec: 'bg:editorSuggestWidget.background ~:editorWidget.background', cls: 'pv-widget' }, `${pv({ spec: 'bg:editorSuggestWidget.selectedBackground', cls: 'pv-suggest active' }, 'createServer')}<div class="pv-suggest">createSecureServer</div>`)}
+      ${pv({ spec: 'bg:editorHoverWidget.background', cls: 'pv-hover' }, '<b>function</b> createServer(): Server')}`);
+  }
+
+  function sidebarPreview(): string {
+    interface TreeNode {
+      depth: number;
+      label: string;
+      spec?: string;
+      cls?: string;
+      /** The git status letter shown on the right. */
+      git?: string;
+    }
+    const GUIDE = '<span class="pv-tguide" data-pv="bc:tree.indentGuidesStroke ~:workbench.tree.renderIndentGuides ~:workbench.tree.indent"></span>';
+    const node = ({ depth, label, spec = '', cls = '', git = '' }: TreeNode): string =>
+      `<div class="pv-node d${depth} ${cls}" data-pv="${spec}">${GUIDE.repeat(depth)}<span class="pv-label">${esc(label)}</span>${git ? `<span class="pv-git">${esc(git)}</span>` : ''}</div>`;
+    const status = (name: string): string => `fg:gitDecoration.${name}ResourceForeground`;
+    const tree = [
+      node({ depth: 0, label: '▾ src', cls: 'pv-expanded' }),
+      node({ depth: 1, label: '▾ core', cls: 'pv-expanded' }),
+      node({ depth: 0, label: '▾ src/core', cls: 'pv-compact', spec: '~:explorer.compactFolders' }),
+      node({ depth: 2, label: 'customizations.ts', spec: status('modified'), git: 'M' }),
+      node({ depth: 2, label: 'profile.ts', spec: status('untracked'), git: 'U' }),
+      node({ depth: 2, label: 'merge.ts', spec: status('conflicting'), git: '!' }),
+      node({ depth: 1, label: 'panel.ts', spec: `${status('modified')} bg:list.hoverBackground`, git: 'M' }),
+      node({ depth: 0, label: '▾ media' }),
+      node({ depth: 1, label: 'main.ts', spec: 'bg:list.activeSelectionBackground fg:list.activeSelectionForeground ol:list.focusOutline ~:list.inactiveSelectionBackground', cls: 'pv-selected' }),
+      node({ depth: 1, label: 'theme.css', spec: status('added'), git: 'A' }),
+      node({ depth: 0, label: '▸ dist', spec: status('ignored') }),
+      node({ depth: 0, label: 'CHANGELOG.md', spec: status('deleted'), cls: 'pv-deleted', git: 'D' }),
+    ].join('');
+    const act = (glyph: string, spec: string, extra = ''): string => `<span class="pv-act ${extra}" data-pv="${spec}">${glyph}</span>`;
+    return pv({ spec: '~:workbench.sideBar.location ~:window.zoomLevel', cls: 'pv pv-workbench' }, `${pv({ spec: 'bg:activityBar.background', cls: 'pv-activity' }, `${act('⧉', 'fg:activityBar.foreground bl:activityBar.activeBorder', 'active')}${act('⌕', 'fg:activityBar.inactiveForeground')}${act('⑂', 'fg:activityBar.inactiveForeground', 'with-badge')}${pv({ spec: 'bg:activityBarBadge.background fg:activityBarBadge.foreground', cls: 'pv-badge', tag: 'span' }, '3')}${act('▷', 'fg:activityBar.inactiveForeground')}`)}
+      ${pv({ spec: 'bg:sideBar.background fg:sideBar.foreground br:sideBar.border', cls: 'pv-side' }, `${pv({ spec: 'fg:sideBarTitle.foreground', cls: 'pv-side-title' }, 'EXPLORER')}${pv({ spec: 'bg:sideBarSectionHeader.background fg:sideBarSectionHeader.foreground', cls: 'pv-section' }, '▾ PERSONIFY')}<div class="pv-tree">${tree}</div>`)}
+      <div class="pv-editor-stub"></div>`);
+  }
+
+  function terminalPreview(): string {
+    const a = (color: string, text: string): string => pv({ spec: `fg:terminal.ansi${color}`, tag: 'span' }, esc(text));
+    const prompt = `${a('Green', 'you')} ${a('Blue', '~/project')} ${a('Magenta', 'main')} $ `;
+    const lines = [
+      `${prompt}git status -s`,
+      `${a('Yellow', ' M')} src/panel.ts`,
+      `${a('Red', ' D')} CHANGELOG.md`,
+      `${a('BrightGreen', '??')} src/core/profile.ts`,
+      `${prompt}npm test`,
+      `${a('BrightBlack', '> personify@0.1.0 test')}`,
+      `${a('Green', '  ✔')} parses keybindings.json`,
+      `${a('Red', '  ✖')} exports a profile ${a('Cyan', '(3 ≠ 4)')}`,
+      `${a('BrightYellow', '  ⚠')} 1 test skipped`,
+      `${prompt}${pv({ spec: 'bg:terminal.selectionBackground', cls: 'pv-mark', tag: 'span' }, 'npm run build')}${pv({ spec: 'bg:terminalCursor.foreground fg:terminalCursor.background ~:terminal.integrated.cursorStyle ~:terminal.integrated.cursorBlinking', cls: 'pv-tcursor', tag: 'span' }, ' ')}`,
+    ];
+    const names = ['Black', 'Red', 'Green', 'Yellow', 'Blue', 'Magenta', 'Cyan', 'White'];
+    const palette = ['', 'Bright']
+      .map((b) => `<div class="pv-palette">${names.map((n) => pv({ spec: `bg:terminal.ansi${b}${n}`, cls: 'pv-chip', tag: 'span' }, '')).join('')}</div>`)
+      .join('');
+    return pv({ spec: 'bg:panel.background bt:panel.border', cls: 'pv pv-panel' }, `<div class="pv-ptabs">${pv({ spec: 'fg:panelTitle.inactiveForeground', cls: 'pv-ptab', tag: 'span' }, 'PROBLEMS')}${pv({ spec: 'fg:panelTitle.inactiveForeground', cls: 'pv-ptab', tag: 'span' }, 'OUTPUT')}${pv({ spec: 'fg:panelTitle.activeForeground bb:panelTitle.activeBorder', cls: 'pv-ptab active', tag: 'span' }, 'TERMINAL')}</div>
+      <div class="pv-term-wrap">
+        ${pv({ spec: 'bg:terminal.background fg:terminal.foreground ~:terminal.integrated.fontFamily ~:terminal.integrated.fontSize ~:terminal.integrated.fontWeight ~:terminal.integrated.fontWeightBold ~:terminal.integrated.lineHeight ~:terminal.integrated.letterSpacing ~:terminal.integrated.minimumContrastRatio', cls: 'pv-term' }, `${lines.map((l) => `<div class="pv-tline">${l}</div>`).join('')}${palette}`)}
+        ${pv({ spec: 'bg:terminal.background fg:terminal.foreground bl:terminal.border', cls: 'pv-term pv-split' }, `<div class="pv-tline">${a('BrightBlack', 'zsh')}</div>`)}
+      </div>
+      ${pv({ spec: 'bg:statusBar.background fg:statusBar.foreground', cls: 'pv-status' }, '⎇ main  ✖ 1  ⚠ 1')}`);
+  }
+
+  const PREVIEWS: Record<string, () => string> = { editor: editorPreview, sidebar: sidebarPreview, terminal: terminalPreview };
+
+  /** The effective value of a setting: what is set here, else what applies, else the default. */
+  function settingNow(key: string): SettingValue | null {
+    const st = S.appearance?.settings[key];
+    return st ? (st.value ?? st.effective ?? st.def) : null;
+  }
+
+  function applyFont(el: HTMLElement, prefix: 'editor' | 'terminal.integrated'): void {
+    const fallback = (key: string): SettingValue | null => settingNow(`${prefix}.${key}`) ?? (prefix === 'terminal.integrated' ? settingNow(`editor.${key}`) : null);
+    const family = fallback('fontFamily');
+    const size = Number(fallback('fontSize')) || 13;
+    const lh = Number(settingNow(`${prefix}.lineHeight`)) || 0;
+    // The editor takes pixels (0 = automatic, under 8 = a factor); the terminal takes a factor.
+    const lineHeight = prefix === 'editor' ? (lh === 0 ? '1.5' : lh < 8 ? String(lh) : `${lh}px`) : String(lh || 1.2);
+    el.style.fontFamily = family ? String(family) : '';
+    el.style.fontSize = `${size}px`;
+    el.style.lineHeight = lineHeight;
+    el.style.letterSpacing = `${Number(settingNow(`${prefix}.letterSpacing`)) || 0}px`;
+    el.style.fontWeight = String(settingNow(`${prefix}.fontWeight`) ?? 'normal');
+    if (prefix === 'editor') el.style.fontVariantLigatures = settingNow('editor.fontLigatures') === true ? 'normal' : 'none';
+  }
+
+  function syncPreview(): void {
+    const root = $opt('#tab-appearance .pv');
+    const state = S.appearance;
+    if (!root || !state) return;
+    for (const el of [root, ...$$<HTMLElement>('[data-pv]', root)]) {
+      for (const part of (el.dataset.pv ?? '').split(/\s+/)) {
+        const [kind, key] = part.split(':');
+        const prop = kind ? PV_PROPS[kind] : undefined;
+        if (!prop || !key) continue;
+        // Borders and outlines must not fall back to the text color when the theme leaves them unset.
+        el.style.setProperty(prop, state.colors[key] ?? themeVar(key, kind === 'fg' ? '' : ', transparent'));
+      }
+    }
+    const code = $opt('.pv-code', root);
+    if (code) {
+      // Line numbers share the editor font, so they stay level with their lines.
+      applyFont($('.pv-body', root), 'editor');
+      root.classList.toggle('cursor-block', String(settingNow('editor.cursorStyle')).startsWith('block'));
+      root.classList.toggle('cursor-underline', String(settingNow('editor.cursorStyle')).startsWith('underline'));
+      root.dataset.lineHighlight = String(settingNow('editor.renderLineHighlight') ?? 'line');
+      root.classList.toggle('no-minimap', settingNow('editor.minimap.enabled') === false);
+      const items = S.syntax?.items ?? {};
+      for (const span of $$('.pt', code)) span.style.cssText = cssFor(items[styleKey('jsts', span.dataset.item ?? '')]);
+    }
+    const term = $$('.pv-term', root);
+    for (const t of term) applyFont(t, 'terminal.integrated');
+    if (term.length) root.classList.toggle('cursor-line', String(settingNow('terminal.integrated.cursorStyle')) === 'line');
+    if (term.length) root.classList.toggle('cursor-underline', String(settingNow('terminal.integrated.cursorStyle')) === 'underline');
+    if ($opt('.pv-tree', root)) {
+      root.style.setProperty('--pv-indent', `${Number(settingNow('workbench.tree.indent')) || 8}px`);
+      root.dataset.guides = String(settingNow('workbench.tree.renderIndentGuides') ?? 'onHover');
+      root.classList.toggle('compact', settingNow('explorer.compactFolders') !== false);
+      root.classList.toggle('side-right', settingNow('workbench.sideBar.location') === 'right');
+    }
+  }
+
+  /** What changed in the open area, with where it came from. */
+  function renderChanges(): void {
+    const box = $opt('#pv-changes');
+    const area = S.catalog.areas.find((a) => a.id === S.area);
+    const state = S.appearance;
+    if (!box || !area || !state) return;
+    const shown = (v: SettingValue | null): string => (v === null || v === '' ? 'default' : typeof v === 'boolean' ? (v ? 'on' : 'off') : String(v));
+    const rows = area.groups
+      .flatMap((g) => g.items)
+      .flatMap((item) => {
+        if (item.kind === 'color') {
+          const value = state.colors[item.key];
+          if (!value) return [];
+          return [`<div class="change" data-key="${esc(item.key)}"><span class="change-label">${esc(item.label)}</span><span class="change-value"><span class="muted">theme</span> → <span class="mini-swatch" data-swatch="${esc(value)}"></span><code>${esc(value)}</code></span><button class="icon-btn" data-action="reset-key" data-kind="color" data-key="${esc(item.key)}" title="Back to the theme color">↺</button></div>`];
+        }
+        if (item.kind !== 'setting') return [];
+        const st = state.settings[item.key];
+        if (!st || st.value === null) return [];
+        return [`<div class="change" data-key="${esc(item.key)}"><span class="change-label">${esc(item.label)}</span><span class="change-value"><span class="muted">${esc(shown(st.def))}</span> → <code>${esc(shown(st.value))}${item.type === 'number' && item.unit ? ` ${esc(item.unit)}` : ''}</code></span><button class="icon-btn" data-action="reset-key" data-kind="setting" data-key="${esc(item.key)}" title="Back to the default">↺</button></div>`];
+      });
+    $('#pv-changes-count').textContent = String(rows.length);
+    box.innerHTML = rows.length ? rows.join('') : '<div class="change-empty">Nothing changed here yet. Every edit applies instantly and shows up here, ready to undo.</div>';
+    for (const sw of $$('.mini-swatch', box)) sw.style.background = sw.dataset.swatch ?? '';
+  }
+
+  /** Outlines where a setting shows up in the preview, and says so under it. */
+  function highlightPreview(key: string): void {
+    const root = $opt('#tab-appearance .pv');
+    if (!root) return;
+    let hits = 0;
+    for (const el of [root, ...$$('[data-pv]', root)]) {
+      const on = Boolean(key) && (el.dataset.pv ?? '').split(/\s+/).some((p) => p.endsWith(`:${key}`));
+      el.classList.toggle('pv-hl', on && el !== root);
+      if (on) hits++;
+    }
+    const item = S.catalog.areas.flatMap((a) => a.groups.flatMap((g) => g.items)).find((i) => i.kind !== 'note' && i.key === key);
+    const label = item && item.kind !== 'note' ? item.label : '';
+    $('#pv-caption').innerHTML = !key
+      ? 'Hover a setting to see where it lands. Click the preview to find its setting.'
+      : hits
+        ? `<b>${esc(label)}</b> · <code class="key">${esc(key)}</code>`
+        : `<b>${esc(label)}</b> is not shown in the preview.`;
+  }
+
   function renderAppearance(): void {
     const areas = S.catalog.areas;
     const area = areas.find((a) => a.id === S.area) ?? areas[0];
@@ -524,9 +749,25 @@
           <input type="search" class="search" data-filter="appearance" placeholder="Filter ${esc(area.title.toLowerCase())} settings…" value="${esc(S.filters.appearance)}">
           <div class="jump">${area.groups.map((g, i) => `<button class="chip" data-jump="${i}">${esc(g.title)}</button>`).join('')}</div>
         </div>
-        ${area.groups.map((g, i) => `<section class="card" data-group="${i}"><h3>${esc(g.title)}<small data-group-count></small></h3><div class="rows">${g.items.map(appearanceRow).join('')}</div></section>`).join('')}
-        <div class="empty-state hidden">Nothing matches this filter.</div>
+        <div class="appearance-layout">
+          <div class="settings-col">
+            ${area.groups.map((g, i) => `<section class="card" data-group="${i}"><h3>${esc(g.title)}<small data-group-count></small></h3><div class="rows">${g.items.map(appearanceRow).join('')}</div></section>`).join('')}
+            <div class="empty-state hidden">Nothing matches this filter.</div>
+          </div>
+          <aside class="preview-col">
+            <details class="pv-card" open>
+              <summary><b>Live preview</b><span class="muted">Your theme plus your changes</span></summary>
+              ${PREVIEWS[area.id]?.() ?? ''}
+              <div class="pv-caption" id="pv-caption"></div>
+            </details>
+            <section class="card changes-card">
+              <h3>Changed in ${esc(area.title)}<small id="pv-changes-count"></small></h3>
+              <div id="pv-changes"></div>
+            </section>
+          </aside>
+        </div>
       </div>`;
+    highlightPreview('');
     applyFilter('appearance');
     syncAppearance();
   }
@@ -570,11 +811,13 @@
         $('[data-val=""]', seg).textContent = `Default (${shown ? 'on' : 'off'})`;
       }
     }
-    for (const card of $$('#tab-appearance .card')) {
+    for (const card of $$('#tab-appearance .settings-col .card')) {
       const rows = $$('.row', card);
       const n = rows.filter((r) => r.classList.contains('modified')).length;
       $('[data-group-count]', card).textContent = n ? `${n} of ${rows.length} changed` : String(rows.length);
     }
+    syncPreview();
+    renderChanges();
     updateCounts();
   }
 
@@ -627,12 +870,41 @@
     };
     root.addEventListener('input', onInput);
     root.addEventListener('change', onInput);
+    // Hovering or focusing a setting outlines where it shows up in the preview.
+    const onPoint = (e: Event): void => {
+      const key = targetOf(e)?.closest<HTMLElement>('.row[data-key], .change[data-key]')?.dataset.key ?? '';
+      if (root.dataset.hover === key) return;
+      root.dataset.hover = key;
+      highlightPreview(key);
+    };
+    root.addEventListener('mouseover', onPoint);
+    root.addEventListener('focusin', onPoint);
     root.addEventListener('click', (e) => {
       const t = targetOf(e);
       if (!t) return;
       const jump = t.closest<HTMLElement>('[data-jump]');
       if (jump) {
         $opt(`#tab-appearance .card[data-group="${jump.dataset.jump ?? ''}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        return;
+      }
+      const resetKey = t.closest<HTMLElement>('[data-action="reset-key"]');
+      if (resetKey) {
+        const key = resetKey.dataset.key ?? '';
+        return resetKey.dataset.kind === 'color' ? setColor(key, null) : setSetting(key, null, 0);
+      }
+      // A click in the preview finds the setting behind it.
+      const shown = t.closest<HTMLElement>('.pv [data-pv], .change[data-key]');
+      if (shown) {
+        const key = shown.dataset.key ?? (shown.dataset.pv ?? '').split(/\s+/).find((p) => p.includes(':'))?.split(':')[1];
+        const row = key ? $opt(`#tab-appearance .row[data-key="${key}"]`) : null;
+        if (!row) return;
+        if (row.classList.contains('hidden')) {
+          S.filters.appearance = '';
+          $<HTMLInputElement>('#tab-appearance [data-filter]').value = '';
+          applyFilter('appearance');
+        }
+        row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        flash(row);
         return;
       }
       const segBtn = t.closest<HTMLElement>('.seg button');
@@ -683,7 +955,7 @@
     const root = $(`#tab-${tab}`);
     const q = S.filters[tab].trim().toLowerCase();
     let visible = 0;
-    for (const card of $$('.card', root)) {
+    for (const card of $$('.card', root).filter((c) => !c.classList.contains('changes-card'))) {
       let any = false;
       for (const row of $$('[data-search]', card)) {
         const show = !q || (row.dataset.search ?? '').includes(q);
@@ -861,6 +1133,8 @@
     if (!S.syntax || !$opt('#tab-syntax .content')) return;
     const items = S.syntax.items;
     updateCounts();
+    // The editor preview on the Appearance page colors its code with these rules.
+    syncPreview();
 
     const sem = $opt('#tab-syntax [data-semantic]');
     if (sem) {

@@ -251,6 +251,86 @@ details.card > summary span { flex: 1; }
 .help ol, .help ul { margin: 4px 16px 12px; padding-left: 20px; line-height: 1.7; color: var(--p-fg2); }
 .help .actions { padding: 0 16px 10px; }
 
+/* ---------- appearance preview ----------
+   Colors here come from data-pv (the user's value or the live theme variable), set from main.ts. */
+.appearance-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(380px, 480px); gap: 24px; align-items: start; }
+.preview-col { position: sticky; top: 80px; display: flex; flex-direction: column; gap: 14px; max-height: calc(100vh - 100px); overflow-y: auto; }
+.pv-card { border: 1px solid var(--p-border); border-radius: var(--p-radius); background: var(--p-surface); overflow: hidden; }
+.pv-card > summary { list-style: none; cursor: pointer; display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 10px 14px; font-size: 12px; }
+.pv-card > summary::-webkit-details-marker { display: none; }
+.pv-caption { padding: 9px 14px; font-size: 11.5px; color: var(--p-muted); border-top: 1px solid var(--p-border-soft); min-height: 36px; }
+.pv-caption b { color: var(--p-fg); }
+.pv { position: relative; overflow: hidden; font-size: 12px; cursor: default; border-top: 1px solid var(--p-border-soft); }
+.pv [data-pv]:not([data-pv='']) { cursor: pointer; }
+.pv .pv-hl { outline: 2px solid var(--p-accent) !important; outline-offset: 1px; position: relative; z-index: 2; }
+.pv-mark { border-radius: 2px; }
+
+.pv-editor { font-family: var(--p-mono); }
+.pv-tabs { display: flex; border-bottom: 1px solid transparent; font-family: var(--p-font); }
+.pv-tab { padding: 7px 14px; border-top: 1px solid transparent; border-right: 1px solid transparent; }
+.pv-body { position: relative; display: flex; padding: 8px 0 76px; }
+.pv-gutter { display: flex; flex-direction: column; align-items: flex-end; min-width: 36px; padding: 0 10px 0 6px; font-variant-ligatures: none; }
+.pv-code { flex: 1; min-width: 0; white-space: pre; overflow: hidden; }
+.pv-line { padding-left: 4px; }
+.pv-current { outline: 1px solid transparent; outline-offset: -1px; }
+.pv[data-line-highlight='none'] .pv-current, .pv[data-line-highlight='gutter'] .pv-current { background: transparent !important; outline-color: transparent !important; }
+.pv-guide { display: inline-block; border-left: 1px solid transparent; }
+.pv-cursor { display: inline-block; width: 2px; height: 1.2em; vertical-align: text-bottom; margin-left: 1px; }
+.pv.cursor-block .pv-cursor { width: 0.6em; opacity: 0.7; }
+.pv.cursor-underline .pv-cursor { width: 0.6em; height: 2px; vertical-align: baseline; }
+.pv-ruler { position: absolute; top: 0; bottom: 0; left: 78%; border-left: 1px solid transparent; }
+.pv-minimap { width: 46px; flex: none; display: flex; flex-direction: column; gap: 5px; padding: 6px; opacity: 0.85; }
+.pv-minimap i { display: block; height: 3px; border-radius: 1px; background: currentColor; opacity: 0.25; }
+.pv-minimap i:nth-child(2n) { width: 60%; }
+.pv.no-minimap .pv-minimap { display: none; }
+.pv-widget, .pv-hover { position: absolute; z-index: 1; padding: 4px; border-radius: 6px; font-size: 11.5px; box-shadow: 0 4px 14px var(--p-shadow); }
+.pv-widget { right: 58px; bottom: 10px; min-width: 150px; }
+.pv-hover { left: 44px; bottom: 26px; padding: 6px 9px; font-family: var(--p-mono); }
+.pv-suggest { padding: 3px 8px; border-radius: 4px; }
+
+.pv-workbench { display: flex; height: 320px; font-family: var(--p-font); }
+.pv-workbench.side-right { flex-direction: row-reverse; }
+.pv-activity { width: 42px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 6px; position: relative; }
+.pv-act { width: 42px; height: 38px; display: grid; place-items: center; font-size: 17px; border-left: 2px solid transparent; }
+.pv-badge { position: absolute; top: 90px; left: 23px; min-width: 15px; height: 15px; padding: 0 3px; border-radius: 8px; font-size: 9px; font-weight: 700; display: grid; place-items: center; }
+.pv-side { width: 250px; flex: none; border-right: 1px solid transparent; overflow: hidden; }
+.pv-side-title { padding: 10px 14px 8px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; }
+.pv-section { padding: 4px 10px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em; }
+.pv-tree { padding: 2px 0; }
+.pv-node { position: relative; display: flex; align-items: center; height: 22px; padding: 0 10px 0 12px; outline: 1px solid transparent; outline-offset: -1px; }
+.pv-node.d1 { padding-left: calc(12px + var(--pv-indent, 8px) + 8px); }
+.pv-node.d2 { padding-left: calc(12px + 2 * (var(--pv-indent, 8px) + 8px)); }
+.pv-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pv-git { font-size: 11px; font-weight: 600; }
+.pv-deleted .pv-label { text-decoration: line-through; }
+.pv-tguide { position: absolute; top: 0; bottom: 0; border-left: 1px solid transparent; }
+.pv-tguide:nth-child(1) { left: 18px; }
+.pv-tguide:nth-child(2) { left: calc(18px + var(--pv-indent, 8px) + 8px); }
+.pv[data-guides='none'] .pv-tguide, .pv[data-guides='onHover'] .pv-tree:not(:hover) .pv-tguide { visibility: hidden; }
+.pv.compact .pv-expanded, .pv:not(.compact) .pv-compact { display: none; }
+.pv-editor-stub { flex: 1; }
+
+.pv-panel { font-family: var(--p-font); border-top-width: 1px; border-top-style: solid; }
+.pv-ptabs { display: flex; gap: 18px; padding: 8px 14px 0; font-size: 10.5px; font-weight: 600; letter-spacing: 0.05em; }
+.pv-ptab { padding-bottom: 6px; border-bottom: 1px solid transparent; }
+.pv-term-wrap { display: flex; }
+.pv-term { flex: 1; min-width: 0; padding: 10px 14px; font-family: var(--p-mono); white-space: pre; overflow: hidden; }
+.pv-split { flex: 0 0 70px; border-left: 1px solid transparent; }
+.pv-tcursor { display: inline-block; width: 0.6em; }
+.pv.cursor-line .pv-tcursor { width: 2px; }
+.pv.cursor-underline .pv-tcursor { height: 2px; vertical-align: baseline; }
+.pv-palette { display: flex; gap: 4px; margin-top: 8px; }
+.pv-chip { width: 22px; height: 12px; border-radius: 3px; }
+.pv-status { padding: 3px 12px; font-size: 11px; }
+
+.change { display: flex; align-items: center; gap: 10px; padding: 7px 14px 7px 16px; border-top: 1px solid var(--p-border-soft); cursor: pointer; }
+.change:hover { background: var(--p-hover); }
+.change-label { flex: 1; min-width: 0; }
+.change-value { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; white-space: nowrap; }
+.change-value code { padding: 0; background: none; }
+.mini-swatch { width: 14px; height: 14px; border-radius: 4px; border: 1px solid var(--p-strong); }
+.change-empty { padding: 10px 16px 12px; font-size: 12px; color: var(--p-muted); }
+
 /* ---------- syntax ---------- */
 .semantic-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 16px; margin-bottom: 18px; border: 1px solid var(--p-border); border-radius: var(--p-radius); background: var(--p-surface); font-size: 12px; }
 .syntax-layout { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(470px, 1fr); gap: 24px; align-items: start; }
@@ -372,7 +452,8 @@ body.vscode-high-contrast .chip.active, body.vscode-high-contrast-light .chip.ac
   .scope-field > span { display: none; }
   .topbar { padding: 10px 20px; }
   main { padding: 22px 20px 40px; }
-  .syntax-layout { grid-template-columns: 1fr; }
+  .syntax-layout, .appearance-layout { grid-template-columns: 1fr; }
+  .preview-col { position: static; order: -1; max-height: none; }
   .preview-wrap { position: static; }
   .preview { max-height: 320px; }
 }
