@@ -49,6 +49,11 @@ function stepRuns(s: TaskState, when: StepWhen | undefined): boolean {
   return when.else ? !met : met;
 }
 
+/** Whether two steps are in the same Branch (either arm): one on the same step, with the same condition. */
+function sameBranch(a: StepWhen | undefined, b: StepWhen | undefined): boolean {
+  return Boolean(a && b) && a!.on === b!.on && JSON.stringify(a!.if) === JSON.stringify(b!.if);
+}
+
 /** The condition in words, for the editor and the task screen: "reviewer approved", "auditor found high or worse". */
 function describeCondition(on: string, c: Condition): string {
   if ('verdict' in c) return `${on} ${c.verdict === 'approved' ? 'approved' : 'requested changes'}`;
@@ -58,4 +63,4 @@ function describeCondition(on: string, c: Condition): string {
   return `${on}'s checks ${c.gates === 'pass' ? 'passed' : 'were left failing'}`;
 }
 
-export { REPORT_SEVERITY, SEVERITY, conditionOutput, describeCondition, evaluate, stepRuns };
+export { REPORT_SEVERITY, SEVERITY, conditionOutput, describeCondition, evaluate, sameBranch, stepRuns };

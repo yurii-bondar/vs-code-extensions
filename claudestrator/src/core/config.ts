@@ -12,7 +12,7 @@ import { ENV_FILE, SECRET_PATHS, GITHUB_TOKENS } from './settings';
 import { signature, writeAtomic } from './files';
 import type { Agent, Config, CustomScenario, Diagnostic, Effort, Gate, GitMode, GroupType, Output, Policy, RepoConfig, Runs, ScenarioStep, TaskGroup, TaskInstruction } from './types';
 import { flattenSteps, nestSteps } from './steps';
-import { conditionOutput, describeCondition } from './conditions';
+import { conditionOutput, describeCondition, sameBranch } from './conditions';
 import type { AgentStepLayer, FlatStep, ScenarioStepLayer } from './steps';
 
 // ---------- the shapes of a config layer, as written in config.yaml ----------
@@ -820,7 +820,7 @@ function blockProblems(id: string, steps: readonly ScenarioStep[], agents: Recor
     if (st.when) {
       const i = steps.indexOf(st);
       const source = steps.findIndex((x) => x.name === st.when!.on);
-      const from = steps.findIndex((x) => x.when && x.when.on === st.when!.on && JSON.stringify(x.when.if) === JSON.stringify(st.when!.if));
+      const from = steps.findIndex((x) => sameBranch(x.when, st.when));
       const so = output(st.when.on);
       if (source === -1 || source >= Math.min(i, from)) out.push(['branch_source', st.name, `scenario "${id}" branches on "${st.when.on}", which is not a step before the branch`]);
       else if (so && !conditionOutput(st.when.if).includes(so)) out.push(['branch_condition', st.name, `scenario "${id}" asks for ${describeCondition(st.when.on, st.when.if)}, but "${st.when.on}" writes ${so}`]);

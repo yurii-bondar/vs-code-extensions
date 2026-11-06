@@ -1,6 +1,7 @@
 // The steps of a custom scenario as config.yaml writes them (agents, and blocks of them: parallel, branch, loop) and as
 // the rest of Claudestrator reads them: one list of agent steps, each marked with the block it is in.
 
+import { sameBranch } from './conditions';
 import type { Condition, Effort, StepWhen } from './types';
 
 /** An agent step: its name, or the agent with what it runs with and does in this scenario. */
@@ -73,8 +74,6 @@ function flattenSteps(layers: readonly ScenarioStepLayer[]): FlatStep[] {
   return out;
 }
 
-const sameCondition = (a: StepWhen, b: StepWhen): boolean => a.on === b.on && JSON.stringify(a.if) === JSON.stringify(b.if);
-
 /** Steps next to each other with the same parallel number as one parallel block, the others as they are. */
 function nestPlain(flat: readonly FlatStep[]): (AgentStepLayer | ParallelLayer)[] {
   const out: (AgentStepLayer | ParallelLayer)[] = [];
@@ -98,7 +97,7 @@ function nestSteps(flat: readonly FlatStep[]): ScenarioStepLayer[] {
       while (j < flat.length && flat[j]!.loop) j++;
       out.push({ loop: { ...(f.loop.rounds !== undefined && { rounds: f.loop.rounds }), steps: nestPlain(flat.slice(i, j)) } });
     } else if (f.when) {
-      while (j < flat.length && flat[j]!.when && sameCondition(flat[j]!.when!, f.when)) j++;
+      while (j < flat.length && sameBranch(flat[j]!.when, f.when)) j++;
       const arm = flat.slice(i, j);
       const steps = (list: FlatStep[]) => list.flatMap((x) => (x.approve ? [x.step, approveLayer(x.approve)] : [x.step]));
       const then = steps(arm.filter((x) => !x.when!.else));

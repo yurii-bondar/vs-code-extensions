@@ -1,8 +1,8 @@
 // A task's pipeline as the diagram on its screen draws it: its steps with where each one is, the Parallels, the
 // branches with the arm taken, the loop with its round, and where you approve. Read from the task's state only.
 
-import { describeCondition, evaluate, stepRuns } from './conditions';
-import type { Output, Stage, StepWhen, TaskState } from './types';
+import { describeCondition, evaluate, sameBranch, stepRuns } from './conditions';
+import type { Output, Stage, TaskState } from './types';
 
 type FlowStatus = 'done' | 'running' | 'waiting' | 'failed' | 'next' | 'pending' | 'skipped';
 
@@ -58,8 +58,6 @@ function nodeOf(s: TaskState, i: number): FlowNode {
   return { agent: st.agent, output: st.output, status, ...(repos.length && { repos }), ...(st.approve && { approve: { ...(st.approve.text && { text: st.approve.text }), status: approveStatus(s, i, status) } }) };
 }
 
-const sameWhen = (a: StepWhen | undefined, b: StepWhen | undefined): boolean => Boolean(a && b) && a!.on === b!.on && JSON.stringify(a!.if) === JSON.stringify(b!.if);
-
 /** Stages `from..to` as items: a step, a Parallel, a Branch; You approve after a step or a Parallel. */
 function itemsOf(s: TaskState, from: number, to: number): FlowItem[] {
   const stages = s.pipeline.stages;
@@ -71,7 +69,7 @@ function itemsOf(s: TaskState, from: number, to: number): FlowItem[] {
     const st: Stage = stages[i]!;
     let j = i + 1;
     if (st.when) {
-      while (j < to && sameWhen(stages[j]!.when, st.when)) j++;
+      while (j < to && sameBranch(stages[j]!.when, st.when)) j++;
       const nodes = stages.slice(i, j).map((x, k) => ({ x, node: nodeOf(s, i + k) }));
       const met = evaluate(s, st.when.on, st.when.if);
       out.push({ kind: 'branch', on: st.when.on, condition: describeCondition(st.when.on, st.when.if), taken: met === null ? null : met ? 'then' : 'else', then: nodes.filter((n) => !n.x.when!.else).map((n) => n.node), else: nodes.filter((n) => n.x.when!.else).map((n) => n.node) });
