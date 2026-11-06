@@ -1246,7 +1246,28 @@ b.err, .lim-pct.err { color: var(--cs-status-err-text); }
 .dg-check.warn .ic { color: var(--cs-status-warn-text); }
 .dg-foot { display: flex; align-items: center; gap: var(--cs-space-2); margin-top: var(--cs-space-2); }
 .dg-foot .ic { width: 13px; height: 13px; vertical-align: -2px; margin-right: 4px; }
-body.vscode-high-contrast .dg-loop { background: transparent; }
+/* Blocks: Parallel lanes side by side, a Branch's two arms, a Loop of the scenario's own. A head selects the block. */
+.dg-parallel, .dg-branch { display: flex; flex-direction: column; align-items: center; padding: var(--cs-space-2) var(--cs-space-3) var(--cs-space-3); border: 1px dashed color-mix(in srgb, var(--cs-hue-blue) 60%, transparent); border-radius: var(--cs-radius-lg); background: color-mix(in srgb, var(--cs-hue-blue) 4%, transparent); }
+.dg-branch { border-color: color-mix(in srgb, var(--cs-hue-yellow) 60%, transparent); background: color-mix(in srgb, var(--cs-hue-yellow) 4%, transparent); }
+.dg-parallel.selected, .dg-branch.selected, .dg-loop.selected { border-style: solid; box-shadow: 0 0 0 1px var(--cs-border-focus); }
+.dg-parallel-head, .dg-branch-head, .dg-own .dg-loop-head { display: flex; align-items: center; gap: var(--cs-space-2); align-self: stretch; padding: 2px var(--cs-space-1); margin-bottom: var(--cs-space-2); border-radius: var(--cs-radius-sm); cursor: pointer; }
+.dg-parallel-head:hover, .dg-branch-head:hover, .dg-own .dg-loop-head:hover { background: var(--cs-bg-hover); }
+.dg-parallel-head .ic { color: var(--cs-agent-blue); }
+.dg-branch-head .ic { color: var(--cs-agent-yellow); }
+.dg-lanes { display: flex; gap: var(--cs-space-3); align-items: flex-start; }
+.dg-lane .dg-node { width: 240px; }
+.dg-lane-add { align-self: center; }
+.dg-lane-add .dg-edge { height: 24px; background: transparent; }
+.dg-arms { display: flex; gap: var(--cs-space-4); align-items: flex-start; }
+.dg-arm { display: flex; flex-direction: column; align-items: center; gap: 0; min-width: 260px; }
+.dg-arm > .chip { margin-bottom: var(--cs-space-2); }
+.dg-arm .dg-node { width: 260px; }
+.dg-yes { color: var(--cs-status-warn-text); border-color: var(--cs-status-warn-border); }
+.dg-edge-end { height: 30px; }
+.dg-members { display: flex; flex-wrap: wrap; gap: var(--cs-space-1); }
+.dg-member .adot { margin-right: 4px; }
+.dg-check.bad .ic { color: var(--cs-status-err-text); }
+body.vscode-high-contrast .dg-loop, body.vscode-high-contrast .dg-parallel, body.vscode-high-contrast .dg-branch { background: transparent; }
 @media (max-width: 900px) {
   .dg-layout { grid-template-columns: minmax(0, 1fr); }
   .dg-side { position: static; max-height: none; }
