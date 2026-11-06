@@ -26,6 +26,7 @@ const SCREENS = [
   { screen: 'repos', theme: 'Dark', name: 'Desktop · Repos & checks', x: 4 * D, y: 0 },
   { screen: 'mcp', theme: 'Dark', name: 'Desktop · Integrations', x: 5 * D, y: 0 },
   { screen: 'settings', theme: 'Dark', name: 'Desktop · Settings', x: 6 * D, y: 0 },
+  { screen: 'diagram', theme: 'Dark', name: 'Desktop · Scenario diagram · Loop, Parallel, Branch', x: 7 * D, y: 0 },
   { screen: 'home', theme: 'Light', name: 'Desktop · Tasks · Light', x: 0, y: 2500 },
   { screen: 'task', theme: 'Light', name: 'Desktop · Task · Plan approval · Light', x: D, y: 2500 },
   { screen: 'task', theme: 'HC Dark', name: 'Desktop · Task · Plan approval · HC Dark', x: 2 * D, y: 2500 },
@@ -75,7 +76,12 @@ const until = async (b, expr, ms = 20000) => {
   }
   return false;
 };
-const ROUTES = { home: 'home', agents: 'agents', scenarios: 'scenarios', repos: 'repos', mcp: 'mcp', settings: 'settings' };
+const ROUTES = { home: 'home', agents: 'agents', scenarios: 'scenarios', repos: 'repos', mcp: 'mcp', settings: 'settings', diagram: 'scenario-diagram' };
+/** The diagram screen draws a new scenario not saved yet, its developer step selected. */
+const DIAGRAM = `(() => {
+  window.CS.S.ui.diagram = { id: null, label: 'Ship with a short review', description: 'Plan, code repo by repo, tests, one review round.', dirty: true, intake: {}, steps: [{ name: 'planner' }, { name: 'developer', loop: {}, instructions: 'Keep the change minimal; no drive-by refactors. Match the error messages of the existing forms.' }, { name: 'reviewer', effort: 'medium', parallel: 1, loop: {} }, { name: 'security-reviewer', parallel: 1, loop: {} }, { name: 'tester', when: { on: 'reviewer', if: { severity: 'major' } } }] };
+  return true;
+})()`;
 const TASK_SCREENS = new Set(['task', 'panel-task', 'panel-menu', 'panel-folded']);
 const MENU_SCREENS = new Set(['panel-menu', 'panel-folded']);
 const profile = path.join(os.tmpdir(), 'claudestrator-design-sync-chrome');
@@ -124,8 +130,14 @@ async function capture({ screen, theme }) {
         await b.sleep(600);
       }
     } else {
+      // A second reviewer for its Parallel, made once in the preview's workspace.
+      if (screen === 'diagram') await b.eval(`window.CS.call('newAgent', { name: 'security-reviewer', base: 'reviewer', description: 'Security only', standalone: true }).catch(() => null).then(() => window.CS.loadOverview()).then(() => ${DIAGRAM})`);
       await b.eval(`window.CS.go({ name: ${JSON.stringify(ROUTES[screen])} })`);
       await b.sleep(2000);
+      if (screen === 'diagram') {
+        await b.eval(`document.querySelector('.dg-step[data-i="1"]').click(), true`);
+        await b.sleep(600);
+      }
     }
     await b.eval(applyTheme(theme));
     await b.sleep(400);

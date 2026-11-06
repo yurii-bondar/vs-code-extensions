@@ -19,7 +19,8 @@
 // Usage (from the repo root): node scripts/release.mjs [build|test|live] [--only <target>] [--dry-run] [--force]
 //   build      build and verify what is due (the default)
 //   test       typecheck, lint and every test first (of each extension due, the sidecar and plugin), then build
-//   live       the tests, then one real Claudestrator task on haiku at low effort (npm run test:live, a few cents), then build
+//   live       the tests, then two real Claudestrator tasks on haiku at low effort (npm run test:live: a delivery and a
+//              scenario with Parallel, You approve and Branch; a few cents), then build
 //   --only     one target: vscode (Claudestrator), jetbrains, scriptor, personify, claude-ctx-man or go-to-project
 //   --dry-run  build and verify, then put the version files back: no commit, no tag
 //   --force    build a target with nothing due at its last released version (no commit, no tag)
@@ -54,7 +55,7 @@ const extension = (dir, label, ships = []) => ({
 });
 
 const TARGETS = {
-  vscode: extension('claudestrator', 'Claudestrator (VS Code)', ['extension/dist/media/app.js', 'extension/dist/media/task.js', 'extension/dist/media/config.js', 'extension/dist/media/markdown.js', 'extension/dist/media/stream.js', 'extension/media/app.css']),
+  vscode: extension('claudestrator', 'Claudestrator (VS Code)', ['extension/dist/media/app.js', 'extension/dist/media/task.js', 'extension/dist/media/diagram-model.js', 'extension/dist/media/diagram-canvas.js', 'extension/dist/media/diagram-side.js', 'extension/dist/media/diagram.js', 'extension/dist/media/config.js', 'extension/dist/media/markdown.js', 'extension/dist/media/stream.js', 'extension/media/app.css']),
   jetbrains: {
     kind: 'jetbrains',
     label: 'Claudestrator (JetBrains)',
@@ -393,7 +394,7 @@ function runTests(opts, due) {
       step('Typecheck the plugin sidecar', npm, ['run', 'typecheck'], { cwd: SIDECAR, env });
       step('Check the JetBrains plugin', gradlew, ['check', '--console=plain'], { cwd: PLUGIN, env });
     }
-    if (opts.mode === 'live' && extensionDirs(targets).includes('claudestrator')) step('Run one real task on haiku, low effort (npm run test:live)', npm, ['run', 'test:live'], { cwd: EXTENSION, env });
+    if (opts.mode === 'live' && extensionDirs(targets).includes('claudestrator')) step('Run two real tasks on haiku, low effort (npm run test:live)', npm, ['run', 'test:live'], { cwd: EXTENSION, env });
   });
 }
 

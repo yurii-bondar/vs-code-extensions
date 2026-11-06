@@ -6,6 +6,7 @@ const at = (agent: string, repo?: string): string => `${agent}${repo ? ` @ ${rep
 const READINESS: Record<string, string> = { ready: 'ready', not_ready: 'not ready', needs_check: 'needs a human check' };
 
 const CHECKPOINT_TITLE: Record<string, string> = {
+  'approve-step': 'Your approval',
   'approve-plan': 'Plan approval',
   'gate-failure': 'Checks are red',
   'agent-failure': 'An agent failed',

@@ -25,7 +25,9 @@ interface OutputEvent {
 const FAKE = path.join(__dirname, '..', 'fixtures', 'fake-claude.js');
 fs.chmodSync(FAKE, 0o755);
 
-const git = (cwd: string, ...args: string[]): string => execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } }).trim();
+// Its stderr is kept, not printed: a call a test expects to fail ("nothing was pushed") says nothing, and one that
+// fails unexpectedly has it in its error.
+const git = (cwd: string, ...args: string[]): string => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } }).trim();
 
 function workspace(repos: string[], configYaml: string): string {
   const ws = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cs-e2e-')));

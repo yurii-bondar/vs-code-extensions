@@ -44,7 +44,7 @@ test('watchdog: a closing window kills an agent that ignores the stop, with its 
     setChildEnv({ ...getChildEnv(), FAKE_HANG: 'planner', FAKE_STUBBORN: '1' });
     const { taskId } = await h.engine.start({ text: 'Do a thing', auto: true });
     h.engine.launch(taskId);
-    const session = await waitFor(async () => h.engine.sessions.get(taskId), 30000);
+    const session = await waitFor(async () => h.engine.sessions.get(taskId)?.[0], 30000);
     const pid = session.proc.pid!;
     await h.engine.stopAll(300);
     const alive = (): boolean => {

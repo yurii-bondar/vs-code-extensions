@@ -209,7 +209,7 @@ test('panel: the task screen says where its failure has a Fix in chat', async ()
   viewModule.detail = async () => shown;
   let checkpoint: { id: string; at: string } | null = { id: 'gate-failure', at: 'now' };
   const engine = {
-    svc: { exists: async () => true, state: async () => ({ checkpoint }), readArtifact: async () => '' },
+    svc: { exists: async () => true, state: async () => ({ checkpoint, pipeline: { stages: [], reviewLoop: null } }), readArtifact: async () => '' },
     checkpointContext: async () => ({ format: 'log', text: 'lint: 1 error' }),
   };
   const p = Object.assign(Object.create(DashboardPanel.prototype) as InstanceType<typeof DashboardPanel>, { orch: { engine }, pipelineEdit: async () => null });

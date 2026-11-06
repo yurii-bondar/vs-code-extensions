@@ -6,11 +6,14 @@ import * as path from 'path';
 import * as YAML from 'yaml';
 import { AsyncLocalStorage } from 'async_hooks';
 import { isDeepStrictEqual } from 'util';
-import { validateConfigLayer, validateAgentPatch, validateLibraryLayer, SCENARIO_OUTPUT, JIRA_KEY, BRANCH_PATTERN } from './protocol';
+import { validateConfigLayer, validateAgentPatch, validateLibraryLayer, INTAKE, SCENARIO_OUTPUT, JIRA_KEY, BRANCH_PATTERN } from './protocol';
 import { ORCH_DIR } from './store';
 import { ENV_FILE, SECRET_PATHS, GITHUB_TOKENS } from './settings';
 import { signature, writeAtomic } from './files';
 import type { Agent, Config, CustomScenario, Diagnostic, Effort, Gate, GitMode, GroupType, Output, Policy, RepoConfig, Runs, ScenarioStep, TaskGroup, TaskInstruction } from './types';
+import { flattenSteps, nestSteps } from './steps';
+import { conditionOutput, describeCondition, sameBranch } from './conditions';
+import type { AgentStepLayer, FlatStep, ScenarioStepLayer } from './steps';
 
 // ---------- the shapes of a config layer, as written in config.yaml ----------
 
@@ -32,12 +35,19 @@ interface AgentLayer {
   instructions?: InstructionsInput;
 }
 
-type ScenarioStepLayer = string | { agent: string; model?: string; effort?: Effort };
 
 interface CustomScenarioLayer {
   label?: string;
   description?: string;
+  /** The model and effort that read its tickets, over the config's `intake`. */
+  intake?: IntakeLayer;
   agents: ScenarioStepLayer[];
+}
+
+/** The model and effort of the agent that reads a Jira issue or Confluence page through an MCP server. */
+interface IntakeLayer {
+  model?: string;
+  effort?: Effort;
 }
 
 type GroupLayer = Omit<TaskGroup, 'id'>;
@@ -59,6 +69,7 @@ interface ConfigLayer {
   limits?: { reviewRounds?: number; gateAttempts?: number; budgetUsd?: number; parallelTasks?: number };
   language?: string;
   baseBranch?: string;
+  intake?: IntakeLayer;
   repos?: Record<string, RepoLayer>;
   jira?: { allowedProjects?: string[] };
   policy?: Partial<Policy>;
@@ -101,6 +112,8 @@ interface Draft extends Omit<AgentLayer, 'instructions'> {
 interface ScenarioEntry {
   value: string[] | false | CustomScenarioLayer;
   source: string;
+  /** The folder of the config that defines it: its steps' instruction files are named from there. */
+  dir: string;
 }
 
 interface Merged {
@@ -116,6 +129,7 @@ interface Merged {
   pipeline?: { names: string[]; source: string };
   language?: string;
   baseBranch?: string;
+  intake: IntakeLayer;
   gitMode?: GitMode;
   context?: string[];
 }
@@ -448,7 +462,7 @@ function toOp(layer: Layer, input: InstructionsInput | undefined): InstructionOp
 }
 
 function mergeLayers(layers: Layer[]): Merged {
-  const merged: Merged = { agents: new Map(), limits: {}, repos: new Map(), jira: {}, policy: {}, scenarios: {}, groups: {}, instructions: {}, origins: {} };
+  const merged: Merged = { agents: new Map(), limits: {}, repos: new Map(), jira: {}, policy: {}, scenarios: {}, groups: {}, instructions: {}, origins: {}, intake: {} };
   for (const layer of layers) {
     const c = layer.config;
     for (const [name, agent] of Object.entries(c.agents ?? {})) {
@@ -460,13 +474,14 @@ function mergeLayers(layers: Layer[]): Merged {
     for (const [name, repo] of Object.entries(c.repos ?? {})) merged.repos.set(name, { ...merged.repos.get(name), ...defined(repo) });
     if (c.pipeline) merged.pipeline = { names: [...c.pipeline], source: layer.name };
     // A later layer replaces a whole scenario: its list, `false` (removed) or a custom scenario.
-    for (const [name, value] of Object.entries(c.scenarios ?? {})) merged.scenarios[name] = { value: clone(value), source: layer.name };
+    for (const [name, value] of Object.entries(c.scenarios ?? {})) merged.scenarios[name] = { value: clone(value), source: layer.name, dir: layer.baseDir };
     // Groups and instructions too: a later layer replaces the whole entry.
     Object.assign(merged.groups, clone(c.groups ?? {}));
     Object.assign(merged.instructions, clone(c.instructions ?? {}));
     if (c.limits) merged.limits = { ...merged.limits, ...defined(c.limits) };
     if (c.language) merged.language = c.language;
     if (c.baseBranch) merged.baseBranch = c.baseBranch;
+    if (c.intake) merged.intake = { ...merged.intake, ...defined(c.intake) };
     if (c.jira && c.jira.allowedProjects) merged.jira = { allowedProjects: [...c.jira.allowedProjects] };
     if (c.policy) merged.policy = { ...merged.policy, ...defined(c.policy) };
     if (c.git && c.git.mode) merged.gitMode = c.git.mode;
@@ -555,7 +570,7 @@ function resolveConfig(layers: Layer[], opts: { flags?: Flags | undefined; readF
   }
 
   const { scenarios, removed } = resolveScenarios(merged.scenarios, merged.agents, agents, diags);
-  const custom = resolveCustomScenarios(merged.scenarios, merged.agents, agents, diags);
+  const custom = resolveCustomScenarios(merged.scenarios, merged.agents, agents, diags, read);
   const inCustom = Object.values(custom).flatMap((s) => s.agents.map((st) => st.name));
   const pipeline = resolvePipeline(merged.pipeline, merged.agents, diags, scenarios, inCustom);
   for (const name of pipeline) {
@@ -616,6 +631,7 @@ function resolveConfig(layers: Layer[], opts: { flags?: Flags | undefined; readF
       },
       language: merged.language ?? 'English',
       baseBranch,
+      intake: { model: merged.intake.model ?? INTAKE.model, effort: merged.intake.effort ?? INTAKE.effort },
       repos,
       jira: { allowedProjects: merged.jira.allowedProjects ?? [] },
       policy: {
@@ -735,16 +751,41 @@ function resolveScenarios(merged: Record<string, ScenarioEntry>, drafts: Map<str
   return { scenarios: out, removed };
 }
 
+/** The custom scenarios among the merged ones: not a built-in report, not removed. */
+function customEntries(merged: Record<string, ScenarioEntry>): Record<string, ScenarioEntry & { value: CustomScenarioLayer }> {
+  return Object.fromEntries(Object.entries(merged).filter((e): e is [string, ScenarioEntry & { value: CustomScenarioLayer }] => !SCENARIO_OUTPUT[e[0]] && !!e[1].value && typeof e[1].value === 'object' && !Array.isArray(e[1].value)));
+}
+
+/** The instruction files the steps of custom scenarios name, as ops (checked and read like an agent's). */
+function stepFileOps(merged: Record<string, ScenarioEntry>): InstructionOp[] {
+  return Object.values(customEntries(merged)).flatMap((entry) =>
+    flattenSteps(entry.value.agents).flatMap(({ step: st }) => (typeof st === 'object' && st.instructions && typeof st.instructions === 'object' ? [{ mode: 'replace', file: path.resolve(entry.dir, st.instructions.file), source: entry.source, dir: entry.dir, layer: entry.source }] : []))
+  );
+}
+
 /**
- * Custom scenarios: `{ id: { id, label, description, kind, agents: [{ name, model?, effort? }] } }`. Their kind is
+ * Custom scenarios: `{ id: { id, label, description, kind, agents: [{ name, model?, effort?, instructions? }] } }`. Their kind is
  * `deliver` when the agents change code, else the report they all write; `null` while a scenario has no agents.
  */
-function resolveCustomScenarios(merged: Record<string, ScenarioEntry>, drafts: Map<string, Draft>, agents: Record<string, Agent>, diags: Diagnostic[]): Record<string, CustomScenario> {
+function resolveCustomScenarios(merged: Record<string, ScenarioEntry>, drafts: Map<string, Draft>, agents: Record<string, Agent>, diags: Diagnostic[], read: ReadFile): Record<string, CustomScenario> {
   const out: Record<string, CustomScenario> = {};
-  for (const [id, entry] of Object.entries(merged)) {
-    if (SCENARIO_OUTPUT[id] || !entry.value || typeof entry.value !== 'object' || Array.isArray(entry.value)) continue;
+  for (const [id, entry] of Object.entries(customEntries(merged))) {
     const def = entry.value;
-    const steps: ScenarioStep[] = def.agents.map((st) => (typeof st === 'string' ? { name: st } : { name: st.agent, ...(st.model && { model: st.model }), ...(st.effort && { effort: st.effort }) }));
+    const steps: ScenarioStep[] = flattenSteps(def.agents).map(({ step: st, parallel, when, loop, approve }) => {
+      const blocks = { ...(parallel !== undefined && { parallel }), ...(when && { when }), ...(loop && { loop }), ...(approve && { approve }) };
+      if (typeof st === 'string') return { name: st, ...blocks };
+      const step: ScenarioStep = { name: st.agent, ...(st.model && { model: st.model }), ...(st.effort && { effort: st.effort }), ...blocks };
+      const ins = st.instructions;
+      if (typeof ins === 'string') return { ...step, instructions: ins.replaceAll('{{dir}}', entry.dir).trim() };
+      if (!ins) return step;
+      const file = path.resolve(entry.dir, ins.file);
+      try {
+        return { ...step, instructions: read(file).replaceAll('{{dir}}', entry.dir).trim(), instructionsFile: file };
+      } catch (e) {
+        diags.push({ level: 'error', code: 'step_instructions_unreadable', agent: st.agent, source: file, message: `cannot read what "${st.agent}" does in scenario "${id}": ${(e as Error).message}` });
+        return { ...step, instructionsFile: file };
+      }
+    });
     const seen = new Set<string>();
     const kinds = new Set<string>();
     for (const { name } of steps) {
@@ -753,10 +794,44 @@ function resolveCustomScenarios(merged: Record<string, ScenarioEntry>, drafts: M
       seen.add(name);
       if (agents[name]) kinds.add(Object.values(SCENARIO_OUTPUT).includes(agents[name]!.output) ? agents[name]!.output : 'deliver');
     }
+    blockProblems(id, steps, agents).forEach(([code, agent, message]) => diags.push({ level: 'error', code, ...(agent && { agent }), source: entry.source, message }));
     if (kinds.size > 1) {
       diags.push({ level: 'error', code: 'scenario_mixed', source: entry.source, message: `scenario "${id}" mixes agents that change code with report agents (${[...kinds].join(', ')}); keep one kind per scenario` });
     }
-    out[id] = { id, label: def.label || id, ...(def.description && { description: def.description }), kind: kinds.size ? [...kinds][0]! : null, agents: steps, source: entry.source };
+    out[id] = { id, label: def.label || id, ...(def.description && { description: def.description }), ...(def.intake && Object.keys(def.intake).length && { intake: { ...def.intake } }), kind: kinds.size ? [...kinds][0]! : null, agents: steps, source: entry.source };
+  }
+  return out;
+}
+
+/** Outputs that may run at once: they read, and write only their own report. */
+const PARALLEL_OUTPUTS: Output[] = ['verdict', 'readiness', 'audit'];
+
+/**
+ * What is wrong with the blocks of a scenario's steps, as `[code, agent, message]`: a Parallel of agents that write,
+ * a Branch on a step that does not come before it or reports no such result, a Loop that is not one block or does not
+ * end with a review.
+ */
+function blockProblems(id: string, steps: readonly ScenarioStep[], agents: Record<string, Agent>): [string, string | undefined, string][] {
+  const out: [string, string | undefined, string][] = [];
+  const output = (name: string): Output | undefined => agents[name]?.output;
+  for (const st of steps) {
+    const o = output(st.name);
+    if (st.parallel !== undefined && o && !PARALLEL_OUTPUTS.includes(o)) out.push(['parallel_writes', st.name, `scenario "${id}" runs "${st.name}" in a Parallel, but it writes ${o}: only reviewers, readiness and audit agents run at once`]);
+    if (st.when) {
+      const i = steps.indexOf(st);
+      const source = steps.findIndex((x) => x.name === st.when!.on);
+      const from = steps.findIndex((x) => sameBranch(x.when, st.when));
+      const so = output(st.when.on);
+      if (source === -1 || source >= Math.min(i, from)) out.push(['branch_source', st.name, `scenario "${id}" branches on "${st.when.on}", which is not a step before the branch`]);
+      else if (so && !conditionOutput(st.when.if).includes(so)) out.push(['branch_condition', st.name, `scenario "${id}" asks for ${describeCondition(st.when.on, st.when.if)}, but "${st.when.on}" writes ${so}`]);
+      if (st.loop || st.parallel !== undefined) out.push(['branch_nested', st.name, `scenario "${id}": a Branch holds only agents, not a Loop or a Parallel`]);
+    }
+  }
+  const looped = steps.map((st, i) => (st.loop ? i : -1)).filter((i) => i !== -1);
+  if (looped.length) {
+    if (looped[looped.length - 1]! - looped[0]! + 1 !== looped.length) out.push(['loop_twice', undefined, `scenario "${id}" has more than one Loop; it may have one`]);
+    const last = steps[looped[looped.length - 1]!]!;
+    if (output(last.name) && output(last.name) !== 'verdict') out.push(['loop_without_review', last.name, `scenario "${id}" has a Loop that ends with "${last.name}", not a reviewer: a Loop runs again until the reviewers at its end approve`]);
   }
   return out;
 }
@@ -859,6 +934,14 @@ async function instructionFileProblem(op: InstructionOp, workspace: string, home
   return null;
 }
 
+/**
+ * Why this project's config may not name `file` as instructions, or null: the check the config gets before it reads
+ * them, for what copies their text elsewhere (a backup, a library), where no check would come after it.
+ */
+async function projectInstructionsProblem(file: string, { workspace, home }: { workspace: string; home?: string | undefined }): Promise<string | null> {
+  return instructionFileProblem({ mode: 'replace', file, source: 'project', dir: path.join(workspace, CONFIG_DIR), layer: 'project' }, workspace, home ?? os.homedir());
+}
+
 /** `policy.writable` entries that open your home folder, one above it or the whole disk to sandboxed commands. */
 function tooWide(writable: string[], home: string): string[] {
   const homeDir = path.resolve(home);
@@ -882,11 +965,12 @@ async function readConfig({ workspace, home, flags }: { workspace: string; home?
   }
   // A file no layer may name is not read: it counts as one that cannot be read (an error for an agent that runs).
   const refused = new Map<string, Error>();
-  for (const op of [...merged.agents.values()].flatMap((d) => d.ops)) {
+  const ops = [...[...merged.agents.values()].flatMap((d) => d.ops), ...stepFileOps(merged.scenarios)];
+  for (const op of ops) {
     const problem = op.file !== undefined && !refused.has(op.file) ? await instructionFileProblem(op, workspace, homeDir) : null;
     if (problem) refused.set(op.file!, new Error(problem));
   }
-  const named = [...new Set([...[...merged.agents.values()].flatMap((d) => d.ops.flatMap((op) => (op.file !== undefined ? [op.file] : []))), ...(merged.context ?? [])])];
+  const named = [...new Set([...ops.flatMap((op) => (op.file !== undefined ? [op.file] : [])), ...(merged.context ?? [])])];
   const read = new Map(await Promise.all(named.map(async (f): Promise<[string, string | Error]> => [f, refused.get(f) ?? (await readBounded(f).catch((e: Error) => e))])));
   const readFile: ReadFile = (p) => {
     const v = read.get(p);
@@ -1286,15 +1370,32 @@ async function setScenario(workspace: string, scenario: string, agents: string[]
 }
 
 /**
- * Writes a custom scenario: `{ label, description?, agents: [{ name, model?, effort? }] }`. A step without its own model
- * or effort is written as the bare agent name. `oldId` renames it.
+ * Writes a custom scenario: `{ label, description?, agents: [{ name, model?, effort?, instructions?, instructionsFile? }] }`.
+ * A step without its own model, effort or instructions is written as the bare agent name. `oldId` renames it.
  */
-async function setCustomScenario(workspace: string, id: string, def: { label: string; description?: string | undefined; agents: ScenarioStep[] }, oldId?: string): Promise<string> {
-  const agents = def.agents.map((st) => (st.model || st.effort ? { agent: st.name, ...(st.model && { model: st.model }), ...(st.effort && { effort: st.effort }) } : st.name));
+async function setCustomScenario(workspace: string, id: string, def: { label: string; description?: string | undefined; agents: ScenarioStep[]; intake?: IntakeLayer | undefined }, oldId?: string): Promise<string> {
+  const agents = nestSteps(
+    def.agents.map((st): FlatStep => {
+      const instructions = stepInstructionsLayer(workspace, st);
+      const step: AgentStepLayer = st.model || st.effort || instructions ? { agent: st.name, ...(st.model && { model: st.model }), ...(st.effort && { effort: st.effort }), ...(instructions && { instructions }) } : st.name;
+      return { step, ...(st.parallel !== undefined && { parallel: st.parallel }), ...(st.when && { when: st.when }), ...(st.loop && { loop: st.loop }), ...(st.approve && { approve: st.approve }) };
+    })
+  );
   return editProjectConfig(workspace, (doc) => {
     if (oldId && oldId !== id) renameIn(doc, ['scenarios'], oldId, id);
-    writeIn(doc, ['scenarios', id], { label: def.label, description: def.description || undefined, agents });
+    const intake = def.intake && (def.intake.model || def.intake.effort) ? def.intake : undefined;
+    writeIn(doc, ['scenarios', id], { label: def.label, description: def.description || undefined, agents, intake });
   });
+}
+
+/**
+ * How config.yaml names a step's instructions: the file they are kept in when it is in this project's config folder,
+ * else the text itself (a library's file, which the project's config may not name).
+ */
+function stepInstructionsLayer(workspace: string, st: ScenarioStep): string | { file: string } | undefined {
+  if (st.instructionsFile && within(path.resolve(st.instructionsFile), path.join(workspace, CONFIG_DIR))) return { file: `./${configRelative(workspace, st.instructionsFile)}` };
+  const text = (st.instructions ?? '').trim();
+  return text || undefined;
 }
 
 /** A custom scenario is deleted; a built-in report scenario is switched off with `false` so a lower layer cannot bring it back. */
@@ -1388,6 +1489,57 @@ function ensureInstructionsFile(workspace: string, agentName: string, resolved?:
   });
 }
 
+/**
+ * A custom scenario of this project's config, with its steps' instruction files read into their text: what it reads
+ * the same wherever it goes (a backup, a library), whose folder its relative paths would not fit. A file that cannot
+ * be read, or that a project's config may not name (a credential, a file outside the workspace), stays named, and the
+ * config that gets it says so.
+ */
+async function withStepTexts(entry: CustomScenarioLayer, where: { workspace: string; home?: string | undefined }): Promise<CustomScenarioLayer> {
+  const dir = path.join(where.workspace, CONFIG_DIR);
+  const flat = await Promise.all(
+    flattenSteps(entry.agents).map(async (f): Promise<FlatStep> => {
+      const st = f.step;
+      if (typeof st === 'string' || !st.instructions || typeof st.instructions === 'string') return f;
+      const file = path.resolve(dir, st.instructions.file);
+      const text = (await projectInstructionsProblem(file, where)) ? null : await readIfThere(file).catch(() => null);
+      // Not there: it stays named, and the config that gets it says so.
+      if (text === null) return f;
+      // An empty file adds nothing: the step goes without instructions.
+      const { instructions: _file, ...rest } = st;
+      return { ...f, step: text.trim() ? { ...rest, instructions: text.trim() } : rest };
+    })
+  );
+  return { ...entry, agents: nestSteps(flat) };
+}
+
+/**
+ * Points a step of a custom scenario at its own instructions file (`.claudestrator/prompts/<scenario>/<agent>.md`),
+ * seeded with the step's text, so editing that file changes what the agent does in that scenario. A step that already
+ * keeps them in the project's config folder keeps its file. Returns the file.
+ */
+async function ensureStepInstructionsFile({ workspace, home, scenario, agent }: { workspace: string; home?: string | undefined; scenario: string; agent: string }): Promise<string> {
+  const r = await loadConfig({ workspace, home });
+  if (!r.ok) throw new Error(r.errors[0]!.message);
+  const sc = r.config.custom[scenario];
+  if (!sc) throw new Error(`There is no scenario "${scenario}"`);
+  const step = sc.agents.find((st) => st.name === agent);
+  if (!step) throw new Error(`The scenario "${sc.label}" has no step "${agent}"`);
+  const dir = path.join(workspace, CONFIG_DIR);
+  const seed = `${step.instructions ?? ''}\n`;
+  if (step.instructionsFile && within(path.resolve(step.instructionsFile), dir)) {
+    if ((await readIfThere(step.instructionsFile)) === null) await serialized(() => writeMaking(step.instructionsFile!, seed));
+    return step.instructionsFile;
+  }
+  const file = path.join(dir, PROMPTS_DIR, scenario, `${agent}.md`);
+  await withConfigRollback({ workspace, home }, async (remember) => {
+    await remember(file);
+    if ((await readIfThere(file)) === null) await writeMaking(file, seed);
+    await setCustomScenario(workspace, scenario, { label: sc.label, description: sc.description, intake: sc.intake, agents: sc.agents.map((st) => (st.name === agent ? { ...st, instructionsFile: file } : st)) });
+  });
+  return file;
+}
+
 // ---------- changes that must leave a working config ----------
 
 /** A path inside .claudestrator/, as config.yaml writes it: relative, with `/` (`./workspace.md` is `workspace.md`). */
@@ -1454,7 +1606,7 @@ const RESERVED_SCENARIOS = ['deliver', 'auto', ...Object.keys(SCENARIO_OUTPUT)];
  * Creates or changes a custom scenario. Without `id` a new one is named after its label (`Quick fix` → `quick-fix`,
  * `-2` for a taken one; a label without Latin letters gets `scenario`). Labels are unique, ignoring case. Returns the id.
  */
-async function saveCustomScenario({ workspace, home, id, label, description, agents = [] }: { workspace: string; home?: string | undefined; id?: string | undefined; label?: string | undefined; description?: string | undefined; agents?: ScenarioStep[] | undefined }): Promise<string> {
+async function saveCustomScenario({ workspace, home, id, label, description, agents = [], intake }: { workspace: string; home?: string | undefined; id?: string | undefined; label?: string | undefined; description?: string | undefined; agents?: ScenarioStep[] | undefined; intake?: IntakeLayer | undefined }): Promise<string> {
   const r = await loadConfig({ workspace, home });
   const custom = r.ok ? r.config.custom : {};
   const clean = String(label || '').trim();
@@ -1464,7 +1616,7 @@ async function saveCustomScenario({ workspace, home, id, label, description, age
   const finalId = id || idFromLabel(clean, new Set([...RESERVED_SCENARIOS, ...Object.keys(custom)]), 'scenario');
   // Some mistakes (an unknown agent, code and report agents mixed) only show once the agents resolve.
   await withConfigRollback({ workspace, home, explain: (errors) => errors.filter((e) => e.message.includes(`"${finalId}"`)) }, () =>
-    setCustomScenario(workspace, finalId, { label: clean, description: description && description.trim(), agents })
+    setCustomScenario(workspace, finalId, { label: clean, description: description && description.trim(), agents, intake })
   );
   return finalId;
 }
@@ -1549,7 +1701,7 @@ async function removeEntry(workspace: string, section: EntrySection, id: string)
  * based on another (`base`) adds to that agent's instructions and runs right after it; one based on a readiness or
  * audit agent joins that report scenario. Returns the instructions file, for the user to write.
  */
-async function addAgent({ workspace, home, name, base, description, output, model, effort }: { workspace: string; home?: string | undefined; name?: string | undefined; base?: string | undefined; description?: string | undefined; output?: Output | undefined; model?: string | undefined; effort?: Effort | undefined }): Promise<string> {
+async function addAgent({ workspace, home, name, base, description, output, model, effort, standalone = false }: { workspace: string; home?: string | undefined; name?: string | undefined; base?: string | undefined; description?: string | undefined; output?: Output | undefined; model?: string | undefined; effort?: Effort | undefined; standalone?: boolean | undefined }): Promise<string> {
   if (!name || !/^[a-z][a-z0-9-]*$/.test(name)) throw new Error('Use lowercase letters, digits and dashes, starting with a letter (e.g. security-reviewer)');
   const before = await loadConfig({ workspace, home });
   if (before.ok && before.config.agents[name]) throw new Error(`An agent called "${name}" already exists`);
@@ -1567,6 +1719,8 @@ async function addAgent({ workspace, home, name, base, description, output, mode
       ...(effort && { effort }),
       instructions: { mode: base ? 'append' : 'replace', file: `./${PROMPTS_DIR}/${name}.md` },
     });
+    // A scenario's diagram places the agent itself; anywhere else it joins the pipeline or report scenario of its kind.
+    if (standalone) return file;
     const now = await loadConfig({ workspace, home });
     if (!now.ok) return file; // the rollback reports it
     const scenario = base ? Object.keys(now.config.scenarios).find((sc) => now.config.scenarios[sc]!.includes(base)) : Object.keys(SCENARIO_OUTPUT).find((sc) => SCENARIO_OUTPUT[sc] === output);
@@ -1581,7 +1735,7 @@ async function addAgent({ workspace, home, name, base, description, output, mode
   });
 }
 
-export type { AgentLayer, ConfigLayer, EntrySection, Flags, GroupLayer, InstructionLayer, Layer, RepoLayer, ResolveResult, ScenarioStepLayer };
+export type { AgentLayer, ConfigLayer, CustomScenarioLayer, EntrySection, Flags, GroupLayer, InstructionLayer, IntakeLayer, Layer, RepoLayer, ResolveResult, ScenarioStepLayer };
 export {
   CONFIG_DIR,
   CONFIG_FILE,
@@ -1625,5 +1779,8 @@ export {
   setRepo,
   createProjectConfig,
   ensureInstructionsFile,
+  ensureStepInstructionsFile,
+  projectInstructionsProblem,
+  withStepTexts,
   writeIn,
 };

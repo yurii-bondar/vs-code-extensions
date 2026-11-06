@@ -7,7 +7,7 @@ import { replay, transition, nextAction, TASK_FILES } from './machine';
 import { deriveTaskId } from './intake';
 import type { TaskEntry } from './view';
 import type { NextAction } from './machine';
-import type { Config, Effort, EventBody, EventOf, OrchEvent, NewEvent, Pipeline, Source, TaskGroup, TaskInstruction, TaskState } from './types';
+import type { Config, Effort, EventBody, IntakeSettings, EventOf, OrchEvent, NewEvent, Pipeline, Source, TaskGroup, TaskInstruction, TaskState } from './types';
 import type { TranscriptItem } from './wire';
 
 const ORCH_DIR = '.orch';
@@ -186,6 +186,8 @@ interface StartRequest {
   config: Pick<Config, 'limits' | 'repos' | 'context' | 'git'>;
   effort?: Record<string, Effort> | undefined;
   model?: Record<string, string> | undefined;
+  stepInstructions?: Record<string, string> | undefined;
+  intake?: IntakeSettings | undefined;
 }
 
 type DispatchResult =
@@ -349,6 +351,8 @@ class TaskService {
       gitMode: (req.config.git && req.config.git.mode) || 'branch',
       ...(req.effort && Object.keys(req.effort).length && { effort: req.effort }),
       ...(req.model && Object.keys(req.model).length && { model: req.model }),
+      ...(req.stepInstructions && Object.keys(req.stepInstructions).length && { stepInstructions: req.stepInstructions }),
+      ...(req.intake && { intake: req.intake }),
       at: this.now().toISOString(),
     };
     const r = transition(null, event);

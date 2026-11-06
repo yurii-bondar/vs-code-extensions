@@ -706,7 +706,26 @@ interface Views {
       </div>
       <div class="row"><button class="btn primary sm" data-action="at-save">${icon('check')}Save</button><button class="btn sm" data-action="at-test" ${s.atlassian.connected ? '' : 'disabled'}>${icon('zap')}Test connection</button>${s.atlassian.hasToken ? `<button class="btn ghost sm danger" data-action="at-forget">Forget token</button>` : ''}</div>
       <label class="field"><span>Allowed Jira projects ${tag(['jira', 'allowedProjects'])}<span class="muted">empty = any</span></span><input class="input mono" data-change="set-list" data-path="jira.allowedProjects" value="${esc(cfg ? cfg.jira.allowedProjects.join(', ') : '')}" placeholder="CP, OPS"></label>
+      ${cfg ? intakeFields(c, cfg.intake) : ''}
     </section>`;
+  }
+
+  /**
+   * The model and effort of the agent that reads a ticket through MCP. Written only when they differ from haiku · low;
+   * a scenario can set its own on the diagram's Ticket node.
+   */
+  function intakeFields(c: ConfigData, intake: { model: string; effort: string }) {
+    const tag = projectTag(c);
+    const models = modelChoices(c.ok ? c.defaults : null).filter(([m]) => m !== 'inherit');
+    const known = models.some(([m]) => m === intake.model);
+    const modelOpts = [...models.map(([m, l]) => `<option value="${esc(m)}" ${m === intake.model ? 'selected' : ''}>${esc(l)}${m === 'haiku' ? ' (default)' : ''}</option>`), ...(known ? [] : [`<option value="${esc(intake.model)}" selected>${esc(intake.model)}</option>`])].join('');
+    const effortOpts = ALL_EFFORTS.map((e) => `<option value="${e}" ${e === intake.effort ? 'selected' : ''}>${esc(EFFORT_LABEL[e] || e)}${e === 'low' ? ' (default)' : ''}</option>`).join('');
+    return `<h4 id="sec-reading">Reading tickets through MCP</h4>
+      <p class="muted small">Text and the API token need no model. Over MCP a short agent reads each issue or page: haiku · low is enough for most tickets; a long Confluence spec reads better with sonnet. A scenario can set its own on its diagram's Ticket node.</p>
+      <div class="field-row two">
+        <label class="field"><span>Model ${tag(['intake', 'model'])}</span><select class="input" data-change="set-intake" data-path="intake.model" data-key="haiku">${modelOpts}</select></label>
+        <label class="field"><span>Effort ${tag(['intake', 'effort'])}</span><select class="input" data-change="set-intake" data-path="intake.effort" data-key="low">${effortOpts}</select></label>
+      </div>`;
   }
 
   // ---------- settings ----------
@@ -917,10 +936,11 @@ interface Views {
     s: null,
     c: null,
     details: {},
-    async enter() {
+    async enter(route) {
       $('#view')!.innerHTML = `<div class="page mcp-page" data-region="mcp"></div>`;
       this.details = {};
       await this.load();
+      if (route.section) $(`#sec-${route.section}`)?.scrollIntoView({ block: 'start' });
     },
     async load(refresh) {
       const [m, s, c] = await Promise.all([call('mcp', { refresh: Boolean(refresh) }), call('settings'), call('config')]);
@@ -983,6 +1003,10 @@ interface Views {
       'set-list': async (el) => {
         const value = el.value.split(/[\s,]+/).filter(Boolean);
         if (await save('setValue', { keyPath: el.dataset.path.split('.'), value: value.length ? value : undefined })) views.mcp.load();
+      },
+      // The default (in data-key) is written as no setting at all.
+      'set-intake': async (el) => {
+        if (await save('setValue', { keyPath: el.dataset.path.split('.'), value: el.value === el.dataset.key ? undefined : el.value }, 'Tickets read over MCP use it from the next task')) views.mcp.load();
       },
     },
     actions: {

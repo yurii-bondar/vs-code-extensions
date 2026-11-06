@@ -2,11 +2,15 @@
 import * as path from 'path';
 import { transition, passSteps, sameStep, branchName, spentOf, blockingQuestions, onlyHumanFindings, MAX_EMPTY_ROUNDS } from './machine';
 import { onRepos } from './pipeline';
+import { evaluate, stepRuns } from './conditions';
 import { describeEvent, checkpointTitle } from './describe';
 import { transcriptKey } from './engine';
 import { resultOf } from './report';
 import { parseInvocation } from './intake';
-import type { GroupType, OrchEvent, Source, StepRef, TaskState } from './types';
+import type { GroupType, OrchEvent, Source, StepRef, StepWhen, TaskState } from './types';
+
+/** A step of a branch whose condition is known already and keeps it out. */
+const skipped = (s: TaskState, when: StepWhen | undefined): boolean => Boolean(when) && evaluate(s, when!.on, when!.if) !== null && !stepRuns(s, when);
 
 import type { Card, FeedEvent, Live, PermissionRequest, Status, StepItem, TaskDetail, TaskError, TaskPush, TaskSection, TaskSource, UsageItem } from './wire';
 /** The part of the engine the UI models read. */
@@ -15,10 +19,10 @@ interface ViewEngine {
   lastError(taskId: string): TaskError | null | undefined;
   pendingPermissions(taskId: string): PermissionRequest[];
   live(taskId: string): Live | null;
-  liveCost: Map<string, number>;
+  liveCost: Map<string, Map<string, number>>;
   liveUsage: Map<string, UsageItem & { key: string }>;
-  sessions: Map<string, unknown>;
-  inTurn: Set<string>;
+  sessions: Map<string, readonly unknown[]>;
+  inTurn: ReadonlyMap<string, number>;
   svc: {
     events(taskId: string): Promise<OrchEvent[]>;
     state(taskId: string): Promise<TaskState>;
@@ -41,6 +45,7 @@ interface TaskEntry {
 const VERDICT_LABEL: Record<string, string> = { ready: 'Ready', not_ready: 'Not ready', needs_check: 'Needs a human check' };
 
 const CHECKPOINT_HINT: Record<string, string> = {
+  'approve-step': 'The scenario waits for you here. Read what the step did, then go on, or have it run again with your words.',
   'approve-plan': 'Read the plan. Approve it, or say what to change and the planner revises it.',
   'gate-failure': 'The repo checks stayed red after the agent tried to fix them.',
   'agent-failure': 'An agent stopped before finishing its report.',
@@ -151,7 +156,7 @@ function stepsOf(events: OrchEvent[], state: TaskState, { running }: { running: 
     if (tokens) st.tokens = tokens;
   }
   // The step the state still calls running: live here, or interrupted (VS Code closed, or another tool runs it).
-  for (const st of steps) if (st.kind === 'agent' && st.status === 'running' && !(state.running && sameStep(state.running, st as StepRef) && running)) st.status = state.status === 'stopped' ? 'paused' : 'interrupted';
+  for (const st of steps) if (st.kind === 'agent' && st.status === 'running' && !(state.running.some((r) => sameStep(r, st as StepRef)) && running)) st.status = state.status === 'stopped' ? 'paused' : 'interrupted';
 
   if (state.checkpoint && state.checkpoint.id !== 'confirm-push') {
     steps.push({ kind: 'human', id: state.checkpoint.id, label: checkpointTitle(state.checkpoint), status: state.status === 'stopped' ? 'paused' : 'waiting' });
@@ -160,20 +165,27 @@ function stepsOf(events: OrchEvent[], state: TaskState, { running }: { running: 
   const upcoming: StepItem[] = [];
   if (state.phase === 'intake' || state.phase === 'stages') {
     // Upcoming steps start after the running one or the one a checkpoint stopped at, or at the next one.
-    const after = state.running || (state.checkpoint && state.checkpoint.step) || null;
+    const after = state.running[0] || (state.checkpoint && state.checkpoint.step) || null;
     const current = after || state.next;
     if (state.repos.length) {
       const pass = passSteps(state);
       const i = current ? pass.findIndex((p) => p.stage === current.stage && sameStep(p, current)) : -1;
       const rest = i === -1 ? (current || state.checkpoint ? [] : pass) : pass.slice(after ? i + 1 : i);
-      for (const p of rest) upcoming.push({ kind: 'agent', agent: p.agent, repo: p.repo, round: state.review.round, status: state.next && sameStep(state.next, p) && p.stage === state.next.stage ? 'next' : 'pending' });
+      for (const p of rest) {
+        // The other members of a parallel group under way are listed above, as they started.
+        if (state.running.some((r) => sameStep(r, p)) || (state.parallel && [...state.parallel.done, ...state.parallel.failed.map((f) => f.step)].some((d) => sameStep(d, p)))) continue;
+        upcoming.push({ kind: 'agent', agent: p.agent, repo: p.repo, round: state.review.round, status: state.next && sameStep(state.next, p) && p.stage === state.next.stage ? 'next' : skipped(state, state.pipeline.stages[p.stage]!.when) ? 'skipped' : 'pending' });
+      }
       // Stages after a running review loop only show up once the loop is left.
       if (state.review.fixing && state.pipeline.reviewLoop) {
         for (const st of state.pipeline.stages.slice(state.pipeline.reviewLoop.end + 1)) upcoming.push({ kind: 'agent', agent: st.agent, perRepo: st.scope === 'repo', allRepos: st.scope === 'repos', status: 'pending' });
       }
     } else {
       const from = current ? current.stage + (after ? 1 : 0) : 0;
-      for (const st of state.pipeline.stages.slice(from)) upcoming.push({ kind: 'agent', agent: st.agent, perRepo: st.scope === 'repo', allRepos: st.scope === 'repos', status: current && st === state.pipeline.stages[current.stage] ? 'next' : 'pending' });
+      for (const st of state.pipeline.stages.slice(from)) {
+        if (state.running.some((r) => r.agent === st.agent)) continue;
+        upcoming.push({ kind: 'agent', agent: st.agent, perRepo: st.scope === 'repo', allRepos: st.scope === 'repos', status: current && st === state.pipeline.stages[current.stage] ? 'next' : skipped(state, st.when) ? 'skipped' : 'pending' });
+      }
     }
   }
   const hasRepoStages = state.pipeline.stages.some(onRepos);
@@ -223,7 +235,7 @@ function baseStatus(state: TaskState | null, { running, elsewhere, error, corrup
   }
   if (state!.status === 'stopped') return { key: 'stopped', label: state!.checkpoint ? `Stopped at: ${checkpointTitle(state!.checkpoint)}` : 'Stopped', tone: 'muted', group: 'stopped' };
   if (error) return { key: 'failed', label: 'Run failed', tone: 'error', group: 'attention' };
-  if (state!.running) return { key: 'interrupted', label: 'Interrupted', tone: 'warn', group: 'attention' };
+  if (state!.running.length) return { key: 'interrupted', label: 'Interrupted', tone: 'warn', group: 'attention' };
   return { key: 'ready', label: 'Ready to continue', tone: 'muted', group: 'stopped' };
 }
 
@@ -314,7 +326,7 @@ async function summary(engine: ViewEngine, entry: TaskEntry): Promise<Card> {
     prs: state.prs,
     branch: branchName(state),
     repos: state.repos.map((r) => r.name),
-    cost: cost + (engine.liveCost.get(taskId) || 0),
+    cost: cost + [...(engine.liveCost.get(taskId)?.values() ?? [])].reduce((a, b) => a + b, 0),
     createdAt: state.createdAt,
     updatedAt: state.updatedAt,
     progress: { done: agentSteps.filter((s) => ['done', 'skipped'].includes(s.status)).length, total: agentSteps.length },
@@ -351,7 +363,8 @@ async function detail(engine: ViewEngine, taskId: string): Promise<TaskDetail> {
     files: await engine.svc.files(taskId),
     taskDir: engine.svc.dir(taskId),
     permissions: engine.pendingPermissions(taskId),
-    canMessage: engine.sessions.has(taskId) && engine.inTurn.has(taskId),
+    // A message reaches one session: not the members of a parallel group, which work at once.
+    canMessage: engine.sessions.get(taskId)?.length === 1 && engine.inTurn.has(taskId),
     liveUsage: engine.liveUsage.get(taskId) || null,
   };
 }

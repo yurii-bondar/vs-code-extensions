@@ -28,7 +28,7 @@ async function taskScreen(screen: Record<string, unknown>, ui: Record<string, un
     taskId: 'T-1', title: 'Risk thresholds', status: { key: 'waiting', tone: 'warn', label: 'Needs you', resumable: false }, live: null, error: null, stopReason: undefined,
     round: 1, maxRounds: 2, phase: 'finish', prs: {}, branch: 'feat/T-1-risk', repos: ['api'], cost: 1, createdAt: '', updatedAt: '', steps: [], events: [], files: [], comments: [], answers: [],
     permissions: [], canMessage: false, liveUsage: null, model: {}, effort: {}, instructions: [], openFindings: [], gitMode: 'branch', auto: false, scenario: 'deliver', source: null, result: null,
-    ticket: '', pipelineEdit: null, fix: null, taskDir: '/ws/.orch/tasks/T-1', ...screen,
+    ticket: '', pipelineEdit: null, flow: [], fix: null, taskDir: '/ws/.orch/tasks/T-1', ...screen,
   };
   const S = { route: { name: 'task', taskId: 'T-1' }, overview: { defaults: null }, ui: { ...ui }, draft: {} };
   const views: Record<string, { enter(r: unknown): Promise<void>; actions: Record<string, (el: unknown) => unknown>; changes: Record<string, (el: unknown) => unknown> }> = {};

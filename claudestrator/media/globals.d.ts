@@ -1,12 +1,15 @@
 // What the dashboard scripts share. They are plain scripts loaded one after the other (markdown.js, stream.js, app.js,
-// task.js, config.js), not modules: markdown.js and stream.js set functions on `window`, app.js publishes the shell API on
-// `window.CS`, and the views register themselves there. The page is built from HTML strings and DOM events.
+// task.js, diagram-model.js, diagram-canvas.js, diagram-side.js, diagram.js, config.js), not modules: markdown.js and
+// stream.js set functions on `window`, app.js publishes the shell API on `window.CS`, the diagram-*.js scripts each a
+// `const` the next ones read (dgModel, dgCanvas, dgSide), and the views register themselves there. The page is built from HTML strings and DOM events.
 // What the host sends comes through the types of src/core/wire.ts.
 
 type Route = import('../src/core/wire').Route;
 type Overview = import('../src/core/wire').Overview;
 type DefaultsView = import('../src/core/wire').DefaultsView;
 type Chip = import('../src/core/pipeline').Chip;
+type FlowItem = import('../src/core/flow').FlowItem;
+type FlowNode = import('../src/core/flow').FlowNode;
 type Status = import('../src/core/wire').Status;
 type Live = import('../src/core/wire').Live;
 type TaskSource = import('../src/core/wire').TaskSource;
@@ -23,6 +26,8 @@ type AccountEntry = import('../src/core/wire').AccountEntry;
 type Preview = import('../src/core/wire').Preview;
 type HostMessage = import('../src/core/wire').HostMessage;
 type ScenarioStep = import('../src/core/types').ScenarioStep;
+type StepWhen = import('../src/core/types').StepWhen;
+type Condition = import('../src/core/types').Condition;
 type GitMode = import('../src/core/types').GitMode;
 type GroupType = import('../src/core/types').GroupType;
 type TaskGroup = import('../src/core/types').TaskGroup;

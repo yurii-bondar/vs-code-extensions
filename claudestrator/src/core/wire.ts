@@ -15,6 +15,7 @@ import type {
   GatesStatus,
   GitMode,
   GroupType,
+  IntakeSettings,
   Output,
   Pipeline,
   PlanMeta,
@@ -32,6 +33,7 @@ import type {
   TaskState,
 } from './types';
 import type { Chip } from './pipeline';
+import type { FlowItem } from './flow';
 
 // ---------- where the dashboard is ----------
 
@@ -442,6 +444,8 @@ export type TaskScreen = TaskDetail & {
   fix: FixSource | null;
   ticket: string;
   pipelineEdit: PipelineEdit | null;
+  /** The pipeline as its diagram draws it: where each step is, the branch taken, the round of the loop. */
+  flow: FlowItem[];
 };
 
 export interface CommentResult {
@@ -511,6 +515,8 @@ export interface SaveScenarioParams {
   label?: string | undefined;
   description?: string | undefined;
   agents?: ScenarioStep[] | undefined;
+  /** The model and effort that read its tickets, over the config's; left out: the config's. */
+  intake?: Partial<IntakeSettings> | undefined;
 }
 
 /** What "Restore from backup" did: what was written, and what was left out with the reason. */
@@ -563,6 +569,9 @@ export interface AgentSummary {
   effort: Effort | undefined;
   ownModel?: true;
   ownEffort?: true;
+  /** A custom scenario's step: what it adds to the agent's instructions, and the file they are in. */
+  instructions?: string;
+  instructionsFile?: string;
   actual: Effective;
 }
 
@@ -582,6 +591,8 @@ export interface CustomScenarioSummary {
   kind: string | null;
   /** The layer that defines it: `project`, `user` or `library:<name>`. */
   source?: string;
+  /** The model and effort that read its tickets, where it sets them over the config's. */
+  intake?: Partial<IntakeSettings>;
 }
 
 export type ConfigSummary =
@@ -817,6 +828,8 @@ export interface NewAgentParams {
   output?: Output | undefined;
   model?: string | undefined;
   effort?: Effort | undefined;
+  /** Only the agent: a scenario's diagram puts it where it goes, not the pipeline. */
+  standalone?: boolean | undefined;
 }
 
 /** Every request the page can make: its parameters and what comes back. */
@@ -837,6 +850,8 @@ export interface Rpc {
   setScenario: { params: { scenario: string; agents: string[] }; result: Void };
   newAgent: { params: NewAgentParams; result: Void };
   editInstructions: { params: { name: string }; result: Void };
+  editStepInstructions: { params: { scenario: string; agent: string }; result: Void };
+  previewScenario: { params: { agents: Pick<ScenarioStep, 'name' | 'parallel' | 'when' | 'loop' | 'approve'>[]; auto?: boolean }; result: { pipeline: Pipeline; outline: Chip[] } };
   setValue: { params: { keyPath: string[]; value: unknown }; result: Void };
   openConfig: { params: { which: string }; result: Void };
   openFile: { params: { taskId?: string; file: string; preview?: boolean }; result: unknown };

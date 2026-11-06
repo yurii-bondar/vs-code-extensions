@@ -2,7 +2,7 @@
 // for what agents hand back (plan and verdict blocks) and for config layers.
 // The on-disk formats match the claudestrator CLI and plugin, so both can work on the same tasks.
 
-import type { Audit, AuditFinding, CheckpointId, Effort, Finding, GroupType, JsonObject, OrchEvent, Output, ParseResult, PlanMeta, Readiness, ReadinessValue, ReadinessVerdict, ReportSeverity, Runs, Scenario, Severity, CriterionStatus, WorkReport } from './types';
+import type { Audit, AuditFinding, CheckpointId, Effort, Finding, GroupType, IntakeSettings, JsonObject, OrchEvent, Output, ParseResult, PlanMeta, Readiness, ReadinessValue, ReadinessVerdict, ReportSeverity, Runs, Scenario, Severity, CriterionStatus, WorkReport } from './types';
 
 import { PROTECTED_MODES } from './protected';
 const OUTPUTS: Output[] = ['plan', 'code', 'tests', 'verdict', 'readiness', 'audit'];
@@ -44,6 +44,7 @@ const SEVERITIES: Severity[] = ['blocker', 'major', 'minor'];
 
 /** Where a human must decide. Ids are shared with the CLI and the plugin. */
 const CHECKPOINT_OPTIONS: Record<CheckpointId, string[]> = {
+  'approve-step': ['approve', 'retry', 'stop'],
   'approve-plan': ['approve', 'approve-post', 'change', 'stop'],
   'gate-failure': ['retry', 'continue', 'stop'],
   'agent-failure': ['retry', 'stop'],
@@ -155,9 +156,49 @@ const AGENT_LAYER: Record<string, Check> = {
   'instructions?': instructions,
 };
 
-/** A step of a custom scenario: an agent name, or the agent with the model and effort it runs with in this scenario. */
-const SCENARIO_STEP = T.any(agentName, T.obj({ agent: agentName, 'model?': T.str(1), 'effort?': T.oneOf(EFFORTS) }));
-const CUSTOM_SCENARIO = T.obj({ 'label?': T.str(1, 60), 'description?': T.str(), agents: T.arr(SCENARIO_STEP) });
+/**
+ * A step of a custom scenario: an agent name, or the agent with the model and effort it runs with in this scenario and
+ * what it does there, after its own instructions (the text, or a file of it).
+ */
+const AGENT_STEP = T.any(agentName, T.obj({ agent: agentName, 'model?': T.str(1), 'effort?': T.oneOf(EFFORTS), 'instructions?': T.any(T.str(1), T.obj({ file: T.str(1) })) }));
+/** What a branch looks at: one result of the step it names. */
+const CONDITION: Check = (v, p) => {
+  if (kind(v) !== 'object') return [`${at(p)}: expected a condition such as { verdict: approved }, got ${kind(v)}`];
+  const keys = Object.keys(asRecord(v));
+  const shapes: Record<string, Check> = {
+    verdict: T.obj({ verdict: T.oneOf(['approved', 'changes_requested']) }),
+    severity: T.obj({ severity: T.oneOf(SEVERITIES) }),
+    readiness: T.obj({ readiness: T.oneOf(['ready', 'not_ready', 'needs_check']) }),
+    audit: T.obj({ audit: T.oneOf(REPORT_SEVERITIES) }),
+    gates: T.obj({ gates: T.oneOf(['pass', 'fail']) }),
+  };
+  const shape = keys.length === 1 && shapes[keys[0]!];
+  return shape ? shape(v, p) : [`${at(p)}: expected one of ${Object.keys(shapes).join(', ')}, got ${keys.join(', ') || 'nothing'}`];
+};
+/** Read-only agents that run at once. */
+const PARALLEL_STEP = T.obj({ parallel: T.arr(AGENT_STEP, 2) });
+/** The task waits for you after the step or block before it: `true`, or what to look at. */
+const APPROVE_STEP = T.obj({ approve: T.any(T.str(1), T.oneOf([true])) });
+const ARM_STEP: Check = (v, p) => (kind(v) === 'object' && 'approve' in asRecord(v) ? APPROVE_STEP(v, p) : AGENT_STEP(v, p));
+const BLOCKS: Record<string, Check> = {
+  parallel: PARALLEL_STEP,
+  approve: APPROVE_STEP,
+  branch: T.obj({ branch: T.obj({ on: agentName, if: CONDITION, 'then?': T.arr(ARM_STEP), 'else?': T.arr(ARM_STEP) }) }),
+  loop: T.obj({ loop: T.obj({ 'rounds?': T.int(1, 20), steps: T.arr(T.any(AGENT_STEP, PARALLEL_STEP), 1) }) }),
+};
+/**
+ * A step of a custom scenario: an agent (see AGENT_STEP), or a block of them: `parallel: [a, b]`, `branch: { on, if,
+ * then, else }`, `loop: { rounds, steps }`; or `approve: <what to look at>` after one.
+ */
+const SCENARIO_STEP: Check = (v, p) => {
+  const block = kind(v) === 'object' && Object.keys(asRecord(v)).find((k) => BLOCKS[k]);
+  return block ? BLOCKS[block]!(v, p) : AGENT_STEP(v, p);
+};
+/** What reads a ticket through an MCP server when no config says otherwise: a short read, which a small model does well. */
+const INTAKE: IntakeSettings = { model: 'haiku', effort: 'low' };
+/** The model and effort that read a ticket through an MCP server. */
+const INTAKE_LAYER = T.obj({ 'model?': T.str(1), 'effort?': T.oneOf(EFFORTS) });
+const CUSTOM_SCENARIO = T.obj({ 'label?': T.str(1, 60), 'description?': T.str(), 'intake?': INTAKE_LAYER, agents: T.arr(SCENARIO_STEP) });
 
 /** `readiness` and `audit` list their agents, or are `false` when removed; any other name is a custom scenario. */
 const scenariosLayer: Check = (v, p) => {
@@ -233,6 +274,7 @@ const CONFIG_LAYER = T.obj({
   'limits?': T.obj({ 'reviewRounds?': T.int(0, 20), 'gateAttempts?': T.int(1, 20), 'budgetUsd?': T.nonNegative(), 'parallelTasks?': T.int(1, 20) }),
   'language?': T.str(1),
   'baseBranch?': BRANCH,
+  'intake?': INTAKE_LAYER,
   'repos?': T.rec(T.re(REPO_NAME, 'a repo name is letters, digits, ".", "_" and "-", e.g. api or web-app'), T.obj({ 'role?': T.str(1), 'path?': T.str(1), 'baseBranch?': BRANCH, 'gates?': GATES })),
   'jira?': T.obj({ 'allowedProjects?': T.arr(T.str(1)) }),
   // The sandbox's lists go to sandbox-runtime as its settings: a few entries each, never an unbounded list to validate.
@@ -414,11 +456,13 @@ function parseAudit(raw: unknown): ParseResult<Audit> {
 export type { Check };
 export {
   T,
+  INTAKE,
   OUTPUTS,
   SCENARIOS,
   SCENARIO_OUTPUT,
   SCENARIO_ID,
   REPORT_SEVERITIES,
+  CONDITION,
   CRITERION_STATUSES,
   SEVERITIES,
   SLUG_PATTERN,

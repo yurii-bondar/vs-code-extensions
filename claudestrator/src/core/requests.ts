@@ -1,7 +1,7 @@
 // What the dashboard page may ask the host: every request's parameters are checked here, at the boundary, so a
 // handler only ever sees the shape `Rpc` promises it.
 import * as path from 'path';
-import { T, EFFORTS, GROUP_TYPES, OUTPUTS, type Check } from './protocol';
+import { T, CONDITION, EFFORTS, GROUP_TYPES, OUTPUTS, type Check } from './protocol';
 import { MODEL_ID } from './fix';
 import type { Rpc } from './wire';
 
@@ -17,6 +17,8 @@ const anything: Check = () => [];
 const nullable = (check: Check): Check => (v, p) => (v === null ? [] : check(v, p));
 
 const id = T.str(1);
+/** The blocks a scenario's step is in: its Parallel, its Branch, its Loop. */
+const stepBlocks = { 'parallel?': T.int(1), 'when?': obj({ on: T.str(1), if: CONDITION, 'else?': T.oneOf([true]) }), 'loop?': obj({ 'rounds?': T.int(1, 20) }), 'approve?': obj({ 'text?': T.str() }) };
 const named = obj({ name: id });
 const byId = obj({ id });
 const task = obj({ taskId: id });
@@ -48,7 +50,7 @@ const PARAMS: { [M in keyof Rpc]: Check } = {
   resetAgent: named,
   setPipeline: obj({ pipeline: T.arr(T.str(1)) }),
   setScenario: obj({ scenario: id, agents: T.arr(T.str(1)) }),
-  newAgent: obj({ 'name?': T.str(), 'base?': T.str(), 'description?': T.str(), 'output?': T.oneOf(OUTPUTS), 'model?': T.str(), 'effort?': T.oneOf(EFFORTS) }),
+  newAgent: obj({ 'name?': T.str(), 'base?': T.str(), 'description?': T.str(), 'output?': T.oneOf(OUTPUTS), 'model?': T.str(), 'effort?': T.oneOf(EFFORTS), 'standalone?': T.bool() }),
   editInstructions: named,
   setValue: obj({ keyPath: T.arr(T.str(1), 1), 'value?': anything }),
   openConfig: obj({ which: id }),
@@ -95,7 +97,9 @@ const PARAMS: { [M in keyof Rpc]: Check } = {
   copy: obj({ text: T.str() }),
   preview: composer,
   start: composer,
-  saveScenario: obj({ 'id?': T.str(), 'label?': T.str(), 'description?': T.str(), 'agents?': T.arr(obj({ name: T.str(1), 'model?': T.str(), 'effort?': T.oneOf(EFFORTS) })) }),
+  saveScenario: obj({ 'id?': T.str(), 'label?': T.str(), 'description?': T.str(), 'agents?': T.arr(obj({ name: T.str(1), 'model?': T.str(), 'effort?': T.oneOf(EFFORTS), 'instructions?': T.str(), 'instructionsFile?': T.str(1), ...stepBlocks })), 'intake?': obj({ 'model?': T.str(1), 'effort?': T.oneOf(EFFORTS) }) }),
+  editStepInstructions: obj({ scenario: id, agent: T.str(1) }),
+  previewScenario: obj({ agents: T.arr(obj({ name: T.str(1), ...stepBlocks })), 'auto?': T.bool() }),
   deleteScenario: byId,
   restoreScenario: byId,
   saveGroup: obj({ 'id?': T.str(), type: T.oneOf(GROUP_TYPES), label: T.str(), 'jira?': T.str(), 'instructions?': T.str(), 'defaultInstructions?': T.arr(T.str(1)), 'baseBranch?': T.str() }),

@@ -11,8 +11,9 @@ import { exists } from './core/files';
 import * as cfg from './core/config';
 import * as backups from './core/backup';
 import * as libraries from './core/library';
-import { buildPipeline, outline, taskPipeline, fitsScenario } from './core/pipeline';
+import { buildPipeline, fixedFlow, outline, scenarioPipeline, taskPipeline, fitsScenario } from './core/pipeline';
 import { editableFrom } from './core/machine';
+import { flowOf } from './core/flow';
 import { taskRepos, taskDiff, launch, getChildEnv } from './core/git';
 import { findRepos, describeRepo, reposFromFolders, repoLayerOf, WORKSPACE_MAP, safeName } from './core/setup';
 import { expand } from './core/env';
@@ -41,10 +42,10 @@ type Handler = (params: unknown) => Promise<unknown>;
 const OUTPUT_MS = 50;
 /**
  * The dashboard's scripts, in the order they load: each uses what the ones before it put on the page (task.js the
- * transcript of stream.js). The JetBrains plugin builds its page from the same files (PageHtml.kt, `SCRIPTS`), and the
+ * transcript of stream.js, diagram.js the draft, canvas and right column of the three diagram-*.js before it). The JetBrains plugin builds its page from the same files (PageHtml.kt, `SCRIPTS`), and the
  * release script checks that it lists these, in this order.
  */
-const PAGE_SCRIPTS = ['markdown.js', 'stream.js', 'app.js', 'task.js', 'config.js'];
+const PAGE_SCRIPTS = ['markdown.js', 'stream.js', 'app.js', 'task.js', 'diagram-model.js', 'diagram-canvas.js', 'diagram-side.js', 'diagram.js', 'config.js'];
 const LANGUAGES = ['English', 'Ukrainian', 'German', 'French', 'Spanish', 'Polish', 'Portuguese', 'Italian', 'Japanese', 'Chinese'];
 
 class DashboardPanel implements RpcHandlers {
@@ -253,10 +254,10 @@ class DashboardPanel implements RpcHandlers {
         .filter(([n]) => c.agents[n])
         .map(([n, scenario, st = {}]) => {
           const a: Agent = { ...c.agents[n]!, ...(st.model && { model: st.model }), ...(st.effort && { effort: st.effort }) };
-          return { name: n, scenario, color: a.color, output: a.output, runs: a.runs, enabled: a.enabled, description: a.description, model: a.model, effort: a.effort, ...(st.model && { ownModel: true }), ...(st.effort && { ownEffort: true }), actual: effectiveFor(a, this.orch.defaults) };
+          return { name: n, scenario, color: a.color, output: a.output, runs: a.runs, enabled: a.enabled, description: a.description, model: a.model, effort: a.effort, ...(st.model && { ownModel: true }), ...(st.effort && { ownEffort: true }), ...(st.instructions && { instructions: st.instructions }), ...(st.instructionsFile && { instructionsFile: st.instructionsFile }), actual: effectiveFor(a, this.orch.defaults) };
         }),
       // Custom scenarios for the composer's menu and the Scenarios page, and the built-in ones that were removed.
-      custom: Object.values(c.custom).map((sc) => ({ id: sc.id, label: sc.label, description: sc.description, kind: sc.kind, ...(sc.source && { source: sc.source }) })),
+      custom: Object.values(c.custom).map((sc) => ({ id: sc.id, label: sc.label, description: sc.description, kind: sc.kind, ...(sc.source && { source: sc.source }), ...(sc.intake && { intake: sc.intake }) })),
       removedScenarios: c.removedScenarios,
       // Every agent, for the composer's scenario editor to add from.
       catalog: Object.values(c.agents).map((a) => ({ name: a.name, output: a.output, runs: a.runs, color: a.color, enabled: a.enabled, description: a.description })),
@@ -353,13 +354,15 @@ class DashboardPanel implements RpcHandlers {
       fix: problem ? problem.source : null,
       ticket: await engine.svc.readArtifact(taskId, 'ticket.md'),
       pipelineEdit: await this.pipelineEdit(state),
+      flow: flowOf(state),
     };
   }
 
   /** What the task's pipeline editor shows: its stages, from which one they can change, and the agents to add. */
   async pipelineEdit(state: TaskState): Promise<PipelineEdit | null> {
     const from = editableFrom(state);
-    if (from === -1) return null;
+    // A scenario's Parallel, Branch or Loop is changed in the scenario, not as this list.
+    if (from === -1 || fixedFlow(state.pipeline)) return null;
     const r = await this.orch.config();
     const agents: Record<string, Agent> = r.ok ? r.config.agents : {};
     const stages = state.pipeline.stages.map((st) => ({ agent: st.agent, output: st.output, scope: st.scope, color: agents[st.agent] && agents[st.agent]!.color }));
@@ -614,8 +617,8 @@ class DashboardPanel implements RpcHandlers {
    * Creates or changes a custom scenario. `agents`: `[{ name, model?, effort? }]`; without `id` a new one is named after
    * its label. Returns its id.
    */
-  async $saveScenario({ id, label, description, agents = [] }: SaveScenarioParams) {
-    return { id: await cfg.saveCustomScenario({ workspace: this.root, id, label, description, agents }) };
+  async $saveScenario({ id, label, description, agents = [], intake }: SaveScenarioParams) {
+    return { id: await cfg.saveCustomScenario({ workspace: this.root, id, label, description, agents, intake }) };
   }
 
   async $deleteScenario({ id }: { id: string }) {
@@ -735,8 +738,8 @@ class DashboardPanel implements RpcHandlers {
     return { moved: true, ...(await libraries.moveToLibrary({ workspace: this.root, library, agents, scenarios })) };
   }
 
-  async $newAgent({ name, base, description, output, model, effort }: NewAgentParams) {
-    const file = await cfg.addAgent({ workspace: this.root, name, base, description, output, model, effort });
+  async $newAgent({ name, base, description, output, model, effort, standalone }: NewAgentParams) {
+    const file = await cfg.addAgent({ workspace: this.root, name, base, description, output, model, effort, standalone });
     await vscode.window.showTextDocument(vscode.Uri.file(file), { viewColumn: vscode.ViewColumn.Beside });
   }
 
@@ -745,6 +748,20 @@ class DashboardPanel implements RpcHandlers {
     const r = await this.orch.config();
     if (!r.ok) throw new Error(r.errors[0]!.message);
     const file = await cfg.ensureInstructionsFile(this.root, name, r.config.agents[name]);
+    await vscode.window.showTextDocument(vscode.Uri.file(file), { viewColumn: vscode.ViewColumn.Beside });
+  }
+
+  /** What a scenario with these steps would run (approvals, review loop, warnings), before it is saved. */
+  async $previewScenario({ agents, auto }: Rpc['previewScenario']['params']) {
+    const r = await this.orch.config();
+    if (!r.ok) throw new Error(r.errors[0]!.message);
+    const pipeline = scenarioPipeline(r.config, agents, { auto });
+    return { pipeline, outline: outline(pipeline) };
+  }
+
+  /** Opens what a scenario's step adds to its agent's instructions, moved into a file of its own first. */
+  async $editStepInstructions({ scenario, agent }: { scenario: string; agent: string }) {
+    const file = await cfg.ensureStepInstructionsFile({ workspace: this.root, scenario, agent });
     await vscode.window.showTextDocument(vscode.Uri.file(file), { viewColumn: vscode.ViewColumn.Beside });
   }
 

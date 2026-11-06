@@ -7,15 +7,15 @@ import { EventEmitter } from 'events';
 import { loadConfig, configPaths } from './config';
 import { exists, ownTemp, ownTempRoot } from './files';
 import { EFFORTS, REPO_NAME, SCENARIOS } from './protocol';
-import { buildPipeline, scenarioKind, taskPipeline, fitsScenario, onRepos, reposBeforePlan } from './pipeline';
-import { nextAction, runOf, artifactPath, branchName, sameStep, editableFrom, spentOf, stepRepos, unknownRepos, onlyHumanFindings, TASK_FILES, type NextAction, type RunAction } from './machine';
+import { buildPipeline, fixedFlow, scenarioKind, taskPipeline, fitsScenario, onRepos, reposBeforePlan } from './pipeline';
+import { nextAction, groupPending, runOf, artifactPath, branchName, sameStep, editableFrom, spentOf, stepRepos, unknownRepos, onlyHumanFindings, TASK_FILES, type NextAction, type RunAction } from './machine';
 import { contentAfter, humanFinding, isInstructionsOnly, isProtectedFile, refusedSettings } from './protected';
 import { parseInvocation, classifyInput, detectScenario, runIntake, renderTicket, IntakeError, extractAcceptanceCriteria, otherSite, planFromTicket, capSpec, projectAllowed } from './intake';
 import { TaskService, type DispatchResult } from './store';
 import { AS_TEXT, exec, getChildEnv, GitRepo, branchAt, taskRepos, prepareRepos, taskDiff, removeWorktrees, SLOW_GIT_MS } from './git';
 import { runGates, runShell, sandboxNote, withoutCredentials } from './gates';
 import { guardBash, inGitMetadata, inside, outsideLabel } from './guard';
-import { buildAgentPrompt, parseStageReport, lastJsonBlock, workReport, workTurn, type StageReport } from './prompt';
+import { buildAgentPrompt, parseStageReport, lastJsonBlock, withStepInstructions, workReport, workTurn, type StageReport } from './prompt';
 import { commitSubject, prTitle, prBody } from './pr';
 import { renderReport, jiraText } from './report';
 import type { Live, PermissionRequest, RepoStatus } from './wire';
@@ -30,7 +30,7 @@ import type { StageSource } from './pipeline';
 import type { RepoGates } from './gates';
 import type { TaskRepo } from './git';
 import type { BlockedRepo, CheckpointContext, CommentResult, ComposerArgs, Preview, TranscriptItem, UsageItem } from './wire';
-import type { AgentStoppedPayload, Checkpoint, Config, Effort, EventBody, EventOf, GatesStatus, Pipeline, PlanMeta, PlanRepo, ProtectedChange, ProtectedMode, Source, Spec, Step, TaskGroup, TaskInstruction, TaskState, WorkReport } from './types';
+import type { AgentStoppedPayload, Checkpoint, Config, Effort, EventBody, EventOf, GatesStatus, Pipeline, PlanMeta, PlanRepo, ProtectedChange, ProtectedMode, Source, Spec, Step, StepRef, TaskGroup, TaskInstruction, TaskState, WorkReport } from './types';
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 const REPORT_OUTPUTS = new Set(['readiness', 'audit']);
@@ -45,6 +45,14 @@ const REPORT_RETRIES = 2;
 /** What Claude Code says when its own sign-in is missing or expired (not an MCP server's). */
 const CLAUDE_AUTH = /Failed to authenticate|OAuth (session|token) (has )?expired|Invalid API key|Please run \/login|not logged in|authentication_error/i;
 const INTAKE_KEY = '0000-intake';
+/** Whose signs of work a turn is watched by: its session's transcript key, and the step whose questions count as work. */
+interface TurnWatch {
+  key: string;
+  step: StepRef;
+}
+const INTAKE_WATCH: TurnWatch = { key: INTAKE_KEY, step: { agent: 'intake' } };
+/** One session of a task, in the maps the engine keeps by task (`activity`): a key alone repeats across tasks. */
+const watchKey = (taskId: string, key: string): string => `${taskId}/${key}`;
 /**
  * MCP tools that only read, by the words of their name: it starts with a reading verb (getJiraIssue, search_code,
  * list_issues, read_file, Atlassian's discover) and no word of it writes (search_and_replace, getOrCreateIssue,
@@ -363,16 +371,22 @@ class Engine extends EventEmitter {
   sandbox: (policy: SandboxPolicy) => Launcher;
   /** Whether the sandbox started here once: it is not probed again. */
   sandboxReady = false;
-  sessions: Map<string, ClaudeSession>;
+  /** The agent sessions each task runs now: one, or one per member of a parallel group. */
+  sessions: Map<string, ClaudeSession[]>;
   /** The first pause before a turn that failed on the API side is tried again; it doubles each time. */
   retryDelayMs = RETRY_DELAY_MS;
   /** What Stop ends besides the agent: the checks of a step, a commit hook, a pre-push hook. */
   gateRuns = new Map<string, AbortController>();
   /**
-   * Tasks whose agent is working on a turn now. Between turns (its checks run, its report is read) a message would set
-   * it working where nothing waits for it: its edits would go unchecked into the next stage.
+   * Tasks whose agents are working on a turn now, with how many (the members of a parallel group each have one).
+   * Between turns (its checks run, its report is read) a message would set it working where nothing waits for it: its
+   * edits would go unchecked into the next stage.
    */
-  inTurn = new Set<string>();
+  inTurn = new Map<string, number>();
+  /** The review diffs being collected, by task and file: the reviewers of a Parallel share one. */
+  reviewDiffs = new Map<string, Promise<{ path: string; empty: boolean }>>();
+  /** Each task's report being written: the next write waits for it. */
+  reportWrites = new Map<string, Promise<void>>();
   /** Each running task's run, which settles once it has recorded its last event. */
   runEnds = new Map<string, Promise<void>>();
   running: Set<string>;
@@ -382,14 +396,17 @@ class Engine extends EventEmitter {
   lives: Map<string, Live>;
   errors: Map<string, { code: string; message: string; blocked?: BlockedRepo[]; at: string }>;
   permissions: Map<string, { request: PermissionRequest; resolve: (a: PermissionAnswer) => void }>;
-  liveCost: Map<string, number>;
+  /** The cost so far of each session a task runs now, by its transcript key: recorded once the session ends. */
+  liveCost: Map<string, Map<string, number>>;
   liveUsage: Map<string, UsageItem & { key: string }>;
   /** Each account's latest 5-hour and weekly limits, as agents last saw them, by its config folder. */
   limitsBy = new Map<string, EngineLimits>();
   svc: TaskService;
   stallMs: number;
-  /** When each task's agent last showed a sign of work: any output, a tool call, a question to you. */
+  /** When each session of a task (`watchKey`) last showed a sign of work: any output, a tool call, a question to you. */
   activity = new Map<string, number>();
+  /** What each member of a task's parallel group is doing; the task shows them together. */
+  memberLives = new Map<string, Map<string, Live>>();
 
   constructor(opts: EngineOptions) {
     super();
@@ -435,6 +452,18 @@ class Engine extends EventEmitter {
     this.emit('live', { taskId, live: this.lives.get(taskId) || null });
   }
 
+  setMemberLive(taskId: string, member: string, live: Live | null): void {
+    const all = this.memberLives.get(taskId) ?? new Map<string, Live>();
+    if (live) all.set(member, live);
+    else all.delete(member);
+    if (all.size) this.memberLives.set(taskId, all);
+    else this.memberLives.delete(taskId);
+    const lives = [...all.values()];
+    if (!lives.length) return this.setLive(taskId, null);
+    // One left: its own words; several: each one's, the first's step and output followed.
+    this.setLive(taskId, lives.length === 1 ? lives[0]! : { ...lives[0]!, text: lives.map((l) => l.text).join(' · ') });
+  }
+
   live(taskId: string): Live | null {
     return this.lives.get(taskId) || null;
   }
@@ -467,12 +496,16 @@ class Engine extends EventEmitter {
     return { scenario: kind, name, ...(custom[name] && { label: custom[name]!.label }), detected: !explicit && name !== 'deliver', source };
   }
 
-  /** A custom scenario's own model and effort per agent, as `{ model: { agent: m }, effort: { agent: level } }`. */
-  scenarioDefaults(config: Config, name: string): { model: Record<string, string>; effort: Record<string, Effort> } {
+  /**
+   * A custom scenario's own model, effort and instructions per agent, as `{ model: { agent: m }, effort: { agent: level },
+   * instructions: { agent: text } }`.
+   */
+  scenarioDefaults(config: Config, name: string): { model: Record<string, string>; effort: Record<string, Effort>; instructions: Record<string, string> } {
     const steps = (config.custom && config.custom[name] && config.custom[name]!.agents) || [];
     return {
       model: Object.fromEntries(steps.filter((st) => st.model).map((st) => [st.name, st.model])) as Record<string, string>,
       effort: Object.fromEntries(steps.filter((st) => st.effort).map((st) => [st.name, st.effort])) as Record<string, Effort>,
+      instructions: Object.fromEntries(steps.filter((st) => st.instructions).map((st) => [st.name, st.instructions])) as Record<string, string>,
     };
   }
 
@@ -620,7 +653,9 @@ class Engine extends EventEmitter {
     if (!repos.ok) throw new EngineError('repos_required', repos.error);
     const defaults = this.scenarioDefaults(config, sc.name);
     const taskEffort = this.effortFor(config, pipeline, inv.effort, effort, defaults.effort);
-    const taskModel: Record<string, string> = Object.fromEntries(Object.entries(defaults.model).filter(([name]) => pipeline.stages.some((st) => st.agent === name)));
+    const inPipeline = ([name]: [string, string]): boolean => pipeline.stages.some((st) => st.agent === name);
+    const taskModel: Record<string, string> = Object.fromEntries(Object.entries(defaults.model).filter(inPipeline));
+    const stepInstructions: Record<string, string> = Object.fromEntries(Object.entries(defaults.instructions).filter(inPipeline));
     const extras = this.extras(config, group, instructions);
     const extra = [...(no.length ? [`--no ${no.join(',')}`] : []), ...(auto && !inv.auto ? ['--auto'] : []), ...(scenario && scenario !== 'auto' && !inv.scenario ? [`--scenario ${scenario}`] : [])].join(' ');
     const started = await this.svc.start({
@@ -634,6 +669,9 @@ class Engine extends EventEmitter {
       config,
       effort: taskEffort as Record<string, Effort>,
       model: taskModel,
+      stepInstructions,
+      // Only a ticket from Jira or Confluence is read by an agent.
+      ...(source.kind !== 'text' && { intake: { ...config.intake, ...(config.custom[sc.name] && config.custom[sc.name]!.intake) } }),
       ...((key || inv.key) && { taskId: key || inv.key }),
     });
     await this.svc.setCurrent(started.taskId);
@@ -769,9 +807,12 @@ class Engine extends EventEmitter {
             await this.intake(s);
             break;
           case 'run':
-          case 'running':
-            await this.runStep(s, next);
+          case 'running': {
+            const group = this.groupRuns(s, next);
+            if (group.length > 1) await this.runGroup(s, group);
+            else await this.runStep(s, next);
             break;
+          }
           case 'commit':
             await this.commit(s);
             break;
@@ -789,6 +830,31 @@ class Engine extends EventEmitter {
       this.setLive(taskId, null);
       this.emit('changed', taskId);
     }
+  }
+
+  /**
+   * The runs of a parallel group that are due with `next`: the members that run (again, after a stop or a reload) and
+   * the ones still to start. Just `next` outside a group.
+   */
+  groupRuns(s: TaskState, next: RunAction | Extract<NextAction, { kind: 'running' }>): (RunAction | Extract<NextAction, { kind: 'running' }>)[] {
+    if (s.pipeline.stages[next.step.stage]!.group === undefined) return [next];
+    const again = next.kind === 'running' ? s.running.map((step) => ({ kind: 'running' as const, step })) : [next];
+    const start = groupPending(s).filter((m) => !again.some((r) => sameStep(r.step, m))).map((m) => runOf(s, m));
+    return [...again, ...start];
+  }
+
+  /**
+   * The members of a parallel group, each in its own session at the same time. Each records its own start and end;
+   * an error of one (it did not start) is thrown once the others ended.
+   */
+  async runGroup(s: TaskState, runs: (RunAction | Extract<NextAction, { kind: 'running' }>)[]): Promise<void> {
+    const budget = (await this.config()).limits.budgetUsd;
+    const spent = budget !== undefined ? await this.spentUsd(s.taskId) : 0;
+    if (budget !== undefined && spent >= budget) return this.stopOnBudget(s.taskId, { budget, spent });
+    this.log('info', `${runs.map((r) => stepLabel(r.step)).join(', ')} work at once`, s.taskId);
+    const ended = await Promise.allSettled(runs.map((r) => this.runStep(s, r, { member: true }).finally(() => this.setMemberLive(s.taskId, stepLabel(r.step), null))));
+    const failed = ended.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+    if (failed) throw failed.reason;
   }
 
   async intake(s: TaskState): Promise<void> {
@@ -819,11 +885,11 @@ class Engine extends EventEmitter {
   emitter(taskId: string, key: string): (item: TranscriptItem) => void {
     return (item) => {
       const t = Date.now();
-      this.activity.set(taskId, t);
+      this.activity.set(watchKey(taskId, key), t);
       const stamped = { ...item, t };
       if (item.type === 'usage') this.liveUsage.set(taskId, { ...item, t, key });
       else if (item.type !== 'text_delta' && item.type !== 'thinking') this.svc.appendTranscript(taskId, key, stamped);
-      if (item.type === 'turn_end') this.liveCost.set(taskId, (item.costUsd as number | undefined) || 0);
+      if (item.type === 'turn_end') this.liveCost.set(taskId, new Map(this.liveCost.get(taskId)).set(key, (item.costUsd as number | undefined) || 0));
       this.emit('output', { taskId, key, item: stamped });
     };
   }
@@ -858,23 +924,30 @@ class Engine extends EventEmitter {
    * count) is interrupted, and the turn fails with that reason: a hung MCP server or network never keeps a task
    * "working" forever.
    */
-  async turnOf(taskId: string, session: Pick<ClaudeSession, 'turn' | 'interrupt'>): Promise<TurnResult> {
-    this.activity.set(taskId, Date.now());
-    this.inTurn.add(taskId);
+  async turnOf(taskId: string, session: Pick<ClaudeSession, 'turn' | 'interrupt'>, by: TurnWatch): Promise<TurnResult> {
+    this.activity.set(watchKey(taskId, by.key), Date.now());
+    this.inTurn.set(taskId, (this.inTurn.get(taskId) ?? 0) + 1);
     try {
-      return await this.watchTurn(taskId, session);
+      return await this.watchTurn(taskId, session, by);
     } finally {
-      this.inTurn.delete(taskId);
+      const left = (this.inTurn.get(taskId) ?? 1) - 1;
+      if (left > 0) this.inTurn.set(taskId, left);
+      else this.inTurn.delete(taskId);
     }
   }
 
-  async watchTurn(taskId: string, session: Pick<ClaudeSession, 'turn' | 'interrupt'>): Promise<TurnResult> {
+  /**
+   * Only the session's own signs of work count (`by`): another member of its parallel group, or another task, working
+   * meanwhile does not keep a hung one going. A question of its own step waiting for you counts as work.
+   */
+  async watchTurn(taskId: string, session: Pick<ClaudeSession, 'turn' | 'interrupt'>, by: TurnWatch): Promise<TurnResult> {
     let timer: NodeJS.Timeout | undefined;
+    const watch = watchKey(taskId, by.key);
     const every = Math.max(50, Math.min(30000, Math.floor(this.stallMs / 4)));
     const stalled = new Promise<true>((resolve) => {
       const check = (): void => {
-        if (this.pendingPermissions(taskId).length) this.activity.set(taskId, Date.now());
-        if (Date.now() - (this.activity.get(taskId) ?? 0) >= this.stallMs) return resolve(true);
+        if (this.pendingPermissions(taskId).some((p) => sameStep(p, by.step))) this.activity.set(watch, Date.now());
+        if (Date.now() - (this.activity.get(watch) ?? 0) >= this.stallMs) return resolve(true);
         timer = setTimeout(check, every);
       };
       timer = setTimeout(check, every);
@@ -926,7 +999,7 @@ class Engine extends EventEmitter {
     const prompt = `Read ${what} using the "${via.server}" MCP server's tools and write the ticket as your instructions say.`;
     const emitItem = this.emitter(s.taskId, INTAKE_KEY);
     emitItem({ type: 'prompt', text: prompt });
-    const agent = { name: 'intake', description: 'Reads the task source', model: 'haiku', effort: 'low' as const, instructions: INTAKE_INSTRUCTIONS, output: 'plan' };
+    const agent = { name: 'intake', description: 'Reads the task source', model: s.intake.model, effort: s.intake.effort, instructions: INTAKE_INSTRUCTIONS, output: 'plan' };
     const webHosts = await this.webHosts(s, await this.config());
     await this.guardListening();
     const hook = this.hooks.register(async ({ tool, input }) => {
@@ -945,14 +1018,14 @@ class Engine extends EventEmitter {
       this.hooks.unregister(hook.token);
       throw e;
     });
-    this.sessions.set(s.taskId, session);
+    this.addSession(s.taskId, session);
     let t: TurnResult = { ok: false, report: '' };
     try {
       if ((await this.svc.state(s.taskId)).status === 'stopped') {
         await session.interrupt();
         throw new EngineError('stopped', 'stopped');
       }
-      t = await this.turnOf(s.taskId, session);
+      t = await this.turnOf(s.taskId, session, INTAKE_WATCH);
       let parsed: RawTicket | null = null;
       for (let i = 0; ; i++) {
         if ((await this.svc.state(s.taskId)).status === 'stopped') throw new EngineError('stopped', 'stopped');
@@ -967,7 +1040,7 @@ class Engine extends EventEmitter {
         }
         if (i >= 1) throw new EngineError('fetch_failed', `could not read ${src.kind === 'jira' ? src.key : 'the page'} via ${via.server}: ${block.ok ? 'the reply has no title' : block.error}. ${t.report.slice(0, 300)}`);
         session.send(`I need the ticket as the fenced json block your instructions describe (with a title). ${block.ok ? '' : block.error}`, { from: 'orchestrator' });
-        t = await this.turnOf(s.taskId, session);
+        t = await this.turnOf(s.taskId, session, INTAKE_WATCH);
       }
       const ticket = parsed!;
       const list = (v: unknown): string[] => (Array.isArray(v) ? v.map(String).filter(Boolean) : []);
@@ -985,11 +1058,9 @@ class Engine extends EventEmitter {
       };
     } finally {
       session.close();
-      this.sessions.delete(s.taskId);
+      this.dropSession(s.taskId, session);
       this.hooks.unregister(hook.token);
-      this.liveUsage.delete(s.taskId);
-      this.liveCost.delete(s.taskId);
-      this.activity.delete(s.taskId);
+      this.sessionEnded(s.taskId, INTAKE_KEY);
       const u: SessionUsage = session.usage ? session.usage() : {};
       await this.svc.record(s.taskId, { type: 'agent_stopped', agent: 'intake', payload: { costUsd: t.costUsd || session.costUsd || 0, turns: t.turns || session.turns || 0, sessionId: t.sessionId || session.sessionId, cwd: this.workspace, transcript: INTAKE_KEY, ...(u.model && { model: u.model }), ...(u.effort && { effort: u.effort }) } });
       await this.svc.flushTranscripts();
@@ -1127,7 +1198,36 @@ class Engine extends EventEmitter {
     return spentOf(await this.svc.events(taskId));
   }
 
-  async runStep(s: TaskState, next: NextAction): Promise<void> {
+  /**
+   * The diff the reviewers of this round read, written to `reviews/r<round>/diff.patch`. The reviewers of a Parallel
+   * start at once: they share the one collected for the first of them, not each collect and write it again.
+   */
+  async reviewDiff(s: TaskState, config: Config): Promise<{ path: string; empty: boolean }> {
+    const rel = `reviews/r${s.review.round}/diff.patch`;
+    const key = `${s.taskId}/${rel}`;
+    const running = this.reviewDiffs.get(key);
+    if (running) return running;
+    const collect = (async () => {
+      const diff = await taskDiff(taskRepos(this.workspace, s, config, s.repos.map((r) => r.name)));
+      return { path: await this.svc.writeArtifact(s.taskId, rel, diff.text), empty: diff.empty };
+    })();
+    this.reviewDiffs.set(key, collect);
+    try {
+      return await collect;
+    } finally {
+      // Collected again by a later review of the round (one run again), which reads the repos as they are then.
+      this.reviewDiffs.delete(key);
+    }
+  }
+
+  /** The task's budget is spent: it stops, and no agent starts. */
+  async stopOnBudget(taskId: string, { budget, spent }: { budget: number; spent: number }): Promise<void> {
+    this.log('warn', `Budget of $${budget} spent ($${spent.toFixed(2)}); the task stopped`, taskId);
+    await this.dispatch(taskId, { type: 'stopped', reason: `budget of $${budget} spent` });
+  }
+
+  /** `member`: one of a parallel group, which shows its state next to the others' and is watched on its own. */
+  async runStep(s: TaskState, next: NextAction, { member = false }: { member?: boolean } = {}): Promise<void> {
     const taskId = s.taskId;
     const step = (next as RunAction | Extract<NextAction, { kind: 'running' }>).step;
     const config = await this.config();
@@ -1137,16 +1237,21 @@ class Engine extends EventEmitter {
     // The task's own model and effort for this agent (from its scenario or the composer) win over the configured ones.
     const override = s.effort && s.effort[step.agent];
     const model = s.model && s.model[step.agent];
-    const agent = configured && (override || model) ? { ...configured, ...(override && { effort: override }), ...(model && { model }) } : configured;
+    // What the scenario's step adds goes after the agent's own instructions, as the task started with it.
+    const extra = s.stepInstructions && s.stepInstructions[step.agent];
+    const agent = configured && {
+      ...configured,
+      ...(override && { effort: override }),
+      ...(model && { model }),
+      ...(extra && { instructions: withStepInstructions(configured.instructions, extra, s.scenarioLabel) }),
+    };
     const label = stepLabel(step);
+    const live = (l: Live | null): void => (member ? this.setMemberLive(taskId, label, l) : this.setLive(taskId, l));
 
     const budget = config.limits.budgetUsd;
     const spent = budget !== undefined ? await this.spentUsd(taskId) : 0;
-    if (budget !== undefined && spent >= budget) {
-      this.log('warn', `Budget of $${budget} spent ($${spent.toFixed(2)}); the task stopped`, taskId);
-      await this.dispatch(taskId, { type: 'stopped', reason: `budget of $${budget} spent` });
-      return;
-    }
+    // A parallel group checks it once, before its members start: each of them would stop the task.
+    if (!member && budget !== undefined && spent >= budget) return this.stopOnBudget(taskId, { budget, spent });
     const usedUp = usedUpWindow(this.limits, Date.now());
     if (usedUp) throw new EngineError('limit_reached', `${label} did not start: ${usedUp}`);
 
@@ -1155,7 +1260,7 @@ class Engine extends EventEmitter {
     let workRepos: { name: string; dir: string }[] = [];
     if (onRepos(stage)) {
       if (!this.prepared.has(taskId)) {
-        this.setLive(taskId, { phase: 'preparing', step, text: `Preparing branch ${branchName(s)}` });
+        live({ phase: 'preparing', step, text: `Preparing branch ${branchName(s)}` });
         const p = await prepareRepos(this.workspace, s, config);
         if (!p.ok) throw new EngineError(p.code, `${p.error}${p.blocked ? `: ${p.blocked.map((b) => `${b.repo} (${b.problem})`).join(', ')}` : ''}`, { blocked: p.blocked });
         this.prepared.add(taskId);
@@ -1168,9 +1273,9 @@ class Engine extends EventEmitter {
     let emptyDiff = false;
     let redChecks: string | undefined;
     if (stage.output === 'verdict' && s.repos.length) {
-      this.setLive(taskId, { phase: 'preparing', step, text: 'Collecting the diff for review' });
-      const diff = await taskDiff(taskRepos(this.workspace, s, config, s.repos.map((r) => r.name)));
-      diffPath = await this.svc.writeArtifact(taskId, `reviews/r${s.review.round}/diff.patch`, diff.text);
+      live({ phase: 'preparing', step, text: 'Collecting the diff for review' });
+      const diff = await this.reviewDiff(s, config);
+      diffPath = diff.path;
       emptyDiff = diff.empty;
       redChecks = (await this.redChecks(s)) ?? undefined;
     }
@@ -1210,7 +1315,7 @@ class Engine extends EventEmitter {
     const readRepos = REPORT_OUTPUTS.has(stage.output) || stage.output === 'plan' ? Object.values(config.repos).map((r) => ({ name: r.name, dir: path.resolve(this.workspace, r.path), baseBranch: r.baseBranch, ...(r.role && { role: r.role }) })) : [];
     let prsPath: string | undefined;
     if (stage.output === 'readiness' && s.source.kind === 'jira' && readRepos.length) {
-      this.setLive(taskId, { phase: 'preparing', step, text: `Listing the PRs on GitHub for ${s.source.key}` });
+      live({ phase: 'preparing', step, text: `Listing the PRs on GitHub for ${s.source.key}` });
       prsPath = await this.listPrs(taskId, s.source.key, readRepos);
     }
     const failed = run.mode === 'retry' ? await this.lastFailure(taskId, step) : null;
@@ -1253,7 +1358,11 @@ class Engine extends EventEmitter {
       }
     };
     await this.guardListening();
-    const hook = this.hooks.register((call) => this.decide({ taskId, step, writeRoots, runsOutside, webHosts, config, call, emitItem, propose }));
+    const hook = this.hooks.register((call) => {
+      // A tool call is a sign of work, also one of a subagent the agent started.
+      this.activity.set(watchKey(taskId, key), Date.now());
+      return this.decide({ taskId, step, writeRoots, runsOutside, webHosts, config, call, emitItem, propose });
+    });
     let session: ClaudeSession;
     try {
       session = await this.runner.start({
@@ -1276,7 +1385,7 @@ class Engine extends EventEmitter {
           if (item.type === 'tool_result' && item.isError) noteRefused(item.text);
         },
       }),
-      onActivity: () => this.activity.set(taskId, Date.now()),
+      onActivity: () => this.activity.set(watchKey(taskId, key), Date.now()),
       onWarn: (message) => this.log('warn', `${label}: ${message}`, taskId),
       // The account the session started under: switching accounts meanwhile does not move its limits to the other.
       onLimits: ((account) => (limits: EngineLimits) => {
@@ -1292,8 +1401,8 @@ class Engine extends EventEmitter {
       await fail(`the agent did not start: ${(e as Error).message}`);
       return;
     }
-    this.sessions.set(taskId, session);
-    this.setLive(taskId, { phase: 'agent', step, key, text: `${label} is working` });
+    this.addSession(taskId, session);
+    live({ phase: 'agent', step, key, text: `${label} is working` });
 
     let t: TurnResult = { ok: false, report: '' };
     const stopped = async (): Promise<boolean> => (await this.svc.state(taskId)).status === 'stopped';
@@ -1311,15 +1420,15 @@ class Engine extends EventEmitter {
      * the first, one fixing red checks or one correcting its report.
      */
     const turn = async (): Promise<TurnResult | null> => {
-      let r = await this.turnOf(taskId, session);
+      let r = await this.turnOf(taskId, session, { key, step });
       if (await stopped()) return null;
       for (let n = 1; !r.ok && n <= TRANSIENT_RETRIES && transientError(r.error) && !session.ended; n++) {
         const wait = this.retryDelayMs * 2 ** (n - 1);
         this.log('warn', `${label}: ${r.error}; trying again in ${Math.round(wait / 1000)}s`, taskId);
-        this.setLive(taskId, { phase: 'agent', step, key, text: `${label} waits ${Math.round(wait / 1000)}s after an API error` });
+        live({ phase: 'agent', step, key, text: `${label} waits ${Math.round(wait / 1000)}s after an API error` });
         if (await this.pause(taskId, wait)) return null;
         say('The last request failed on the API side. Continue where you left off; what you did before it is kept.');
-        r = await this.turnOf(taskId, session);
+        r = await this.turnOf(taskId, session, { key, step });
         if (await stopped()) return null;
       }
       return workTurn(stage.output, r);
@@ -1350,7 +1459,7 @@ class Engine extends EventEmitter {
           this.gateRuns.set(taskId, abort);
           try {
             for (const r of targets) {
-              this.setLive(taskId, { phase: 'gates', step, key, text: `Running gates in ${r.name}` });
+              live({ phase: 'gates', step, key, text: `Running gates in ${r.name}` });
               // The checks see the repo as a commit would: without Claude Code's empty staging folders, which its
               // session makes again before its next command.
               await new GitRepo(r.dir).removeWriteStaging();
@@ -1360,7 +1469,7 @@ class Engine extends EventEmitter {
                   repo: { ...config.repos[r.name]!, baseBranch: taskRepos(this.workspace, state, config, [r.name])[0]!.base },
                   dir: r.dir,
                   logDir: path.join(taskDir, 'gates', `r${state.review.round}`),
-                  onGate: (name) => this.setLive(taskId, { phase: 'gates', step, key, text: `Gate "${name}" in ${r.name} (attempt ${attempt})` }),
+                  onGate: (name) => live({ phase: 'gates', step, key, text: `Gate "${name}" in ${r.name} (attempt ${attempt})` }),
                   signal: abort.signal,
                   launch: this.sandboxFor(config, [r.dir], { runsOutside }),
                   keepEnv: config.policy.checkEnv,
@@ -1390,7 +1499,7 @@ class Engine extends EventEmitter {
           }
           const red = runs.filter((x) => x.status === 'fail').map((x) => x.repo).join(', ');
           say(`Gates failed in ${red} (attempt ${attempt} of ${config.limits.gateAttempts}). Fix the causes below. Do not weaken, skip or delete tests or lint rules. Then reply with your full report again.\n\n${g.summary}`);
-          this.setLive(taskId, { phase: 'agent', step, key, text: `${label} is fixing red gates in ${where.includes(',') ? red : where}` });
+          live({ phase: 'agent', step, key, text: `${label} is fixing red gates in ${where.includes(',') ? red : where}` });
           const fixed = await turn();
           if (!fixed) return;
           t = fixed;
@@ -1437,7 +1546,7 @@ class Engine extends EventEmitter {
       };
       let parsed = await check();
       for (let i = 0; !parsed.ok && i < REPORT_RETRIES; i++) {
-        this.setLive(taskId, { phase: 'agent', step, key, text: `${label} is correcting its report` });
+        live({ phase: 'agent', step, key, text: `${label} is correcting its report` });
         say(`Your report could not be read: ${parsed.error}. Reply again with the complete, corrected report.`);
         const corrected = await turn();
         if (!corrected) return;
@@ -1471,12 +1580,10 @@ class Engine extends EventEmitter {
       if (REPORT_OUTPUTS.has(stage.output)) await this.writeReport(taskId, config.language);
     } finally {
       session.close();
-      this.sessions.delete(taskId);
+      this.dropSession(taskId, session);
       this.hooks.unregister(hook.token);
-      this.denyPermissions(taskId, 'the agent session ended');
-      this.liveCost.delete(taskId);
-      this.liveUsage.delete(taskId);
-      this.activity.delete(taskId);
+      this.denyPermissions(taskId, 'the agent session ended', step);
+      this.sessionEnded(taskId, key);
       const u: SessionUsage = session.usage ? session.usage() : {};
       await this.svc.record(taskId, {
         type: 'agent_stopped',
@@ -1529,8 +1636,6 @@ class Engine extends EventEmitter {
   /** The permission policy of an agent session: the Bash guard, writes only inside the stage's repo, then (optionally) you. */
   async decide({ taskId, step, writeRoots = [], runsOutside = [], webHosts = [], config, call, emitItem, propose }: DecideArgs): Promise<Decision> {
     const { tool, input } = call;
-    // A tool call is a sign of work, also one of a subagent the agent started.
-    this.activity.set(taskId, Date.now());
     const blocked = (reason: string): Decision => {
       emitItem({ type: 'blocked', tool, reason, input: summarizeInput(tool, input) });
       this.log('info', `${stepLabel(step)}: ${tool} blocked: ${reason}`, taskId);
@@ -1640,8 +1745,32 @@ class Engine extends EventEmitter {
     return true;
   }
 
-  denyPermissions(taskId: string, message: string): void {
-    for (const [id, p] of this.permissions) if (p.request.taskId === taskId) this.permissionReply(id, false, message);
+  /** Refuses the task's open questions about a tool: of one step (its session ended), or all of them. */
+  denyPermissions(taskId: string, message: string, step?: StepRef): void {
+    for (const [id, p] of this.permissions) if (p.request.taskId === taskId && (!step || sameStep(p.request, step))) this.permissionReply(id, false, message);
+  }
+
+  addSession(taskId: string, session: ClaudeSession): void {
+    this.sessions.set(taskId, [...(this.sessions.get(taskId) ?? []), session]);
+  }
+
+  dropSession(taskId: string, session: ClaudeSession): void {
+    const left = (this.sessions.get(taskId) ?? []).filter((x) => x !== session);
+    if (left.length) this.sessions.set(taskId, left);
+    else this.sessions.delete(taskId);
+  }
+
+  /**
+   * Forgets what a session that ended (transcript `key`) showed while it ran: its cost (its `agent_stopped` has it now),
+   * its signs of work, its context usage. The other sessions of the task keep theirs.
+   */
+  sessionEnded(taskId: string, key: string): void {
+    const costs = new Map(this.liveCost.get(taskId));
+    costs.delete(key);
+    if (costs.size) this.liveCost.set(taskId, costs);
+    else this.liveCost.delete(taskId);
+    if (this.liveUsage.get(taskId)?.key === key) this.liveUsage.delete(taskId);
+    this.activity.delete(watchKey(taskId, key));
   }
 
   // ---------- finishing ----------
@@ -1820,9 +1949,21 @@ class Engine extends EventEmitter {
   }
 
   /** `report.md`: every readiness or audit agent's result in one document. */
+  /**
+   * Writes the task's report from its state as it is when the write's turn comes: the members of a parallel group end
+   * at about the same time, and one after another the last write has every member's report.
+   */
   async writeReport(taskId: string, language?: string): Promise<void> {
-    const text = renderReport(await this.svc.state(taskId), language);
-    if (text) await this.svc.writeArtifact(taskId, TASK_FILES.report, text);
+    const write = (this.reportWrites.get(taskId) ?? Promise.resolve()).catch(() => {}).then(async () => {
+      const text = renderReport(await this.svc.state(taskId), language);
+      if (text) await this.svc.writeArtifact(taskId, TASK_FILES.report, text);
+    });
+    this.reportWrites.set(taskId, write);
+    try {
+      await write;
+    } finally {
+      if (this.reportWrites.get(taskId) === write) this.reportWrites.delete(taskId);
+    }
   }
 
   /**
@@ -1939,6 +2080,8 @@ class Engine extends EventEmitter {
   async editPipeline(taskId: string, names: string[]): Promise<{ warnings: string[] }> {
     const s = await this.svc.state(taskId);
     if (editableFrom(s) === -1) throw new EngineError('pipeline_locked', 'The stages of this task are through; its pipeline can no longer change');
+    // Its Parallel, Branch and Loop are the scenario's: a list of agents would lose them.
+    if (fixedFlow(s.pipeline)) throw new EngineError('pipeline_fixed', 'This task runs a scenario with Parallel, Branch or Loop steps, which a list of agents cannot keep; change the scenario, and start a new task with it');
     const config = await this.config();
     const agents: StageSource[] = names.map((name) => {
       const kept = s.pipeline.stages.find((st) => st.agent === name);
@@ -2031,8 +2174,10 @@ class Engine extends EventEmitter {
   }
 
   sendMessage(taskId: string, text: string): void {
-    const session = this.sessions.get(taskId);
-    if (!session) throw new EngineError('no_agent', 'No agent is running for this task right now');
+    const sessions = this.sessions.get(taskId) ?? [];
+    if (!sessions.length) throw new EngineError('no_agent', 'No agent is running for this task right now');
+    if (sessions.length > 1) throw new EngineError('agents_parallel', 'Several agents of this task work at once; a message would reach only one of them. Send it when the group is through, or stop the task and say it in its retry');
+    const session = sessions[0]!;
     if (!this.inTurn.has(taskId)) throw new EngineError('agent_busy', 'The agent is not working right now (its checks run, or its report is read); send it once it works again');
     session.send(text);
   }
@@ -2044,8 +2189,7 @@ class Engine extends EventEmitter {
     this.denyPermissions(taskId, 'the task was stopped');
     const gates = this.gateRuns.get(taskId);
     if (gates) gates.abort();
-    const session = this.sessions.get(taskId);
-    if (session) await session.interrupt();
+    await Promise.all((this.sessions.get(taskId) ?? []).map((x) => x.interrupt()));
   }
 
   /**
@@ -2057,8 +2201,7 @@ class Engine extends EventEmitter {
     this.denyPermissions(taskId, 'the task was stopped');
     const gates = this.gateRuns.get(taskId);
     if (gates) gates.abort();
-    const session = this.sessions.get(taskId);
-    if (session) await session.interrupt();
+    await Promise.all((this.sessions.get(taskId) ?? []).map((x) => x.interrupt()));
   }
 
   /**
@@ -2067,7 +2210,7 @@ class Engine extends EventEmitter {
    */
   async stopAll(graceMs = 2500): Promise<void> {
     const ids = [...this.running];
-    const sessions = ids.map((id) => this.sessions.get(id)).filter((x): x is ClaudeSession => x !== undefined);
+    const sessions = ids.flatMap((id) => this.sessions.get(id) ?? []);
     await Promise.all(ids.map((id) => this.stop(id, 'VS Code closed the workspace').catch(() => {})));
     await Promise.all(sessions.map((x) => x.terminate(graceMs)));
     // Then a moment for each run to record how its session ended (its cost, where to resume it).
@@ -2079,6 +2222,19 @@ class Engine extends EventEmitter {
     if (!cp) return { format: 'markdown', text: '' };
     const read = async (rel?: string): Promise<string> => (rel ? this.svc.readArtifact(s.taskId, rel) : '');
     switch (cp.id) {
+      case 'approve-step': {
+        // What the step wrote this round (each repo's, for a per-repo step), under what the scenario asks you to look at.
+        const step = cp.step!;
+        const ask = s.pipeline.stages[step.stage]!.approve?.text;
+        // After a Parallel: every member's report.
+        const group = s.pipeline.stages[step.stage]!.group;
+        const agents = group === undefined ? [step.agent] : s.pipeline.stages.filter((st) => st.group === group).map((st) => st.agent);
+        // A step run again ("Run it again") counts with its latest report only.
+        const mine = s.artifacts.filter((a, i, all) => agents.includes(a.agent) && a.round === s.review.round && !all.slice(i + 1).some((b) => b.agent === a.agent && b.repo === a.repo && b.round === a.round));
+        const texts = await Promise.all(mine.map((a) => read(a.path)));
+        const last = mine[mine.length - 1];
+        return { format: 'markdown', text: `${ask ? `**${ask}**\n\n` : ''}${texts.join('\n\n---\n\n')}`, ...(last && { file: last.path }) };
+      }
       case 'approve-plan': {
         const plans = s.artifacts.filter((a) => a.output === 'plan');
         const last = plans[plans.length - 1];

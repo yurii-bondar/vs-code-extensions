@@ -1,7 +1,8 @@
 // The task state machine. Pure: the same events always give the same state, and an illegal
 // event (a skipped approval, an extra review round, a push before it was confirmed) is rejected.
-import { CHECKPOINT_OPTIONS, JIRA_ONLY_OPTIONS, REPO_NAME, isBlocking, isInfoEvent } from './protocol';
+import { CHECKPOINT_OPTIONS, INTAKE, JIRA_ONLY_OPTIONS, REPO_NAME, isBlocking, isInfoEvent } from './protocol';
 import { onRepos, reposBeforePlan } from './pipeline';
+import { stepRuns } from './conditions';
 import type { Checkpoint, CheckpointId, Finding, NextMode, Output, OrchEvent, PlanMeta, PlanQuestion, PlanRepo, ProtectedChange, RecordedVerdict, Stage, Step, StepRef, TaskState, Transition } from './types';
 
 /** The event of one type: `Ev<'stopped'>`. */
@@ -51,11 +52,18 @@ function transition(state: TaskState | null, event: OrchEvent): Transition {
     case 'stage_completed':
       return stageCompleted(s, event);
     case 'stage_failed': {
-      if (!s.running || !sameStep(s.running, event)) return fail('not_running', `${describe(event)} is not running`);
-      const step = s.running;
-      s.running = null;
+      const at = s.running.findIndex((r) => sameStep(r, event));
+      if (at === -1) return fail('not_running', `${describe(event)} is not running`);
+      const step = s.running[at]!;
+      s.running.splice(at, 1);
       // What it changed of the settings before it failed is not lost: it comes up when the step ends well.
       if (event.protectedChanges && event.protectedChanges.length) s.proposed = mergeProposed(s.proposed ?? [], event.protectedChanges);
+      // A member of a parallel group: the others finish first, then you are asked.
+      if (s.parallel && s.pipeline.stages[step.stage]!.group === s.parallel.id) {
+        s.parallel.failed.push({ step, error: event.error, ...(event.blocked && { blocked: true as const }) });
+        settleGroup(s, event.at);
+        return ok(s);
+      }
       openCheckpoint(s, 'agent-failure', { at: event.at, step, reason: event.error, ...(event.blocked && { blocked: true }) });
       return ok(s);
     }
@@ -118,6 +126,10 @@ function created(e: Ev<'task_created'>): TaskState {
     effort: e.effort ?? {},
     /** Model per agent for this task (a custom scenario's own); it wins over the agents' configured model. */
     model: e.model ?? {},
+    /** What a custom scenario's steps add to their agents' instructions. */
+    stepInstructions: e.stepInstructions ?? {},
+    /** Logs written before it was set read their tickets as Claudestrator always did. */
+    intake: e.intake ?? { ...INTAKE },
     limits: e.limits,
     status: 'active',
     phase: 'intake',
@@ -125,9 +137,10 @@ function created(e: Ev<'task_created'>): TaskState {
     next: null,
     nextMode: 'initial',
     feedback: null,
-    running: null,
+    running: [],
     checkpoint: null,
-    review: { round: 1, maxRounds: e.limits.reviewRounds, fixing: false, fixRepos: [], emptyRounds: 0, verdicts: [], lastVerdicts: [], openFindings: [] },
+    // A scenario's own Loop says how many rounds it runs; the one outputs make runs `limits.reviewRounds`.
+    review: { round: 1, maxRounds: e.pipeline.reviewLoop && e.pipeline.reviewLoop.explicit ? e.pipeline.reviewLoop.maxRounds : e.limits.reviewRounds, fixing: false, fixRepos: [], emptyRounds: 0, verdicts: [], lastVerdicts: [], openFindings: [] },
     finishStep: null,
     gateFailures: [],
     artifacts: [],
@@ -170,24 +183,31 @@ function intakeCompleted(s: TaskState, e: Ev<'intake_completed'>): Transition {
   }
   s.spec = e.spec;
   s.phase = 'stages';
-  setNext(s, passSteps(s)[0] ?? null, 'initial');
+  setNext(s, firstRunnable(s, passSteps(s), 0), 'initial');
   return ok(s);
 }
 
 function stageStarted(s: TaskState, e: Ev<'stage_started'>): Transition {
   if (s.phase !== 'stages') return fail('not_in_stages', `no stage can start during ${s.phase}`);
-  if (s.running) return fail('already_running', `${describe(s.running)} is still running`);
+  // Members of a parallel group start in any order, while the others run.
+  const mate = groupPending(s).find((m) => sameStep(m, e));
+  if (s.running.length) {
+    if (!mate) return fail('already_running', `${describe(s.running[0]!)} is still running`);
+    startStep(s, mate);
+    return ok(s);
+  }
   if (!s.next) return fail('nothing_next', 'no stage is due');
-  if (!sameStep(s.next, e)) return fail('wrong_stage', `expected ${describe(s.next)}, got ${describe(e)}`);
-  s.running = s.next;
+  if (!sameStep(s.next, e) && !mate) return fail('wrong_stage', `expected ${describe(s.next)}, got ${describe(e)}`);
+  startStep(s, mate ?? s.next);
   s.next = null;
   // The feedback stays with the running step until it ends: run again after a Stop or a reload, it still has it.
   return ok(s);
 }
 
 function stageCompleted(s: TaskState, e: Ev<'stage_completed'>): Transition {
-  if (!s.running || !sameStep(s.running, e)) return fail('not_running', `${describe(e)} is not running`);
-  const step = s.running;
+  const at = s.running.findIndex((r) => sameStep(r, e));
+  if (at === -1) return fail('not_running', `${describe(e)} is not running`);
+  const step = s.running[at]!;
   const stage = s.pipeline.stages[step.stage]!;
   delete s.lastFailure;
 
@@ -200,8 +220,10 @@ function stageCompleted(s: TaskState, e: Ev<'stage_completed'>): Transition {
   if (stage.output === 'readiness' && !e.readiness) return fail('readiness_required', `readiness stage "${step.agent}" must report its criteria`);
   if (stage.output === 'audit' && !e.audit) return fail('audit_required', `audit stage "${step.agent}" must report its findings`);
 
-  s.running = null;
+  s.running.splice(at, 1);
   s.artifacts.push({ agent: step.agent, ...(step.repo && { repo: step.repo }), round: s.review.round, output: stage.output, path: e.artifact, at: e.at });
+  // Its checks as they are now: red ones you went on past are no longer red once it ends without (a later round's run).
+  if (e.gates !== 'fail') s.gateFailures = s.gateFailures.filter((g) => !sameStep(g, step));
 
   switch (stage.output) {
     case 'plan':
@@ -211,7 +233,7 @@ function stageCompleted(s: TaskState, e: Ev<'stage_completed'>): Transition {
       s.repos = e.plan!.repos.filter((r, i, all) => all.findIndex((x) => x.name === r.name) === i);
       // A question only you can answer stops the plan, also where it is not approved by hand (a task on auto).
       if (stage.approval || blockingQuestions(s.plan).length) openPlanApproval(s, step, e.at);
-      else advance(s, step);
+      else advance(s, step, e.at);
       return ok(s);
     case 'code':
     case 'tests':
@@ -221,14 +243,16 @@ function stageCompleted(s: TaskState, e: Ev<'stage_completed'>): Transition {
       return ok(s);
     case 'verdict':
       s.review.verdicts.push({ agent: step.agent, artifact: e.artifact, status: e.verdict!.status, findings: e.verdict!.findings, ...(e.emptyDiff && { emptyDiff: true }) });
-      if (s.pipeline.reviewLoop && s.pipeline.reviewLoop.end === step.stage) evaluateRound(s, e.at);
-      else advance(s, step);
+      if (inGroup(s, step)) memberDone(s, step, e.at);
+      else if (s.pipeline.reviewLoop && s.pipeline.reviewLoop.end === step.stage) evaluateRound(s, e.at, step);
+      else advance(s, step, e.at);
       return ok(s);
     case 'readiness':
     case 'audit':
       // One report per agent; a retried agent replaces its earlier one.
       s.reports = [...(s.reports || []).filter((r) => r.agent !== step.agent), { agent: step.agent, output: stage.output, artifact: e.artifact, value: e[stage.output] }];
-      advance(s, step);
+      if (inGroup(s, step)) memberDone(s, step, e.at);
+      else advance(s, step, e.at);
       return ok(s);
   }
   return fail('unknown_output', `unknown output ${stage.output as string}`);
@@ -252,9 +276,23 @@ function checkpointAnswered(s: TaskState, e: Ev<'checkpoint_answered'>): Transit
   }
 
   switch (cp.id) {
+    case 'approve-step': {
+      const step = cp.step!;
+      const loop = s.pipeline.reviewLoop;
+      if (e.option === 'retry') {
+        // Its result goes, so the run again is the one that counts.
+        s.review.verdicts = s.review.verdicts.filter((v) => v.agent !== step.agent);
+        // A per-repo stage waited after its last repo: it runs again from its first one, each repo with your words.
+        const first = passSteps(s).find((p) => p.stage === step.stage) ?? step;
+        if (step.repo) s.rerun = { stage: step.stage, feedback };
+        setNext(s, first, 'retry', feedback);
+      } else if (loop && [step, ...groupSteps(s, step)].some((m) => m.stage === loop.end)) passReview(s, false);
+      else advance(s, step, e.at, true);
+      break;
+    }
     case 'approve-plan':
       if (e.option === 'change') setNext(s, cp.step!, 'replan', feedback);
-      else advance(s, cp.step!);
+      else advance(s, cp.step!, e.at);
       break;
     case 'gate-failure':
       if (e.option === 'retry') setNext(s, cp.step!, 'retry', feedback);
@@ -278,7 +316,7 @@ function checkpointAnswered(s: TaskState, e: Ev<'checkpoint_answered'>): Transit
       else {
         // Applied (the engine wrote them before it answered) or left: either way they are no longer waiting.
         delete s.proposed;
-        advance(s, cp.step!);
+        advance(s, cp.step!, e.at);
       }
       break;
     case 'hook-failure':
@@ -301,9 +339,11 @@ function editableFrom(s: TaskState): number {
   if (s.phase === 'intake') return 0;
   if (s.phase !== 'stages') return -1;
   const { stages, reviewLoop } = s.pipeline;
-  const current = s.running || (s.checkpoint && s.checkpoint.step) || s.next;
+  const current = s.running[0] || (s.checkpoint && s.checkpoint.step) || s.next;
   let at = current ? current.stage : reviewLoop ? reviewLoop.end : stages.length - 1;
   while (stages[at]!.scope === 'repo' && at + 1 < stages.length && stages[at + 1]!.scope === 'repo') at++;
+  // A parallel group counts whole, as it runs at once.
+  while (stages[at]!.group !== undefined && at + 1 < stages.length && stages[at + 1]!.group === stages[at]!.group) at++;
   if (s.review.fixing && reviewLoop) at = Math.max(at, reviewLoop.end);
   return at + 1;
 }
@@ -413,7 +453,7 @@ function mergeProposed(was: ProtectedChange[], now: ProtectedChange[]): Protecte
 /** After a code or tests step: its changes to the repos' settings go to you first, then the task moves on. */
 function afterWork(s: TaskState, step: Step, at: string): void {
   if (s.proposed && s.proposed.length) openCheckpoint(s, 'protected-changes', { at, step });
-  else advance(s, step);
+  else advance(s, step, at);
 }
 
 /** The plan's questions only you can answer: with any, it is not approved until a new plan has none. */
@@ -425,11 +465,93 @@ function openPlanApproval(s: TaskState, step: Step, at: string): void {
   if (blockingQuestions(s.plan).length) s.checkpoint!.options = s.checkpoint!.options.filter((o) => o !== 'approve' && o !== 'approve-post');
 }
 
-function advance(s: TaskState, from: Step): void {
+/** Moves on after `from`; where the scenario says You approve after it, the task waits for you first. */
+function advance(s: TaskState, from: Step, at: string, approved = false): void {
   const pass = passSteps(s);
   const i = pass.findIndex((p) => p.stage === from.stage && sameStep(p, from));
-  const next = i >= 0 ? pass[i + 1] : undefined;
-  setNext(s, next ?? null, s.review.fixing ? 'fix' : 'initial');
+  if (!approved && i >= 0 && waitsForYou(s, from, pass.slice(i + 1))) return openApproval(s, from, at);
+  if (approved) delete s.rerun;
+  const next = i >= 0 ? firstRunnable(s, pass, i + 1) : null;
+  if (next && s.rerun && next.stage === s.rerun.stage) setNext(s, next, 'retry', s.rerun.feedback);
+  else setNext(s, next, s.review.fixing ? 'fix' : 'initial');
+}
+
+/**
+ * Whether the task waits for you after `step`: its stage says You approve, and `rest` of the pass holds no more of it
+ * (a per-repo stage waits after its last repo). A plan has its own approval.
+ */
+function waitsForYou(s: TaskState, step: Step, rest: readonly Step[]): boolean {
+  const st = s.pipeline.stages[step.stage]!;
+  return Boolean(st.approve) && st.output !== 'plan' && !rest.some((p) => p.stage === step.stage);
+}
+
+/** You approve: go on, run the step again with your words (not one of a Parallel, which runs as one), or stop. */
+function openApproval(s: TaskState, step: Step, at: string): void {
+  delete s.rerun;
+  openCheckpoint(s, 'approve-step', { at, step });
+  if (s.pipeline.stages[step.stage]!.group !== undefined) s.checkpoint!.options = s.checkpoint!.options.filter((o) => o !== 'retry');
+}
+
+/** The first step of `pass` from `from` on that runs: a step of a branch whose condition does not hold is skipped. */
+function firstRunnable(s: TaskState, pass: Step[], from: number): Step | null {
+  return pass.slice(from).find((p) => stepRuns(s, s.pipeline.stages[p.stage]!.when)) ?? null;
+}
+
+// ---------- parallel groups ----------
+
+/** The steps of the pass in the parallel group of `step`, in order; none when it is in no group. */
+function groupSteps(s: TaskState, step: Step): Step[] {
+  const id = s.pipeline.stages[step.stage]!.group;
+  if (id === undefined) return [];
+  return passSteps(s).filter((p) => s.pipeline.stages[p.stage]!.group === id);
+}
+
+const inGroup = (s: TaskState, step: Step): boolean => Boolean(s.parallel) && s.pipeline.stages[step.stage]!.group === s.parallel!.id;
+
+/**
+ * Members of the group under way (or of the one `next` opens) that may start: not running, not done, not failed. A
+ * failed one runs again only when you retry it.
+ */
+function groupPending(s: TaskState): Step[] {
+  const anchor = s.running[0] || s.next;
+  if (!anchor) return [];
+  const members = groupSteps(s, anchor);
+  const p = s.parallel;
+  return members.filter((m) => !s.running.some((r) => sameStep(r, m)) && !(p && (p.done.some((d) => sameStep(d, m)) || p.failed.some((f) => sameStep(f.step, m)))));
+}
+
+function startStep(s: TaskState, step: Step): void {
+  s.running.push(step);
+  const id = s.pipeline.stages[step.stage]!.group;
+  if (id === undefined) return;
+  if (!s.parallel || s.parallel.id !== id) s.parallel = { id, done: [], failed: [] };
+  // A failed member you retry is a member again.
+  s.parallel.failed = s.parallel.failed.filter((f) => !sameStep(f.step, step));
+}
+
+function memberDone(s: TaskState, step: Step, at: string): void {
+  s.parallel!.done.push(step);
+  settleGroup(s, at);
+}
+
+/**
+ * Once no member runs: a member that never started (the task stopped first) is next; a failure is yours to answer;
+ * else the group is through and the task goes on after it, through the review loop when the group ends it.
+ */
+function settleGroup(s: TaskState, at: string): void {
+  if (s.running.length) return;
+  const g = s.parallel!;
+  const anchor = g.done[0] || (g.failed[0] && g.failed[0].step);
+  const members = anchor ? groupSteps(s, anchor) : [];
+  const waiting = members.find((m) => !g.done.some((d) => sameStep(d, m)) && !g.failed.some((f) => sameStep(f.step, m)));
+  if (waiting) return setNext(s, waiting, s.review.fixing ? 'fix' : 'initial');
+  const failed = g.failed[0];
+  if (failed) return openCheckpoint(s, 'agent-failure', { at, step: failed.step, reason: failed.error, ...(failed.blocked && { blocked: true }) });
+  delete s.parallel;
+  const last = members[members.length - 1]!;
+  const loop = s.pipeline.reviewLoop;
+  if (loop && members.some((m) => m.stage === loop.end)) evaluateRound(s, at, last);
+  else advance(s, last, at);
 }
 
 /** Review rounds in a row with an empty diff after which the loop stops: another fix round would change nothing either. */
@@ -445,13 +567,15 @@ function onlyHumanFindings(verdicts: readonly RecordedVerdict[]): string[] | nul
   return [...new Set(blocking.map((f) => (f.repo ? `${f.repo}/${f.file}` : f.file!)))];
 }
 
-function evaluateRound(s: TaskState, at: string): void {
+function evaluateRound(s: TaskState, at: string, step: Step): void {
   const blocking = s.review.verdicts.some((v) => v.status === 'changes_requested');
   const empty = s.review.verdicts.length > 0 && s.review.verdicts.every((v) => v.emptyDiff);
   s.review.emptyRounds = empty ? s.review.emptyRounds + 1 : 0;
   const yours = blocking ? onlyHumanFindings(s.review.verdicts) : null;
-  if (!blocking) passReview(s, false);
-  else if (yours) openCheckpoint(s, 'review-limit', { at, reason: `the blocking findings are about the repos' Claude Code or VS Code settings (${yours.join(', ')}), which no agent changes: make the change yourself, then retry for another review` });
+  if (!blocking) {
+    if (waitsForYou(s, step, [])) openApproval(s, step, at);
+    else passReview(s, false);
+  } else if (yours) openCheckpoint(s, 'review-limit', { at, reason: `the blocking findings are about the repos' Claude Code or VS Code settings (${yours.join(', ')}), which no agent changes: make the change yourself, then retry for another review` });
   else if (s.review.emptyRounds >= MAX_EMPTY_ROUNDS) openCheckpoint(s, 'review-limit', { at, reason: `the diff was empty in ${s.review.emptyRounds} review rounds in a row: the agents changed nothing, so another fix round would not help` });
   else if (s.review.round < s.review.maxRounds) startFixRound(s, null);
   else openCheckpoint(s, 'review-limit', { at, reason: `round ${s.review.round} of ${s.review.maxRounds} still has blocking findings` });
@@ -469,7 +593,7 @@ function startFixRound(s: TaskState, feedback: string | null): void {
   s.review.round += 1;
   s.review.fixing = true;
   s.review.roundFeedback = feedback;
-  setNext(s, passSteps(s)[0] ?? null, 'fix', feedback);
+  setNext(s, firstRunnable(s, passSteps(s), 0), 'fix', feedback);
 }
 
 /** Leaves the loop: minors (and, if shipped anyway, the blocking findings) go to the PR body. */
@@ -481,7 +605,9 @@ function passReview(s: TaskState, shipBlocking: boolean): void {
   s.review.fixing = false;
   s.review.roundFeedback = null;
   const end = s.pipeline.reviewLoop!.end;
-  setNext(s, passSteps(s).find((p) => p.stage > end) ?? null, 'initial');
+  const pass = passSteps(s);
+  const after = pass.findIndex((p) => p.stage > end);
+  setNext(s, after === -1 ? null : firstRunnable(s, pass, after), 'initial');
 }
 
 function enterFinish(s: TaskState): void {
@@ -588,7 +714,7 @@ function nextAction(s: TaskState): NextAction {
   if (s.status === 'stopped') return { kind: 'stopped', checkpoint: s.checkpoint };
   if (s.checkpoint) return { kind: 'checkpoint', checkpoint: s.checkpoint };
   if (s.phase === 'intake') return { kind: 'intake' };
-  if (s.running) return { kind: 'running', step: s.running };
+  if (s.running.length) return { kind: 'running', step: s.running[0]! };
   const repos = s.repos.map((r) => r.name);
   if (s.phase === 'finish') {
     return s.finishStep === 'publish' ? { kind: 'publish', repos, openFindings: s.review.openFindings } : { kind: 'commit', repos };
@@ -609,7 +735,7 @@ function nextAction(s: TaskState): NextAction {
 
 /** For a step that was running when the orchestrator stopped: the run description it would have had. */
 function runOf(state: TaskState, step: Step): RunAction {
-  const probe = nextAction({ ...state, running: null, next: step, status: 'active', checkpoint: null });
+  const probe = nextAction({ ...state, running: [], next: step, status: 'active', checkpoint: null });
   if (probe.kind !== 'run') throw new Error('cannot rebuild the running step');
   return probe;
 }
@@ -651,4 +777,4 @@ function branchName(s: TaskState): string | null {
 }
 
 export type { NextAction, RunAction, SessionTotals };
-export { MAX_EMPTY_ROUNDS, blockingQuestions, onlyHumanFindings, sessionTotals, spentOf, transition, replay, canPush, passSteps, editableFrom, stepRepos, nextAction, runOf, artifactPath, branchName, sameStep, unknownRepos, TASK_FILES };
+export { MAX_EMPTY_ROUNDS, groupSteps, groupPending, blockingQuestions, onlyHumanFindings, sessionTotals, spentOf, transition, replay, canPush, passSteps, editableFrom, stepRepos, nextAction, runOf, artifactPath, branchName, sameStep, unknownRepos, TASK_FILES };
