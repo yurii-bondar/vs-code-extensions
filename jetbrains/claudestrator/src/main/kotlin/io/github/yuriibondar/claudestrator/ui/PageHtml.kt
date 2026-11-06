@@ -11,7 +11,7 @@ import java.util.Base64
  */
 object PageHtml {
     /** The VS Code page's `PAGE_SCRIPTS` (panel.ts), in its order: the release script checks the two agree. */
-    private val SCRIPTS = listOf("markdown.js", "stream.js", "app.js", "task.js", "diagram.js", "config.js")
+    private val SCRIPTS = listOf("markdown.js", "stream.js", "app.js", "task.js", "diagram-model.js", "diagram-canvas.js", "diagram-side.js", "diagram.js", "config.js")
 
     /** `sendToEngine` is the JS that hands the string `s` to the plugin (JBCefJSQuery.inject). */
     fun build(engineDir: Path, sendToEngine: String): String {

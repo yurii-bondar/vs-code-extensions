@@ -42,10 +42,10 @@ type Handler = (params: unknown) => Promise<unknown>;
 const OUTPUT_MS = 50;
 /**
  * The dashboard's scripts, in the order they load: each uses what the ones before it put on the page (task.js the
- * transcript of stream.js). The JetBrains plugin builds its page from the same files (PageHtml.kt, `SCRIPTS`), and the
+ * transcript of stream.js, diagram.js the draft, canvas and right column of the three diagram-*.js before it). The JetBrains plugin builds its page from the same files (PageHtml.kt, `SCRIPTS`), and the
  * release script checks that it lists these, in this order.
  */
-const PAGE_SCRIPTS = ['markdown.js', 'stream.js', 'app.js', 'task.js', 'diagram.js', 'config.js'];
+const PAGE_SCRIPTS = ['markdown.js', 'stream.js', 'app.js', 'task.js', 'diagram-model.js', 'diagram-canvas.js', 'diagram-side.js', 'diagram.js', 'config.js'];
 const LANGUAGES = ['English', 'Ukrainian', 'German', 'French', 'Spanish', 'Polish', 'Portuguese', 'Italian', 'Japanese', 'Chinese'];
 
 class DashboardPanel implements RpcHandlers {

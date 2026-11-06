@@ -1,5 +1,5 @@
 // Claudestrator dashboard: core (rpc, state, router, rendering helpers), the shell, home and setup.
-// Views live in task.js, diagram.js and config.js and register themselves on window.CS.views.
+// Views live in task.js, diagram.js (with the diagram-*.js before it) and config.js and register themselves on window.CS.views.
 // Rendering: each view renders named regions; live updates re-render only regions whose HTML changed,
 // and keep focus and caret, so typing is never interrupted.
 interface CustomDef {
