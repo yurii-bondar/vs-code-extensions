@@ -1367,7 +1367,7 @@ interface Views {
           <div class="row"><button class="btn ghost" data-action="open-config">${icon('edit')}config.yaml</button><button class="btn" data-action="backup-save" title="Save this project's agents, pipeline and scenarios to a file">${icon('download')}Save backup</button><button class="btn" data-action="backup-restore" title="Bring agents, pipeline and scenarios back from a backup file; ones with the same name are replaced">${icon('upload')}Restore</button><span class="menu-wrap split-btn"><button class="btn primary" data-action="sc-new">${icon('plus')}New scenario</button><button class="btn primary split-caret" data-action="eff-menu" aria-haspopup="menu" aria-label="New scenario as a list or a diagram">▾</button>
             <div class="menu sc-new-menu" role="menu">
               <button role="menuitem" data-action="sc-new">${icon('list')}<span class="sc-text"><b>List</b><span class="muted small">Agents in order, as chips. Approvals and the review loop are added from their outputs.</span></span></button>
-              <button role="menuitem" data-action="nav-diagram">${icon('branch')}<span class="sc-text"><b>Diagram <span class="chip small">new</span></b><span class="muted small">Steps on a canvas: instructions per step; parallel reviewers and branches later.</span></span></button>
+              <button role="menuitem" data-action="nav-diagram">${icon('branch')}<span class="sc-text"><b>Diagram <span class="chip small">new</span></b><span class="muted small">Steps on a canvas: instructions per step, Parallel, Branch, Loop and You approve.</span></span></button>
             </div></span></div>
         </div>
         <div class="sc-layout">
