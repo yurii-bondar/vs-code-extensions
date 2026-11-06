@@ -735,8 +735,8 @@ class DashboardPanel implements RpcHandlers {
     return { moved: true, ...(await libraries.moveToLibrary({ workspace: this.root, library, agents, scenarios })) };
   }
 
-  async $newAgent({ name, base, description, output, model, effort }: NewAgentParams) {
-    const file = await cfg.addAgent({ workspace: this.root, name, base, description, output, model, effort });
+  async $newAgent({ name, base, description, output, model, effort, standalone }: NewAgentParams) {
+    const file = await cfg.addAgent({ workspace: this.root, name, base, description, output, model, effort, standalone });
     await vscode.window.showTextDocument(vscode.Uri.file(file), { viewColumn: vscode.ViewColumn.Beside });
   }
 

@@ -202,3 +202,14 @@ test('scenario steps: a save, Open in editor and a restore keep the scenario\'s 
   await config.saveCustomScenario({ workspace: ws, home, id: 'ship', label: 'Ship', agents: sc.agents });
   assert.equal((await resolved(ws, home)).custom.ship!.intake, undefined);
 });
+
+test('scenario steps: an agent made from a diagram joins no pipeline', async () => {
+  const home = tmp('cs-steps-h-');
+  const ws = workspace('');
+  const before = await resolved(ws, home);
+  await config.addAgent({ workspace: ws, home, name: 'security-reviewer', base: 'reviewer', standalone: true });
+  const after = await resolved(ws, home);
+  assert.ok(after.agents['security-reviewer']);
+  assert.deepEqual(after.pipeline, before.pipeline);
+  assert.deepEqual(after.scenarios, before.scenarios);
+});

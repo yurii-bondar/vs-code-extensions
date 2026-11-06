@@ -1645,7 +1645,7 @@ async function removeEntry(workspace: string, section: EntrySection, id: string)
  * based on another (`base`) adds to that agent's instructions and runs right after it; one based on a readiness or
  * audit agent joins that report scenario. Returns the instructions file, for the user to write.
  */
-async function addAgent({ workspace, home, name, base, description, output, model, effort }: { workspace: string; home?: string | undefined; name?: string | undefined; base?: string | undefined; description?: string | undefined; output?: Output | undefined; model?: string | undefined; effort?: Effort | undefined }): Promise<string> {
+async function addAgent({ workspace, home, name, base, description, output, model, effort, standalone = false }: { workspace: string; home?: string | undefined; name?: string | undefined; base?: string | undefined; description?: string | undefined; output?: Output | undefined; model?: string | undefined; effort?: Effort | undefined; standalone?: boolean | undefined }): Promise<string> {
   if (!name || !/^[a-z][a-z0-9-]*$/.test(name)) throw new Error('Use lowercase letters, digits and dashes, starting with a letter (e.g. security-reviewer)');
   const before = await loadConfig({ workspace, home });
   if (before.ok && before.config.agents[name]) throw new Error(`An agent called "${name}" already exists`);
@@ -1663,6 +1663,8 @@ async function addAgent({ workspace, home, name, base, description, output, mode
       ...(effort && { effort }),
       instructions: { mode: base ? 'append' : 'replace', file: `./${PROMPTS_DIR}/${name}.md` },
     });
+    // A scenario's diagram places the agent itself; anywhere else it joins the pipeline or report scenario of its kind.
+    if (standalone) return file;
     const now = await loadConfig({ workspace, home });
     if (!now.ok) return file; // the rollback reports it
     const scenario = base ? Object.keys(now.config.scenarios).find((sc) => now.config.scenarios[sc]!.includes(base)) : Object.keys(SCENARIO_OUTPUT).find((sc) => SCENARIO_OUTPUT[sc] === output);

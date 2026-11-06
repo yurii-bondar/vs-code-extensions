@@ -48,7 +48,7 @@ const PARAMS: { [M in keyof Rpc]: Check } = {
   resetAgent: named,
   setPipeline: obj({ pipeline: T.arr(T.str(1)) }),
   setScenario: obj({ scenario: id, agents: T.arr(T.str(1)) }),
-  newAgent: obj({ 'name?': T.str(), 'base?': T.str(), 'description?': T.str(), 'output?': T.oneOf(OUTPUTS), 'model?': T.str(), 'effort?': T.oneOf(EFFORTS) }),
+  newAgent: obj({ 'name?': T.str(), 'base?': T.str(), 'description?': T.str(), 'output?': T.oneOf(OUTPUTS), 'model?': T.str(), 'effort?': T.oneOf(EFFORTS), 'standalone?': T.bool() }),
   editInstructions: named,
   setValue: obj({ keyPath: T.arr(T.str(1), 1), 'value?': anything }),
   openConfig: obj({ which: id }),

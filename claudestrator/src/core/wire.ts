@@ -825,6 +825,8 @@ export interface NewAgentParams {
   output?: Output | undefined;
   model?: string | undefined;
   effort?: Effort | undefined;
+  /** Only the agent: a scenario's diagram puts it where it goes, not the pipeline. */
+  standalone?: boolean | undefined;
 }
 
 /** Every request the page can make: its parameters and what comes back. */
