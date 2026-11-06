@@ -11,6 +11,7 @@ import * as backups from '../src/core/backup';
 import * as libraries from '../src/core/library';
 import { Engine } from '../src/core/engine';
 import { withStepInstructions } from '../src/core/prompt';
+import { buildPipeline, scenarioPipeline } from '../src/core/pipeline';
 import type { EngineOptions } from '../src/core/engine';
 
 const tmp = (prefix: string): string => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
@@ -158,4 +159,25 @@ test('scenario steps: the agent runs with the step\'s instructions after its own
   assert.match(started.agent.instructions, /\n\n## In this scenario \(Plan only\)\n\nPlan in three steps at most\.$/);
   const own = (await resolved(ws, home)).agents.planner!.instructions.trim();
   assert.ok(own && started.agent.instructions.startsWith(own), "the agent's own instructions come first");
+});
+
+test('scenario steps: the editor sees the route of steps not saved yet, as a saved scenario would run', async () => {
+  const home = tmp('cs-steps-h-');
+  const ws = workspace(`agents:
+  tester: { enabled: false }
+scenarios:
+  ship:
+    label: Ship
+    agents: [planner, developer, tester, reviewer]
+`);
+  const cfg = await resolved(ws, home);
+  const steps = [{ name: 'planner' }, { name: 'developer' }, { name: 'tester' }, { name: 'reviewer' }];
+  const p = scenarioPipeline(cfg, steps);
+  assert.deepEqual(p, buildPipeline(cfg, { scenario: 'ship' }), 'the same as the saved scenario runs');
+  assert.deepEqual(p.stages.map((s) => [s.agent, s.approval]), [['planner', true], ['developer', false], ['reviewer', false]], 'a turned-off agent is left out; the plan waits for you');
+  assert.ok(p.reviewLoop);
+  assert.equal(scenarioPipeline(cfg, steps, { auto: true }).stages[0]!.approval, false);
+  assert.deepEqual(scenarioPipeline(cfg, [{ name: 'developer' }]).warnings.map((w) => w.code), ['no_plan']);
+  assert.equal(scenarioPipeline(cfg, [{ name: 'auditor' }]).mode, 'audit', 'report agents make it a report');
+  assert.equal(scenarioPipeline(cfg, []).mode, 'intake_only');
 });

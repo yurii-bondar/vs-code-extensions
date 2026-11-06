@@ -38,13 +38,21 @@ function reposBeforePlan(stages: readonly { scope: Scope; output: Output }[]): b
 function buildPipeline(config: Config, opts: { scenario?: string | undefined; auto?: boolean | undefined } = {}): Pipeline {
   const scenario = opts.scenario || 'deliver';
   const custom = config.custom && config.custom[scenario];
-  if (custom) {
-    const enabled = custom.agents.map((st) => config.agents[st.name]).filter((a): a is Agent => Boolean(a && a.enabled));
-    if (custom.kind && custom.kind !== 'deliver') return reportStages(enabled, custom.kind);
-    return routed(enabled.map(stageOf), { auto: opts.auto, maxRounds: config.limits.reviewRounds });
-  }
+  if (custom) return scenarioPipeline(config, custom.agents, opts);
   if (scenario !== 'deliver') return reportPipeline(config, scenario);
   const enabled = config.pipeline.map((n) => config.agents[n]).filter((a): a is Agent => Boolean(a && a.enabled));
+  return routed(enabled.map(stageOf), { auto: opts.auto, maxRounds: config.limits.reviewRounds });
+}
+
+/**
+ * What a custom scenario with these steps runs: the report its agents write, or a delivery routed by their outputs.
+ * Turned-off agents are left out. Also what its editor shows of steps not saved yet.
+ */
+function scenarioPipeline(config: Pick<Config, 'agents' | 'limits'>, steps: readonly { name: string }[], opts: { auto?: boolean | undefined } = {}): Pipeline {
+  const known = steps.map((st) => config.agents[st.name]).filter((a): a is Agent => Boolean(a));
+  const report = known.find((a) => REPORT_OUTPUTS.includes(a.output));
+  const enabled = known.filter((a) => a.enabled);
+  if (report) return reportStages(enabled, report.output);
   return routed(enabled.map(stageOf), { auto: opts.auto, maxRounds: config.limits.reviewRounds });
 }
 
@@ -178,4 +186,4 @@ function outline(pipeline: Pick<StoredPipeline, 'stages' | 'reviewLoop' | 'scena
 }
 
 export type { Chip, StageSource };
-export { buildPipeline, scenarioKind, taskPipeline, fitsScenario, onRepos, reposBeforePlan, outline };
+export { buildPipeline, scenarioPipeline, scenarioKind, taskPipeline, fitsScenario, onRepos, reposBeforePlan, outline };

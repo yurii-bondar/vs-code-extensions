@@ -11,7 +11,7 @@ import { exists } from './core/files';
 import * as cfg from './core/config';
 import * as backups from './core/backup';
 import * as libraries from './core/library';
-import { buildPipeline, outline, taskPipeline, fitsScenario } from './core/pipeline';
+import { buildPipeline, outline, scenarioPipeline, taskPipeline, fitsScenario } from './core/pipeline';
 import { editableFrom } from './core/machine';
 import { taskRepos, taskDiff, launch, getChildEnv } from './core/git';
 import { findRepos, describeRepo, reposFromFolders, repoLayerOf, WORKSPACE_MAP, safeName } from './core/setup';
@@ -746,6 +746,14 @@ class DashboardPanel implements RpcHandlers {
     if (!r.ok) throw new Error(r.errors[0]!.message);
     const file = await cfg.ensureInstructionsFile(this.root, name, r.config.agents[name]);
     await vscode.window.showTextDocument(vscode.Uri.file(file), { viewColumn: vscode.ViewColumn.Beside });
+  }
+
+  /** What a scenario with these steps would run (approvals, review loop, warnings), before it is saved. */
+  async $previewScenario({ agents, auto }: { agents: { name: string }[]; auto?: boolean }) {
+    const r = await this.orch.config();
+    if (!r.ok) throw new Error(r.errors[0]!.message);
+    const pipeline = scenarioPipeline(r.config, agents, { auto });
+    return { pipeline, outline: outline(pipeline) };
   }
 
   /** Opens what a scenario's step adds to its agent's instructions, moved into a file of its own first. */
