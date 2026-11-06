@@ -21,10 +21,10 @@
   const send = (msg: ClientMessage): void => vscode.postMessage(msg);
 
   const TABS: readonly { id: Tab; label: string; icon: string }[] = [
-    { id: 'hotkeys', label: 'Hotkeys', icon: '⌨' },
-    { id: 'appearance', label: 'Appearance', icon: '◐' },
-    { id: 'syntax', label: 'Syntax colors', icon: '{ }' },
-    { id: 'profiles', label: 'Profiles & backup', icon: '⇅' },
+    { id: 'hotkeys', label: 'Hotkeys', icon: '⌘' },
+    { id: 'appearance', label: 'Appearance', icon: 'Aa' },
+    { id: 'syntax', label: 'Syntax colors', icon: '{}' },
+    { id: 'profiles', label: 'Profiles & backup', icon: '↕' },
   ];
   const FONTS = ['Menlo', 'Monaco', 'SF Mono', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Source Code Pro', 'Hack', 'IBM Plex Mono', 'Roboto Mono', 'Ubuntu Mono', 'Iosevka', 'Victor Mono', 'Consolas', 'Courier New', 'monospace'];
   const WHEN = ['editorTextFocus', 'editorFocus', '!editorReadonly', 'editorHasSelection', 'terminalFocus', 'explorerViewletFocus', 'filesExplorerFocus', 'sideBarFocus', 'panelFocus', 'inputFocus', 'textInputFocus', 'inQuickOpen', 'suggestWidgetVisible', 'findWidgetVisible', "editorLangId == 'typescript'", "editorLangId == 'javascript'", "editorLangId == 'go'"];
@@ -276,44 +276,77 @@
 
   // ---------- shell ----------
 
+  /** One rail entry; a group with sub-pages opens a flyout when the rail is collapsed. */
+  function navGroupHtml(tab: Tab, subs: readonly (readonly [string, string])[]): string {
+    const t = TABS.find((x) => x.id === tab);
+    if (!t) return '';
+    const kids = subs
+      .map(([id, label]) => `<button class="nav-sub-item" data-nav="${tab}" data-sub="${esc(id)}"><span>${esc(label)}</span><span class="nav-count" data-count="${tab}:${esc(id)}"></span></button>`)
+      .join('');
+    return `<div class="nav-group" data-group="${tab}">
+      <button class="nav-item" data-nav="${tab}" title="${esc(t.label)}"><span class="nav-icon">${esc(t.icon)}</span><span class="nav-text">${esc(t.label)}</span><span class="nav-badge" data-count="${tab}"></span></button>
+      ${kids ? `<div class="nav-sub"><div class="flyout-title">${esc(t.label)}</div>${kids}</div>` : ''}
+    </div>`;
+  }
+
   function renderShell(): void {
+    const areas = S.catalog.areas.map((a) => [a.id, a.title] as const);
+    const langs = [...S.catalog.languages.map((l) => [l.id, l.title] as const), ['custom', 'Custom scopes'] as const];
     app.innerHTML = `
-      <header class="topbar">
-        <div class="brand">
-          <div class="logo">P</div>
-          <div><div class="brand-name">Personify</div><div class="brand-sub">Make VS Code yours</div></div>
+      <div class="layout">
+        <aside class="rail">
+          <div class="brand"><div class="logo">P</div><div class="brand-text"><b>Personify</b><small>Make VS Code yours</small></div></div>
+          <div class="nav-label">Customize</div>
+          <nav class="nav">
+            ${navGroupHtml('hotkeys', [])}
+            ${navGroupHtml('appearance', areas)}
+            ${navGroupHtml('syntax', langs)}
+            ${navGroupHtml('profiles', [])}
+          </nav>
+          <div class="session" id="session" title="Everything Personify has set">
+            <div class="session-head"><span class="session-dot"></span><span id="session-title">Theme defaults</span></div>
+            <div class="session-line" id="session-count"></div>
+            <div class="session-sub" id="session-target"></div>
+            <button class="btn secondary" data-session="revert" title="Undo every change made since this panel was opened">↺ Revert session</button>
+          </div>
+        </aside>
+        <div class="main">
+          <header class="topbar">
+            <div class="crumbs" id="crumbs"></div>
+            <div class="scope-bar">
+              <div class="scope-field" title="Where settings are written">
+                <span>Save to</span>
+                <div class="seg" id="scope"><button data-val="user">User</button><button data-val="workspace">Workspace</button></div>
+              </div>
+              <div class="scope-field" title="Colors can apply to every theme or only to the active one">
+                <span>Apply to</span>
+                <div class="seg" id="themeMode"><button data-val="all">All themes</button><button data-val="current">Current theme</button></div>
+              </div>
+              <span class="scope-note">ⓘ Shortcuts always save to user keybindings.json</span>
+            </div>
+          </header>
+          <main>
+            ${TABS.map((t) => `<section class="tab-panel" id="tab-${t.id}" role="tabpanel"></section>`).join('')}
+          </main>
         </div>
-        <nav class="tabs" role="tablist">
-          ${TABS.map((t) => `<button class="tab" role="tab" data-tab="${t.id}"><span class="tab-icon">${esc(t.icon)}</span>${esc(t.label)}</button>`).join('')}
-        </nav>
-        <div class="scope-bar">
-          <label class="scope-field" title="Where settings are written">
-            <span>Save to</span>
-            <select id="scope">
-              <option value="user">User · all projects</option>
-              <option value="workspace">This workspace only</option>
-            </select>
-          </label>
-          <label class="scope-field" title="Colors can apply to every theme or only to the active one">
-            <span>Apply to</span>
-            <select id="themeMode">
-              <option value="all">All themes</option>
-              <option value="current">Current theme</option>
-            </select>
-          </label>
-          <span class="scope-note">Hotkeys are always saved to your user keybindings.json</span>
-        </div>
-      </header>
-      <main>
-        ${TABS.map((t) => `<section class="tab-panel" id="tab-${t.id}" role="tabpanel"></section>`).join('')}
-      </main>
+      </div>
       <datalist id="font-list">${FONTS.map((f) => `<option value="${esc(f)}">`).join('')}</datalist>
       <datalist id="when-list">${WHEN.map((w) => `<option value="${esc(w)}">`).join('')}</datalist>
       <datalist id="cmd-list"></datalist>`;
 
-    $$('.tab', app).forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
-    $('#scope').addEventListener('change', sendPrefs);
-    $('#themeMode').addEventListener('change', sendPrefs);
+    $('.rail', app).addEventListener('click', (e) => {
+      const t = targetOf(e);
+      if (t?.closest('[data-session="revert"]')) return send({ type: 'revertSession' });
+      const item = t?.closest<HTMLElement>('[data-nav]');
+      if (item) navigate(toTab(item.dataset.nav), item.dataset.sub);
+    });
+    $('.scope-bar', app).addEventListener('click', (e) => {
+      const b = targetOf(e)?.closest<HTMLButtonElement>('.seg button');
+      const p = S.prefs;
+      if (!b || b.disabled || !p) return;
+      if (b.closest('#scope')) sendPrefs({ scope: b.dataset.val === 'workspace' ? 'workspace' : 'user', themeMode: p.themeMode });
+      else sendPrefs({ scope: p.scope, themeMode: b.dataset.val === 'current' ? 'current' : 'all' });
+    });
     wireAppearance();
     wireSyntax();
     wireHotkeys();
@@ -321,44 +354,107 @@
     showTab(S.tab);
   }
 
+  /** Opens a page; `sub` picks an appearance area or a syntax language. */
+  function navigate(tab: Tab, sub?: string): void {
+    if (tab === 'appearance' && sub && sub !== S.area) {
+      S.area = sub;
+      S.filters.appearance = '';
+      renderAppearance();
+    } else if (tab === 'syntax' && sub && sub !== S.lang) {
+      S.lang = sub;
+      S.filters.syntax = '';
+      renderSyntax();
+    }
+    showTab(tab);
+    window.scrollTo(0, 0);
+  }
+
   function showTab(tab: string | undefined): void {
     S.tab = toTab(tab);
     persist();
-    $$('.tab', app).forEach((b) => b.classList.toggle('active', b.dataset.tab === S.tab));
     $$('.tab-panel', app).forEach((p) => p.classList.toggle('active', p.id === `tab-${S.tab}`));
     app.classList.toggle('hotkeys-mode', S.tab === 'hotkeys');
+    const sub = S.tab === 'appearance' ? S.area : S.tab === 'syntax' ? S.lang : '';
+    for (const g of $$('.nav-group', app)) {
+      const on = g.dataset.group === S.tab;
+      g.classList.toggle('open', on);
+      $('.nav-item', g).classList.toggle('active', on && !$opt('.nav-sub', g));
+      $$('.nav-sub-item', g).forEach((b) => b.classList.toggle('active', on && b.dataset.sub === sub));
+    }
+    const tabLabel = TABS.find((t) => t.id === S.tab)?.label ?? '';
+    const subLabel = S.tab === 'appearance' ? S.catalog.areas.find((a) => a.id === S.area)?.title : S.tab === 'syntax' ? (S.lang === 'custom' ? 'Custom scopes' : currentLang()?.title) : undefined;
+    $('#crumbs').innerHTML = subLabel ? `<span>${esc(tabLabel)}</span><span class="crumb-sep">/</span><b>${esc(subLabel)}</b>` : `<b>${esc(tabLabel)}</b>`;
   }
 
-  function sendPrefs(): void {
+  function sendPrefs(prefs: { scope: Scope; themeMode: ThemeMode }): void {
+    const p = S.prefs;
+    if (p && p.scope === prefs.scope && p.themeMode === prefs.themeMode) return;
     // Writes still queued belong to the old target, so they go out before the switch.
     flushPending();
     S.custom = [];
-    send({
-      type: 'prefs',
-      scope: $<HTMLSelectElement>('#scope').value === 'workspace' ? 'workspace' : 'user',
-      themeMode: $<HTMLSelectElement>('#themeMode').value === 'current' ? 'current' : 'all',
-    });
+    send({ type: 'prefs', ...prefs });
   }
 
   function syncPrefs(): void {
     const p = S.prefs;
     if (!p) return;
-    const scope = $<HTMLSelectElement>('#scope');
-    scope.value = p.scope;
-    const workspace = $<HTMLOptionElement>('option[value="workspace"]', scope);
-    workspace.disabled = !p.hasWorkspace;
-    workspace.textContent = p.hasWorkspace ? 'This workspace only' : 'This workspace (open a folder first)';
-    const tm = $<HTMLSelectElement>('#themeMode');
-    tm.value = p.themeMode;
-    $('option[value="current"]', tm).textContent = `Only "${p.theme}"`;
+    const scope = $('#scope');
+    $$('button', scope).forEach((b) => b.classList.toggle('active', b.dataset.val === p.scope));
+    const workspace = $<HTMLButtonElement>('[data-val="workspace"]', scope);
+    workspace.disabled = !p.hasWorkspace && p.scope !== 'workspace';
+    workspace.title = p.hasWorkspace ? 'This workspace only (.vscode/settings.json)' : 'Open a folder first: workspace settings live in its .vscode/settings.json';
+    const tm = $('#themeMode');
+    $$('button', tm).forEach((b) => b.classList.toggle('active', b.dataset.val === p.themeMode));
+    const current = $('[data-val="current"]', tm);
+    current.textContent = p.theme;
+    current.title = `Only "${p.theme}"`;
     $$('.target-chip', app).forEach((el) => (el.innerHTML = targetChip()));
     $$('.theme-note', app).forEach((el) => el.classList.toggle('hidden', p.themeMode !== 'current'));
+    $('#session-target').textContent = `${p.scope === 'workspace' ? 'Workspace' : 'User'} settings · ${p.themeMode === 'current' ? p.theme : 'All themes'}`;
   }
 
   const targetChip = (): string =>
     S.prefs
-      ? `Saving to <b>${S.prefs.scope === 'workspace' ? 'workspace' : 'user'}</b> settings · <b>${S.prefs.themeMode === 'current' ? esc(S.prefs.theme) : 'all themes'}</b>`
+      ? `<span class="meta-chip">Writes to <b>${S.prefs.scope === 'workspace' ? 'workspace' : 'user'} settings.json</b></span><span class="meta-chip">Colors <b>${S.prefs.themeMode === 'current' ? esc(S.prefs.theme) : 'all themes'}</b></span>`
       : '';
+
+  /** Customized items per page, shown in the rail, the page heads and the session card. */
+  function updateCounts(): void {
+    const set = (sel: string, text: string): void => {
+      for (const el of $$(sel, app)) el.textContent = text;
+    };
+    let total = 0;
+    const appearance = S.appearance;
+    if (appearance) {
+      for (const area of S.catalog.areas) {
+        const items = area.groups.flatMap((g) => g.items).filter((i) => i.kind !== 'note');
+        const n = items.filter((i) => (i.kind === 'color' ? Boolean(appearance.colors[i.key]) : i.kind === 'setting' && (appearance.settings[i.key]?.value ?? null) !== null)).length;
+        total += n;
+        set(`[data-count="appearance:${area.id}"]`, n ? String(n) : '');
+        if (area.id === S.area) set('[data-changed="appearance"]', `${n} of ${items.length}`);
+      }
+    }
+    const syntax = S.syntax;
+    if (syntax) {
+      for (const lang of S.catalog.languages) {
+        const items = lang.groups.flatMap((g) => g.items);
+        const n = items.filter((i) => hasStyle(syntax.items[styleKey(lang.id, i.id)])).length;
+        total += n;
+        set(`[data-count="syntax:${lang.id}"]`, n ? String(n) : '');
+        if (lang.id === S.lang) set('[data-changed="syntax"]', `${n} of ${items.length}`);
+      }
+      const rules = S.custom.filter((c) => c.scope.trim() && hasStyle(c)).length;
+      total += rules;
+      set('[data-count="syntax:custom"]', rules ? String(rules) : '');
+      set('[data-changed="custom"]', String(rules));
+    }
+    const kb = kbView.counts.changed;
+    total += kb;
+    set('[data-count="hotkeys"]', kb ? String(kb) : '');
+    $('#session').classList.toggle('live', total > 0);
+    $('#session-title').textContent = total ? 'Applied live' : 'Theme defaults';
+    $('#session-count').textContent = total ? `${total} customization${total === 1 ? '' : 's'}` : 'Edits apply instantly and can be undone.';
+  }
 
   // ---------- appearance ----------
 
@@ -399,7 +495,7 @@
     return `<div class="row" data-kind="${item.kind}" data-key="${esc(item.key)}" data-search="${esc(search)}">
       <div class="row-label">
         <div class="label">${esc(item.label)}<span class="dot" title="Customized"></span></div>
-        <div class="desc">${hint ? `${esc(hint)} · ` : ''}<code>${esc(item.key)}</code></div>
+        <div class="desc"><code class="key">${esc(item.key)}</code>${hint ? ` · ${esc(hint)}` : ''}</div>
       </div>
       <div class="row-control">${item.kind === 'color' ? colorControl() : settingControl(item)}</div>
       <button class="icon-btn reset" data-action="reset-item" title="Reset to default">↺</button>
@@ -412,31 +508,31 @@
     if (!area) return;
     S.area = area.id;
     $('#tab-appearance').innerHTML = `
-      <div class="split">
-        <aside class="subnav">
-          ${areas.map((a) => `<button class="subnav-item" data-area="${a.id}"><span class="subnav-icon">${esc(a.icon)}</span><span class="subnav-text"><b>${esc(a.title)}</b><small data-count="${a.id}"></small></span></button>`).join('')}
-          <div class="subnav-tip">Changes apply instantly. Not happy? <b>Profiles → Revert session</b> undoes everything.</div>
-        </aside>
-        <div class="content">
-          <div class="content-head">
-            <div><h2>${esc(area.title)}</h2><p>${esc(area.desc)}</p><div class="target-chip">${targetChip()}</div>${themeNote(area)}</div>
-            <div class="actions">
-              <button class="btn secondary" data-action="open-settings-json">Open settings.json</button>
-              <button class="btn secondary" data-action="reset-area">Reset ${esc(area.title.toLowerCase())}</button>
-            </div>
+      <div class="content">
+        <div class="content-head">
+          <div>
+            <h2>${esc(area.title)}</h2><p>${esc(area.desc)}</p>
+            <div class="chip-row"><span class="target-chip">${targetChip()}</span><span class="meta-chip">Changed <b data-changed="appearance"></b></span></div>
+            ${themeNote(area)}
           </div>
-          <input type="search" class="search" data-filter="appearance" placeholder="Filter ${esc(area.title.toLowerCase())} settings…" value="${esc(S.filters.appearance)}">
-          ${area.groups.map((g) => `<section class="card"><h3>${esc(g.title)}</h3><div class="rows">${g.items.map(appearanceRow).join('')}</div></section>`).join('')}
-          <div class="empty-state hidden">Nothing matches this filter.</div>
+          <div class="actions">
+            <button class="btn secondary" data-action="open-settings-json">Open settings.json</button>
+            <button class="btn ghost" data-action="reset-area">Reset ${esc(area.title.toLowerCase())}</button>
+          </div>
         </div>
+        <div class="toolbar">
+          <input type="search" class="search" data-filter="appearance" placeholder="Filter ${esc(area.title.toLowerCase())} settings…" value="${esc(S.filters.appearance)}">
+          <div class="jump">${area.groups.map((g, i) => `<button class="chip" data-jump="${i}">${esc(g.title)}</button>`).join('')}</div>
+        </div>
+        ${area.groups.map((g, i) => `<section class="card" data-group="${i}"><h3>${esc(g.title)}<small data-group-count></small></h3><div class="rows">${g.items.map(appearanceRow).join('')}</div></section>`).join('')}
+        <div class="empty-state hidden">Nothing matches this filter.</div>
       </div>`;
-    $$('.subnav-item', $('#tab-appearance')).forEach((b) => b.classList.toggle('active', b.dataset.area === S.area));
     applyFilter('appearance');
     syncAppearance();
   }
 
   function syncAppearance(): void {
-    if (!S.appearance || !$opt('#tab-appearance .split')) return;
+    if (!S.appearance || !$opt('#tab-appearance .content')) return;
     const { colors, settings } = S.appearance;
     for (const row of $$('#tab-appearance .row')) {
       const key = row.dataset.key ?? '';
@@ -474,13 +570,12 @@
         $('[data-val=""]', seg).textContent = `Default (${shown ? 'on' : 'off'})`;
       }
     }
-    for (const area of S.catalog.areas) {
-      const n = area.groups
-        .flatMap((g) => g.items)
-        .filter((i) => (i.kind === 'color' ? Boolean(colors[i.key]) : i.kind === 'setting' && (settings[i.key]?.value ?? null) !== null)).length;
-      const el = $opt(`#tab-appearance [data-count="${area.id}"]`);
-      if (el) el.textContent = n ? `${n} customized` : 'Theme defaults';
+    for (const card of $$('#tab-appearance .card')) {
+      const rows = $$('.row', card);
+      const n = rows.filter((r) => r.classList.contains('modified')).length;
+      $('[data-group-count]', card).textContent = n ? `${n} of ${rows.length} changed` : String(rows.length);
     }
+    updateCounts();
   }
 
   function setColor(key: string, value: string | null): void {
@@ -535,12 +630,10 @@
     root.addEventListener('click', (e) => {
       const t = targetOf(e);
       if (!t) return;
-      const areaBtn = t.closest<HTMLElement>('[data-area]');
-      if (areaBtn) {
-        S.area = areaBtn.dataset.area ?? S.area;
-        S.filters.appearance = '';
-        persist();
-        return renderAppearance();
+      const jump = t.closest<HTMLElement>('[data-jump]');
+      if (jump) {
+        $opt(`#tab-appearance .card[data-group="${jump.dataset.jump ?? ''}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        return;
       }
       const segBtn = t.closest<HTMLElement>('.seg button');
       if (segBtn) {
@@ -658,15 +751,9 @@
     const langs = S.catalog.languages;
     const first = langs[0];
     if (S.lang !== 'custom' && !langs.some((l) => l.id === S.lang) && first) S.lang = first.id;
-    const nav = `<aside class="subnav">
-      ${langs.map((l) => `<button class="subnav-item" data-lang="${l.id}"><span class="subnav-icon">${l.id === 'go' ? 'Go' : 'JS'}</span><span class="subnav-text"><b>${esc(l.title)}</b><small data-count="${l.id}"></small></span></button>`).join('')}
-      <button class="subnav-item" data-lang="custom"><span class="subnav-icon">✱</span><span class="subnav-text"><b>Custom scopes</b><small data-count="custom"></small></span></button>
-      <div class="subnav-tip">Click any token in the preview to jump to its setting.</div>
-    </aside>`;
     const lang = currentLang();
     const content = S.lang === 'custom' ? customHtml() : lang ? languageHtml(lang) : '';
-    $('#tab-syntax').innerHTML = `<div class="split">${nav}<div class="content">${content}</div></div>`;
-    $$('#tab-syntax .subnav-item').forEach((b) => b.classList.toggle('active', b.dataset.lang === S.lang));
+    $('#tab-syntax').innerHTML = `<div class="content">${content}</div>`;
     if (S.lang === 'custom') renderCustomRows();
     else applyFilter('syntax');
     syncSyntax();
@@ -695,23 +782,26 @@
       .join('');
     return `
       <div class="content-head">
-        <div><h2>${esc(lang.title)}</h2><p>Color and style every kind of token. Unset tokens keep your theme's colors.</p><div class="target-chip">${targetChip()}</div></div>
+        <div>
+          <h2>${esc(lang.title)}</h2><p>Click a token in the code to find its setting. Unset tokens keep your theme's colors.</p>
+          <div class="chip-row"><span class="meta-chip">Writes to <b>editor.tokenColorCustomizations</b></span><span class="meta-chip">Changed <b data-changed="syntax"></b></span></div>
+        </div>
         <div class="actions">
           <button class="btn secondary" data-action="open-sample">Open sample in editor</button>
-          <button class="btn secondary" data-action="inspect">Inspect token under cursor</button>
-          <button class="btn secondary" data-action="reset-lang">Reset ${esc(lang.short)}</button>
+          <button class="btn secondary" data-action="inspect">⌖ Inspect token</button>
+          <button class="btn ghost" data-action="reset-lang">Reset ${esc(lang.short)}</button>
         </div>
       </div>
       ${semanticBar()}
       <div class="syntax-layout">
+        <div class="preview-wrap">
+          <div class="preview-head"><b>${esc(lang.short)} sample</b><span class="muted">Dimmed tokens keep your theme's colors</span></div>
+          <div class="preview"><pre>${previewHtml(lang)}</pre></div>
+        </div>
         <div class="token-list">
           <input type="search" class="search" data-filter="syntax" placeholder="Filter tokens (e.g. string, async, scope)…" value="${esc(S.filters.syntax)}">
           ${groups}
           <div class="empty-state hidden">No tokens match this filter.</div>
-        </div>
-        <div class="preview-wrap">
-          <div class="preview-head"><b>Live preview</b><span class="muted">Dimmed tokens use your theme's colors in the editor</span></div>
-          <div class="preview"><pre>${previewHtml(lang)}</pre></div>
         </div>
       </div>`;
   }
@@ -719,10 +809,13 @@
   function customHtml(): string {
     return `
       <div class="content-head">
-        <div><h2>Custom scopes</h2><p>Style any TextMate scope, in any language. Use the inspector to find the scope of a token under your cursor.</p><div class="target-chip">${targetChip()}</div></div>
+        <div>
+          <h2>Custom scopes</h2><p>Style any TextMate scope, in any language. The inspector shows the scopes of the token under your cursor.</p>
+          <div class="chip-row"><span class="meta-chip">Writes to <b>editor.tokenColorCustomizations › textMateRules</b></span><span class="meta-chip">Rules <b data-changed="custom"></b></span></div>
+        </div>
         <div class="actions">
-          <button class="btn secondary" data-action="inspect">Inspect token under cursor</button>
-          <button class="btn" data-action="add-custom">＋ Add rule</button>
+          <button class="btn secondary" data-action="inspect">⌖ Inspect token</button>
+          <button class="btn" data-action="add-custom">+ Add rule</button>
         </div>
       </div>
       <section class="card"><h3>Rules</h3><div class="rows" id="custom-rows"></div></section>
@@ -765,15 +858,9 @@
   }
 
   function syncSyntax(): void {
-    if (!S.syntax || !$opt('#tab-syntax .split')) return;
+    if (!S.syntax || !$opt('#tab-syntax .content')) return;
     const items = S.syntax.items;
-    for (const lang of S.catalog.languages) {
-      const n = lang.groups.flatMap((g) => g.items).filter((i) => hasStyle(items[styleKey(lang.id, i.id)])).length;
-      const el = $opt(`#tab-syntax [data-count="${lang.id}"]`);
-      if (el) el.textContent = n ? `${n} customized` : 'Theme colors';
-    }
-    const customCount = $opt('#tab-syntax [data-count="custom"]');
-    if (customCount) customCount.textContent = S.custom.length ? `${S.custom.length} rule${S.custom.length > 1 ? 's' : ''}` : 'Any scope';
+    updateCounts();
 
     const sem = $opt('#tab-syntax [data-semantic]');
     if (sem) {
@@ -795,7 +882,7 @@
     for (const card of $$('#tab-syntax details.card')) {
       const rows = $$('.token-row', card);
       const n = rows.filter((r) => r.classList.contains('modified')).length;
-      $('[data-group-count]', card).textContent = n ? `${n} / ${rows.length} customized` : `${rows.length} tokens`;
+      $('[data-group-count]', card).textContent = n ? `${n} of ${rows.length} changed` : String(rows.length);
     }
     const bg = S.appearance?.colors['editor.background'];
     const fg = S.appearance?.colors['editor.foreground'];
@@ -878,13 +965,6 @@
     root.addEventListener('click', (e) => {
       const t = targetOf(e);
       if (!t) return;
-      const langBtn = t.closest<HTMLElement>('[data-lang]');
-      if (langBtn) {
-        S.lang = langBtn.dataset.lang ?? S.lang;
-        S.filters.syntax = '';
-        persist();
-        return renderSyntax();
-      }
       const semBtn = t.closest<HTMLElement>('[data-semantic] button');
       if (semBtn) {
         if (!S.syntax) return;
@@ -1113,9 +1193,9 @@
         <div class="content-head">
           <div><h2>Keyboard shortcuts</h2><p id="kb-file" class="muted"></p></div>
           <div class="actions">
-            <button class="btn" data-kbtool="add">＋ Add shortcut</button>
             <button class="btn secondary" data-kbtool="json">Open keybindings.json</button>
-            <button class="btn secondary" data-kbtool="refresh" title="Reload the list (e.g. after installing an extension)">↻</button>
+            <button class="btn secondary" data-kbtool="refresh" title="Reload the list (e.g. after installing an extension)">Reload</button>
+            <button class="btn" data-kbtool="add">+ Add shortcut</button>
           </div>
         </div>
         <div id="kb-error" class="banner error hidden"></div>
@@ -1146,6 +1226,7 @@
       if (el) el.textContent = String(n);
     }
     $$('#tab-hotkeys .chip').forEach((c) => c.classList.toggle('active', c.dataset.filterKb === S.kbFilter));
+    updateCounts();
   }
 
   function findKbRow(id: string): ListRow | undefined {
