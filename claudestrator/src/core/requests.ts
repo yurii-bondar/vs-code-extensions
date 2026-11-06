@@ -95,7 +95,7 @@ const PARAMS: { [M in keyof Rpc]: Check } = {
   copy: obj({ text: T.str() }),
   preview: composer,
   start: composer,
-  saveScenario: obj({ 'id?': T.str(), 'label?': T.str(), 'description?': T.str(), 'agents?': T.arr(obj({ name: T.str(1), 'model?': T.str(), 'effort?': T.oneOf(EFFORTS), 'instructions?': T.str(), 'instructionsFile?': T.str(1) })) }),
+  saveScenario: obj({ 'id?': T.str(), 'label?': T.str(), 'description?': T.str(), 'agents?': T.arr(obj({ name: T.str(1), 'model?': T.str(), 'effort?': T.oneOf(EFFORTS), 'instructions?': T.str(), 'instructionsFile?': T.str(1) })), 'intake?': obj({ 'model?': T.str(1), 'effort?': T.oneOf(EFFORTS) }) }),
   editStepInstructions: obj({ scenario: id, agent: T.str(1) }),
   previewScenario: obj({ agents: T.arr(obj({ name: T.str(1) })), 'auto?': T.bool() }),
   deleteScenario: byId,

@@ -271,7 +271,7 @@ async function writeScenario(workspace: string, id: string, entry: ScenarioEntry
   else if (Array.isArray(entry)) await setScenario(workspace, id, entry);
   else {
     const agents = entry.agents.map((step): ScenarioStep => (typeof step === 'string' ? { name: step } : { name: step.agent, ...(step.model && { model: step.model }), ...(step.effort && { effort: step.effort }), ...(typeof step.instructions === 'string' && { instructions: step.instructions }) }));
-    await setCustomScenario(workspace, id, { label: entry.label || id, description: entry.description, agents });
+    await setCustomScenario(workspace, id, { label: entry.label || id, description: entry.description, agents, intake: entry.intake });
   }
 }
 

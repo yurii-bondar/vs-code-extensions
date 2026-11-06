@@ -1328,14 +1328,15 @@ async function setScenario(workspace: string, scenario: string, agents: string[]
  * Writes a custom scenario: `{ label, description?, agents: [{ name, model?, effort?, instructions?, instructionsFile? }] }`.
  * A step without its own model, effort or instructions is written as the bare agent name. `oldId` renames it.
  */
-async function setCustomScenario(workspace: string, id: string, def: { label: string; description?: string | undefined; agents: ScenarioStep[] }, oldId?: string): Promise<string> {
+async function setCustomScenario(workspace: string, id: string, def: { label: string; description?: string | undefined; agents: ScenarioStep[]; intake?: IntakeLayer | undefined }, oldId?: string): Promise<string> {
   const agents = def.agents.map((st): ScenarioStepLayer => {
     const instructions = stepInstructionsLayer(workspace, st);
     return st.model || st.effort || instructions ? { agent: st.name, ...(st.model && { model: st.model }), ...(st.effort && { effort: st.effort }), ...(instructions && { instructions }) } : st.name;
   });
   return editProjectConfig(workspace, (doc) => {
     if (oldId && oldId !== id) renameIn(doc, ['scenarios'], oldId, id);
-    writeIn(doc, ['scenarios', id], { label: def.label, description: def.description || undefined, agents });
+    const intake = def.intake && (def.intake.model || def.intake.effort) ? def.intake : undefined;
+    writeIn(doc, ['scenarios', id], { label: def.label, description: def.description || undefined, agents, intake });
   });
 }
 
@@ -1478,7 +1479,7 @@ async function ensureStepInstructionsFile({ workspace, home, scenario, agent }: 
   await withConfigRollback({ workspace, home }, async (remember) => {
     await remember(file);
     if ((await readIfThere(file)) === null) await writeMaking(file, seed);
-    await setCustomScenario(workspace, scenario, { label: sc.label, description: sc.description, agents: sc.agents.map((st) => (st.name === agent ? { ...st, instructionsFile: file } : st)) });
+    await setCustomScenario(workspace, scenario, { label: sc.label, description: sc.description, intake: sc.intake, agents: sc.agents.map((st) => (st.name === agent ? { ...st, instructionsFile: file } : st)) });
   });
   return file;
 }
@@ -1549,7 +1550,7 @@ const RESERVED_SCENARIOS = ['deliver', 'auto', ...Object.keys(SCENARIO_OUTPUT)];
  * Creates or changes a custom scenario. Without `id` a new one is named after its label (`Quick fix` → `quick-fix`,
  * `-2` for a taken one; a label without Latin letters gets `scenario`). Labels are unique, ignoring case. Returns the id.
  */
-async function saveCustomScenario({ workspace, home, id, label, description, agents = [] }: { workspace: string; home?: string | undefined; id?: string | undefined; label?: string | undefined; description?: string | undefined; agents?: ScenarioStep[] | undefined }): Promise<string> {
+async function saveCustomScenario({ workspace, home, id, label, description, agents = [], intake }: { workspace: string; home?: string | undefined; id?: string | undefined; label?: string | undefined; description?: string | undefined; agents?: ScenarioStep[] | undefined; intake?: IntakeLayer | undefined }): Promise<string> {
   const r = await loadConfig({ workspace, home });
   const custom = r.ok ? r.config.custom : {};
   const clean = String(label || '').trim();
@@ -1559,7 +1560,7 @@ async function saveCustomScenario({ workspace, home, id, label, description, age
   const finalId = id || idFromLabel(clean, new Set([...RESERVED_SCENARIOS, ...Object.keys(custom)]), 'scenario');
   // Some mistakes (an unknown agent, code and report agents mixed) only show once the agents resolve.
   await withConfigRollback({ workspace, home, explain: (errors) => errors.filter((e) => e.message.includes(`"${finalId}"`)) }, () =>
-    setCustomScenario(workspace, finalId, { label: clean, description: description && description.trim(), agents })
+    setCustomScenario(workspace, finalId, { label: clean, description: description && description.trim(), agents, intake })
   );
   return finalId;
 }

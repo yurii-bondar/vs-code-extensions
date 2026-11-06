@@ -15,6 +15,7 @@ import type {
   GatesStatus,
   GitMode,
   GroupType,
+  IntakeSettings,
   Output,
   Pipeline,
   PlanMeta,
@@ -511,6 +512,8 @@ export interface SaveScenarioParams {
   label?: string | undefined;
   description?: string | undefined;
   agents?: ScenarioStep[] | undefined;
+  /** The model and effort that read its tickets, over the config's; left out: the config's. */
+  intake?: Partial<IntakeSettings> | undefined;
 }
 
 /** What "Restore from backup" did: what was written, and what was left out with the reason. */
@@ -563,6 +566,9 @@ export interface AgentSummary {
   effort: Effort | undefined;
   ownModel?: true;
   ownEffort?: true;
+  /** A custom scenario's step: what it adds to the agent's instructions, and the file they are in. */
+  instructions?: string;
+  instructionsFile?: string;
   actual: Effective;
 }
 
@@ -582,6 +588,8 @@ export interface CustomScenarioSummary {
   kind: string | null;
   /** The layer that defines it: `project`, `user` or `library:<name>`. */
   source?: string;
+  /** The model and effort that read its tickets, where it sets them over the config's. */
+  intake?: Partial<IntakeSettings>;
 }
 
 export type ConfigSummary =

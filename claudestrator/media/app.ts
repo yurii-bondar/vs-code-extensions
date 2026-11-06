@@ -1436,9 +1436,11 @@ interface Views {
         const step: ScenarioStep = { name: a.name };
         if (a.ownModel) step.model = a.model;
         if (a.ownEffort && a.effort) step.effort = a.effort;
+        if (a.instructions) step.instructions = a.instructions;
+        if (a.instructionsFile) step.instructionsFile = a.instructionsFile;
         return step;
       });
-      return { id, label: own.label, description: own.description, agents, ...change };
+      return { id, label: own.label, description: own.description, agents, intake: own.intake, ...change };
     },
     async saveCustom(def, done) {
       if ((await attempt('saveScenario', def)) === undefined) return false;

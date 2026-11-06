@@ -253,10 +253,10 @@ class DashboardPanel implements RpcHandlers {
         .filter(([n]) => c.agents[n])
         .map(([n, scenario, st = {}]) => {
           const a: Agent = { ...c.agents[n]!, ...(st.model && { model: st.model }), ...(st.effort && { effort: st.effort }) };
-          return { name: n, scenario, color: a.color, output: a.output, runs: a.runs, enabled: a.enabled, description: a.description, model: a.model, effort: a.effort, ...(st.model && { ownModel: true }), ...(st.effort && { ownEffort: true }), actual: effectiveFor(a, this.orch.defaults) };
+          return { name: n, scenario, color: a.color, output: a.output, runs: a.runs, enabled: a.enabled, description: a.description, model: a.model, effort: a.effort, ...(st.model && { ownModel: true }), ...(st.effort && { ownEffort: true }), ...(st.instructions && { instructions: st.instructions }), ...(st.instructionsFile && { instructionsFile: st.instructionsFile }), actual: effectiveFor(a, this.orch.defaults) };
         }),
       // Custom scenarios for the composer's menu and the Scenarios page, and the built-in ones that were removed.
-      custom: Object.values(c.custom).map((sc) => ({ id: sc.id, label: sc.label, description: sc.description, kind: sc.kind, ...(sc.source && { source: sc.source }) })),
+      custom: Object.values(c.custom).map((sc) => ({ id: sc.id, label: sc.label, description: sc.description, kind: sc.kind, ...(sc.source && { source: sc.source }), ...(sc.intake && { intake: sc.intake }) })),
       removedScenarios: c.removedScenarios,
       // Every agent, for the composer's scenario editor to add from.
       catalog: Object.values(c.agents).map((a) => ({ name: a.name, output: a.output, runs: a.runs, color: a.color, enabled: a.enabled, description: a.description })),
@@ -614,8 +614,8 @@ class DashboardPanel implements RpcHandlers {
    * Creates or changes a custom scenario. `agents`: `[{ name, model?, effort? }]`; without `id` a new one is named after
    * its label. Returns its id.
    */
-  async $saveScenario({ id, label, description, agents = [] }: SaveScenarioParams) {
-    return { id: await cfg.saveCustomScenario({ workspace: this.root, id, label, description, agents }) };
+  async $saveScenario({ id, label, description, agents = [], intake }: SaveScenarioParams) {
+    return { id: await cfg.saveCustomScenario({ workspace: this.root, id, label, description, agents, intake }) };
   }
 
   async $deleteScenario({ id }: { id: string }) {

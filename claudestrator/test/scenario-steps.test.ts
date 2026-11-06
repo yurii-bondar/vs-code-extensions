@@ -181,3 +181,24 @@ scenarios:
   assert.equal(scenarioPipeline(cfg, [{ name: 'auditor' }]).mode, 'audit', 'report agents make it a report');
   assert.equal(scenarioPipeline(cfg, []).mode, 'intake_only');
 });
+
+test('scenario steps: a save, Open in editor and a restore keep the scenario\'s reading settings', async () => {
+  const home = tmp('cs-steps-h-');
+  const ws = workspace(SHIP.replace('    label: Ship\n', '    label: Ship\n    intake: { model: sonnet }\n'), { 'prompts/ship/reviewer.md': 'Look at the auth code.\n' });
+  const sc = (await resolved(ws, home)).custom.ship!;
+  assert.deepEqual(sc.intake, { model: 'sonnet' });
+  await config.saveCustomScenario({ workspace: ws, home, id: 'ship', label: 'Ship', agents: sc.agents, intake: sc.intake });
+  await config.ensureStepInstructionsFile({ workspace: ws, home, scenario: 'ship', agent: 'developer' });
+  assert.deepEqual((await resolved(ws, home)).custom.ship!.intake, { model: 'sonnet' });
+
+  const made = await backups.createBackup({ workspace: ws, now: new Date('2026-11-06T12:00:00Z') });
+  const parsed = backups.parseBackup(made.text);
+  assert.ok(parsed.ok);
+  const other = workspace('');
+  await backups.restoreBackup({ workspace: other, home, backup: parsed.backup });
+  assert.deepEqual((await resolved(other, home)).custom.ship!.intake, { model: 'sonnet' });
+
+  // A save that leaves it out goes back to the config's.
+  await config.saveCustomScenario({ workspace: ws, home, id: 'ship', label: 'Ship', agents: sc.agents });
+  assert.equal((await resolved(ws, home)).custom.ship!.intake, undefined);
+});
