@@ -43,7 +43,7 @@ interface DiagramView extends View {
   renderFlow(): void;
   renderSide(): void;
   renderHead(): void;
-  change(fn: (d: DiagramDraft) => void, opts?: { side?: boolean }): void;
+  change(fn: (d: DiagramDraft) => void, opts?: { side?: boolean; route?: boolean }): void;
   save(): Promise<boolean>;
 }
 
@@ -671,8 +671,11 @@ interface UiState {
       const main = sel.kind === 'start' ? startSide(d) : sel.kind === 'step' ? stepSide(d, sel.i) : sel.kind === 'block' ? blockSide(d, sel.type, sel.i) : sel.kind === 'approve' ? approveSide(d, sel.i) : sel.kind === 'create' ? createSide(d, sel.at) : scenarioSide(d);
       patch('dg-side', main + routeHtml(d));
     },
-    /** Applies a change to the draft and draws it; the right column only when `side` (typing there keeps it). */
-    change(fn, { side = true } = {}) {
+    /**
+     * Applies a change to the draft and draws it; the right column only when `side` (typing there keeps it), the route
+     * asked of the host again only when `route` (a name or a text changes no route).
+     */
+    change(fn, { side = true, route = true } = {}) {
       const d = this.draft();
       fn(d);
       d.dirty = true;
@@ -680,6 +683,7 @@ interface UiState {
       this.renderHead();
       this.renderFlow();
       if (side) this.renderSide();
+      if (!route) return;
       debounce('dg-preview', async () => {
         await refreshPreview();
         this.renderHead();
@@ -879,20 +883,20 @@ interface UiState {
       },
     },
     inputs: {
-      'dg-label': (el) => v().change((d) => void (d.label = el.value), { side: false }),
-      'dg-desc': (el) => v().change((d) => void (d.description = el.value), { side: false }),
+      'dg-label': (el) => v().change((d) => void (d.label = el.value), { side: false, route: false }),
+      'dg-desc': (el) => v().change((d) => void (d.description = el.value), { side: false, route: false }),
       'dg-approve-text': (el) =>
         v().change((d) => {
           const st = d.steps[Number(el.dataset.i)];
           if (st) st.approve = el.value.trim() ? { text: el.value.trim() } : {};
-        }, { side: false }),
+        }, { side: false, route: false }),
       'dg-query': (el) => {
         v().query = el.value;
         v().renderFlow();
       },
       'dg-instructions': (el) => {
         const sel = v().sel;
-        if (sel.kind === 'step') v().change((d) => void (d.steps[sel.i]!.instructions = el.value), { side: false });
+        if (sel.kind === 'step') v().change((d) => void (d.steps[sel.i]!.instructions = el.value), { side: false, route: false });
       },
     },
     changes: {
