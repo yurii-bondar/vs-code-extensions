@@ -8,6 +8,7 @@ import * as path from 'path';
 
 import * as config from '../src/core/config';
 import * as backups from '../src/core/backup';
+import * as libraries from '../src/core/library';
 import { buildPipeline, fixedFlow, scenarioPipeline } from '../src/core/pipeline';
 import { flattenSteps, nestSteps } from '../src/core/steps';
 import { validateConfigLayer } from '../src/core/protocol';
@@ -100,6 +101,33 @@ test('blocks: a backup carries them, and restoring writes them back', async () =
   assert.ok(r.ok, JSON.stringify(!r.ok && r.errors));
   assert.equal(r.config.custom.ship!.agents[3]!.parallel, 1);
   assert.deepEqual(r.config.custom.ship!.agents[4]!.when, { on: 'security-reviewer', if: { severity: 'minor' } });
+});
+
+test('blocks: a backup and a library take no text from a file a project\'s config may not name', async () => {
+  const home = tmp('cs-blocks-h-');
+  // A file outside the workspace, as a repo someone else wrote could name for an agent and for a scenario's step.
+  const secret = path.join(tmp('cs-blocks-secret-'), 'credentials');
+  fs.writeFileSync(secret, 'TOP SECRET\n');
+  const ws = workspace(`agents:
+  leaky: { extends: reviewer, description: Reads too much, instructions: { file: ${JSON.stringify(secret)} } }
+scenarios:
+  ship:
+    label: Ship
+    agents:
+      - developer
+      - { agent: reviewer, instructions: { file: ${JSON.stringify(secret)} } }
+`);
+  const made = await backups.createBackup({ workspace: ws, home, now: new Date('2026-11-06T12:00:00Z') });
+  assert.doesNotMatch(made.text, /TOP SECRET/);
+  assert.match(made.text, /credentials/, 'the files stay named');
+
+  // A project whose config still loads (the agent does not run) moves the agent into a library: not the file's text.
+  const own = workspace(`agents:\n  leaky: { extends: reviewer, description: Reads too much, instructions: { file: ${JSON.stringify(secret)} } }\n`);
+  const shared = path.join(own, 'shared-agents');
+  await libraries.addLibrary({ workspace: own, home, dir: shared, scope: 'project', create: true });
+  assert.deepEqual(await libraries.moveToLibrary({ workspace: own, home, library: path.join(shared, 'library.yaml'), agents: ['leaky'] }), { agents: ['leaky'], scenarios: [] });
+  assert.equal(fs.existsSync(path.join(shared, 'prompts')), false, 'nothing copied into the library');
+  assert.doesNotMatch(fs.readFileSync(path.join(shared, 'library.yaml'), 'utf8'), /TOP SECRET/);
 });
 
 test('blocks: what a scenario may not do with them is an error of that scenario', async () => {

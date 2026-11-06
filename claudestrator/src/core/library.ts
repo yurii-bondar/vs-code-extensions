@@ -6,7 +6,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as YAML from 'yaml';
-import { CONFIG_DIR, LIBRARY_FILE, PROMPTS_DIR, editProjectConfig, editYamlFile, libraryFile, libraryLabel, projectConfigFile, readProjectLayer, userConfigFile, withConfigRollback, withStepTexts, writeIn } from './config';
+import { CONFIG_DIR, LIBRARY_FILE, PROMPTS_DIR, editProjectConfig, editYamlFile, libraryFile, libraryLabel, projectConfigFile, projectInstructionsProblem, readProjectLayer, userConfigFile, withConfigRollback, withStepTexts, writeIn } from './config';
 import { exists, writeAtomic } from './files';
 import { agentOf, flattenSteps } from './steps';
 import { validateConfigLayer, validateLibraryLayer } from './protocol';
@@ -160,7 +160,9 @@ async function moveToLibrary({ library, agents = [], scenarios = [], ...where }:
       const ins = def.instructions;
       if (ins && typeof ins === 'object' && ins.file !== undefined) {
         const source = path.resolve(projectDir, ins.file);
-        const content = await fs.promises.readFile(source, 'utf8').catch(() => null);
+        // One the project's config may not name (a credential, a file outside the workspace) is not copied: it stays
+        // named, and the library's config says it cannot be read.
+        const content = (await projectInstructionsProblem(source, where)) ? null : await fs.promises.readFile(source, 'utf8').catch(() => null);
         if (content !== null) {
           const rel = `${PROMPTS_DIR}/${path.basename(source)}`;
           const dest = path.join(libraryDir, rel);
@@ -177,7 +179,7 @@ async function moveToLibrary({ library, agents = [], scenarios = [], ...where }:
       moved[name] = def;
     }
     // A step's instructions file is named from the project's folder: in the library they go as their text.
-    const movedScenarios = await Promise.all(scenarios.map(async (id) => [id, await withStepTexts(project.scenarios![id] as CustomScenarioLayer, projectDir)] as const));
+    const movedScenarios = await Promise.all(scenarios.map(async (id) => [id, await withStepTexts(project.scenarios![id] as CustomScenarioLayer, where)] as const));
     await editYamlFile(
       target.file,
       (doc) => {

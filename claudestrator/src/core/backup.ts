@@ -8,7 +8,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as YAML from 'yaml';
-import { CONFIG_DIR, PROMPTS_DIR, loadConfig, projectConfigFile, readProjectLayer, removeScenario, setAgentLayer, setCustomScenario, setPipeline, setScenario, withConfigRollback, withStepTexts } from './config';
+import { CONFIG_DIR, PROMPTS_DIR, loadConfig, projectConfigFile, projectInstructionsProblem, readProjectLayer, removeScenario, setAgentLayer, setCustomScenario, setPipeline, setScenario, withConfigRollback, withStepTexts } from './config';
 import { agentOf, flattenSteps } from './steps';
 import { validateConfigLayer } from './protocol';
 import { writeAtomic } from './files';
@@ -82,7 +82,7 @@ function fileKey(rel: string): string | null {
 }
 
 /** Reads the project's agents, pipeline and scenarios, with the instruction files of its agents, into the text of a backup. */
-async function createBackup({ workspace, now }: { workspace: string; now: Date }): Promise<BackupFile> {
+async function createBackup({ workspace, home, now }: { workspace: string; home?: string | undefined; now: Date }): Promise<BackupFile> {
   // readProjectLayer reads a broken file as empty; a backup must say the file is broken, not that it holds nothing.
   const text = await fs.promises.readFile(projectConfigFile(workspace), 'utf8').catch(() => null);
   if (text !== null) {
@@ -101,6 +101,9 @@ async function createBackup({ workspace, now }: { workspace: string; now: Date }
     agents[name] = def;
     if (!own || typeof own !== 'object' || own.file === undefined) continue;
     const abs = path.resolve(dir, own.file);
+    // One the config may not name (a credential, a file outside the workspace) is not read: it stays named, as one
+    // that is missing does, and the config that gets it says so.
+    if (await projectInstructionsProblem(abs, { workspace, home })) continue;
     let content: string;
     try {
       content = await fs.promises.readFile(abs, 'utf8');
@@ -113,7 +116,7 @@ async function createBackup({ workspace, now }: { workspace: string; now: Date }
     if (rel) files[rel] = content;
   }
   // A step's instructions travel as their text: a backup carries only the agents' files.
-  const scenarios: Scenarios = Object.fromEntries(await Promise.all(Object.entries(layer.scenarios ?? {}).map(async ([id, entry]) => [id, entry && typeof entry === 'object' && !Array.isArray(entry) ? await withStepTexts(entry, dir) : entry] as const)));
+  const scenarios: Scenarios = Object.fromEntries(await Promise.all(Object.entries(layer.scenarios ?? {}).map(async ([id, entry]) => [id, entry && typeof entry === 'object' && !Array.isArray(entry) ? await withStepTexts(entry, { workspace, home }) : entry] as const)));
   const pipeline = layer.pipeline && layer.pipeline.length ? layer.pipeline : undefined;
   const counts = { agents: Object.keys(agents).length, scenarios: Object.keys(scenarios).length, pipeline: pipeline !== undefined };
   if (!counts.agents && !counts.scenarios && !counts.pipeline) throw new Error('There is nothing to back up yet: agents, the pipeline and scenarios are saved in config.yaml once you change one');

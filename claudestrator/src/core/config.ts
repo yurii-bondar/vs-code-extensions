@@ -934,6 +934,14 @@ async function instructionFileProblem(op: InstructionOp, workspace: string, home
   return null;
 }
 
+/**
+ * Why this project's config may not name `file` as instructions, or null: the check the config gets before it reads
+ * them, for what copies their text elsewhere (a backup, a library), where no check would come after it.
+ */
+async function projectInstructionsProblem(file: string, { workspace, home }: { workspace: string; home?: string | undefined }): Promise<string | null> {
+  return instructionFileProblem({ mode: 'replace', file, source: 'project', dir: path.join(workspace, CONFIG_DIR), layer: 'project' }, workspace, home ?? os.homedir());
+}
+
 /** `policy.writable` entries that open your home folder, one above it or the whole disk to sandboxed commands. */
 function tooWide(writable: string[], home: string): string[] {
   const homeDir = path.resolve(home);
@@ -1482,16 +1490,19 @@ function ensureInstructionsFile(workspace: string, agentName: string, resolved?:
 }
 
 /**
- * A custom scenario as config.yaml has it, with its steps' instruction files read into their text: what it reads the
- * same wherever it goes (a backup, a library), whose folder its relative paths would not fit. A file that cannot be
- * read stays named, and the config that gets it says so.
+ * A custom scenario of this project's config, with its steps' instruction files read into their text: what it reads
+ * the same wherever it goes (a backup, a library), whose folder its relative paths would not fit. A file that cannot
+ * be read, or that a project's config may not name (a credential, a file outside the workspace), stays named, and the
+ * config that gets it says so.
  */
-async function withStepTexts(entry: CustomScenarioLayer, dir: string): Promise<CustomScenarioLayer> {
+async function withStepTexts(entry: CustomScenarioLayer, where: { workspace: string; home?: string | undefined }): Promise<CustomScenarioLayer> {
+  const dir = path.join(where.workspace, CONFIG_DIR);
   const flat = await Promise.all(
     flattenSteps(entry.agents).map(async (f): Promise<FlatStep> => {
       const st = f.step;
       if (typeof st === 'string' || !st.instructions || typeof st.instructions === 'string') return f;
-      const text = await readIfThere(path.resolve(dir, st.instructions.file)).catch(() => null);
+      const file = path.resolve(dir, st.instructions.file);
+      const text = (await projectInstructionsProblem(file, where)) ? null : await readIfThere(file).catch(() => null);
       // Not there: it stays named, and the config that gets it says so.
       if (text === null) return f;
       // An empty file adds nothing: the step goes without instructions.
@@ -1769,6 +1780,7 @@ export {
   createProjectConfig,
   ensureInstructionsFile,
   ensureStepInstructionsFile,
+  projectInstructionsProblem,
   withStepTexts,
   writeIn,
 };
