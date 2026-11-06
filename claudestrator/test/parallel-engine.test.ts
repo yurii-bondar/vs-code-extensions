@@ -130,3 +130,29 @@ test('engine: a session of a parallel group that ends leaves the others their tu
   }
 });
 
+test('engine: a budget spent before a Parallel stops the task once, not with an error', async () => {
+  const ws = workspace(['api'], `limits: { budgetUsd: 0.5 }
+agents:
+  security: { extends: reviewer, description: Security only }
+scenarios:
+  review:
+    label: Review
+    agents:
+      - parallel: [reviewer, security]
+`);
+  const h = await harness(ws, { FAKE_REPOS: 'api' });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Review the feature', scenario: 'review' });
+    // What an earlier session of the task spent: the budget is through before the group starts.
+    await h.engine.svc.record(taskId, { type: 'agent_stopped', agent: 'intake', payload: { sessionId: 's-0', costUsd: 1, turns: 1 } });
+    const s = await runTask(h.engine, taskId);
+    assert.equal(s.status, 'stopped', JSON.stringify(h.engine.lastError(taskId)));
+    assert.equal(h.engine.lastError(taskId) ?? null, null);
+    const events = await h.engine.svc.events(taskId);
+    assert.equal(only(events, 'stopped').length, 1);
+    assert.equal(only(events, 'stage_started').length, 0, 'no member started');
+  } finally {
+    h.hooks.dispose();
+  }
+});
+

@@ -845,6 +845,9 @@ class Engine extends EventEmitter {
    * an error of one (it did not start) is thrown once the others ended.
    */
   async runGroup(s: TaskState, runs: (RunAction | Extract<NextAction, { kind: 'running' }>)[]): Promise<void> {
+    const budget = (await this.config()).limits.budgetUsd;
+    const spent = budget !== undefined ? await this.spentUsd(s.taskId) : 0;
+    if (budget !== undefined && spent >= budget) return this.stopOnBudget(s.taskId, { budget, spent });
     this.log('info', `${runs.map((r) => stepLabel(r.step)).join(', ')} work at once`, s.taskId);
     const ended = await Promise.allSettled(runs.map((r) => this.runStep(s, r, { member: true }).finally(() => this.setMemberLive(s.taskId, stepLabel(r.step), null))));
     const failed = ended.find((r): r is PromiseRejectedResult => r.status === 'rejected');
@@ -1192,6 +1195,12 @@ class Engine extends EventEmitter {
     return spentOf(await this.svc.events(taskId));
   }
 
+  /** The task's budget is spent: it stops, and no agent starts. */
+  async stopOnBudget(taskId: string, { budget, spent }: { budget: number; spent: number }): Promise<void> {
+    this.log('warn', `Budget of $${budget} spent ($${spent.toFixed(2)}); the task stopped`, taskId);
+    await this.dispatch(taskId, { type: 'stopped', reason: `budget of $${budget} spent` });
+  }
+
   /** `member`: one of a parallel group, which shows its state next to the others' and is watched on its own. */
   async runStep(s: TaskState, next: NextAction, { member = false }: { member?: boolean } = {}): Promise<void> {
     const taskId = s.taskId;
@@ -1211,12 +1220,8 @@ class Engine extends EventEmitter {
 
     const budget = config.limits.budgetUsd;
     const spent = budget !== undefined ? await this.spentUsd(taskId) : 0;
-    if (budget !== undefined && spent >= budget) {
-      this.log('warn', `Budget of $${budget} spent ($${spent.toFixed(2)}); the task stopped`, taskId);
-      // The members of a parallel group each find it spent: the task stops once.
-      if ((await this.svc.state(taskId)).status !== 'stopped') await this.dispatch(taskId, { type: 'stopped', reason: `budget of $${budget} spent` });
-      return;
-    }
+    // A parallel group checks it once, before its members start: each of them would stop the task.
+    if (!member && budget !== undefined && spent >= budget) return this.stopOnBudget(taskId, { budget, spent });
     const usedUp = usedUpWindow(this.limits, Date.now());
     if (usedUp) throw new EngineError('limit_reached', `${label} did not start: ${usedUp}`);
 
