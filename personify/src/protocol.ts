@@ -3,7 +3,7 @@ import type { Area, Language } from './catalog/types';
 import type { JsonObject } from './core/json';
 import type { ProfileDiff } from './core/profile';
 import type { SnapshotId, SnapshotInfo } from './core/snapshots';
-import type { AppearanceState, CustomRule, KeybindingEdit, KeybindingsState, Prefs, Scope, SettingValue, SyntaxChange, SyntaxState, Tab, ThemeMode, TokenStyle } from './core/types';
+import type { AppearanceState, CustomRule, KeybindingEdit, KeybindingsState, Prefs, Scope, SettingValue, SyntaxChange, SyntaxState, Tab, ThemeMode, ThemeProblem, TokenStyle } from './core/types';
 
 export interface PrefsView extends Prefs {
   /** The active color theme. */
@@ -30,6 +30,8 @@ export type HostMessage =
   | { type: 'state'; prefs: PrefsView; appearance: AppearanceState; syntax: SyntaxState }
   | ({ type: 'keybindings' } & KeybindingsState)
   | { type: 'snapshots'; list: readonly SnapshotInfo[]; sessionStart: number }
+  /** What the active theme (plus the user's own token colors) gives each catalog token, by `langId/itemId`. */
+  | { type: 'themeSyntax'; theme: string; items: Readonly<Record<string, TokenStyle>>; problem: ThemeProblem }
   | { type: 'importPreview'; preview: ImportPreview }
   | { type: 'toast'; text: string; kind: ToastKind };
 

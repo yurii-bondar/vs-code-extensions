@@ -18,6 +18,9 @@ export interface Target {
 /** What the catalog's settings hold: numbers, enum strings, font names and booleans. */
 export type SettingValue = string | number | boolean;
 
+/** Why the active theme's syntax colors are not known; null when they are. */
+export type ThemeProblem = 'notFound' | 'tmTheme' | 'unreadable' | null;
+
 export interface SettingState {
   /** Written at the current scope; null when not set there. */
   value: SettingValue | null;

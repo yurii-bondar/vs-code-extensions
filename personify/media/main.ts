@@ -69,6 +69,8 @@
     /** The shortcut being changed in its row; null when none is. */
     kbEdit: KbEdit | null;
     snapshots: readonly SnapshotInfo[];
+    /** The active theme's colors for each catalog token; null until the host sends them. */
+    themeSyntax: { theme: string; items: Readonly<Record<string, TokenStyle>>; problem: ThemeProblem } | null;
     /** When the panel opened, in epoch milliseconds; 0 until the host says. */
     sessionStart: number;
     filters: Record<FilterTab, string>;
@@ -94,6 +96,7 @@
     kbRecordSearch: false,
     kbEdit: null,
     snapshots: [],
+    themeSyntax: null,
     sessionStart: 0,
     filters: { appearance: '', syntax: '' },
     pending: new Set(),
@@ -692,8 +695,7 @@
       root.classList.toggle('cursor-underline', String(settingNow('editor.cursorStyle')).startsWith('underline'));
       root.dataset.lineHighlight = String(settingNow('editor.renderLineHighlight') ?? 'line');
       root.classList.toggle('no-minimap', settingNow('editor.minimap.enabled') === false);
-      const items = S.syntax?.items ?? {};
-      for (const span of $$('.pt', code)) span.style.cssText = cssFor(items[styleKey('jsts', span.dataset.item ?? '')]);
+      for (const span of $$('.pt', code)) span.style.cssText = cssFor(shownStyle(styleKey('jsts', span.dataset.item ?? '')));
     }
     const term = $$('.pv-term', root);
     for (const t of term) applyFont(t, 'terminal.integrated');
@@ -1025,6 +1027,41 @@
     return parts.join(';');
   }
 
+  /** What a token looks like in the editor: the user's style over the theme's, each part on its own. */
+  function shownStyle(key: string): TokenStyle {
+    const own = S.syntax?.items[key];
+    const theme = S.themeSyntax?.items[key];
+    return { fg: own?.fg || theme?.fg || null, fontStyle: own?.fontStyle ?? theme?.fontStyle ?? null };
+  }
+
+  /** An unset color control shows the theme's color faintly, and its hex as the placeholder. */
+  function showThemeColor(ctl: HTMLElement | null, color: string | null): void {
+    if (!ctl) return;
+    const shown = !ctl.dataset.value && color !== null;
+    ctl.classList.toggle('has-theme', shown);
+    if (shown) $('.swatch-fill', ctl).style.background = color;
+    $<HTMLInputElement>('.hex', ctl).placeholder = shown ? color : 'theme';
+  }
+
+  /** Where the sample's colors come from, or why the theme's are missing. */
+  function themeSourceText(): string {
+    const t = S.themeSyntax;
+    if (!t) return '';
+    switch (t.problem) {
+      case null:
+        return `Colors from ${t.theme}, with your changes on top`;
+      case 'tmTheme':
+        return `${t.theme} is an older .tmTheme file, so its colors are not shown here; dimmed tokens keep them in the editor`;
+      case 'notFound':
+      case 'unreadable':
+        return `${t.theme}'s colors could not be read; dimmed tokens keep them in the editor`;
+      default: {
+        const unknownProblem: never = t.problem;
+        return unknownProblem;
+      }
+    }
+  }
+
   function previewHtml(lang: Language): string {
     const labels = new Map(lang.groups.flatMap((g) => g.items.map((i) => [i.id, i.label] as const)));
     return lang.sample
@@ -1162,7 +1199,7 @@
       ${semanticBar()}
       <div class="syntax-layout">
         <div class="preview-wrap">
-          <div class="preview-head"><b>${esc(lang.short)} sample</b><span class="muted">Dimmed tokens keep your theme's colors</span></div>
+          <div class="preview-head"><b>${esc(lang.short)} sample</b><span class="muted" id="syntax-source">${esc(themeSourceText())}</span></div>
           <div class="preview"><pre>${previewHtml(lang)}</pre></div>
         </div>
         <div class="token-list">
@@ -1266,11 +1303,16 @@
     const lang = currentLang();
     if (!lang) return;
     for (const row of $$('#tab-syntax .token-row')) {
-      const st = items[styleKey(lang.id, row.dataset.item ?? '')];
-      setColorCtl($opt('.color-ctl', row), st?.fg ?? null);
+      const key = styleKey(lang.id, row.dataset.item ?? '');
+      const st = items[key];
+      const ctl = $opt('.color-ctl', row);
+      setColorCtl(ctl, st?.fg ?? null);
+      showThemeColor(ctl, S.themeSyntax?.items[key]?.fg ?? null);
       syncStyleButtons(row, st?.fontStyle ?? null);
       row.classList.toggle('modified', hasStyle(st));
     }
+    const head = $opt('#syntax-source');
+    if (head) head.textContent = themeSourceText();
     for (const card of $$('#tab-syntax details.card')) {
       const rows = $$('.token-row', card);
       const n = rows.filter((r) => r.classList.contains('modified')).length;
@@ -1283,15 +1325,19 @@
       preview.style.background = bg || '';
       preview.style.color = fg || '';
     }
+    // Without the theme's colors, tokens the user has not styled are dimmed rather than shown in a wrong color.
+    const themeKnown = S.themeSyntax?.problem === null;
     for (const span of $$('#tab-syntax .tok')) {
-      const st = items[styleKey(lang.id, span.dataset.item ?? '')];
+      const st = shownStyle(styleKey(lang.id, span.dataset.item ?? ''));
       span.style.cssText = cssFor(st);
-      span.classList.toggle('dim', !st?.fg);
+      span.classList.toggle('dim', !st.fg && !themeKnown);
     }
     const pop = $opt('#tok-pop');
     if (pop) {
-      const st = items[styleKey(lang.id, pop.dataset.item ?? '')];
+      const key = styleKey(lang.id, pop.dataset.item ?? '');
+      const st = items[key];
       setColorCtl($opt('.color-ctl', pop), st?.fg ?? null);
+      showThemeColor($opt('.color-ctl', pop), S.themeSyntax?.items[key]?.fg ?? null);
       syncStyleButtons(pop, st?.fontStyle ?? null);
       const fg = (st?.fg ?? '').toLowerCase();
       $$('.tp-preset', pop).forEach((b) => b.classList.toggle('active', b.dataset.color === fg));
@@ -2264,6 +2310,9 @@
         S.snapshots = msg.list;
         S.sessionStart = msg.sessionStart;
         return renderSnapshots();
+      case 'themeSyntax':
+        S.themeSyntax = { theme: msg.theme, items: msg.items, problem: msg.problem };
+        return syncSyntax();
       case 'importPreview':
         return openImportDialog(msg.preview);
       case 'toast':

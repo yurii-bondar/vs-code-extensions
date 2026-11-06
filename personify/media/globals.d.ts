@@ -14,6 +14,7 @@ type Language = import('../src/catalog/types').Language;
 type Tab = import('../src/core/types').Tab;
 type Scope = import('../src/core/types').Scope;
 type ThemeMode = import('../src/core/types').ThemeMode;
+type ThemeProblem = import('../src/core/types').ThemeProblem;
 type AppearanceState = import('../src/core/types').AppearanceState;
 type SyntaxState = import('../src/core/types').SyntaxState;
 type SettingValue = import('../src/core/types').SettingValue;

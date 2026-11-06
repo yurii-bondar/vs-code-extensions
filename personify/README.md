@@ -35,7 +35,7 @@ Everything is written to the regular VS Code JSON files, nothing hidden:
 - Go token scopes follow VS Code's built-in Go grammar. Semantic colors for Go need `"gopls": { "ui.semanticTokens": true }`.
 - With a non-default VS Code profile, set `personify.keybindingsPath` to that profile's `keybindings.json`.
 - VS Code does not tell extensions the TextMate scopes of a token, so the scope inspector is VS Code's own window, and Custom scopes cannot count matches in your files.
-- The previews draw your theme's UI colors; code in them uses the syntax colors you set in Personify and the editor text color for the rest.
+- Code in the previews is colored like the editor: your theme's token colors (read from the installed theme file), your own `editor.tokenColorCustomizations`, then Personify's. Two approximations: semantic colors are applied by token kind, not by analysing code, and themes that still ship a `.tmTheme` file are not read (their tokens are dimmed instead).
 
 ## Develop
 

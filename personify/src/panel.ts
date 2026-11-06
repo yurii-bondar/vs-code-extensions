@@ -4,12 +4,14 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as catalog from './catalog';
-import { Customizations, SEMANTIC_ENABLED } from './core/customizations';
+import { Customizations, RULE_PREFIX, SEMANTIC_ENABLED, TOKENS } from './core/customizations';
 import { errorMessage, str } from './core/json';
 import { diffProfile, parseProfile, profileFile } from './core/profile';
 import { parseSnapshots, snapshotInfo, withSnapshot } from './core/snapshots';
+import { customizationRules, itemStyles } from './core/themeSyntax';
 import { parseClientMessage, parsePrefs } from './protocol';
 import { vscodeConfig } from './settings';
+import { ThemeReader } from './themes';
 import type { KeybindingStore } from './keybindings';
 import type { Snapshot } from './core/customizations';
 import type { Profile } from './core/profile';
@@ -19,6 +21,8 @@ import type { ClientMessage, HostMessage, ToastKind } from './protocol';
 
 const PREFS_KEY = 'personify.prefs';
 const SNAPSHOTS_KEY = 'personify.snapshots';
+// What the theme's syntax colors depend on.
+const THEME_KEYS = ['workbench.colorTheme', 'editor.tokenColorCustomizations', SEMANTIC_ENABLED];
 const WATCHED_KEYS = ['workbench.colorCustomizations', 'editor.tokenColorCustomizations', 'editor.semanticTokenColorCustomizations', 'workbench.colorTheme', SEMANTIC_ENABLED, ...catalog.SETTING_KEYS];
 
 const activeTheme = (): string => str(vscode.workspace.getConfiguration('workbench').get<unknown>('colorTheme')) ?? '';
@@ -40,6 +44,9 @@ export class PersonifyPanel {
   private readonly sessionStart = Date.now();
   /** The profile last previewed, until the panel applies or cancels it. */
   private pendingImport: { file: string; data: Profile } | null = null;
+  private readonly themes = new ThemeReader();
+  /** The theme syntax colors last sent, so an unrelated settings change does not resend them. */
+  private lastThemeSyntax = '';
 
   static show(context: vscode.ExtensionContext, store: KeybindingStore, tab?: Tab): void {
     if (PersonifyPanel.current) {
@@ -81,6 +88,7 @@ export class PersonifyPanel {
     vscode.workspace.onDidChangeConfiguration(
       (e) => {
         if (WATCHED_KEYS.some((k) => e.affectsConfiguration(k))) this.schedule('state', () => this.pushState());
+        if (THEME_KEYS.some((k) => e.affectsConfiguration(k))) this.schedule('theme', () => void this.pushThemeSyntax());
         if (e.affectsConfiguration('personify.keybindingsPath')) {
           this.watchKeybindings();
           void this.pushKeybindings();
@@ -97,6 +105,7 @@ export class PersonifyPanel {
     if (this.watchedFile) fs.unwatchFile(this.watchedFile);
     for (const timer of this.timers.values()) clearTimeout(timer);
     for (const d of this.disposables) d.dispose();
+    this.themes.dispose();
   }
 
   // fs.watchFile polls, so it also notices a keybindings.json that does not exist yet. It runs only while the panel is open.
@@ -140,6 +149,21 @@ export class PersonifyPanel {
     });
   }
 
+  /** The theme's syntax colors with the user's own token colors on top, for the panel's code samples. */
+  private async pushThemeSyntax(): Promise<void> {
+    const theme = activeTheme();
+    const { tokens, problem } = await this.themes.read(theme);
+    const extra = customizationRules(vscodeConfig.effective(TOKENS), theme, (name) => name.startsWith(RULE_PREFIX));
+    // true and false decide; anything else ("configuredByTheme") leaves it to the theme.
+    const setting = vscodeConfig.effective(SEMANTIC_ENABLED);
+    const semantic = typeof setting === 'boolean' ? setting : tokens.semanticHighlighting;
+    const items = itemStyles({ tokens, extra, languages: catalog.LANGUAGES, semantic });
+    const sent = JSON.stringify([theme, items, problem]);
+    if (sent === this.lastThemeSyntax) return;
+    this.lastThemeSyntax = sent;
+    this.post({ type: 'themeSyntax', theme, items, problem });
+  }
+
   private async pushKeybindings(force = false): Promise<void> {
     try {
       this.post({ type: 'keybindings', ...(await this.store.state(force)) });
@@ -171,6 +195,7 @@ export class PersonifyPanel {
         });
         this.pushState();
         this.pushSnapshots();
+        await this.pushThemeSyntax();
         await this.pushKeybindings();
         return;
       case 'prefs':
