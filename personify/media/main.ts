@@ -39,6 +39,15 @@
   ];
   type FilterTab = 'appearance' | 'syntax';
 
+  /** A shortcut being changed in its row. */
+  interface KbEdit {
+    rowId: string;
+    chords: string[];
+    when: string;
+    /** The first key pressed replaces the old shortcut instead of extending it into a chord. */
+    fresh: boolean;
+  }
+
   const toTab = (v: string | undefined): Tab => TABS.find((t) => t.id === v)?.id ?? 'appearance';
 
   interface State {
@@ -57,6 +66,8 @@
     kbQuery: string;
     kbLimit: number;
     kbRecordSearch: boolean;
+    /** The shortcut being changed in its row; null when none is. */
+    kbEdit: KbEdit | null;
     filters: Record<FilterTab, string>;
     /** Debounce keys whose write is still queued. */
     pending: Set<string>;
@@ -78,6 +89,7 @@
     kbQuery: '',
     kbLimit: 200,
     kbRecordSearch: false,
+    kbEdit: null,
     filters: { appearance: '', syntax: '' },
     pending: new Set(),
   };
@@ -1353,8 +1365,6 @@
     args: undefined;
   }
   type ListRow = ViewRow | CommandRow;
-  type UserViewRow = Extract<ViewRow, { source: 'user' }>;
-  type DefaultViewRow = Extract<ViewRow, { source: 'default' }>;
 
   const commandRow = (command: string, title: string): CommandRow => ({ source: 'unbound', id: `c:${command}`, command, title, key: '', when: '', args: undefined });
 
@@ -1427,38 +1437,134 @@
     return kbView.rows.filter((r) => pick[filter](r) && matches(r));
   }
 
+  // ---------- recording a shortcut (the row editor and the Add dialog) ----------
+
+  type RecordStep = { kind: 'stop' } | { kind: 'clear' } | { kind: 'key'; key: string } | { kind: 'none' };
+
+  /** What a key press means while a shortcut is being recorded: plain Esc stops, plain Backspace clears. */
+  function recordStep(e: KeyboardEvent): RecordStep {
+    const plain = !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey;
+    if (plain && e.key === 'Escape') return { kind: 'stop' };
+    if (plain && e.key === 'Backspace') return { kind: 'clear' };
+    const key = keyFromEvent(e);
+    return key ? { kind: 'key', key } : { kind: 'none' };
+  }
+
+  /** The chords after a key press: a fresh recording or a finished two-step chord starts over. */
+  const addChord = (chords: readonly string[], key: string, fresh: boolean): string[] => (fresh || chords.length >= 2 ? [key] : [...chords, key]);
+
+  /** Active shortcuts of other commands on the same keys. */
+  function sameKeys(key: string, command: string, self: ListRow | null): ViewRow[] {
+    if (!key) return [];
+    const nk = normKey(key);
+    return kbView.rows.filter((r) => !r.removed && r.nk === nk && r.command !== command && r !== self);
+  }
+
+  const alsoRuns = (others: readonly ViewRow[]): string =>
+    others.length
+      ? `⚠ Also runs ${others
+          .slice(0, 2)
+          .map((o) => `<b>${esc(o.title)}</b>${o.when ? ` <span class="muted">(when ${esc(o.when)})</span>` : ''}`)
+          .join(', ')}${others.length > 2 ? ` and ${others.length - 2} more` : ''}`
+      : '';
+
+  // ---------- rows ----------
+
+  function badgeFor(r: ListRow): string {
+    if (r.source === 'unbound') return '<span class="badge">No shortcut</span>';
+    if (r.removed) return '<span class="badge badge-removed">Removed</span>';
+    return r.source === 'user' ? '<span class="badge badge-user">Yours</span>' : '<span class="badge">Default</span>';
+  }
+
+  /** A row whose shortcut can be changed in place. */
+  const editable = (r: ListRow): boolean => r.source === 'unbound' || !r.removed;
+
   function kbRowHtml(r: ListRow): string {
+    if (S.kbEdit?.rowId === r.id) return kbEditHtml(r, S.kbEdit);
     const btn = (action: string, label: string, title: string, cls = ''): string => `<button class="icon-btn ${cls}" data-kb="${action}" data-id="${esc(r.id)}" title="${esc(title)}">${label}</button>`;
-    let badge: string;
     let actions: string;
     if (r.source === 'unbound') {
-      badge = '<span class="badge">No shortcut</span>';
-      actions = btn('add', '＋ Assign', 'Assign a shortcut', 'text-btn');
+      actions = btn('edit', '+ Assign', 'Assign a shortcut', 'text-btn');
     } else if (r.removed) {
-      badge = '<span class="badge badge-removed">Removed</span>';
       actions =
         r.source === 'user'
           ? btn('restore', '↺ Restore', 'Delete the entry that switches this shortcut off', 'text-btn') + btn('remove', '🗑', 'Delete this shortcut')
           : btn('restore', '↺ Restore', 'Bring this default shortcut back', 'text-btn');
     } else if (r.source === 'user') {
-      badge = '<span class="badge badge-user">Custom</span>';
-      actions = btn('edit', '✎', 'Edit shortcut') + btn('add', '＋', 'Add another shortcut for this command') + btn('remove', '🗑', 'Delete this shortcut') + (kbView.withDefault.has(r.command) ? btn('reset', '↺', 'Reset command to defaults') : '');
+      actions = btn('edit', '✎', 'Change shortcut') + btn('add', '＋', 'Add another shortcut for this command') + btn('remove', '🗑', 'Delete this shortcut') + (kbView.withDefault.has(r.command) ? btn('reset', '↺', 'Reset command to defaults') : '');
     } else {
-      badge = '<span class="badge">Default</span>';
       actions = btn('edit', '✎', 'Change shortcut') + btn('add', '＋', 'Add another shortcut for this command') + btn('remove', '⊘', 'Remove this default shortcut');
     }
     const conflicts = r.source === 'unbound' ? [] : r.conflicts;
-    const conflict = conflicts.length
-      ? `<span class="conflict" title="Same key also runs:\n${esc(conflicts.slice(0, 6).map((c) => `• ${c.title}${c.when ? ` (when ${c.when})` : ''}`).join('\n'))}">⚠ ${conflicts.length}</span>`
-      : '';
     const removed = r.source !== 'unbound' && r.removed;
+    const key = editable(r) && r.source !== 'unbound' ? `<button class="kb-keys" data-kb="edit" data-id="${esc(r.id)}" title="Click to change">${keyHtml(r.key)}</button>` : keyHtml(r.key);
     return `<div class="kb-row ${removed ? 'removed' : ''} ${r.source === 'user' ? 'user' : ''}">
       <div class="kb-cmd"><div class="kb-title">${esc(r.title)}</div><div class="kb-id">${esc(r.command)}</div></div>
-      <div class="kb-key">${keyHtml(r.key)}${conflict}</div>
-      <div class="kb-when">${r.when ? `<code>${esc(r.when)}</code>` : '<span class="muted">always</span>'}</div>
-      <div class="kb-src">${badge}</div>
+      <div class="kb-key">${key}${conflicts.length ? `<div class="conflict">${alsoRuns(conflicts)}</div>` : ''}</div>
+      <div class="kb-when">${r.when ? `<code>${esc(r.when)}</code>` : '<span class="muted">everywhere</span>'}</div>
+      <div class="kb-src">${badgeFor(r)}</div>
       <div class="kb-actions">${actions}</div>
     </div>`;
+  }
+
+  /** The row while its shortcut is recorded: keys, when, Cancel and Save. */
+  function kbEditHtml(r: ListRow, edit: KbEdit): string {
+    return `<div class="kb-row editing" data-edit="${esc(r.id)}">
+      <div class="kb-cmd"><div class="kb-title">${esc(r.title)}</div><div class="kb-id">${esc(r.command)}</div></div>
+      <div class="kb-key">
+        <div class="recorder inline recording" tabindex="0" id="kb-rec" aria-label="Press the new shortcut"><span class="rec-keys"></span><span class="rec-hint">press a key…</span><span class="rec-help">Esc cancels · ⌫ clears</span></div>
+        <div class="conflict" id="kb-rec-conflicts"></div>
+      </div>
+      <div class="kb-when"><input type="text" class="text" id="kb-rec-when" list="when-list" placeholder="everywhere" spellcheck="false" value="${esc(edit.when)}" aria-label="When"></div>
+      <div class="kb-src">${badgeFor(r)}</div>
+      <div class="kb-actions"><button class="btn ghost" data-kb-edit="cancel">Cancel</button><button class="btn" data-kb-edit="save">Save</button></div>
+    </div>`;
+  }
+
+  /** Shows the recorded keys and their conflicts without re-rendering the table. */
+  function syncEdit(): void {
+    const edit = S.kbEdit;
+    const box = $opt('#kb-rec');
+    if (!edit || !box) return;
+    const key = edit.chords.join(' ');
+    $('.rec-keys', box).innerHTML = key ? keyHtml(key) : '';
+    box.classList.toggle('has-keys', Boolean(key));
+    const row = findKbRow(edit.rowId) ?? null;
+    $('#kb-rec-conflicts').innerHTML = row ? alsoRuns(sameKeys(key, row.command, row)) : '';
+  }
+
+  function startEdit(row: ListRow): void {
+    flushEditWhen();
+    S.kbEdit = { rowId: row.id, chords: row.key ? row.key.trim().split(/\s+/) : [], when: row.when, fresh: true };
+    renderKbRows();
+    $opt('#kb-rec')?.focus();
+  }
+
+  /** Keeps what was typed in the when field of the row being edited. */
+  function flushEditWhen(): void {
+    const input = $opt<HTMLInputElement>('#kb-rec-when');
+    if (S.kbEdit && input && input.closest<HTMLElement>('[data-edit]')?.dataset.edit === S.kbEdit.rowId) S.kbEdit.when = input.value;
+  }
+
+  function endEdit(): void {
+    S.kbEdit = null;
+    renderKbRows();
+  }
+
+  function saveEdit(): void {
+    flushEditWhen();
+    const edit = S.kbEdit;
+    const row = edit ? findKbRow(edit.rowId) : undefined;
+    if (!edit || !row) return endEdit();
+    const key = edit.chords.join(' ');
+    const when = edit.when.trim();
+    if (!key) return toast('Press the new shortcut first', 'error');
+    // The host confirms the save, or reports why it failed.
+    if (row.source === 'unbound') kbOp({ op: 'add', command: row.command, key, when, args: undefined });
+    else if (row.source === 'user') kbOp({ op: 'update', index: row.index, command: row.command, key, when });
+    else if (key !== row.key || when !== row.when) kbOp({ op: 'replaceDefault', command: row.command, oldKey: row.key, oldWhen: row.when, key, when, args: row.args });
+    else toast('Nothing changed');
+    endEdit();
   }
 
   function renderHotkeysShell(): void {
@@ -1476,15 +1582,16 @@
         <div class="kb-toolbar">
           <div class="search-wrap">
             <input type="search" id="kb-search" class="search" placeholder="Search command, key (cmd+p) or when…" value="${esc(S.kbQuery)}">
-            <button class="btn secondary ${S.kbRecordSearch ? 'active' : ''}" id="kb-record-search" title="Press keys to search by shortcut">⌨ Search by keys</button>
+            <button class="record-btn ${S.kbRecordSearch ? 'active' : ''}" id="kb-record-search" title="Press keys to search by shortcut"><span class="rec-dot"></span>Record keys</button>
           </div>
           <div class="chips">${KB_FILTERS.map(([id, label]) => `<button class="chip ${S.kbFilter === id ? 'active' : ''}" data-filter-kb="${id}">${label} <span data-kbcount="${id}"></span></button>`).join('')}</div>
         </div>
+        <div id="kb-conflicts" class="banner warn conflicts-banner hidden"></div>
         <div class="kb-table">
           <div class="kb-row kb-head"><div>Command</div><div>Shortcut</div><div>When</div><div>Source</div><div></div></div>
           <div id="kb-body"><div class="empty-state">Loading shortcuts…</div></div>
         </div>
-        <div class="kb-more"></div>
+        <div class="kb-foot"><span class="muted small" id="kb-shown"></span><div class="kb-more"></div><span class="muted small">Click a shortcut to change it.</span></div>
       </div>`;
   }
 
@@ -1492,9 +1599,24 @@
     if (!S.kb) return;
     const list = kbFiltered(S.kb);
     const shown = list.slice(0, S.kbLimit);
+    // An edit whose row is gone (filtered out, or the file changed under it) is dropped.
+    if (S.kbEdit && !shown.some((r) => r.id === S.kbEdit?.rowId)) S.kbEdit = null;
+    const whenFocused = document.activeElement?.id === 'kb-rec-when';
+    flushEditWhen();
     $('#kb-body').innerHTML = shown.length ? shown.map(kbRowHtml).join('') : '<div class="empty-state">No shortcuts match.</div>';
+    if (S.kbEdit) {
+      syncEdit();
+      $opt(whenFocused ? '#kb-rec-when' : '#kb-rec')?.focus();
+    }
     const more = list.length - shown.length;
-    $('#tab-hotkeys .kb-more').innerHTML = more > 0 ? `<button class="btn secondary" data-kbtool="more">Show ${Math.min(more, 200)} more (${more} hidden)</button>` : '';
+    $('#tab-hotkeys .kb-more').innerHTML = more > 0 ? `<button class="btn secondary" data-kbtool="more">Show ${Math.min(more, 200)} more</button>` : '';
+    $('#kb-shown').textContent = `Showing ${shown.length} of ${list.length}`;
+    const conflicts = kbView.counts.conflicts;
+    const banner = $('#kb-conflicts');
+    banner.classList.toggle('hidden', !conflicts || S.kbFilter === 'conflicts');
+    banner.innerHTML = conflicts
+      ? `<span>⚠ <b>${conflicts} shortcut${conflicts === 1 ? '' : 's'} share${conflicts === 1 ? 's' : ''} keys with another command in an overlapping context.</b> <span class="muted">Only one of them runs.</span></span><button class="link-btn" data-filter-kb="conflicts">Show conflicts →</button>`
+      : '';
     for (const [id, n] of Object.entries(kbView.counts)) {
       const el = $opt(`[data-kbcount="${id}"]`);
       if (el) el.textContent = String(n);
@@ -1526,6 +1648,21 @@
     });
     root.addEventListener('keydown', (e) => {
       const t = e.target;
+      const edit = S.kbEdit;
+      if (edit && t instanceof HTMLElement && t.id === 'kb-rec') {
+        const step = recordStep(e);
+        if (step.kind === 'none') return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (step.kind === 'stop') return endEdit();
+        edit.chords = step.kind === 'clear' ? [] : addChord(edit.chords, step.key, edit.fresh);
+        edit.fresh = step.kind === 'clear';
+        return syncEdit();
+      }
+      if (edit && t instanceof HTMLInputElement && t.id === 'kb-rec-when' && (e.key === 'Enter' || e.key === 'Escape')) {
+        e.preventDefault();
+        return e.key === 'Enter' ? saveEdit() : endEdit();
+      }
       if (!(t instanceof HTMLInputElement) || t.id !== 'kb-search' || !S.kbRecordSearch) return;
       const key = keyFromEvent(e);
       if (!key) return;
@@ -1547,6 +1684,8 @@
         input.focus();
         return;
       }
+      const editBtn = t.closest<HTMLElement>('[data-kb-edit]');
+      if (editBtn) return editBtn.dataset.kbEdit === 'save' ? saveEdit() : endEdit();
       const chip = t.closest<HTMLElement>('[data-filter-kb]');
       if (chip) {
         S.kbFilter = KB_FILTERS.find(([id]) => id === chip.dataset.filterKb)?.[0] ?? 'all';
@@ -1557,7 +1696,7 @@
       if (tool) {
         switch (tool.dataset.kbtool) {
           case 'add':
-            return openRecorder({ mode: 'add', seed: null });
+            return openRecorder(null);
           case 'json':
             return send({ type: 'openKeybindingsJson' });
           case 'refresh':
@@ -1573,11 +1712,10 @@
       if (!row) return;
       switch (b.dataset.kb) {
         case 'edit':
-          if (row.source === 'user') openRecorder({ mode: 'update', row });
-          else if (row.source === 'default') openRecorder({ mode: 'replace', row });
+          if (editable(row)) startEdit(row);
           return;
         case 'add':
-          return openRecorder({ mode: 'add', seed: { command: row.command, title: row.title, when: row.source === 'unbound' ? '' : row.when, args: row.args } });
+          return openRecorder({ command: row.command, title: row.title, when: row.source === 'unbound' ? '' : row.when, args: row.args });
         case 'remove':
           if (row.source === 'user') kbOp({ op: 'remove', index: row.index, command: row.command });
           else if (row.source === 'default') kbOp({ op: 'disableDefault', command: row.command, key: row.key, when: row.when });
@@ -1598,24 +1736,22 @@
     when: string;
     args: unknown;
   }
-  type RecorderOpts = { mode: 'add'; seed: AddSeed | null } | { mode: 'update'; row: UserViewRow } | { mode: 'replace'; row: DefaultViewRow };
-
-  // Modal to record / edit a shortcut.
-  function openRecorder(opts: RecorderOpts): void {
-    const titles: Record<RecorderOpts['mode'], string> = { add: 'Add shortcut', update: 'Edit shortcut', replace: 'Change default shortcut' };
-    const row = opts.mode === 'add' ? opts.seed : opts.row;
-    const editableCommand = !row;
-    let chords = opts.mode !== 'add' && opts.row.key ? opts.row.key.trim().split(/\s+/) : [];
-    // The first key pressed replaces an existing shortcut instead of extending it into a chord.
+  /**
+   * Dialog to add a shortcut: for a command the user picks, or (with a seed) another one for a known command.
+   * Changing an existing shortcut happens in its row.
+   */
+  function openRecorder(seed: AddSeed | null): void {
+    let chords: string[] = [];
+    // The first key pressed replaces what is there instead of extending it into a chord.
     let fresh = true;
     const wrap = document.createElement('div');
     wrap.className = 'modal-backdrop';
     wrap.innerHTML = `
       <div class="modal" role="dialog" aria-modal="true">
-        <h3>${titles[opts.mode]}</h3>
-        ${editableCommand
+        <h3>Add shortcut</h3>
+        ${!seed
           ? `<label class="field"><span>Command</span><input type="text" class="text" id="rec-command" list="cmd-list" placeholder="Start typing a command id, e.g. workbench.action.files.save" spellcheck="false"></label>`
-          : `<div class="field"><span>Command</span><div class="cmd-display"><b>${esc(row.title)}</b><code>${esc(row.command)}</code></div></div>`}
+          : `<div class="field"><span>Command</span><div class="cmd-display"><b>${esc(seed.title)}</b><code>${esc(seed.command)}</code></div></div>`}
         <div class="field">
           <span>Shortcut</span>
           <div class="recorder" tabindex="0" id="rec-box"><span class="rec-keys"></span><span class="rec-hint">Click here and press keys</span></div>
@@ -1624,7 +1760,6 @@
         </div>
         <label class="field"><span>When <small class="muted">(optional context, e.g. editorTextFocus)</small></span><input type="text" class="text" id="rec-when" list="when-list" spellcheck="false"></label>
         <div class="rec-conflicts"></div>
-        ${opts.mode === 'replace' ? '<div class="muted small">The default shortcut is switched off and your new one is added to keybindings.json. You can restore it any time.</div>' : ''}
         <div class="modal-actions">
           <button class="btn secondary" data-m="cancel">Cancel</button>
           <button class="btn" data-m="save">Save</button>
@@ -1636,22 +1771,16 @@
     const manual = $<HTMLInputElement>('#rec-manual', wrap);
     const when = $<HTMLInputElement>('#rec-when', wrap);
     const cmdInput = $opt<HTMLInputElement>('#rec-command', wrap);
-    when.value = row?.when ?? '';
-    const command = (): string => (cmdInput ? cmdInput.value.trim() : (row?.command ?? ''));
+    when.value = seed?.when ?? '';
+    const command = (): string => (cmdInput ? cmdInput.value.trim() : (seed?.command ?? ''));
 
     const update = (): void => {
       const key = chords.join(' ');
       $('.rec-keys', box).innerHTML = key ? keyHtml(key) : '';
       box.classList.toggle('has-keys', Boolean(key));
       if (document.activeElement !== manual) manual.value = key;
-      const nk = normKey(key);
-      const others = key && S.kb ? kbView.rows.filter((r) => !r.removed && r.nk === nk && r.command !== command() && r !== row) : [];
-      $('.rec-conflicts', wrap).innerHTML = others.length
-        ? `<div class="banner warn">⚠ Also used by ${others
-            .slice(0, 4)
-            .map((o) => `<b>${esc(o.title)}</b>${o.when ? ` <span class="muted">(when ${esc(o.when)})</span>` : ''}`)
-            .join(', ')}${others.length > 4 ? ` and ${others.length - 4} more` : ''}</div>`
-        : '';
+      const others = alsoRuns(sameKeys(key, command(), null));
+      $('.rec-conflicts', wrap).innerHTML = others ? `<div class="banner warn">${others}</div>` : '';
     };
 
     box.addEventListener('focus', () => {
@@ -1660,23 +1789,13 @@
     });
     box.addEventListener('blur', () => box.classList.remove('recording'));
     box.addEventListener('keydown', (e) => {
-      const plain = !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey;
-      if (plain && e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        return box.blur();
-      }
-      if (plain && e.key === 'Backspace') {
-        e.preventDefault();
-        chords = [];
-        return update();
-      }
-      const key = keyFromEvent(e);
-      if (!key) return;
+      const step = recordStep(e);
+      if (step.kind === 'none') return;
       e.preventDefault();
       e.stopPropagation();
-      chords = fresh || chords.length >= 2 ? [key] : [...chords, key];
-      fresh = false;
+      if (step.kind === 'stop') return box.blur();
+      chords = step.kind === 'clear' ? [] : addChord(chords, step.key, fresh);
+      fresh = step.kind === 'clear';
       update();
     });
     manual.addEventListener('input', () => {
@@ -1706,10 +1825,7 @@
       if (!cmd) return toast('Choose a command first', 'error');
       if (!key) return toast('Record or type a shortcut first', 'error');
       // The host confirms the save, or reports why it failed.
-      if (opts.mode === 'add') kbOp({ op: 'add', command: cmd, key, when: w, args: opts.seed?.args });
-      else if (opts.mode === 'update') kbOp({ op: 'update', index: opts.row.index, command: opts.row.command, key, when: w });
-      else if (key !== opts.row.key || w !== opts.row.when) kbOp({ op: 'replaceDefault', command: opts.row.command, oldKey: opts.row.key, oldWhen: opts.row.when, key, when: w, args: opts.row.args });
-      else toast('Nothing changed');
+      kbOp({ op: 'add', command: cmd, key, when: w, args: seed?.args });
       close();
     });
 
