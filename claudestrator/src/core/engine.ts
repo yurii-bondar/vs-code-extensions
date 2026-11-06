@@ -2158,7 +2158,10 @@ class Engine extends EventEmitter {
         // What the step wrote this round (each repo's, for a per-repo step), under what the scenario asks you to look at.
         const step = cp.step!;
         const ask = s.pipeline.stages[step.stage]!.approve?.text;
-        const mine = s.artifacts.filter((a) => a.agent === step.agent && a.round === s.review.round);
+        // After a Parallel: every member's report.
+        const group = s.pipeline.stages[step.stage]!.group;
+        const agents = group === undefined ? [step.agent] : s.pipeline.stages.filter((st) => st.group === group).map((st) => st.agent);
+        const mine = s.artifacts.filter((a) => agents.includes(a.agent) && a.round === s.review.round);
         const texts = await Promise.all(mine.map((a) => read(a.path)));
         const last = mine[mine.length - 1];
         return { format: 'markdown', text: `${ask ? `**${ask}**\n\n` : ''}${texts.join('\n\n---\n\n')}`, ...(last && { file: last.path }) };

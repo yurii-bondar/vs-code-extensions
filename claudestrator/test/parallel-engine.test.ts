@@ -72,3 +72,19 @@ test('engine: a member of a group that hangs is stopped while the other one work
     h.hooks.dispose();
   }
 });
+
+test('engine: You approve after a Parallel shows every member\'s report under what to look at', async () => {
+  const ws = workspace(['api'], SCENARIO.replace('      - parallel: [reviewer, security]\n', '      - parallel: [reviewer, security]\n      - approve: Read both reviews\n'));
+  const h = await harness(ws, { FAKE_REPOS: 'api' });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Add the feature --repos api', scenario: 'ship' });
+    const s = await runTask(h.engine, taskId);
+    assert.equal(s.checkpoint && s.checkpoint.id, 'approve-step', JSON.stringify(s.checkpoint || h.engine.lastError(taskId)));
+    assert.deepEqual(s.checkpoint!.options, ['approve', 'stop']);
+    const ctx = await h.engine.checkpointContext(s, s.checkpoint);
+    assert.match(ctx.text, /^\*\*Read both reviews\*\*/);
+    assert.equal(ctx.text.split('\n\n---\n\n').length, 2, 'the reviewer\'s and security\'s');
+  } finally {
+    h.hooks.dispose();
+  }
+});
