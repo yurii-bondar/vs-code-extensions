@@ -42,3 +42,33 @@ test('engine: the reviewers of a Parallel work at once, and the review loop judg
     h.hooks.dispose();
   }
 });
+
+test('engine: a member of a group that hangs is stopped while the other one works, and the task shows both', async () => {
+  const ws = workspace(['api'], SCENARIO);
+  const h = await harness(ws, { FAKE_REPOS: 'api' });
+  try {
+    const engine = h.engine;
+    engine.stallMs = 300;
+    // The other member works: the task shows signs of work all the time, its own session none.
+    const busy = setInterval(() => engine.activity.set('T-1', Date.now()), 50);
+    let interrupted = false;
+    let end: (r: { ok: boolean; report: string }) => void = () => {};
+    const turn = new Promise<{ ok: boolean; report: string }>((resolve) => (end = resolve));
+    const session = { turn: () => turn, interrupt: async () => void ((interrupted = true), end({ ok: false, report: '' })) };
+    const r = await engine.turnOf('T-1', session, '0007-security');
+    clearInterval(busy);
+    assert.ok(interrupted, 'its own silence counts, not the task\'s');
+    assert.equal(r.ok, false);
+    assert.match(r.error ?? '', /no sign of work/);
+
+    engine.setMemberLive('T-1', 'reviewer', { phase: 'agent', text: 'reviewer is working', key: 'k1' });
+    engine.setMemberLive('T-1', 'security', { phase: 'agent', text: 'security is working', key: 'k2' });
+    assert.equal(engine.live('T-1')!.text, 'reviewer is working · security is working');
+    engine.setMemberLive('T-1', 'reviewer', null);
+    assert.equal(engine.live('T-1')!.text, 'security is working');
+    engine.setMemberLive('T-1', 'security', null);
+    assert.equal(engine.live('T-1'), null);
+  } finally {
+    h.hooks.dispose();
+  }
+});

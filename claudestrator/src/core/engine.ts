@@ -436,6 +436,21 @@ class Engine extends EventEmitter {
     this.emit('live', { taskId, live: this.lives.get(taskId) || null });
   }
 
+  /** What each member of a task's parallel group is doing; the task shows them together. */
+  memberLives = new Map<string, Map<string, Live>>();
+
+  setMemberLive(taskId: string, member: string, live: Live | null): void {
+    const all = this.memberLives.get(taskId) ?? new Map<string, Live>();
+    if (live) all.set(member, live);
+    else all.delete(member);
+    if (all.size) this.memberLives.set(taskId, all);
+    else this.memberLives.delete(taskId);
+    const lives = [...all.values()];
+    if (!lives.length) return this.setLive(taskId, null);
+    // One left: its own words; several: each one's, the first's step and output followed.
+    this.setLive(taskId, lives.length === 1 ? lives[0]! : { ...lives[0]!, text: lives.map((l) => l.text).join(' · ') });
+  }
+
   live(taskId: string): Live | null {
     return this.lives.get(taskId) || null;
   }
@@ -821,7 +836,7 @@ class Engine extends EventEmitter {
    */
   async runGroup(s: TaskState, runs: (RunAction | Extract<NextAction, { kind: 'running' }>)[]): Promise<void> {
     this.log('info', `${runs.map((r) => stepLabel(r.step)).join(', ')} work at once`, s.taskId);
-    const ended = await Promise.allSettled(runs.map((r) => this.runStep(s, r)));
+    const ended = await Promise.allSettled(runs.map((r) => this.runStep(s, r, { member: true }).finally(() => this.setMemberLive(s.taskId, stepLabel(r.step), null))));
     const failed = ended.find((r): r is PromiseRejectedResult => r.status === 'rejected');
     if (failed) throw failed.reason;
   }
@@ -855,6 +870,7 @@ class Engine extends EventEmitter {
     return (item) => {
       const t = Date.now();
       this.activity.set(taskId, t);
+      this.activity.set(key, t);
       const stamped = { ...item, t };
       if (item.type === 'usage') this.liveUsage.set(taskId, { ...item, t, key });
       else if (item.type !== 'text_delta' && item.type !== 'thinking') this.svc.appendTranscript(taskId, key, stamped);
@@ -893,23 +909,25 @@ class Engine extends EventEmitter {
    * count) is interrupted, and the turn fails with that reason: a hung MCP server or network never keeps a task
    * "working" forever.
    */
-  async turnOf(taskId: string, session: Pick<ClaudeSession, 'turn' | 'interrupt'>): Promise<TurnResult> {
+  async turnOf(taskId: string, session: Pick<ClaudeSession, 'turn' | 'interrupt'>, watch = taskId): Promise<TurnResult> {
     this.activity.set(taskId, Date.now());
+    this.activity.set(watch, Date.now());
     this.inTurn.add(taskId);
     try {
-      return await this.watchTurn(taskId, session);
+      return await this.watchTurn(taskId, session, watch);
     } finally {
       this.inTurn.delete(taskId);
     }
   }
 
-  async watchTurn(taskId: string, session: Pick<ClaudeSession, 'turn' | 'interrupt'>): Promise<TurnResult> {
+  /** `watch`: whose signs of work count, the task's or one session's of it (a member of a parallel group). */
+  async watchTurn(taskId: string, session: Pick<ClaudeSession, 'turn' | 'interrupt'>, watch = taskId): Promise<TurnResult> {
     let timer: NodeJS.Timeout | undefined;
     const every = Math.max(50, Math.min(30000, Math.floor(this.stallMs / 4)));
     const stalled = new Promise<true>((resolve) => {
       const check = (): void => {
-        if (this.pendingPermissions(taskId).length) this.activity.set(taskId, Date.now());
-        if (Date.now() - (this.activity.get(taskId) ?? 0) >= this.stallMs) return resolve(true);
+        if (this.pendingPermissions(taskId).length) this.activity.set(watch, Date.now());
+        if (Date.now() - (this.activity.get(watch) ?? 0) >= this.stallMs) return resolve(true);
         timer = setTimeout(check, every);
       };
       timer = setTimeout(check, every);
@@ -1162,7 +1180,8 @@ class Engine extends EventEmitter {
     return spentOf(await this.svc.events(taskId));
   }
 
-  async runStep(s: TaskState, next: NextAction): Promise<void> {
+  /** `member`: one of a parallel group, which shows its state next to the others' and is watched on its own. */
+  async runStep(s: TaskState, next: NextAction, { member = false }: { member?: boolean } = {}): Promise<void> {
     const taskId = s.taskId;
     const step = (next as RunAction | Extract<NextAction, { kind: 'running' }>).step;
     const config = await this.config();
@@ -1176,6 +1195,7 @@ class Engine extends EventEmitter {
     const extra = s.stepInstructions && s.stepInstructions[step.agent];
     const agent = configured && (override || model || extra) ? { ...configured, ...(override && { effort: override }), ...(model && { model }), ...(extra && { instructions: withStepInstructions(configured.instructions, extra, s.scenarioLabel) }) } : configured;
     const label = stepLabel(step);
+    const live = (l: Live | null): void => (member ? this.setMemberLive(taskId, label, l) : this.setLive(taskId, l));
 
     const budget = config.limits.budgetUsd;
     const spent = budget !== undefined ? await this.spentUsd(taskId) : 0;
@@ -1193,7 +1213,7 @@ class Engine extends EventEmitter {
     let workRepos: { name: string; dir: string }[] = [];
     if (onRepos(stage)) {
       if (!this.prepared.has(taskId)) {
-        this.setLive(taskId, { phase: 'preparing', step, text: `Preparing branch ${branchName(s)}` });
+        live({ phase: 'preparing', step, text: `Preparing branch ${branchName(s)}` });
         const p = await prepareRepos(this.workspace, s, config);
         if (!p.ok) throw new EngineError(p.code, `${p.error}${p.blocked ? `: ${p.blocked.map((b) => `${b.repo} (${b.problem})`).join(', ')}` : ''}`, { blocked: p.blocked });
         this.prepared.add(taskId);
@@ -1206,7 +1226,7 @@ class Engine extends EventEmitter {
     let emptyDiff = false;
     let redChecks: string | undefined;
     if (stage.output === 'verdict' && s.repos.length) {
-      this.setLive(taskId, { phase: 'preparing', step, text: 'Collecting the diff for review' });
+      live({ phase: 'preparing', step, text: 'Collecting the diff for review' });
       const diff = await taskDiff(taskRepos(this.workspace, s, config, s.repos.map((r) => r.name)));
       diffPath = await this.svc.writeArtifact(taskId, `reviews/r${s.review.round}/diff.patch`, diff.text);
       emptyDiff = diff.empty;
@@ -1248,7 +1268,7 @@ class Engine extends EventEmitter {
     const readRepos = REPORT_OUTPUTS.has(stage.output) || stage.output === 'plan' ? Object.values(config.repos).map((r) => ({ name: r.name, dir: path.resolve(this.workspace, r.path), baseBranch: r.baseBranch, ...(r.role && { role: r.role }) })) : [];
     let prsPath: string | undefined;
     if (stage.output === 'readiness' && s.source.kind === 'jira' && readRepos.length) {
-      this.setLive(taskId, { phase: 'preparing', step, text: `Listing the PRs on GitHub for ${s.source.key}` });
+      live({ phase: 'preparing', step, text: `Listing the PRs on GitHub for ${s.source.key}` });
       prsPath = await this.listPrs(taskId, s.source.key, readRepos);
     }
     const failed = run.mode === 'retry' ? await this.lastFailure(taskId, step) : null;
@@ -1314,7 +1334,10 @@ class Engine extends EventEmitter {
           if (item.type === 'tool_result' && item.isError) noteRefused(item.text);
         },
       }),
-      onActivity: () => this.activity.set(taskId, Date.now()),
+      onActivity: () => {
+        this.activity.set(taskId, Date.now());
+        this.activity.set(key, Date.now());
+      },
       onWarn: (message) => this.log('warn', `${label}: ${message}`, taskId),
       // The account the session started under: switching accounts meanwhile does not move its limits to the other.
       onLimits: ((account) => (limits: EngineLimits) => {
@@ -1331,7 +1354,7 @@ class Engine extends EventEmitter {
       return;
     }
     this.addSession(taskId, session);
-    this.setLive(taskId, { phase: 'agent', step, key, text: `${label} is working` });
+    live({ phase: 'agent', step, key, text: `${label} is working` });
 
     let t: TurnResult = { ok: false, report: '' };
     const stopped = async (): Promise<boolean> => (await this.svc.state(taskId)).status === 'stopped';
@@ -1349,15 +1372,15 @@ class Engine extends EventEmitter {
      * the first, one fixing red checks or one correcting its report.
      */
     const turn = async (): Promise<TurnResult | null> => {
-      let r = await this.turnOf(taskId, session);
+      let r = await this.turnOf(taskId, session, key);
       if (await stopped()) return null;
       for (let n = 1; !r.ok && n <= TRANSIENT_RETRIES && transientError(r.error) && !session.ended; n++) {
         const wait = this.retryDelayMs * 2 ** (n - 1);
         this.log('warn', `${label}: ${r.error}; trying again in ${Math.round(wait / 1000)}s`, taskId);
-        this.setLive(taskId, { phase: 'agent', step, key, text: `${label} waits ${Math.round(wait / 1000)}s after an API error` });
+        live({ phase: 'agent', step, key, text: `${label} waits ${Math.round(wait / 1000)}s after an API error` });
         if (await this.pause(taskId, wait)) return null;
         say('The last request failed on the API side. Continue where you left off; what you did before it is kept.');
-        r = await this.turnOf(taskId, session);
+        r = await this.turnOf(taskId, session, key);
         if (await stopped()) return null;
       }
       return workTurn(stage.output, r);
@@ -1388,7 +1411,7 @@ class Engine extends EventEmitter {
           this.gateRuns.set(taskId, abort);
           try {
             for (const r of targets) {
-              this.setLive(taskId, { phase: 'gates', step, key, text: `Running gates in ${r.name}` });
+              live({ phase: 'gates', step, key, text: `Running gates in ${r.name}` });
               // The checks see the repo as a commit would: without Claude Code's empty staging folders, which its
               // session makes again before its next command.
               await new GitRepo(r.dir).removeWriteStaging();
@@ -1398,7 +1421,7 @@ class Engine extends EventEmitter {
                   repo: { ...config.repos[r.name]!, baseBranch: taskRepos(this.workspace, state, config, [r.name])[0]!.base },
                   dir: r.dir,
                   logDir: path.join(taskDir, 'gates', `r${state.review.round}`),
-                  onGate: (name) => this.setLive(taskId, { phase: 'gates', step, key, text: `Gate "${name}" in ${r.name} (attempt ${attempt})` }),
+                  onGate: (name) => live({ phase: 'gates', step, key, text: `Gate "${name}" in ${r.name} (attempt ${attempt})` }),
                   signal: abort.signal,
                   launch: this.sandboxFor(config, [r.dir], { runsOutside }),
                   keepEnv: config.policy.checkEnv,
@@ -1428,7 +1451,7 @@ class Engine extends EventEmitter {
           }
           const red = runs.filter((x) => x.status === 'fail').map((x) => x.repo).join(', ');
           say(`Gates failed in ${red} (attempt ${attempt} of ${config.limits.gateAttempts}). Fix the causes below. Do not weaken, skip or delete tests or lint rules. Then reply with your full report again.\n\n${g.summary}`);
-          this.setLive(taskId, { phase: 'agent', step, key, text: `${label} is fixing red gates in ${where.includes(',') ? red : where}` });
+          live({ phase: 'agent', step, key, text: `${label} is fixing red gates in ${where.includes(',') ? red : where}` });
           const fixed = await turn();
           if (!fixed) return;
           t = fixed;
@@ -1475,7 +1498,7 @@ class Engine extends EventEmitter {
       };
       let parsed = await check();
       for (let i = 0; !parsed.ok && i < REPORT_RETRIES; i++) {
-        this.setLive(taskId, { phase: 'agent', step, key, text: `${label} is correcting its report` });
+        live({ phase: 'agent', step, key, text: `${label} is correcting its report` });
         say(`Your report could not be read: ${parsed.error}. Reply again with the complete, corrected report.`);
         const corrected = await turn();
         if (!corrected) return;
@@ -1515,6 +1538,7 @@ class Engine extends EventEmitter {
       this.liveCost.delete(taskId);
       this.liveUsage.delete(taskId);
       this.activity.delete(taskId);
+      this.activity.delete(key);
       const u: SessionUsage = session.usage ? session.usage() : {};
       await this.svc.record(taskId, {
         type: 'agent_stopped',

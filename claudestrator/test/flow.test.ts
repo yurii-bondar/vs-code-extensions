@@ -236,3 +236,26 @@ test('task diagram: where each step is, the branch taken, the loop\'s round and 
   assert.equal(branch.condition, 'security found major or worse');
   assert.deepEqual([branch.then[0]!.status, branch.else[0]!.status], ['skipped', 'next']);
 });
+
+test('task diagram: in a fix round, the loop\'s steps are done only once they ran in it', () => {
+  const t = task(REVIEWED);
+  t.apply({ type: 'stage_started', agent: 'developer', repo: 'api' });
+  t.apply({ type: 'stage_completed', agent: 'developer', repo: 'api', artifact: 'd', gates: 'pass' });
+  t.apply({ type: 'stage_started', agent: 'reviewer' });
+  t.apply({ type: 'stage_started', agent: 'security' });
+  t.apply({ type: 'stage_completed', agent: 'reviewer', artifact: 'r', verdict: approved });
+  t.apply({ type: 'stage_completed', agent: 'security', artifact: 's', verdict: changes });
+  const statuses = () => {
+    const loop = flowOf(t.state())[0] as Extract<FlowItem, { kind: 'loop' }>;
+    return [loop.round, (loop.items[0] as Extract<FlowItem, { kind: 'step' }>).node.status, ...(loop.items[1] as Extract<FlowItem, { kind: 'parallel' }>).nodes.map((n) => n.status)];
+  };
+  assert.deepEqual(statuses(), [2, 'next', 'pending', 'pending'], 'round 2 starts: nothing of it ran yet');
+  t.apply({ type: 'stage_started', agent: 'developer', repo: 'api' });
+  t.apply({ type: 'stage_completed', agent: 'developer', repo: 'api', artifact: 'd2', gates: 'pass' });
+  t.apply({ type: 'stage_started', agent: 'reviewer' });
+  assert.deepEqual(statuses(), [2, 'done', 'running', 'pending'], 'security has not started yet');
+  t.apply({ type: 'stage_completed', agent: 'reviewer', artifact: 'r2', verdict: approved });
+  t.apply({ type: 'stage_started', agent: 'security' });
+  t.apply({ type: 'stage_completed', agent: 'security', artifact: 's2', verdict: approved });
+  assert.deepEqual(statuses(), [2, 'done', 'done', 'done'], 'the loop is left: what ran in its last round is done');
+});
