@@ -11,12 +11,17 @@
   --p-fg2: color-mix(in srgb, var(--vscode-foreground) 78%, var(--p-bg));
   --p-muted: var(--vscode-descriptionForeground);
   --p-faint: var(--vscode-disabledForeground, color-mix(in srgb, var(--vscode-foreground) 45%, var(--p-bg)));
-  --p-accent: #8b7cff;
+  /* Accent text and marks; on these dark backgrounds and on accent-soft it stays above 4.5:1. */
+  --p-accent: #aea4ff;
+  /* Fills that carry --p-accent-fg text (buttons): 5:1 with white. */
+  --p-accent-strong: #6a55f0;
   --p-accent-fg: #ffffff;
-  --p-accent-soft: color-mix(in srgb, var(--p-accent) 16%, var(--p-bg));
+  --p-accent-soft: color-mix(in srgb, var(--p-accent) 14%, var(--p-bg));
   --p-ok: var(--vscode-testing-iconPassed, #3fb950);
   --p-warn: var(--vscode-editorWarning-foreground, #d29922);
   --p-warn-soft: color-mix(in srgb, var(--p-warn) 12%, var(--p-bg));
+  /* Theme warning colors are made for icons; text needs some of the foreground to stay above 4.5:1 on light themes. */
+  --p-warn-text: color-mix(in srgb, var(--p-warn) 55%, var(--p-fg));
   --p-err: var(--vscode-errorForeground, #f05252);
   --p-err-soft: color-mix(in srgb, var(--p-err) 14%, var(--p-bg));
   --p-on-solid: #ffffff;
@@ -42,12 +47,16 @@
   --p-rail: 248px;
 }
 body.vscode-light {
-  --p-accent: #6a55f0;
+  /* One color for both roles: 6.5:1 with white and on light backgrounds. */
+  --p-accent: #5940df;
+  --p-accent-strong: var(--p-accent);
+  --p-accent-soft: color-mix(in srgb, var(--p-accent) 12%, var(--p-bg));
   --p-backdrop: rgba(0, 0, 0, 0.3);
 }
 body.vscode-high-contrast,
 body.vscode-high-contrast-light {
   --p-accent: var(--vscode-focusBorder);
+  --p-accent-strong: var(--p-accent);
   --p-accent-fg: var(--vscode-editor-background);
   --p-accent-soft: transparent;
   --p-hover: transparent;
@@ -63,7 +72,7 @@ b { font-weight: 600; }
 .hidden { display: none !important; }
 .muted { color: var(--p-muted); }
 .small { font-size: 12px; }
-.warn-text { color: var(--p-warn); }
+.warn-text { color: var(--p-warn-text); }
 button { font: inherit; color: inherit; }
 :focus-visible { outline: 1px solid var(--p-accent); outline-offset: 1px; }
 
@@ -160,7 +169,7 @@ select:focus, .text:focus, .num:focus, .search:focus, .hex:focus, .recorder:focu
 .search { width: 100%; padding: 7px 10px; margin-bottom: 14px; border-radius: 8px; }
 .btn {
   font: inherit; font-weight: 500; cursor: pointer; white-space: nowrap; border: 1px solid transparent; border-radius: 7px; padding: 6px 13px;
-  color: var(--p-accent-fg); background: var(--p-accent);
+  color: var(--p-accent-fg); background: var(--p-accent-strong);
 }
 .btn:hover { filter: brightness(1.08); }
 .btn.secondary { color: var(--p-fg); background: var(--p-raised); border-color: var(--p-border); filter: none; }
@@ -370,7 +379,7 @@ details.card > summary span { flex: 1; }
 .scope-line { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 6px; min-height: 0; }
 .scope-chip { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 5px; font-family: var(--p-mono); font-size: 11px; color: var(--p-fg); background: var(--p-input); border: 1px solid var(--p-border); }
 .scope-chip i { font-style: normal; margin: 0 4px; color: var(--p-muted); }
-.scope-hint { font-size: 11px; color: var(--p-warn); }
+.scope-hint { font-size: 11px; color: var(--p-warn-text); }
 .scope-hint:empty { display: none; }
 .scope-help { list-style: none; padding-left: 0 !important; }
 .scope-help li { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
@@ -407,7 +416,7 @@ kbd {
 .badge { font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 99px; background: var(--p-hover); color: var(--p-muted); }
 .badge-user { background: var(--p-accent-soft); color: var(--p-accent); }
 .badge-removed { background: var(--p-err-soft); color: var(--p-err); }
-.conflict { flex-basis: 100%; font-size: 11.5px; color: var(--p-warn); }
+.conflict { flex-basis: 100%; font-size: 11.5px; color: var(--p-warn-text); }
 .conflict b { font-weight: 600; }
 .conflict:empty { display: none; }
 .kb-keys { padding: 3px 4px; margin: -3px -4px; border: 1px solid transparent; border-radius: 6px; background: transparent; cursor: pointer; text-align: left; }
@@ -421,7 +430,7 @@ kbd {
 .rec-help { margin-left: auto; font-size: 10.5px; color: var(--p-muted); white-space: nowrap; }
 .conflicts-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .conflicts-banner.hidden { display: none; }
-.link-btn { border: 0; background: transparent; padding: 0; cursor: pointer; font-weight: 600; color: var(--p-warn); white-space: nowrap; }
+.link-btn { border: 0; background: transparent; padding: 0; cursor: pointer; font-weight: 600; color: var(--p-warn-text); white-space: nowrap; }
 .link-btn:hover { text-decoration: underline; }
 .record-btn {
   position: absolute; right: 5px; top: 50%; transform: translateY(-50%); display: inline-flex; align-items: center; gap: 6px;
@@ -508,7 +517,7 @@ kbd {
 .diff-row { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 7px; background: var(--p-surface); font-size: 12.5px; }
 .diff-row i { width: 12px; font-style: normal; font-weight: 700; font-family: var(--p-mono); text-align: center; }
 .diff-row.added i { color: var(--p-ok); }
-.diff-row.changed i { color: var(--p-warn); }
+.diff-row.changed i { color: var(--p-warn-text); }
 .diff-row.removed i { color: var(--p-err); }
 .diff-row.same { color: var(--p-muted); }
 .diff-label { flex: 1; min-width: 0; }
