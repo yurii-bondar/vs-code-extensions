@@ -167,6 +167,9 @@ function routed(plain: PlainStage[], { auto, maxRounds, loop }: { auto?: boolean
     const body = span(loop.from, loop.to);
     if (stages[loop.to]!.output === 'verdict' && body.some((s) => isWork(s.output))) {
       reviewLoop = { restartAt: loop.from, end: loop.to, fixers: body.filter((s) => isWork(s.output)).map((s) => s.agent), reviewers: body.filter((s) => s.output === 'verdict').map((s) => s.agent), maxRounds: loop.rounds ?? maxRounds, explicit: true };
+    } else if (stages[loop.to]!.output !== 'verdict') {
+      // Config checks the Loop ends with a reviewer: here it is turned off.
+      warn('loop_without_review', `the Loop ends with "${stages[loop.to]!.agent}", as the reviewer at its end is turned off: no review ends it, so it runs once`);
     } else warn('loop_without_work', 'the Loop has no agent that changes code before its review, so there is nothing to fix: it runs once');
   } else {
     // A step of a branch may be skipped, so it never ends the loop the outputs make, nor opens it.

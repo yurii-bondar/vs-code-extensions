@@ -149,6 +149,16 @@ test('blocks: You approve after a turned-off agent waits after the step before i
   assert.ok(alone.warnings.some((w) => w.code === 'approve_dropped'));
 });
 
+test('blocks: a Loop whose reviewer is turned off says so, not that it has nothing to fix', async () => {
+  const home = tmp('cs-blocks-h-');
+  const r = await config.loadConfig({ workspace: workspace(SHIP), home });
+  assert.ok(r.ok, JSON.stringify(!r.ok && r.errors));
+  const agents = { ...r.config.agents, reviewer: { ...r.config.agents.reviewer!, enabled: false }, 'security-reviewer': { ...r.config.agents['security-reviewer']!, enabled: false } };
+  const p = scenarioPipeline({ ...r.config, agents }, r.config.custom.ship!.agents);
+  assert.equal(p.reviewLoop, null);
+  assert.deepEqual(p.warnings.filter((w) => w.code.startsWith('loop_')).map((w) => w.code), ['loop_without_review']);
+});
+
 test('blocks: approve after a step, after a block and in a branch\'s arm marks the step before it, and writes back', async () => {
   const layers: ScenarioStepLayer[] = [
     'developer',
