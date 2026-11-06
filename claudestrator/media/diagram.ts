@@ -236,9 +236,9 @@ interface UiState {
         <label class="field"><span>Model</span><select class="input" data-change="dg-intake-model">${modelOptions(d.intake.model, `config's (${def.model})`)}</select></label>
         <label class="field"><span>Effort</span><select class="input" data-change="dg-intake-effort">${effortOptions(d.intake.effort, `config's (${def.effort})`)}</select></label>
       </div>
-      <p class="muted small">Only in this scenario. For every task: <code>intake: { model, effort }</code> in config.yaml (now ${esc(def.model)} · ${esc(def.effort)}). A long Confluence spec reads better with sonnet.</p>
+      <p class="muted small">Only in this scenario. For every task: Integrations → Jira &amp; Confluence (now ${esc(def.model)} · ${esc(def.effort)}). A long Confluence spec reads better with sonnet.</p>
       <h4>Jira</h4>
-      <div class="row"><span class="grow">${c.config.jira.allowedProjects.length ? `Allowed projects: ${esc(c.config.jira.allowedProjects.join(', '))}` : '<span class="muted">No Jira projects allowed yet</span>'}</span><button class="btn ghost sm" data-action="dg-settings">Settings</button></div>
+      <div class="row"><span class="grow">${c.config.jira.allowedProjects.length ? `Allowed projects: ${esc(c.config.jira.allowedProjects.join(', '))}` : '<span class="muted">No Jira projects allowed yet</span>'}</span><button class="btn ghost sm" data-action="dg-settings">Integrations</button></div>
     </section>`;
   }
 
@@ -496,7 +496,7 @@ interface UiState {
       },
       'dg-remove': (el) => removeStep(Number(el.dataset.i)),
       'dg-edit-agent': () => leaveTo({ name: 'agents' }),
-      'dg-settings': () => leaveTo({ name: 'settings' }),
+      'dg-settings': () => leaveTo({ name: 'mcp', section: 'atlassian' }),
       'dg-open-editor': async () => {
         const view = v();
         const sel = view.sel;
