@@ -383,6 +383,8 @@ class Engine extends EventEmitter {
    * edits would go unchecked into the next stage.
    */
   inTurn = new Map<string, number>();
+  /** The review diffs being collected, by task and file: the reviewers of a Parallel share one. */
+  reviewDiffs = new Map<string, Promise<{ path: string; empty: boolean }>>();
   /** Each task's report being written: the next write waits for it. */
   reportWrites = new Map<string, Promise<void>>();
   /** Each running task's run, which settles once it has recorded its last event. */
@@ -1196,6 +1198,28 @@ class Engine extends EventEmitter {
     return spentOf(await this.svc.events(taskId));
   }
 
+  /**
+   * The diff the reviewers of this round read, written to `reviews/r<round>/diff.patch`. The reviewers of a Parallel
+   * start at once: they share the one collected for the first of them, not each collect and write it again.
+   */
+  async reviewDiff(s: TaskState, config: Config): Promise<{ path: string; empty: boolean }> {
+    const rel = `reviews/r${s.review.round}/diff.patch`;
+    const key = `${s.taskId}/${rel}`;
+    const running = this.reviewDiffs.get(key);
+    if (running) return running;
+    const collect = (async () => {
+      const diff = await taskDiff(taskRepos(this.workspace, s, config, s.repos.map((r) => r.name)));
+      return { path: await this.svc.writeArtifact(s.taskId, rel, diff.text), empty: diff.empty };
+    })();
+    this.reviewDiffs.set(key, collect);
+    try {
+      return await collect;
+    } finally {
+      // Collected again by a later review of the round (one run again), which reads the repos as they are then.
+      this.reviewDiffs.delete(key);
+    }
+  }
+
   /** The task's budget is spent: it stops, and no agent starts. */
   async stopOnBudget(taskId: string, { budget, spent }: { budget: number; spent: number }): Promise<void> {
     this.log('warn', `Budget of $${budget} spent ($${spent.toFixed(2)}); the task stopped`, taskId);
@@ -1250,8 +1274,8 @@ class Engine extends EventEmitter {
     let redChecks: string | undefined;
     if (stage.output === 'verdict' && s.repos.length) {
       live({ phase: 'preparing', step, text: 'Collecting the diff for review' });
-      const diff = await taskDiff(taskRepos(this.workspace, s, config, s.repos.map((r) => r.name)));
-      diffPath = await this.svc.writeArtifact(taskId, `reviews/r${s.review.round}/diff.patch`, diff.text);
+      const diff = await this.reviewDiff(s, config);
+      diffPath = diff.path;
       emptyDiff = diff.empty;
       redChecks = (await this.redChecks(s)) ?? undefined;
     }

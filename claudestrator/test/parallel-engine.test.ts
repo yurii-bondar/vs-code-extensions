@@ -177,3 +177,25 @@ scenarios:
     h.hooks.dispose();
   }
 });
+
+test('engine: the reviewers of a Parallel share the one diff collected for the round, and a later review collects it again', async () => {
+  const ws = workspace(['api'], SCENARIO);
+  const h = await harness(ws, { FAKE_REPOS: 'api' });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Add the feature --repos api', scenario: 'ship' });
+    const s = await runTask(h.engine, taskId);
+    const config = await h.engine.config();
+    const svc = h.engine.svc;
+    const write = svc.writeArtifact.bind(svc);
+    const written: string[] = [];
+    svc.writeArtifact = async (id, rel, content) => (written.push(rel), write(id, rel, content));
+    // Two members start at once.
+    const [a, b] = await Promise.all([h.engine.reviewDiff(s, config), h.engine.reviewDiff(s, config)]);
+    assert.deepEqual(a, b);
+    assert.deepEqual(written, [`reviews/r${s.review.round}/diff.patch`], 'collected and written once');
+    await h.engine.reviewDiff(s, config);
+    assert.equal(written.length, 2, 'a review after them reads the repos as they are then');
+  } finally {
+    h.hooks.dispose();
+  }
+});
