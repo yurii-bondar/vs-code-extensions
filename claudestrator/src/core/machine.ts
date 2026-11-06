@@ -222,6 +222,8 @@ function stageCompleted(s: TaskState, e: Ev<'stage_completed'>): Transition {
 
   s.running.splice(at, 1);
   s.artifacts.push({ agent: step.agent, ...(step.repo && { repo: step.repo }), round: s.review.round, output: stage.output, path: e.artifact, at: e.at });
+  // Its checks as they are now: red ones you went on past are no longer red once it ends without (a later round's run).
+  if (e.gates !== 'fail') s.gateFailures = s.gateFailures.filter((g) => !sameStep(g, step));
 
   switch (stage.output) {
     case 'plan':

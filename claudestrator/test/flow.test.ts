@@ -135,6 +135,32 @@ test('branch: the steps of the arm whose condition holds run, the others are ski
   }
 });
 
+test('branch: checks left failing in one round do not hold in the next, where they pass', () => {
+  // A branch on the developer's checks between it and the reviewer: inside the review loop its outputs make.
+  const when = { on: 'developer', if: { gates: 'fail' as const } };
+  const t = task({
+    mode: 'custom',
+    stages: [st('developer', 'code'), st('fixer', 'code', { when }), st('reviewer', 'verdict')],
+    reviewLoop: { restartAt: 0, end: 2, fixers: ['developer', 'fixer'], reviewers: ['reviewer'], maxRounds: 3 },
+  });
+  t.apply({ type: 'stage_started', agent: 'developer', repo: 'api' });
+  t.apply({ type: 'stage_completed', agent: 'developer', repo: 'api', artifact: 'd1', gates: 'fail' });
+  t.apply({ type: 'checkpoint_answered', id: 'gate-failure', option: 'continue' });
+  assert.equal(t.state().next!.agent, 'fixer', 'round 1: the checks were left failing');
+  t.apply({ type: 'stage_started', agent: 'fixer', repo: 'api' });
+  t.apply({ type: 'stage_completed', agent: 'fixer', repo: 'api', artifact: 'f1', gates: 'pass' });
+  t.apply({ type: 'stage_started', agent: 'reviewer' });
+  t.apply({ type: 'stage_completed', agent: 'reviewer', artifact: 'r1', verdict: changes });
+  assert.equal(t.state().review.round, 2);
+  t.apply({ type: 'stage_started', agent: 'developer', repo: 'api' });
+  t.apply({ type: 'stage_completed', agent: 'developer', repo: 'api', artifact: 'd2', gates: 'pass' });
+  assert.equal(evaluate(t.state(), 'developer', { gates: 'fail' }), false);
+  assert.equal(evaluate(t.state(), 'developer', { gates: 'pass' }), true);
+  assert.equal(t.state().next!.agent, 'reviewer', 'round 2: the checks pass, the fixer is skipped');
+  assert.deepEqual(t.state().gateFailures, []);
+  assert.deepEqual(replay(t.events), t.state());
+});
+
 test('branch: conditions read the latest result of the step they name; nothing reported yet holds nothing', () => {
   const s = task(BRANCHED).state();
   assert.equal(evaluate(s, 'reviewer', { verdict: 'approved' }), null);
