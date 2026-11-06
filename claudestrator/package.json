@@ -45,7 +45,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.webview.json",
     "lint": "eslint .",
     "test": "npm run build && node --test dist/test/*.test.js",
-    "test:live": "npm run build && node dist/test/live/smoke.js",
+    "test:live": "npm run build && node dist/test/live/smoke.js && node dist/test/live/blocks.js",
     "eval": "npm run build && node dist/test/live/eval.js",
     "package": "npx @vscode/vsce package",
     "preview": "npm run build && node dist/test/harness/server.js",
