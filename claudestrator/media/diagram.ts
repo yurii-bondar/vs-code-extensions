@@ -136,6 +136,8 @@ interface UiState {
     const { parallel: _p, when: _w, loop: _l, ...rest } = st;
     return { ...rest, ...(ctx.parallel !== undefined && { parallel: ctx.parallel }), ...(ctx.when && { when: ctx.when }), ...(ctx.loop && { loop: ctx.loop }) };
   }
+  /** The steps of the Parallel or the Loop `st` is in, or null for a step in neither. */
+  const blockOf = (st: ScenarioStep): ((x: ScenarioStep) => boolean) | null => (st.parallel !== undefined ? (x) => x.parallel === st.parallel : st.loop ? (x) => Boolean(x.loop) : null);
   const newParallel = (steps: readonly ScenarioStep[]) => Math.max(0, ...steps.map((st) => st.parallel ?? 0)) + 1;
 
   // Conditions, as one value per choice: `severity:major`.
@@ -811,10 +813,14 @@ interface UiState {
         const kind = st.parallel !== undefined ? 'parallel' : st.when ? 'branch' : 'loop';
         const inBlock = (x: ScenarioStep) => (kind === 'parallel' ? x.parallel === st.parallel : kind === 'branch' ? sameWhen(x.when, st.when) : Boolean(x.loop));
         const last = d.steps.reduce((n, x, k) => (inBlock(x) ? k : n), i);
-        const { parallel, when, loop, ...rest } = st;
-        const out: ScenarioStep = { ...rest, ...(kind !== 'parallel' && parallel !== undefined && { parallel }), ...(kind !== 'branch' && when && { when }), ...(kind !== 'loop' && loop && { loop }) };
+        const { parallel, when, loop, approve, ...rest } = st;
+        // A Parallel's or the Loop's You approve stays with the block, on the step that ends it now.
+        const ofBlock = kind !== 'branch';
+        const out: ScenarioStep = { ...rest, ...(kind !== 'parallel' && parallel !== undefined && { parallel }), ...(kind !== 'branch' && when && { when }), ...(kind !== 'loop' && loop && { loop }), ...(approve && !ofBlock && { approve }) };
         v().change((dd) => {
           dd.steps.splice(i, 1);
+          const end = dd.steps.reduce((n, x, k) => (inBlock(x) ? k : n), -1);
+          if (approve && ofBlock && end !== -1 && !dd.steps[end]!.approve) dd.steps[end] = { ...dd.steps[end]!, approve };
           dd.steps.splice(last, 0, out);
         });
         select({ kind: 'step', i: last });
@@ -1097,13 +1103,21 @@ interface UiState {
     const ctx = edgeCtx(Number(edge.dataset.i));
     if (!ctx) return;
     const d = v().draft();
-    const moved = placed(d.steps[from]!, ctx);
+    const src = d.steps[from]!;
+    const moved = placed(src, ctx);
     // An arrow right above or below the step, in the same blocks, leaves it where it is.
-    if ((ctx.at === from || ctx.at === from + 1) && JSON.stringify(moved) === JSON.stringify(d.steps[from])) return v().renderFlow();
+    if ((ctx.at === from || ctx.at === from + 1) && JSON.stringify(moved) === JSON.stringify(src)) return v().renderFlow();
     const at = ctx.at > from ? ctx.at - 1 : ctx.at;
+    // You approve after a Parallel or the Loop is the block's: it stays on the step that ends the block. Into one, a
+    // step's own goes, as the block waits for you after its end.
+    const block = blockOf(src);
+    const { approve, ...bare } = moved;
+    const keep = approve && !block && ctx.parallel === undefined && !ctx.loop;
     v().change((dd) => {
       dd.steps.splice(from, 1);
-      dd.steps.splice(at, 0, moved);
+      dd.steps.splice(at, 0, keep ? moved : bare);
+      const end = block ? dd.steps.reduce((n, x, k) => (block(x) ? k : n), -1) : -1;
+      if (approve && end !== -1 && !dd.steps[end]!.approve) dd.steps[end] = { ...dd.steps[end]!, approve };
     }, { side: false });
     select({ kind: 'step', i: at });
   });
