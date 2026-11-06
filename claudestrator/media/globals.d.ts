@@ -1,5 +1,5 @@
 // What the dashboard scripts share. They are plain scripts loaded one after the other (markdown.js, stream.js, app.js,
-// task.js, config.js), not modules: markdown.js and stream.js set functions on `window`, app.js publishes the shell API on
+// task.js, diagram.js, config.js), not modules: markdown.js and stream.js set functions on `window`, app.js publishes the shell API on
 // `window.CS`, and the views register themselves there. The page is built from HTML strings and DOM events.
 // What the host sends comes through the types of src/core/wire.ts.
 

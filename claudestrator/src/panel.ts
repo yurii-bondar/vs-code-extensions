@@ -44,7 +44,7 @@ const OUTPUT_MS = 50;
  * transcript of stream.js). The JetBrains plugin builds its page from the same files (PageHtml.kt, `SCRIPTS`), and the
  * release script checks that it lists these, in this order.
  */
-const PAGE_SCRIPTS = ['markdown.js', 'stream.js', 'app.js', 'task.js', 'config.js'];
+const PAGE_SCRIPTS = ['markdown.js', 'stream.js', 'app.js', 'task.js', 'diagram.js', 'config.js'];
 const LANGUAGES = ['English', 'Ukrainian', 'German', 'French', 'Spanish', 'Polish', 'Portuguese', 'Italian', 'Japanese', 'Chinese'];
 
 class DashboardPanel implements RpcHandlers {

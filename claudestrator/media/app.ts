@@ -1,5 +1,5 @@
 // Claudestrator dashboard: core (rpc, state, router, rendering helpers), the shell, home and setup.
-// Views live in task.js and config.js and register themselves on window.CS.views.
+// Views live in task.js, diagram.js and config.js and register themselves on window.CS.views.
 // Rendering: each view renders named regions; live updates re-render only regions whose HTML changed,
 // and keep focus and caret, so typing is never interrupted.
 interface CustomDef {
@@ -455,7 +455,7 @@ interface Views {
     const o = S.overview;
     const attention = o ? o.tasks.filter((t) => t.status.group === 'attention').length : 0;
     const running = o ? o.tasks.filter((t) => t.status.group === 'running').length : 0;
-    const active = S.route.name === 'task' ? 'home' : S.route.name;
+    const active = S.route.name === 'task' ? 'home' : S.route.name === 'scenario-diagram' ? 'scenarios' : S.route.name;
     /** A section's item; `action` replaces the link to the section (then it is never the current page). */
     const item = (n: (typeof NAV)[number], action?: string) => {
       let badge = '';
@@ -464,7 +464,7 @@ interface Views {
         const bad = o.mcp.problems;
         badge = bad ? `<span class="nb err" title="${plural(bad, 'server')} with a problem">${bad}</span>` : o.mcp.connected === o.mcp.total ? '<span class="mcp-dot s-connected" title="All connected"></span>' : '<span class="mcp-dot s-installed" title="Not checked yet"></span>';
       }
-      const on = !action && S.route.name === n.name;
+      const on = !action && (S.route.name === n.name || (n.name === 'scenarios' && S.route.name === 'scenario-diagram'));
       return `<button class="nav-item ${on ? 'active' : ''}" ${action ?? `data-action="nav" data-name="${n.name}"`}${on ? ' aria-current="page"' : ''}>${icon(n.icon)}<span class="nav-label">${n.label}</span>${badge}</button>`;
     };
     // Tasks is the root of the tree, an item like the others: a click folds or opens the tasks under it (the logo opens
@@ -1351,6 +1351,7 @@ interface Views {
             <div class="sc-card-title"><h2>${esc(x.label)}</h2>${origin(id)}<span class="muted small">${esc(x.hint)}</span></div>
             <div class="sc-card-actions">
               <button class="btn sm" data-action="sc-use" data-id="${esc(id)}" title="Start a task with ${esc(x.label)}">${icon('play')}Use in a new task</button>
+              ${x.custom ? `<button class="btn sm" data-action="nav-diagram" data-id="${esc(id)}" title="Its steps on a canvas, with instructions per step">${icon('branch')}Open as diagram</button>` : ''}
               ${c.custom.find((sc) => sc.id === id)?.source === 'project' ? libraryMove('scenario', id, this.libs) : ''}
               ${id === 'deliver' ? '' : `<button class="icon-btn sc-del" data-action="sc-delete" data-id="${esc(id)}" aria-label="Delete ${esc(x.label)}" title="Delete ${esc(x.label)}">${icon('trash')}</button>`}
             </div>
@@ -1363,7 +1364,11 @@ interface Views {
         `<div class="page-head">
           <div><h1>${icon('wand')}Scenarios</h1>
           <p class="lead">What a task is for, and which agents do it in what order. Pick one in the task composer, or let your words pick it.</p></div>
-          <div class="row"><button class="btn ghost" data-action="open-config">${icon('edit')}config.yaml</button><button class="btn" data-action="backup-save" title="Save this project's agents, pipeline and scenarios to a file">${icon('download')}Save backup</button><button class="btn" data-action="backup-restore" title="Bring agents, pipeline and scenarios back from a backup file; ones with the same name are replaced">${icon('upload')}Restore</button><button class="btn primary" data-action="sc-new">${icon('plus')}New scenario</button></div>
+          <div class="row"><button class="btn ghost" data-action="open-config">${icon('edit')}config.yaml</button><button class="btn" data-action="backup-save" title="Save this project's agents, pipeline and scenarios to a file">${icon('download')}Save backup</button><button class="btn" data-action="backup-restore" title="Bring agents, pipeline and scenarios back from a backup file; ones with the same name are replaced">${icon('upload')}Restore</button><span class="menu-wrap split-btn"><button class="btn primary" data-action="sc-new">${icon('plus')}New scenario</button><button class="btn primary split-caret" data-action="eff-menu" aria-haspopup="menu" aria-label="New scenario as a list or a diagram">▾</button>
+            <div class="menu sc-new-menu" role="menu">
+              <button role="menuitem" data-action="sc-new">${icon('list')}<span class="sc-text"><b>List</b><span class="muted small">Agents in order, as chips. Approvals and the review loop are added from their outputs.</span></span></button>
+              <button role="menuitem" data-action="nav-diagram">${icon('branch')}<span class="sc-text"><b>Diagram <span class="chip small">new</span></b><span class="muted small">Steps on a canvas: instructions per step; parallel reviewers and branches later.</span></span></button>
+            </div></span></div>
         </div>
         <div class="sc-layout">
           <div class="sc-list">
@@ -1754,6 +1759,7 @@ interface Views {
     },
     // A new scenario starts as a draft on the Scenarios page, its name ready to type over; its first agent saves it.
     'sc-new': async () => {
+      closeMenus();
       const labels = new Set(((okConfig()?.custom) || []).map((x) => x.label.toLowerCase()));
       let label = 'New scenario';
       for (let n = 2; labels.has(label.toLowerCase()); n++) label = `New scenario ${n}`;
@@ -1767,6 +1773,18 @@ interface Views {
       if (name) {
         name.focus();
         name.select();
+      }
+    },
+    // A scenario as a diagram: the one in data-id, else a new one (what a diagram left unsaved is dropped).
+    'nav-diagram': async (el) => {
+      closeMenus();
+      const id = el.dataset.id;
+      if (!id) S.ui.diagram = null;
+      await go({ name: 'scenario-diagram', ...(id && { scenario: id }) });
+      if (!id) {
+        const name = $<HTMLInputElement>('[data-input="dg-label"]');
+        name?.focus();
+        name?.select();
       }
     },
     'sc-draft-cancel': () => {

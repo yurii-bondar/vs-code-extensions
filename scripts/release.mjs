@@ -54,7 +54,7 @@ const extension = (dir, label, ships = []) => ({
 });
 
 const TARGETS = {
-  vscode: extension('claudestrator', 'Claudestrator (VS Code)', ['extension/dist/media/app.js', 'extension/dist/media/task.js', 'extension/dist/media/config.js', 'extension/dist/media/markdown.js', 'extension/dist/media/stream.js', 'extension/media/app.css']),
+  vscode: extension('claudestrator', 'Claudestrator (VS Code)', ['extension/dist/media/app.js', 'extension/dist/media/task.js', 'extension/dist/media/diagram.js', 'extension/dist/media/config.js', 'extension/dist/media/markdown.js', 'extension/dist/media/stream.js', 'extension/media/app.css']),
   jetbrains: {
     kind: 'jetbrains',
     label: 'Claudestrator (JetBrains)',
