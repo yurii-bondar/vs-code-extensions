@@ -19,10 +19,10 @@ interface ViewEngine {
   lastError(taskId: string): TaskError | null | undefined;
   pendingPermissions(taskId: string): PermissionRequest[];
   live(taskId: string): Live | null;
-  liveCost: Map<string, number>;
+  liveCost: Map<string, Map<string, number>>;
   liveUsage: Map<string, UsageItem & { key: string }>;
-  sessions: Map<string, unknown>;
-  inTurn: Set<string>;
+  sessions: Map<string, readonly unknown[]>;
+  inTurn: ReadonlyMap<string, number>;
   svc: {
     events(taskId: string): Promise<OrchEvent[]>;
     state(taskId: string): Promise<TaskState>;
@@ -326,7 +326,7 @@ async function summary(engine: ViewEngine, entry: TaskEntry): Promise<Card> {
     prs: state.prs,
     branch: branchName(state),
     repos: state.repos.map((r) => r.name),
-    cost: cost + (engine.liveCost.get(taskId) || 0),
+    cost: cost + [...(engine.liveCost.get(taskId)?.values() ?? [])].reduce((a, b) => a + b, 0),
     createdAt: state.createdAt,
     updatedAt: state.updatedAt,
     progress: { done: agentSteps.filter((s) => ['done', 'skipped'].includes(s.status)).length, total: agentSteps.length },
@@ -363,7 +363,8 @@ async function detail(engine: ViewEngine, taskId: string): Promise<TaskDetail> {
     files: await engine.svc.files(taskId),
     taskDir: engine.svc.dir(taskId),
     permissions: engine.pendingPermissions(taskId),
-    canMessage: engine.sessions.has(taskId) && engine.inTurn.has(taskId),
+    // A message reaches one session: not the members of a parallel group, which work at once.
+    canMessage: engine.sessions.get(taskId)?.length === 1 && engine.inTurn.has(taskId),
     liveUsage: engine.liveUsage.get(taskId) || null,
   };
 }

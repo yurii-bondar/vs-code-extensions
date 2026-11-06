@@ -49,15 +49,23 @@ test('engine: a member of a group that hangs is stopped while the other one work
   try {
     const engine = h.engine;
     engine.stallMs = 300;
-    // The other member works: the task shows signs of work all the time, its own session none.
-    const busy = setInterval(() => engine.activity.set('T-1', Date.now()), 50);
+    // The other member works, and so does a step of the same name in another task (the same transcript key there),
+    // with a question of its own waiting for you: none of it is this session's sign of work.
+    const mate = engine.emitter('T-1', '0006-reviewer');
+    const elsewhere = engine.emitter('T-2', '0007-security');
+    const busy = setInterval(() => {
+      mate({ type: 'text_delta', text: '.' });
+      elsewhere({ type: 'text_delta', text: '.' });
+    }, 50);
+    engine.permissions.set('r-mate', { request: { requestId: 'r-mate', taskId: 'T-1', agent: 'reviewer', tool: 'Bash', input: {}, at: 0 }, resolve: () => {} });
     let interrupted = false;
     let end: (r: { ok: boolean; report: string }) => void = () => {};
     const turn = new Promise<{ ok: boolean; report: string }>((resolve) => (end = resolve));
     const session = { turn: () => turn, interrupt: async () => void ((interrupted = true), end({ ok: false, report: '' })) };
-    const r = await engine.turnOf('T-1', session, '0007-security');
+    const r = await engine.turnOf('T-1', session, { key: '0007-security', step: { agent: 'security' } });
     clearInterval(busy);
-    assert.ok(interrupted, 'its own silence counts, not the task\'s');
+    engine.permissions.delete('r-mate');
+    assert.ok(interrupted, 'its own silence counts, not the other member\'s or the other task\'s');
     assert.equal(r.ok, false);
     assert.match(r.error ?? '', /no sign of work/);
 
@@ -88,3 +96,37 @@ test('engine: You approve after a Parallel shows every member\'s report under wh
     h.hooks.dispose();
   }
 });
+
+test('engine: a session of a parallel group that ends leaves the others their turn, their cost and their watch', async () => {
+  const ws = workspace(['api'], SCENARIO);
+  const h = await harness(ws, { FAKE_REPOS: 'api' });
+  try {
+    const engine = h.engine;
+    const ends: ((r: { ok: boolean; report: string }) => void)[] = [];
+    const session = () => ({ turn: () => new Promise<{ ok: boolean; report: string }>((resolve) => ends.push(resolve)), interrupt: async () => {} });
+    const first = engine.turnOf('T-1', session(), { key: '0006-reviewer', step: { agent: 'reviewer' } });
+    const second = engine.turnOf('T-1', session(), { key: '0007-security', step: { agent: 'security' } });
+    assert.equal(engine.inTurn.get('T-1'), 2);
+    ends[0]!({ ok: true, report: '' });
+    await first;
+    assert.ok(engine.inTurn.has('T-1'), 'security still works on its turn');
+    ends[1]!({ ok: true, report: '' });
+    await second;
+    assert.equal(engine.inTurn.has('T-1'), false);
+
+    engine.liveCost.set('T-1', new Map([['0006-reviewer', 0.5], ['0007-security', 0.25]]));
+    engine.liveUsage.set('T-1', { type: 'usage', key: '0007-security', t: 0 } as never);
+    engine.activity.set('T-1/0007-security', 1);
+    engine.sessionEnded('T-1', '0006-reviewer');
+    assert.deepEqual([...engine.liveCost.get('T-1')!], [['0007-security', 0.25]], 'its cost goes; the other one\'s stays');
+    assert.equal(engine.liveUsage.get('T-1')!.key, '0007-security');
+    assert.ok(engine.activity.has('T-1/0007-security'));
+    engine.sessionEnded('T-1', '0007-security');
+    assert.equal(engine.liveCost.has('T-1'), false);
+    assert.equal(engine.liveUsage.has('T-1'), false);
+    assert.equal(engine.activity.size, 0);
+  } finally {
+    h.hooks.dispose();
+  }
+});
+

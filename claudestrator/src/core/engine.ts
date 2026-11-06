@@ -45,6 +45,14 @@ const REPORT_RETRIES = 2;
 /** What Claude Code says when its own sign-in is missing or expired (not an MCP server's). */
 const CLAUDE_AUTH = /Failed to authenticate|OAuth (session|token) (has )?expired|Invalid API key|Please run \/login|not logged in|authentication_error/i;
 const INTAKE_KEY = '0000-intake';
+/** Whose signs of work a turn is watched by: its session's transcript key, and the step whose questions count as work. */
+interface TurnWatch {
+  key: string;
+  step: StepRef;
+}
+const INTAKE_WATCH: TurnWatch = { key: INTAKE_KEY, step: { agent: 'intake' } };
+/** One session of a task, in the maps the engine keeps by task (`activity`): a key alone repeats across tasks. */
+const watchKey = (taskId: string, key: string): string => `${taskId}/${key}`;
 /**
  * MCP tools that only read, by the words of their name: it starts with a reading verb (getJiraIssue, search_code,
  * list_issues, read_file, Atlassian's discover) and no word of it writes (search_and_replace, getOrCreateIssue,
@@ -370,10 +378,11 @@ class Engine extends EventEmitter {
   /** What Stop ends besides the agent: the checks of a step, a commit hook, a pre-push hook. */
   gateRuns = new Map<string, AbortController>();
   /**
-   * Tasks whose agent is working on a turn now. Between turns (its checks run, its report is read) a message would set
-   * it working where nothing waits for it: its edits would go unchecked into the next stage.
+   * Tasks whose agents are working on a turn now, with how many (the members of a parallel group each have one).
+   * Between turns (its checks run, its report is read) a message would set it working where nothing waits for it: its
+   * edits would go unchecked into the next stage.
    */
-  inTurn = new Set<string>();
+  inTurn = new Map<string, number>();
   /** Each running task's run, which settles once it has recorded its last event. */
   runEnds = new Map<string, Promise<void>>();
   running: Set<string>;
@@ -383,13 +392,14 @@ class Engine extends EventEmitter {
   lives: Map<string, Live>;
   errors: Map<string, { code: string; message: string; blocked?: BlockedRepo[]; at: string }>;
   permissions: Map<string, { request: PermissionRequest; resolve: (a: PermissionAnswer) => void }>;
-  liveCost: Map<string, number>;
+  /** The cost so far of each session a task runs now, by its transcript key: recorded once the session ends. */
+  liveCost: Map<string, Map<string, number>>;
   liveUsage: Map<string, UsageItem & { key: string }>;
   /** Each account's latest 5-hour and weekly limits, as agents last saw them, by its config folder. */
   limitsBy = new Map<string, EngineLimits>();
   svc: TaskService;
   stallMs: number;
-  /** When each task's agent last showed a sign of work: any output, a tool call, a question to you. */
+  /** When each session of a task (`watchKey`) last showed a sign of work: any output, a tool call, a question to you. */
   activity = new Map<string, number>();
 
   constructor(opts: EngineOptions) {
@@ -869,12 +879,11 @@ class Engine extends EventEmitter {
   emitter(taskId: string, key: string): (item: TranscriptItem) => void {
     return (item) => {
       const t = Date.now();
-      this.activity.set(taskId, t);
-      this.activity.set(key, t);
+      this.activity.set(watchKey(taskId, key), t);
       const stamped = { ...item, t };
       if (item.type === 'usage') this.liveUsage.set(taskId, { ...item, t, key });
       else if (item.type !== 'text_delta' && item.type !== 'thinking') this.svc.appendTranscript(taskId, key, stamped);
-      if (item.type === 'turn_end') this.liveCost.set(taskId, (item.costUsd as number | undefined) || 0);
+      if (item.type === 'turn_end') this.liveCost.set(taskId, new Map(this.liveCost.get(taskId)).set(key, (item.costUsd as number | undefined) || 0));
       this.emit('output', { taskId, key, item: stamped });
     };
   }
@@ -909,24 +918,29 @@ class Engine extends EventEmitter {
    * count) is interrupted, and the turn fails with that reason: a hung MCP server or network never keeps a task
    * "working" forever.
    */
-  async turnOf(taskId: string, session: Pick<ClaudeSession, 'turn' | 'interrupt'>, watch = taskId): Promise<TurnResult> {
-    this.activity.set(taskId, Date.now());
-    this.activity.set(watch, Date.now());
-    this.inTurn.add(taskId);
+  async turnOf(taskId: string, session: Pick<ClaudeSession, 'turn' | 'interrupt'>, by: TurnWatch): Promise<TurnResult> {
+    this.activity.set(watchKey(taskId, by.key), Date.now());
+    this.inTurn.set(taskId, (this.inTurn.get(taskId) ?? 0) + 1);
     try {
-      return await this.watchTurn(taskId, session, watch);
+      return await this.watchTurn(taskId, session, by);
     } finally {
-      this.inTurn.delete(taskId);
+      const left = (this.inTurn.get(taskId) ?? 1) - 1;
+      if (left > 0) this.inTurn.set(taskId, left);
+      else this.inTurn.delete(taskId);
     }
   }
 
-  /** `watch`: whose signs of work count, the task's or one session's of it (a member of a parallel group). */
-  async watchTurn(taskId: string, session: Pick<ClaudeSession, 'turn' | 'interrupt'>, watch = taskId): Promise<TurnResult> {
+  /**
+   * Only the session's own signs of work count (`by`): another member of its parallel group, or another task, working
+   * meanwhile does not keep a hung one going. A question of its own step waiting for you counts as work.
+   */
+  async watchTurn(taskId: string, session: Pick<ClaudeSession, 'turn' | 'interrupt'>, by: TurnWatch): Promise<TurnResult> {
     let timer: NodeJS.Timeout | undefined;
+    const watch = watchKey(taskId, by.key);
     const every = Math.max(50, Math.min(30000, Math.floor(this.stallMs / 4)));
     const stalled = new Promise<true>((resolve) => {
       const check = (): void => {
-        if (this.pendingPermissions(taskId).length) this.activity.set(watch, Date.now());
+        if (this.pendingPermissions(taskId).some((p) => sameStep(p, by.step))) this.activity.set(watch, Date.now());
         if (Date.now() - (this.activity.get(watch) ?? 0) >= this.stallMs) return resolve(true);
         timer = setTimeout(check, every);
       };
@@ -1005,7 +1019,7 @@ class Engine extends EventEmitter {
         await session.interrupt();
         throw new EngineError('stopped', 'stopped');
       }
-      t = await this.turnOf(s.taskId, session);
+      t = await this.turnOf(s.taskId, session, INTAKE_WATCH);
       let parsed: RawTicket | null = null;
       for (let i = 0; ; i++) {
         if ((await this.svc.state(s.taskId)).status === 'stopped') throw new EngineError('stopped', 'stopped');
@@ -1020,7 +1034,7 @@ class Engine extends EventEmitter {
         }
         if (i >= 1) throw new EngineError('fetch_failed', `could not read ${src.kind === 'jira' ? src.key : 'the page'} via ${via.server}: ${block.ok ? 'the reply has no title' : block.error}. ${t.report.slice(0, 300)}`);
         session.send(`I need the ticket as the fenced json block your instructions describe (with a title). ${block.ok ? '' : block.error}`, { from: 'orchestrator' });
-        t = await this.turnOf(s.taskId, session);
+        t = await this.turnOf(s.taskId, session, INTAKE_WATCH);
       }
       const ticket = parsed!;
       const list = (v: unknown): string[] => (Array.isArray(v) ? v.map(String).filter(Boolean) : []);
@@ -1040,9 +1054,7 @@ class Engine extends EventEmitter {
       session.close();
       this.dropSession(s.taskId, session);
       this.hooks.unregister(hook.token);
-      this.liveUsage.delete(s.taskId);
-      this.liveCost.delete(s.taskId);
-      this.activity.delete(s.taskId);
+      this.sessionEnded(s.taskId, INTAKE_KEY);
       const u: SessionUsage = session.usage ? session.usage() : {};
       await this.svc.record(s.taskId, { type: 'agent_stopped', agent: 'intake', payload: { costUsd: t.costUsd || session.costUsd || 0, turns: t.turns || session.turns || 0, sessionId: t.sessionId || session.sessionId, cwd: this.workspace, transcript: INTAKE_KEY, ...(u.model && { model: u.model }), ...(u.effort && { effort: u.effort }) } });
       await this.svc.flushTranscripts();
@@ -1311,7 +1323,11 @@ class Engine extends EventEmitter {
       }
     };
     await this.guardListening();
-    const hook = this.hooks.register((call) => this.decide({ taskId, step, writeRoots, runsOutside, webHosts, config, call, emitItem, propose }));
+    const hook = this.hooks.register((call) => {
+      // A tool call is a sign of work, also one of a subagent the agent started.
+      this.activity.set(watchKey(taskId, key), Date.now());
+      return this.decide({ taskId, step, writeRoots, runsOutside, webHosts, config, call, emitItem, propose });
+    });
     let session: ClaudeSession;
     try {
       session = await this.runner.start({
@@ -1334,10 +1350,7 @@ class Engine extends EventEmitter {
           if (item.type === 'tool_result' && item.isError) noteRefused(item.text);
         },
       }),
-      onActivity: () => {
-        this.activity.set(taskId, Date.now());
-        this.activity.set(key, Date.now());
-      },
+      onActivity: () => this.activity.set(watchKey(taskId, key), Date.now()),
       onWarn: (message) => this.log('warn', `${label}: ${message}`, taskId),
       // The account the session started under: switching accounts meanwhile does not move its limits to the other.
       onLimits: ((account) => (limits: EngineLimits) => {
@@ -1372,7 +1385,7 @@ class Engine extends EventEmitter {
      * the first, one fixing red checks or one correcting its report.
      */
     const turn = async (): Promise<TurnResult | null> => {
-      let r = await this.turnOf(taskId, session, key);
+      let r = await this.turnOf(taskId, session, { key, step });
       if (await stopped()) return null;
       for (let n = 1; !r.ok && n <= TRANSIENT_RETRIES && transientError(r.error) && !session.ended; n++) {
         const wait = this.retryDelayMs * 2 ** (n - 1);
@@ -1380,7 +1393,7 @@ class Engine extends EventEmitter {
         live({ phase: 'agent', step, key, text: `${label} waits ${Math.round(wait / 1000)}s after an API error` });
         if (await this.pause(taskId, wait)) return null;
         say('The last request failed on the API side. Continue where you left off; what you did before it is kept.');
-        r = await this.turnOf(taskId, session, key);
+        r = await this.turnOf(taskId, session, { key, step });
         if (await stopped()) return null;
       }
       return workTurn(stage.output, r);
@@ -1535,10 +1548,7 @@ class Engine extends EventEmitter {
       this.dropSession(taskId, session);
       this.hooks.unregister(hook.token);
       this.denyPermissions(taskId, 'the agent session ended', step);
-      this.liveCost.delete(taskId);
-      this.liveUsage.delete(taskId);
-      this.activity.delete(taskId);
-      this.activity.delete(key);
+      this.sessionEnded(taskId, key);
       const u: SessionUsage = session.usage ? session.usage() : {};
       await this.svc.record(taskId, {
         type: 'agent_stopped',
@@ -1591,8 +1601,6 @@ class Engine extends EventEmitter {
   /** The permission policy of an agent session: the Bash guard, writes only inside the stage's repo, then (optionally) you. */
   async decide({ taskId, step, writeRoots = [], runsOutside = [], webHosts = [], config, call, emitItem, propose }: DecideArgs): Promise<Decision> {
     const { tool, input } = call;
-    // A tool call is a sign of work, also one of a subagent the agent started.
-    this.activity.set(taskId, Date.now());
     const blocked = (reason: string): Decision => {
       emitItem({ type: 'blocked', tool, reason, input: summarizeInput(tool, input) });
       this.log('info', `${stepLabel(step)}: ${tool} blocked: ${reason}`, taskId);
@@ -1715,6 +1723,19 @@ class Engine extends EventEmitter {
     const left = (this.sessions.get(taskId) ?? []).filter((x) => x !== session);
     if (left.length) this.sessions.set(taskId, left);
     else this.sessions.delete(taskId);
+  }
+
+  /**
+   * Forgets what a session that ended (transcript `key`) showed while it ran: its cost (its `agent_stopped` has it now),
+   * its signs of work, its context usage. The other sessions of the task keep theirs.
+   */
+  sessionEnded(taskId: string, key: string): void {
+    const costs = new Map(this.liveCost.get(taskId));
+    costs.delete(key);
+    if (costs.size) this.liveCost.set(taskId, costs);
+    else this.liveCost.delete(taskId);
+    if (this.liveUsage.get(taskId)?.key === key) this.liveUsage.delete(taskId);
+    this.activity.delete(watchKey(taskId, key));
   }
 
   // ---------- finishing ----------
