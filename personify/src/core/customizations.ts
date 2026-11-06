@@ -8,8 +8,8 @@ export const COLORS = 'workbench.colorCustomizations';
 export const TOKENS = 'editor.tokenColorCustomizations';
 export const SEMANTIC = 'editor.semanticTokenColorCustomizations';
 export const SEMANTIC_ENABLED = 'editor.semanticHighlighting.enabled';
-const RULE_PREFIX = 'personify:';
-const CUSTOM_PREFIX = 'personify:custom:';
+export const RULE_PREFIX = 'personify:';
+export const CUSTOM_PREFIX = 'personify:custom:';
 const STYLES = ['bold', 'italic', 'underline', 'strikethrough'];
 const SCOPES: readonly Scope[] = ['user', 'workspace'];
 // The webview and profiles may write these and nothing else.

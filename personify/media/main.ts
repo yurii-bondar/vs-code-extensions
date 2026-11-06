@@ -68,6 +68,9 @@
     kbRecordSearch: boolean;
     /** The shortcut being changed in its row; null when none is. */
     kbEdit: KbEdit | null;
+    snapshots: readonly SnapshotInfo[];
+    /** When the panel opened, in epoch milliseconds; 0 until the host says. */
+    sessionStart: number;
     filters: Record<FilterTab, string>;
     /** Debounce keys whose write is still queued. */
     pending: Set<string>;
@@ -90,6 +93,8 @@
     kbLimit: 200,
     kbRecordSearch: false,
     kbEdit: null,
+    snapshots: [],
+    sessionStart: 0,
     filters: { appearance: '', syntax: '' },
     pending: new Set(),
   };
@@ -437,18 +442,18 @@
       ? `<span class="meta-chip">Writes to <b>${S.prefs.scope === 'workspace' ? 'workspace' : 'user'} settings.json</b></span><span class="meta-chip">Colors <b>${S.prefs.themeMode === 'current' ? esc(S.prefs.theme) : 'all themes'}</b></span>`
       : '';
 
-  /** Customized items per page, shown in the rail, the page heads and the session card. */
+  /** Customized items per page, shown in the rail, the page heads, the session card and the Profiles summary. */
   function updateCounts(): void {
     const set = (sel: string, text: string): void => {
       for (const el of $$(sel, app)) el.textContent = text;
     };
-    let total = 0;
+    const totals: SetupCounts = { hotkeys: kbView.counts.changed, appearance: 0, syntax: 0 };
     const appearance = S.appearance;
     if (appearance) {
       for (const area of S.catalog.areas) {
         const items = area.groups.flatMap((g) => g.items).filter((i) => i.kind !== 'note');
         const n = items.filter((i) => (i.kind === 'color' ? Boolean(appearance.colors[i.key]) : i.kind === 'setting' && (appearance.settings[i.key]?.value ?? null) !== null)).length;
-        total += n;
+        totals.appearance += n;
         set(`[data-count="appearance:${area.id}"]`, n ? String(n) : '');
         if (area.id === S.area) set('[data-changed="appearance"]', `${n} of ${items.length}`);
       }
@@ -458,21 +463,21 @@
       for (const lang of S.catalog.languages) {
         const items = lang.groups.flatMap((g) => g.items);
         const n = items.filter((i) => hasStyle(syntax.items[styleKey(lang.id, i.id)])).length;
-        total += n;
+        totals.syntax += n;
         set(`[data-count="syntax:${lang.id}"]`, n ? String(n) : '');
         if (lang.id === S.lang) set('[data-changed="syntax"]', `${n} of ${items.length}`);
       }
       const rules = S.custom.filter((c) => c.scope.trim() && hasStyle(c)).length;
-      total += rules;
+      totals.syntax += rules;
       set('[data-count="syntax:custom"]', rules ? String(rules) : '');
       set('[data-changed="custom"]', String(rules));
     }
-    const kb = kbView.counts.changed;
-    total += kb;
-    set('[data-count="hotkeys"]', kb ? String(kb) : '');
+    set('[data-count="hotkeys"]', totals.hotkeys ? String(totals.hotkeys) : '');
+    const total = totals.hotkeys + totals.appearance + totals.syntax;
     $('#session').classList.toggle('live', total > 0);
     $('#session-title').textContent = total ? 'Applied live' : 'Theme defaults';
     $('#session-count').textContent = total ? `${total} customization${total === 1 ? '' : 's'}` : 'Edits apply instantly and can be undone.';
+    renderSetup(totals);
   }
 
   // ---------- appearance ----------
@@ -1958,51 +1963,57 @@
 
   // ---------- profiles ----------
 
+  interface SetupCounts {
+    hotkeys: number;
+    appearance: number;
+    syntax: number;
+  }
+  let setup: SetupCounts = { hotkeys: 0, appearance: 0, syntax: 0 };
+
   function wireProfiles(): void {
     const root = $('#tab-profiles');
     root.innerHTML = `
       <div class="content wide">
-        <div class="content-head"><div><h2>Profiles & backup</h2><p>Save your setup to a file, move it to another machine, or roll back.</p><div class="target-chip">${targetChip()}</div></div></div>
-        <div class="grid">
-          <section class="card action-card">
-            <div class="ac-icon">⇪</div>
-            <h3>Export profile</h3>
-            <p>Writes your Personify colors, fonts and syntax rules (for the scope above) to a JSON file.</p>
-            <label class="check"><input type="checkbox" id="exp-kb" checked> Include keybindings.json</label>
-            <button class="btn" data-p="export">Export…</button>
-          </section>
-          <section class="card action-card">
-            <div class="ac-icon">⇩</div>
-            <h3>Import profile</h3>
-            <p>Load a profile exported by Personify. You choose whether to replace or merge with what you have.</p>
-            <button class="btn" data-p="import">Import…</button>
-          </section>
-          <section class="card action-card">
-            <div class="ac-icon">↶</div>
-            <h3>Revert this session</h3>
-            <p>Undo every change made since this panel was opened: settings in both scopes and keybindings.json.</p>
-            <button class="btn secondary" data-p="revert">Revert session</button>
-          </section>
-          <section class="card action-card danger">
-            <div class="ac-icon">⟲</div>
-            <h3>Reset Personify customizations</h3>
-            <p>Removes everything Personify wrote for the scope above. Your hand-written settings and keybindings stay.</p>
-            <button class="btn danger" data-p="reset">Reset…</button>
-          </section>
+        <div class="content-head">
+          <div><h2>Profiles & backup</h2><p>Save your setup to a file, move it to another machine, or roll back.</p></div>
+          <div class="actions"><button class="btn secondary" data-p="import">Import…</button><button class="btn" data-p="export">Export profile…</button></div>
         </div>
-        <section class="card help">
-          <h3>Where things are stored</h3>
-          <ul>
-            <li><b>Colors</b> → <code>workbench.colorCustomizations</code>, <b>syntax</b> → <code>editor.tokenColorCustomizations</code> + <code>editor.semanticTokenColorCustomizations</code>, <b>fonts</b> → regular settings.</li>
-            <li><b>Save to</b> picks user settings (every project) or this workspace's <code>.vscode/settings.json</code>.</li>
-            <li><b>Apply to → Current theme</b> nests values under <code>"[Theme name]"</code>, so other themes stay untouched.</li>
-            <li><b>Hotkeys</b> go to <code>keybindings.json</code>. Before the first change in a session Personify saves a copy next to it: <code>keybindings.json.personify-backup</code>.</li>
-          </ul>
-          <div class="actions"><button class="btn secondary" data-p="settings">Open settings.json</button><button class="btn secondary" data-p="keybindings">Open keybindings.json</button></div>
+        <section class="card setup-card">
+          <h3>Your setup</h3>
+          <p class="muted" id="setup-line"></p>
+          <div class="setup-bar" id="setup-bar"><span class="seg-hotkeys"></span><span class="seg-appearance"></span><span class="seg-syntax"></span></div>
+          <div class="setup-foot">
+            <div class="setup-legend" id="setup-legend"></div>
+            <label class="check"><input type="checkbox" id="exp-kb" checked> Export includes keybindings.json</label>
+          </div>
         </section>
+        <div class="profiles-grid">
+          <section class="card">
+            <h3>Snapshots <small>Taken before anything that changes a lot, so it can be undone.</small></h3>
+            <div class="timeline" id="snap-list"></div>
+          </section>
+          <div class="profiles-side">
+            <section class="card files-card">
+              <h3>Where things are stored</h3>
+              <div class="file-row"><div><code>settings.json</code><small>Colors, fonts and syntax colors. Save to picks user settings or this workspace's <code>.vscode/settings.json</code>.</small></div><button class="btn ghost" data-p="settings">Open ↗</button></div>
+              <div class="file-row"><div><code>keybindings.json</code><small>Hotkeys, always user-wide. A copy is kept next to it as <code>keybindings.json.personify-backup</code> before the first change of a session.</small></div><button class="btn ghost" data-p="keybindings">Open ↗</button></div>
+            </section>
+            <section class="card danger-card">
+              <h3>Reset Personify customizations</h3>
+              <p>Removes every color, font and syntax rule Personify wrote to the target in the top bar. A snapshot is taken first, so this can be undone.</p>
+              <button class="btn danger" data-p="reset">Reset…</button>
+            </section>
+          </div>
+        </div>
       </div>`;
     root.addEventListener('click', (e) => {
-      const b = targetOf(e)?.closest<HTMLElement>('[data-p]');
+      const t = targetOf(e);
+      const restore = t?.closest<HTMLElement>('[data-restore]');
+      if (restore) {
+        const snap = S.snapshots.find((s) => s.id === restore.dataset.restore);
+        return snap && send({ type: 'restoreSnapshot', id: snap.id });
+      }
+      const b = t?.closest<HTMLElement>('[data-p]');
       if (!b) return;
       switch (b.dataset.p) {
         case 'export':
@@ -2012,13 +2023,182 @@
         case 'revert':
           return send({ type: 'revertSession' });
         case 'reset':
-          return send({ type: 'resetAll' });
+          return openResetDialog();
         case 'settings':
           return send({ type: 'openSettingsJson' });
         case 'keybindings':
           return send({ type: 'openKeybindingsJson' });
       }
     });
+    renderSnapshots();
+  }
+
+  function renderSetup(counts: SetupCounts): void {
+    setup = counts;
+    const line = $opt('#setup-line');
+    if (!line) return;
+    const total = counts.hotkeys + counts.appearance + counts.syntax;
+    const parts: readonly (readonly [keyof SetupCounts, string])[] = [
+      ['hotkeys', 'Hotkeys'],
+      ['appearance', 'Appearance'],
+      ['syntax', 'Syntax colors'],
+    ];
+    line.textContent = total ? `${total} customization${total === 1 ? '' : 's'} across ${parts.filter(([k]) => counts[k]).length} area${parts.filter(([k]) => counts[k]).length === 1 ? '' : 's'}` : 'Nothing customized yet: your theme decides everything.';
+    for (const [key] of parts) $(`#setup-bar .seg-${key}`).style.flexGrow = String(counts[key]);
+    $('#setup-bar').classList.toggle('empty', !total);
+    $('#setup-legend').innerHTML = parts.map(([key, label]) => `<span class="legend-item"><i class="dot-${key}"></i>${label} <b>${counts[key]}</b></span>`).join('');
+  }
+
+  const DAY = 86_400_000;
+  /** "Today, 09:14", "Yesterday, 18:40" or "Oct 24". */
+  function when(at: number): string {
+    const d = new Date(at);
+    const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (at >= today.getTime()) return `Today, ${time}`;
+    if (at >= today.getTime() - DAY) return `Yesterday, ${time}`;
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
+
+  function renderSnapshots(): void {
+    const box = $opt('#snap-list');
+    if (!box) return;
+    type Entry = { at: number; html: string };
+    const entries: Entry[] = S.snapshots.map((s) => ({
+      at: s.at,
+      html: `<div class="tl-item"><span class="tl-dot"></span><div class="tl-text"><b>${esc(when(s.at))}</b><small>${esc(s.reason)}</small></div><button class="btn secondary" data-restore="${esc(s.id)}">Restore</button></div>`,
+    }));
+    if (S.sessionStart) {
+      entries.push({
+        at: S.sessionStart,
+        html: `<div class="tl-item"><span class="tl-dot"></span><div class="tl-text"><b>${esc(when(S.sessionStart))}</b><small>This session started</small></div><button class="btn secondary" data-p="revert">Revert to this</button></div>`,
+      });
+    }
+    entries.sort((a, b) => b.at - a.at);
+    box.innerHTML = `<div class="tl-item now"><span class="tl-dot"></span><div class="tl-text"><b>Now</b><small>Your current setup</small></div><span class="badge badge-live">Live</span></div>${entries.map((e) => e.html).join('')}${S.snapshots.length ? '' : '<div class="tl-note muted small">Snapshots appear here before an import, a reset, a revert or a restore.</div>'}`;
+  }
+
+  // ---------- dialogs ----------
+
+  interface DialogOpts {
+    title: string;
+    body: string;
+    /** Called with the data-d value of the button pressed; return false to keep the dialog open. */
+    onAction: (action: string, dialog: HTMLElement) => boolean | void;
+    onClose?: () => void;
+    tone?: 'danger';
+  }
+
+  /** A dialog over the panel: Esc and a click on the backdrop cancel; buttons carry data-d. */
+  function openDialog({ title, body, onAction, onClose, tone }: DialogOpts): HTMLElement {
+    const wrap = document.createElement('div');
+    wrap.className = 'modal-backdrop';
+    wrap.innerHTML = `<div class="modal ${tone ?? ''}" role="dialog" aria-modal="true" aria-label="${esc(title)}"><h3>${esc(title)}</h3>${body}</div>`;
+    document.body.appendChild(wrap);
+    const dialog = $('.modal', wrap);
+    const close = (): void => {
+      wrap.remove();
+      document.removeEventListener('keydown', onKey, true);
+      onClose?.();
+    };
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      close();
+    };
+    document.addEventListener('keydown', onKey, true);
+    wrap.addEventListener('mousedown', (e) => {
+      if (e.target === wrap) close();
+    });
+    wrap.addEventListener('click', (e) => {
+      const b = targetOf(e)?.closest<HTMLElement>('[data-d]');
+      if (!b) return;
+      if (b.dataset.d === 'cancel' || onAction(b.dataset.d ?? '', dialog) !== false) close();
+    });
+    $opt<HTMLElement>('[data-d="cancel"]', dialog)?.focus();
+    return dialog;
+  }
+
+  function openResetDialog(): void {
+    const n = setup.appearance + setup.syntax;
+    if (!n) return toast('Nothing to reset: Personify has not changed anything here');
+    const p = S.prefs;
+    const target = p ? `${p.scope === 'workspace' ? 'workspace' : 'user'} settings${p.themeMode === 'current' ? ` for “${p.theme}”` : ''}` : 'settings';
+    openDialog({
+      title: 'Reset Personify customizations?',
+      tone: 'danger',
+      body: `<p class="muted">This removes what Personify wrote to ${esc(target)}.</p>
+        <div class="dlg-list">
+          <div class="dlg-row"><span>Appearance<small>colors and fonts</small></span><b class="err-text">${setup.appearance}</b></div>
+          <div class="dlg-row"><span>Syntax colors<small>tokens and custom scopes</small></span><b class="err-text">${setup.syntax}</b></div>
+          <div class="dlg-row"><span>Shortcuts<small>keybindings.json is not touched</small></span><b class="muted">0</b></div>
+        </div>
+        <div class="dlg-note ok">↺ <b>A snapshot is taken first.</b> Undo it any time from Profiles & backup → Snapshots.</div>
+        <div class="modal-actions"><button class="btn secondary" data-d="cancel">Cancel</button><button class="btn danger" data-d="reset">Reset ${n} customization${n === 1 ? '' : 's'}</button></div>`,
+      onAction: (action) => {
+        if (action === 'reset') send({ type: 'resetAll' });
+      },
+    });
+  }
+
+  function openImportDialog(preview: ImportPreview): void {
+    let replace = false;
+    let applied = false;
+    const icon: Record<string, string> = { added: '+', changed: '~', removed: '−' };
+    const listHtml = (diff: ProfileDiff): string => {
+      const shown = diff.entries.slice(0, 12);
+      const rows = shown
+        .map((e) => `<div class="diff-row ${e.kind}"><i>${icon[e.kind] ?? ''}</i><span class="diff-label">${esc(e.label)}</span><span class="diff-value">${e.from === null ? '' : `<code>${esc(e.from)}</code>`}${e.from !== null && e.to !== null ? ' → ' : ''}${e.to === null ? '' : `<code>${esc(e.to)}</code>`}</span></div>`)
+        .join('');
+      const more = diff.entries.length - shown.length;
+      return `${rows}${more > 0 ? `<div class="diff-row muted"><i></i>and ${more} more</div>` : ''}${diff.same ? `<div class="diff-row same"><i>=</i>${diff.same} item${diff.same === 1 ? '' : 's'} already match</div>` : ''}${!diff.entries.length && !diff.same ? '<div class="diff-row muted">The file has no colors, fonts or syntax rules.</div>' : ''}`;
+    };
+    const summary = (diff: ProfileDiff): string => {
+      const by = (k: string): number => diff.entries.filter((e) => e.kind === k).length;
+      return `${by('added')} added · ${by('changed')} changed · ${by('removed')} removed`;
+    };
+    const kb = preview.keybindingCount
+      ? `<label class="check dlg-kb"><input type="checkbox" id="imp-kb"> Also add the file's ${preview.keybindingCount} shortcut${preview.keybindingCount === 1 ? '' : 's'} that are missing</label>
+         <details class="dlg-kb-list"><summary>Show them</summary><pre>${preview.keybindings.map(esc).join('\n')}${preview.keybindingCount > preview.keybindings.length ? `\n…and ${preview.keybindingCount - preview.keybindings.length} more` : ''}</pre></details>
+         <div class="dlg-note warn">A shortcut can run any command. Add them only from a file you trust.</div>`
+      : '';
+    const dialog = openDialog({
+      title: `Import ${preview.file}`,
+      body: `<div class="dlg-mode"><span class="muted">How</span><div class="seg" id="imp-mode"><button data-mode="merge" class="active">Merge with mine</button><button data-mode="replace">Replace mine</button></div></div>
+        <div class="dlg-sub">What changes</div>
+        <div class="diff-list" id="imp-list"></div>
+        <div class="dlg-summary"><b id="imp-summary"></b><span class="muted">A snapshot of your current setup is taken first.</span></div>
+        ${kb}
+        <div class="modal-actions"><button class="btn secondary" data-d="cancel">Cancel</button><button class="btn" data-d="import" id="imp-go"></button></div>`,
+      onAction: (action, d) => {
+        if (action !== 'import') return;
+        applied = true;
+        send({ type: 'importApply', replace, keybindings: $opt<HTMLInputElement>('#imp-kb', d)?.checked === true });
+      },
+      onClose: () => {
+        if (!applied) send({ type: 'importCancel' });
+      },
+    });
+    const sync = (): void => {
+      const diff = replace ? preview.replace : preview.merge;
+      $('#imp-list', dialog).innerHTML = listHtml(diff);
+      $('#imp-summary', dialog).textContent = summary(diff);
+      $$('#imp-mode button', dialog).forEach((b) => b.classList.toggle('active', (b.dataset.mode === 'replace') === replace));
+      const withKb = $opt<HTMLInputElement>('#imp-kb', dialog)?.checked === true;
+      const n = diff.entries.length;
+      const go = $<HTMLButtonElement>('#imp-go', dialog);
+      go.disabled = !n && !withKb;
+      go.textContent = n ? `Import ${n} change${n === 1 ? '' : 's'}${withKb ? ' and shortcuts' : ''}` : withKb ? 'Add shortcuts' : 'Nothing to import';
+    };
+    dialog.addEventListener('click', (e) => {
+      const mode = targetOf(e)?.closest<HTMLElement>('[data-mode]');
+      if (!mode) return;
+      replace = mode.dataset.mode === 'replace';
+      sync();
+    });
+    dialog.addEventListener('change', sync);
+    sync();
   }
 
   // ---------- messages ----------
@@ -2080,6 +2260,12 @@
         computeKb(msg);
         renderKbRows();
         return;
+      case 'snapshots':
+        S.snapshots = msg.list;
+        S.sessionStart = msg.sessionStart;
+        return renderSnapshots();
+      case 'importPreview':
+        return openImportDialog(msg.preview);
       case 'toast':
         return toast(msg.text, msg.kind);
       default: {

@@ -6,15 +6,19 @@ import * as path from 'path';
 import * as catalog from './catalog';
 import { Customizations, SEMANTIC_ENABLED } from './core/customizations';
 import { errorMessage, str } from './core/json';
-import { parseProfile, profileFile } from './core/profile';
+import { diffProfile, parseProfile, profileFile } from './core/profile';
+import { parseSnapshots, snapshotInfo, withSnapshot } from './core/snapshots';
 import { parseClientMessage, parsePrefs } from './protocol';
 import { vscodeConfig } from './settings';
 import type { KeybindingStore } from './keybindings';
 import type { Snapshot } from './core/customizations';
+import type { Profile } from './core/profile';
+import type { SnapshotId, SnapshotRecord } from './core/snapshots';
 import type { Prefs, Tab, Target } from './core/types';
 import type { ClientMessage, HostMessage, ToastKind } from './protocol';
 
 const PREFS_KEY = 'personify.prefs';
+const SNAPSHOTS_KEY = 'personify.snapshots';
 const WATCHED_KEYS = ['workbench.colorCustomizations', 'editor.tokenColorCustomizations', 'editor.semanticTokenColorCustomizations', 'workbench.colorTheme', SEMANTIC_ENABLED, ...catalog.SETTING_KEYS];
 
 const activeTheme = (): string => str(vscode.workspace.getConfiguration('workbench').get<unknown>('colorTheme')) ?? '';
@@ -32,6 +36,10 @@ export class PersonifyPanel {
   /** keybindings.json when the panel opened; null when it could not be read. */
   private readonly keybindingsSnapshot: Promise<{ file: string; text: string } | null>;
   private watchedFile: string | undefined;
+  /** When the panel opened: Revert session goes back to it. */
+  private readonly sessionStart = Date.now();
+  /** The profile last previewed, until the panel applies or cancels it. */
+  private pendingImport: { file: string; data: Profile } | null = null;
 
   static show(context: vscode.ExtensionContext, store: KeybindingStore, tab?: Tab): void {
     if (PersonifyPanel.current) {
@@ -162,6 +170,7 @@ export class PersonifyPanel {
           catalog: { areas: catalog.AREAS, languages: catalog.LANGUAGES },
         });
         this.pushState();
+        this.pushSnapshots();
         await this.pushKeybindings();
         return;
       case 'prefs':
@@ -200,10 +209,17 @@ export class PersonifyPanel {
         return this.exportFile(msg.includeKeybindings);
       case 'import':
         return this.importFile();
+      case 'importApply':
+        return this.applyImport(msg.replace, msg.keybindings);
+      case 'importCancel':
+        this.pendingImport = null;
+        return;
       case 'resetAll':
         return this.resetAll();
       case 'revertSession':
         return this.revertSession();
+      case 'restoreSnapshot':
+        return this.restore(msg.id);
       default: {
         const unknownMessage: never = msg;
         return unknownMessage;
@@ -238,62 +254,92 @@ export class PersonifyPanel {
     this.toast(`Exported to ${uri.scheme === 'file' ? uri.fsPath : uri.toString()}`, 'success');
   }
 
+  /** Reads the profile and sends the panel what it would change; nothing is written until the panel confirms. */
   private async importFile(): Promise<void> {
     const [uri] = (await vscode.window.showOpenDialog({ canSelectMany: false, filters: { 'Personify profile': ['json'] } })) ?? [];
     if (!uri) return;
     const data = parseProfile(JSON.parse(new TextDecoder().decode(await vscode.workspace.fs.readFile(uri))));
     if (!data) throw new Error('This file is not a Personify profile.');
-    const mode = await vscode.window.showInformationMessage(
-      'Import Personify profile',
-      { modal: true, detail: 'Replace: clear current Personify customizations first.\nMerge: only add/overwrite what the file contains.' },
-      'Replace',
-      'Merge'
-    );
-    if (!mode) return;
-    await this.customizations.importState(this.target, data, { replace: mode === 'Replace' });
+    const file = path.basename(uri.path);
+    this.pendingImport = { file, data };
+    const current = this.customizations.exportState(this.target);
+    this.post({
+      type: 'importPreview',
+      preview: {
+        file,
+        merge: diffProfile(current, data, { replace: false }),
+        replace: diffProfile(current, data, { replace: true }),
+        keybindings: data.keybindings.slice(0, 15).map((kb) => `${str(kb.key) ?? ''} → ${str(kb.command) ?? ''}${kb.args === undefined ? '' : ' (with args)'}`),
+        keybindingCount: data.keybindings.length,
+      },
+    });
+  }
 
-    if (data.keybindings.length) {
-      const shown = data.keybindings.slice(0, 15).map((kb) => `${str(kb.key)} → ${str(kb.command)}${kb.args === undefined ? '' : ' (with args)'}`);
-      const more = data.keybindings.length - shown.length;
-      const ok = await vscode.window.showInformationMessage(
-        `The profile also has ${data.keybindings.length} keybindings. Add the missing ones to your keybindings.json?`,
-        { modal: true, detail: `${shown.join('\n')}${more > 0 ? `\n…and ${more} more` : ''}\n\nOnly add shortcuts from a profile you trust: a shortcut can run any command.` },
-        'Add'
-      );
-      if (ok) {
-        const added = await this.store.addMissing(data.keybindings);
-        this.toast(added ? `Added ${added} shortcut${added > 1 ? 's' : ''}` : 'Every shortcut was already there');
-        await this.pushKeybindings();
-      }
+  private async applyImport(replace: boolean, withKeybindings: boolean): Promise<void> {
+    const pending = this.pendingImport;
+    this.pendingImport = null;
+    if (!pending) return;
+    await this.takeSnapshot(`Before importing ${pending.file}`);
+    await this.customizations.importState(this.target, pending.data, { replace });
+    if (withKeybindings && pending.data.keybindings.length) {
+      const added = await this.store.addMissing(pending.data.keybindings);
+      this.toast(added ? `Added ${added} shortcut${added > 1 ? 's' : ''}` : 'Every shortcut was already there');
+      await this.pushKeybindings();
     }
-    this.toast('Profile imported', 'success');
+    this.toast(`Imported ${pending.file}. Undo it from Snapshots.`, 'success');
   }
 
   private async resetAll(): Promise<void> {
-    const where = this.prefs.scope === 'workspace' ? 'workspace' : 'user';
-    const theme = this.target.theme ? ` for theme "${this.target.theme}"` : '';
-    const ok = await vscode.window.showWarningMessage(
-      `Remove every Personify color, font and syntax customization from ${where} settings${theme}?`,
-      { modal: true, detail: 'Keybindings are not touched. Settings you wrote by hand outside Personify are kept.' },
-      'Reset'
-    );
-    if (!ok) return;
+    await this.takeSnapshot('Before resetting Personify customizations');
     await this.customizations.resetAll(this.target);
-    this.toast('Personify customizations removed', 'success');
+    this.toast('Personify customizations removed. Undo it from Snapshots.', 'success');
   }
 
   private async revertSession(): Promise<void> {
     const ok = await vscode.window.showWarningMessage(
       'Undo everything changed since this Personify panel was opened?',
-      { modal: true, detail: 'Restores colors, fonts, syntax colors (user and workspace) and keybindings.json.' },
+      { modal: true, detail: 'Restores colors, fonts, syntax colors (user and workspace) and keybindings.json. A snapshot is taken first.' },
       'Revert'
     );
     if (!ok) return;
+    await this.takeSnapshot('Before reverting the session');
     await this.customizations.restoreSnapshot(this.snapshot);
     const keybindings = await this.keybindingsSnapshot;
     if (keybindings) await this.store.disk.restore(keybindings.file, keybindings.text);
     await this.pushKeybindings();
     this.toast('Reverted to the state when the panel was opened', 'success');
+  }
+
+  // ---------- snapshots ----------
+
+  private snapshots(): SnapshotRecord[] {
+    return parseSnapshots(this.context.globalState.get<unknown>(SNAPSHOTS_KEY));
+  }
+
+  private pushSnapshots(): void {
+    this.post({ type: 'snapshots', list: snapshotInfo(this.snapshots()), sessionStart: this.sessionStart });
+  }
+
+  /** Saves both levels of settings and keybindings.json, so what comes next can be undone. */
+  private async takeSnapshot(reason: string): Promise<void> {
+    const file = this.store.file;
+    const keybindings = await this.store.disk.readText(file).then(
+      (text) => ({ file, text }),
+      () => null
+    );
+    const record: SnapshotRecord = { id: crypto.randomUUID() as SnapshotId, at: Date.now(), reason, settings: this.customizations.snapshot(), keybindings };
+    await this.context.globalState.update(SNAPSHOTS_KEY, withSnapshot(this.snapshots(), record));
+    this.pushSnapshots();
+  }
+
+  private async restore(id: SnapshotId): Promise<void> {
+    const snap = this.snapshots().find((s) => s.id === id);
+    if (!snap) throw new Error('That snapshot is gone.');
+    await this.takeSnapshot('Before restoring a snapshot');
+    await this.customizations.restoreSnapshot(snap.settings);
+    if (snap.keybindings) await this.store.disk.restore(snap.keybindings.file, snap.keybindings.text);
+    await this.pushKeybindings();
+    this.toast('Snapshot restored', 'success');
   }
 
   private html(media: vscode.Uri, scripts: vscode.Uri): string {

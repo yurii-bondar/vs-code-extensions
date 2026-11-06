@@ -55,3 +55,11 @@ test('catalog: keys are unique, and every token in a sample is an item of its la
   assert.ok(jsts && item);
   assert.deepEqual(textMateScopes(jsts, item).slice(0, 2), [`source.js ${item.scopes[0]}`, `source.ts ${item.scopes[0]}`]);
 });
+
+test('import and snapshot messages carry only what they need', () => {
+  assert.deepEqual(parseClientMessage({ type: 'importApply', replace: 'yes', keybindings: true }), { type: 'importApply', replace: false, keybindings: true });
+  assert.deepEqual(parseClientMessage({ type: 'importCancel', file: 'x' }), { type: 'importCancel' });
+  assert.deepEqual(parseClientMessage({ type: 'restoreSnapshot', id: 'abc' }), { type: 'restoreSnapshot', id: 'abc' });
+  assert.equal(parseClientMessage({ type: 'restoreSnapshot', id: '' }), null);
+  assert.equal(parseClientMessage({ type: 'restoreSnapshot' }), null);
+});

@@ -1,6 +1,8 @@
 import { isRecord, records, settingValue, str } from './core/json';
 import type { Area, Language } from './catalog/types';
 import type { JsonObject } from './core/json';
+import type { ProfileDiff } from './core/profile';
+import type { SnapshotId, SnapshotInfo } from './core/snapshots';
 import type { AppearanceState, CustomRule, KeybindingEdit, KeybindingsState, Prefs, Scope, SettingValue, SyntaxChange, SyntaxState, Tab, ThemeMode, TokenStyle } from './core/types';
 
 export interface PrefsView extends Prefs {
@@ -11,11 +13,24 @@ export interface PrefsView extends Prefs {
 
 export type ToastKind = 'info' | 'success' | 'error';
 
+/** What an import would do, for the panel to confirm before anything is written. */
+export interface ImportPreview {
+  /** The file's name. */
+  readonly file: string;
+  readonly merge: ProfileDiff;
+  readonly replace: ProfileDiff;
+  /** The file's shortcuts as "key → command", the first few of them. */
+  readonly keybindings: readonly string[];
+  readonly keybindingCount: number;
+}
+
 export type HostMessage =
   | { type: 'init'; tab: Tab | null; platform: string; catalog: { areas: readonly Area[]; languages: readonly Language[] } }
   | { type: 'focusTab'; tab: Tab }
   | { type: 'state'; prefs: PrefsView; appearance: AppearanceState; syntax: SyntaxState }
   | ({ type: 'keybindings' } & KeybindingsState)
+  | { type: 'snapshots'; list: readonly SnapshotInfo[]; sessionStart: number }
+  | { type: 'importPreview'; preview: ImportPreview }
   | { type: 'toast'; text: string; kind: ToastKind };
 
 export type ClientMessage =
@@ -35,8 +50,13 @@ export type ClientMessage =
   | { type: 'inspectScope'; langId: string }
   | { type: 'export'; includeKeybindings: boolean }
   | { type: 'import' }
+  /** Applies the import the host last previewed. */
+  | { type: 'importApply'; replace: boolean; keybindings: boolean }
+  | { type: 'importCancel' }
+  /** Confirmed in the panel; the host takes a snapshot first. */
   | { type: 'resetAll' }
-  | { type: 'revertSession' };
+  | { type: 'revertSession' }
+  | { type: 'restoreSnapshot'; id: SnapshotId };
 
 const SCOPES: readonly Scope[] = ['user', 'workspace'];
 const THEME_MODES: readonly ThemeMode[] = ['all', 'current'];
@@ -104,9 +124,16 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
     case 'openKeybindingsJson':
     case 'openSettingsJson':
     case 'import':
+    case 'importCancel':
     case 'resetAll':
     case 'revertSession':
       return { type: raw.type };
+    case 'importApply':
+      return { type: 'importApply', replace: raw.replace === true, keybindings: raw.keybindings === true };
+    case 'restoreSnapshot': {
+      const id = str(raw.id);
+      return id ? { type: 'restoreSnapshot', id: id as SnapshotId } : null;
+    }
     case 'prefs':
       return { type: 'prefs', ...parsePrefs(raw) };
     case 'setColors':
