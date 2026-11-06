@@ -288,6 +288,12 @@
 
   // ---------- shell ----------
 
+  /** Every TextMate scope the catalog knows, bare and inside its language, for the custom scope field. */
+  function catalogScopes(): string[] {
+    const all = S.catalog.languages.flatMap((lang) => lang.groups.flatMap((g) => g.items.flatMap((i) => i.scopes.flatMap((s) => [s, ...lang.roots.map((r) => `${r} ${s}`)]))));
+    return [...new Set(all)].sort();
+  }
+
   /** One rail entry; a group with sub-pages opens a flyout when the rail is collapsed. */
   function navGroupHtml(tab: Tab, subs: readonly (readonly [string, string])[]): string {
     const t = TABS.find((x) => x.id === tab);
@@ -344,6 +350,7 @@
       </div>
       <datalist id="font-list">${FONTS.map((f) => `<option value="${esc(f)}">`).join('')}</datalist>
       <datalist id="when-list">${WHEN.map((w) => `<option value="${esc(w)}">`).join('')}</datalist>
+      <datalist id="scope-list">${catalogScopes().map((s) => `<option value="${esc(s)}">`).join('')}</datalist>
       <datalist id="cmd-list"></datalist>`;
 
     $('.rail', app).addEventListener('click', (e) => {
@@ -1014,14 +1021,85 @@
   }
 
   function previewHtml(lang: Language): string {
+    const labels = new Map(lang.groups.flatMap((g) => g.items.map((i) => [i.id, i.label] as const)));
     return lang.sample
       .map((line) => {
         const html = line.replace(/⟦([^¦]*)¦([^⟧]*)⟧|([^⟦]+)/g, (_: string, id: string | undefined, text: string | undefined, plain: string | undefined) =>
-          plain !== undefined ? esc(plain) : `<span class="tok" data-item="${esc(id ?? '')}">${esc(text ?? '')}</span>`
+          plain !== undefined ? esc(plain) : `<span class="tok" data-item="${esc(id ?? '')}" title="${esc(labels.get(id ?? '') ?? '')} · click to style">${esc(text ?? '')}</span>`
         );
         return `<div class="pl">${html || ' '}</div>`;
       })
       .join('');
+  }
+
+  // ---------- token popover ----------
+
+  const PRESETS = ['#7aa2f7', '#bb9af7', '#9ece6a', '#e0af68', '#f7768e', '#7dcfff', '#ff9e64', '#c0caf5'];
+
+  /** Colors the user already picked come first, so their palette stays consistent. */
+  function presetColors(): string[] {
+    const used = [...Object.values(S.syntax?.items ?? {}).map((s) => s.fg), ...S.custom.map((c) => c.fg)].flatMap((c) => (c && HEX_RE.test(c) ? [c.toLowerCase()] : []));
+    return [...new Set([...used, ...PRESETS])].slice(0, 10);
+  }
+
+  /** Styles one kind of token right where it is clicked in the sample. */
+  function openTokenPopover(tok: HTMLElement): void {
+    closeTokenPopover();
+    const lang = currentLang();
+    const id = tok.dataset.item ?? '';
+    const item = lang?.groups.flatMap((g) => g.items).find((i) => i.id === id);
+    const wrap = tok.closest<HTMLElement>('.preview-wrap');
+    if (!lang || !item || !wrap) return;
+    const count = $$(`.tok[data-item="${id}"]`, wrap).length;
+    const pop = document.createElement('div');
+    pop.className = 'tok-pop';
+    pop.id = 'tok-pop';
+    pop.dataset.item = id;
+    pop.setAttribute('role', 'dialog');
+    pop.setAttribute('aria-label', `Style of ${item.label}`);
+    pop.innerHTML = `
+      <div class="tp-head">
+        <div class="tp-title"><b>${esc(item.label)}</b><code class="key">${esc(item.scopes.join(' · ') || item.semantic.join(' · '))}</code></div>
+        <button class="icon-btn" data-tp="close" title="Close (Esc)">×</button>
+      </div>
+      <div class="tp-presets">${presetColors().map((c) => `<button class="tp-preset" data-color="${c}" title="${c}" aria-label="${c}"></button>`).join('')}</div>
+      <div class="tp-row">${colorControl()}${styleToggles()}</div>
+      <div class="tp-foot">
+        <span class="muted small">${count} in sample</span>
+        <span class="tp-actions"><button class="btn ghost" data-tp="list">Show in list</button><button class="btn ghost" data-tp="reset">Reset</button><button class="btn" data-tp="close">Done</button></span>
+      </div>`;
+    wrap.appendChild(pop);
+    for (const b of $$('.tp-preset', pop)) b.style.background = b.dataset.color ?? '';
+    // Under the token, kept inside the preview column.
+    const box = wrap.getBoundingClientRect();
+    const at = tok.getBoundingClientRect();
+    pop.style.left = `${Math.max(8, Math.min(at.left - box.left - 16, box.width - pop.offsetWidth - 8))}px`;
+    pop.style.top = `${at.bottom - box.top + 8}px`;
+    $$('.tok', wrap).forEach((s) => s.classList.toggle('hl', s.dataset.item === id));
+    syncSyntax();
+    $opt<HTMLElement>('.tp-preset', pop)?.focus();
+  }
+
+  function closeTokenPopover(): void {
+    const pop = $opt('#tok-pop');
+    if (!pop) return;
+    pop.remove();
+    $$('#tab-syntax .tok.hl').forEach((s) => s.classList.remove('hl'));
+  }
+
+  /** Scrolls the token list to a token's row and flashes it. */
+  function showTokenRow(itemId: string): void {
+    const row = $opt(`#tab-syntax .token-row[data-item="${itemId}"]`);
+    if (!row) return;
+    if (row.classList.contains('hidden')) {
+      S.filters.syntax = '';
+      $<HTMLInputElement>('#tab-syntax [data-filter]').value = '';
+      applyFilter('syntax');
+    }
+    const details = row.closest<HTMLDetailsElement>('details');
+    if (details) details.open = true;
+    row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    flash(row);
   }
 
   function semanticBar(): string {
@@ -1104,11 +1182,16 @@
       </div>
       <section class="card"><h3>Rules</h3><div class="rows" id="custom-rows"></div></section>
       <section class="card help">
+        <h3>How scopes match</h3>
+        <ul class="scope-help">
+          <li><span class="scope-chip">comment</span> every comment, in any language</li>
+          <li><span class="scope-chip">comment</span><span class="scope-chip">string</span> written <code>comment, string</code>: a comma means “or”</li>
+          <li><span class="scope-chip">source.go<i> › </i>comment</span> written <code>source.go comment</code>: a space means “inside”, here comments in Go files only</li>
+        </ul>
         <h3>How to find a scope</h3>
         <ol>
-          <li>Put the cursor on a token in any file and click <b>Inspect token under cursor</b>.</li>
-          <li>Copy a line from the <b>textmate scopes</b> list, e.g. <code>keyword.control.flow.ts</code>.</li>
-          <li>Paste it here. Several scopes can be comma-separated; space-separated parts mean "inside", e.g. <code>source.go comment</code>.</li>
+          <li>Put the cursor on a token in any file and click <b>⌖ Inspect token</b>: VS Code opens its scope inspector.</li>
+          <li>Copy a line from its <b>textmate scopes</b> list, e.g. <code>keyword.control.flow.ts</code>, and paste it here.</li>
         </ol>
       </section>`;
   }
@@ -1120,15 +1203,30 @@
       ? S.custom
           .map(
             (c) => `<div class="row custom-row" data-id="${esc(c.id)}">
-              <div class="row-label"><input type="text" class="text scope-input" placeholder="e.g. source.ts keyword.control, comment.line" spellcheck="false" value="${esc(c.scope)}"></div>
+              <div class="row-label">
+                <input type="text" class="text scope-input" list="scope-list" placeholder="e.g. source.go comment, markup.heading" spellcheck="false" value="${esc(c.scope)}" aria-label="TextMate scopes">
+                <div class="scope-line"><span class="scope-chips"></span><span class="scope-hint"></span></div>
+              </div>
               <div class="row-control">${colorControl()}${styleToggles()}</div>
               <button class="icon-btn reset" data-action="delete-custom" title="Delete rule">✕</button>
             </div>`
           )
           .join('')
-      : '<div class="empty-state">No custom rules yet. Click <b>＋ Add rule</b>.</div>';
+      : `<div class="empty-state">
+          <div class="empty-title">No custom rules yet</div>
+          <div class="actions center"><button class="btn" data-action="add-custom">+ Add rule</button><button class="btn secondary" data-action="inspect">⌖ Inspect a token first</button></div>
+        </div>`;
     syncCustom();
   }
+
+  /** A rule's scopes as chips: a comma starts another scope, a space means "inside". */
+  const scopeChips = (scope: string): string =>
+    scope
+      .split(',')
+      .map((s) => s.trim().split(/\s+/).filter(Boolean))
+      .filter((parts) => parts.length)
+      .map((parts) => `<span class="scope-chip">${parts.map(esc).join('<i> › </i>')}</span>`)
+      .join('');
 
   function syncCustom(): void {
     for (const row of $$('#custom-rows .custom-row')) {
@@ -1138,6 +1236,9 @@
       syncStyleButtons(row, c.fontStyle);
       row.classList.toggle('modified', hasStyle(c));
       row.classList.toggle('incomplete', !c.scope.trim() || !hasStyle(c));
+      $('.scope-chips', row).innerHTML = scopeChips(c.scope);
+      // Rules without a scope or a style are not written, so say which part is missing.
+      $('.scope-hint', row).textContent = !c.scope.trim() ? 'Type a scope, or pick one from the list' : !hasStyle(c) ? 'Pick a color or a style to save this rule' : '';
     }
   }
 
@@ -1181,6 +1282,14 @@
       const st = items[styleKey(lang.id, span.dataset.item ?? '')];
       span.style.cssText = cssFor(st);
       span.classList.toggle('dim', !st?.fg);
+    }
+    const pop = $opt('#tok-pop');
+    if (pop) {
+      const st = items[styleKey(lang.id, pop.dataset.item ?? '')];
+      setColorCtl($opt('.color-ctl', pop), st?.fg ?? null);
+      syncStyleButtons(pop, st?.fontStyle ?? null);
+      const fg = (st?.fg ?? '').toLowerCase();
+      $$('.tp-preset', pop).forEach((b) => b.classList.toggle('active', b.dataset.color === fg));
     }
   }
 
@@ -1230,6 +1339,8 @@
   function wireSyntax(): void {
     const root = $('#tab-syntax');
     const onColor = (ctl: HTMLElement, value: string | null): void => {
+      const pop = ctl.closest<HTMLElement>('#tok-pop');
+      if (pop) return setTokenStyle(pop.dataset.item ?? '', { fg: value || null });
       const row = ctl.closest<HTMLElement>('.row');
       if (!row) return;
       if (row.classList.contains('custom-row')) updateCustom(row.dataset.id ?? '', { fg: value || null });
@@ -1263,7 +1374,7 @@
       }
       const styleBtn = t.closest<HTMLElement>('.style-btn');
       if (styleBtn) {
-        const row = styleBtn.closest<HTMLElement>('.row');
+        const row = styleBtn.closest<HTMLElement>('.row, #tok-pop');
         const style = styleBtn.dataset.style ?? '';
         if (!row) return;
         if (row.classList.contains('custom-row')) {
@@ -1275,18 +1386,21 @@
         return setTokenStyle(itemId, { fontStyle: toggleStyle(st?.fontStyle ?? null, style) });
       }
       const tok = t.closest<HTMLElement>('.tok');
-      if (tok) {
-        const row = $opt(`#tab-syntax .token-row[data-item="${tok.dataset.item ?? ''}"]`);
-        if (!row) return;
-        if (row.classList.contains('hidden')) {
-          S.filters.syntax = '';
-          $<HTMLInputElement>('#tab-syntax [data-filter]').value = '';
-          applyFilter('syntax');
+      if (tok) return openTokenPopover(tok);
+      const pop = t.closest<HTMLElement>('#tok-pop');
+      if (pop) {
+        const itemId = pop.dataset.item ?? '';
+        const preset = t.closest<HTMLElement>('.tp-preset');
+        if (preset) return setTokenStyle(itemId, { fg: preset.dataset.color ?? null });
+        switch (t.closest<HTMLElement>('[data-tp]')?.dataset.tp) {
+          case 'close':
+            return closeTokenPopover();
+          case 'reset':
+            return setTokenStyle(itemId, null);
+          case 'list':
+            closeTokenPopover();
+            return showTokenRow(itemId);
         }
-        const details = row.closest<HTMLDetailsElement>('details');
-        if (details) details.open = true;
-        row.scrollIntoView({ block: 'center', behavior: 'smooth' });
-        flash(row);
         return;
       }
       const action = t.closest<HTMLElement>('[data-action]');
@@ -1341,12 +1455,21 @@
     });
 
     // Hovering a token row highlights its tokens in the preview.
+    // An open popover keeps its own tokens highlighted.
     root.addEventListener('mouseover', (e) => {
       const row = targetOf(e)?.closest<HTMLElement>('.token-row');
-      const id = row?.dataset.item ?? '';
+      const id = row?.dataset.item ?? $opt('#tok-pop')?.dataset.item ?? '';
       if (root.dataset.hover === id) return;
       root.dataset.hover = id;
       $$('.tok', root).forEach((s) => s.classList.toggle('hl', s.dataset.item === id));
+    });
+    // The popover closes on Esc or a click anywhere outside it (a click on another token opens that one).
+    document.addEventListener('mousedown', (e) => {
+      const t = targetOf(e);
+      if ($opt('#tok-pop') && !t?.closest('#tok-pop, .tok')) closeTokenPopover();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && $opt('#tok-pop')) closeTokenPopover();
     });
   }
 
