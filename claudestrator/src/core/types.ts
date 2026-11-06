@@ -468,7 +468,8 @@ export interface TaskState {
   next: Step | null;
   nextMode: NextMode;
   feedback: string | null;
-  running: Step | null;
+  /** The steps an agent works on now: one, or the members of a parallel group. */
+  running: Step[];
   checkpoint: Checkpoint | null;
   review: ReviewState;
   finishStep: 'commit' | 'confirm' | 'publish' | null;

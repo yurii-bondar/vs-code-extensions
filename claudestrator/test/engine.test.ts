@@ -155,7 +155,7 @@ test('engine: dirty checkouts block branch mode, stop interrupts a hanging agent
     await waitFor(async () => !h.engine.isRunning(taskId));
     let s = await h.engine.svc.state(taskId);
     assert.equal(s.status, 'stopped');
-    assert.equal(s.running!.agent, 'developer', 'the interrupted step stays the running one');
+    assert.equal(s.running[0]!.agent, 'developer', 'the interrupted step stays the running one');
     assert.equal((await view.summary(h.engine, { taskId, state: s })).mini.find((m) => m.agent === 'developer')!.status, 'paused');
 
     setChildEnv({ ...getChildEnv(), FAKE_HANG: '' });

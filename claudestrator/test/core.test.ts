@@ -154,8 +154,8 @@ test('machine: plan → approval → per-repo work → review fix round → comm
     apply({ type: 'stage_completed', agent: 'developer', repo, artifact: `reports/r1/developer-${repo}.md`, gates: 'pass' });
   }
   apply({ type: 'stage_started', agent: 'tester' });
-  assert.equal(runOf(nx({ ...s!, running: null, next: s!.running })).artifact, 'reports/r1/tester.md');
-  assert.ok(['reports/r1/developer-api.md', 'reports/r1/developer-web.md'].every((f) => runOf(nx({ ...s!, running: null, next: s!.running })).inputs.includes(f)), 'the tester reads every developer report');
+  assert.equal(runOf(nx({ ...s!, running: [], next: s!.running[0]! })).artifact, 'reports/r1/tester.md');
+  assert.ok(['reports/r1/developer-api.md', 'reports/r1/developer-web.md'].every((f) => runOf(nx({ ...s!, running: [], next: s!.running[0]! })).inputs.includes(f)), 'the tester reads every developer report');
   apply({ type: 'stage_completed', agent: 'tester', artifact: 'reports/r1/tester.md', gates: 'pass' });
   apply({ type: 'stage_started', agent: 'reviewer' });
   apply({ type: 'stage_completed', agent: 'reviewer', artifact: 'reviews/r1/reviewer.md', verdict: { status: 'changes_requested', summary: 'x', findings: [{ severity: 'major', repo: 'web', problem: 'no test' }, { severity: 'minor', problem: 'naming' }] } });
@@ -272,7 +272,7 @@ test('machine: your feedback stays with a step run again after a Stop, and reach
   ];
   // "Request changes", the planner starts, Stop, resume: it runs again with the feedback.
   const s = rpl(timed([...planned, { type: 'checkpoint_answered', id: 'approve-plan', option: 'change', feedback: 'split it in two' }, { type: 'stage_started', agent: 'planner' }, { type: 'stopped', reason: 'x' }, { type: 'resumed' }]));
-  const again = rerunOf(s, s.running!);
+  const again = rerunOf(s, s.running[0]!);
   assert.deepEqual([again.mode, again.feedback], ['replan', 'split it in two']);
   assert.ok(again.inputs.includes('plan/planner.md'), 'and its previous plan');
 
@@ -418,7 +418,7 @@ test('machine: a log replays as it was written: the same failure twice, then a r
     { type: 'checkpoint_answered', id: 'agent-failure', option: 'retry' },
     { type: 'stage_started', agent: 'planner' },
   ]));
-  assert.ok(s.running && s.running.agent === 'planner', 'the retry as it was replays, and its step runs');
+  assert.ok(s.running[0] && s.running[0].agent === 'planner', 'the retry as it was replays, and its step runs');
   assert.equal(s.lastFailure && s.lastFailure.reason, eperm);
 });
 

@@ -151,7 +151,7 @@ function stepsOf(events: OrchEvent[], state: TaskState, { running }: { running: 
     if (tokens) st.tokens = tokens;
   }
   // The step the state still calls running: live here, or interrupted (VS Code closed, or another tool runs it).
-  for (const st of steps) if (st.kind === 'agent' && st.status === 'running' && !(state.running && sameStep(state.running, st as StepRef) && running)) st.status = state.status === 'stopped' ? 'paused' : 'interrupted';
+  for (const st of steps) if (st.kind === 'agent' && st.status === 'running' && !(state.running.some((r) => sameStep(r, st as StepRef)) && running)) st.status = state.status === 'stopped' ? 'paused' : 'interrupted';
 
   if (state.checkpoint && state.checkpoint.id !== 'confirm-push') {
     steps.push({ kind: 'human', id: state.checkpoint.id, label: checkpointTitle(state.checkpoint), status: state.status === 'stopped' ? 'paused' : 'waiting' });
@@ -160,7 +160,7 @@ function stepsOf(events: OrchEvent[], state: TaskState, { running }: { running: 
   const upcoming: StepItem[] = [];
   if (state.phase === 'intake' || state.phase === 'stages') {
     // Upcoming steps start after the running one or the one a checkpoint stopped at, or at the next one.
-    const after = state.running || (state.checkpoint && state.checkpoint.step) || null;
+    const after = state.running[0] || (state.checkpoint && state.checkpoint.step) || null;
     const current = after || state.next;
     if (state.repos.length) {
       const pass = passSteps(state);
@@ -223,7 +223,7 @@ function baseStatus(state: TaskState | null, { running, elsewhere, error, corrup
   }
   if (state!.status === 'stopped') return { key: 'stopped', label: state!.checkpoint ? `Stopped at: ${checkpointTitle(state!.checkpoint)}` : 'Stopped', tone: 'muted', group: 'stopped' };
   if (error) return { key: 'failed', label: 'Run failed', tone: 'error', group: 'attention' };
-  if (state!.running) return { key: 'interrupted', label: 'Interrupted', tone: 'warn', group: 'attention' };
+  if (state!.running.length) return { key: 'interrupted', label: 'Interrupted', tone: 'warn', group: 'attention' };
   return { key: 'ready', label: 'Ready to continue', tone: 'muted', group: 'stopped' };
 }
 

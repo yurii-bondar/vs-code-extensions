@@ -51,9 +51,10 @@ function transition(state: TaskState | null, event: OrchEvent): Transition {
     case 'stage_completed':
       return stageCompleted(s, event);
     case 'stage_failed': {
-      if (!s.running || !sameStep(s.running, event)) return fail('not_running', `${describe(event)} is not running`);
-      const step = s.running;
-      s.running = null;
+      const at = s.running.findIndex((r) => sameStep(r, event));
+      if (at === -1) return fail('not_running', `${describe(event)} is not running`);
+      const step = s.running[at]!;
+      s.running.splice(at, 1);
       // What it changed of the settings before it failed is not lost: it comes up when the step ends well.
       if (event.protectedChanges && event.protectedChanges.length) s.proposed = mergeProposed(s.proposed ?? [], event.protectedChanges);
       openCheckpoint(s, 'agent-failure', { at: event.at, step, reason: event.error, ...(event.blocked && { blocked: true }) });
@@ -129,7 +130,7 @@ function created(e: Ev<'task_created'>): TaskState {
     next: null,
     nextMode: 'initial',
     feedback: null,
-    running: null,
+    running: [],
     checkpoint: null,
     review: { round: 1, maxRounds: e.limits.reviewRounds, fixing: false, fixRepos: [], emptyRounds: 0, verdicts: [], lastVerdicts: [], openFindings: [] },
     finishStep: null,
@@ -180,18 +181,19 @@ function intakeCompleted(s: TaskState, e: Ev<'intake_completed'>): Transition {
 
 function stageStarted(s: TaskState, e: Ev<'stage_started'>): Transition {
   if (s.phase !== 'stages') return fail('not_in_stages', `no stage can start during ${s.phase}`);
-  if (s.running) return fail('already_running', `${describe(s.running)} is still running`);
+  if (s.running.length) return fail('already_running', `${describe(s.running[0]!)} is still running`);
   if (!s.next) return fail('nothing_next', 'no stage is due');
   if (!sameStep(s.next, e)) return fail('wrong_stage', `expected ${describe(s.next)}, got ${describe(e)}`);
-  s.running = s.next;
+  s.running = [s.next];
   s.next = null;
   // The feedback stays with the running step until it ends: run again after a Stop or a reload, it still has it.
   return ok(s);
 }
 
 function stageCompleted(s: TaskState, e: Ev<'stage_completed'>): Transition {
-  if (!s.running || !sameStep(s.running, e)) return fail('not_running', `${describe(e)} is not running`);
-  const step = s.running;
+  const at = s.running.findIndex((r) => sameStep(r, e));
+  if (at === -1) return fail('not_running', `${describe(e)} is not running`);
+  const step = s.running[at]!;
   const stage = s.pipeline.stages[step.stage]!;
   delete s.lastFailure;
 
@@ -204,7 +206,7 @@ function stageCompleted(s: TaskState, e: Ev<'stage_completed'>): Transition {
   if (stage.output === 'readiness' && !e.readiness) return fail('readiness_required', `readiness stage "${step.agent}" must report its criteria`);
   if (stage.output === 'audit' && !e.audit) return fail('audit_required', `audit stage "${step.agent}" must report its findings`);
 
-  s.running = null;
+  s.running.splice(at, 1);
   s.artifacts.push({ agent: step.agent, ...(step.repo && { repo: step.repo }), round: s.review.round, output: stage.output, path: e.artifact, at: e.at });
 
   switch (stage.output) {
@@ -305,7 +307,7 @@ function editableFrom(s: TaskState): number {
   if (s.phase === 'intake') return 0;
   if (s.phase !== 'stages') return -1;
   const { stages, reviewLoop } = s.pipeline;
-  const current = s.running || (s.checkpoint && s.checkpoint.step) || s.next;
+  const current = s.running[0] || (s.checkpoint && s.checkpoint.step) || s.next;
   let at = current ? current.stage : reviewLoop ? reviewLoop.end : stages.length - 1;
   while (stages[at]!.scope === 'repo' && at + 1 < stages.length && stages[at + 1]!.scope === 'repo') at++;
   if (s.review.fixing && reviewLoop) at = Math.max(at, reviewLoop.end);
@@ -592,7 +594,7 @@ function nextAction(s: TaskState): NextAction {
   if (s.status === 'stopped') return { kind: 'stopped', checkpoint: s.checkpoint };
   if (s.checkpoint) return { kind: 'checkpoint', checkpoint: s.checkpoint };
   if (s.phase === 'intake') return { kind: 'intake' };
-  if (s.running) return { kind: 'running', step: s.running };
+  if (s.running.length) return { kind: 'running', step: s.running[0]! };
   const repos = s.repos.map((r) => r.name);
   if (s.phase === 'finish') {
     return s.finishStep === 'publish' ? { kind: 'publish', repos, openFindings: s.review.openFindings } : { kind: 'commit', repos };
@@ -613,7 +615,7 @@ function nextAction(s: TaskState): NextAction {
 
 /** For a step that was running when the orchestrator stopped: the run description it would have had. */
 function runOf(state: TaskState, step: Step): RunAction {
-  const probe = nextAction({ ...state, running: null, next: step, status: 'active', checkpoint: null });
+  const probe = nextAction({ ...state, running: [], next: step, status: 'active', checkpoint: null });
   if (probe.kind !== 'run') throw new Error('cannot rebuild the running step');
   return probe;
 }
