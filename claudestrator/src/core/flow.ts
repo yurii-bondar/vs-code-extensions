@@ -46,9 +46,10 @@ function approveStatus(s: TaskState, i: number, node: FlowStatus): FlowStatus {
   const cp = s.checkpoint;
   if (cp && cp.id === 'approve-step' && cp.step && cp.step.stage === i) return 'waiting';
   if (node === 'skipped') return 'skipped';
-  const answered = s.answers.some((a) => a.id === 'approve-step');
+  // Past it: a later step ran, runs, is next or waits for you; an answer to another approval does not count.
   const later = s.pipeline.stages.some((st, k) => k > i && s.artifacts.some((a) => a.agent === st.agent));
-  return node === 'done' && (later || answered || s.phase === 'finish' || s.phase === 'done') ? 'done' : 'pending';
+  const beyond = [...s.running, s.next, cp && cp.step].some((st) => Boolean(st) && st!.stage > i);
+  return node === 'done' && (later || beyond || s.phase === 'finish' || s.phase === 'done') ? 'done' : 'pending';
 }
 
 function nodeOf(s: TaskState, i: number): FlowNode {
