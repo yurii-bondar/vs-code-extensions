@@ -25,6 +25,28 @@ export interface Stage {
   output: Output;
   scope: Scope;
   approval: boolean;
+  /** Stages next to each other with the same group run at once (read-only agents a scenario puts in a Parallel). */
+  group?: number;
+  /** The stage runs only when this holds (a branch of a scenario); otherwise it is skipped. */
+  when?: StepWhen;
+}
+
+/**
+ * What a branch looks at: a result a step before it reported. `severity` and `audit` hold when a finding is at least
+ * that serious; `gates` when the step's checks passed or were left failing.
+ */
+export type Condition =
+  | { verdict: 'approved' | 'changes_requested' }
+  | { severity: Severity }
+  | { readiness: ReadinessVerdict }
+  | { audit: ReportSeverity }
+  | { gates: 'pass' | 'fail' };
+
+/** A step of a branch: it runs when `on`'s result meets `if`, or, with `else`, when it does not. */
+export interface StepWhen {
+  on: string;
+  if: Condition;
+  else?: true;
 }
 
 export interface ReviewLoop {
@@ -33,6 +55,8 @@ export interface ReviewLoop {
   fixers: string[];
   reviewers: string[];
   maxRounds: number;
+  /** A scenario's own Loop, not the one its outputs make: a task with one keeps its stages as they are. */
+  explicit?: true;
 }
 
 export interface PipelineWarning {
@@ -223,6 +247,12 @@ export interface ScenarioStep {
   instructions?: string;
   /** The file those instructions are kept in, as an absolute path. */
   instructionsFile?: string;
+  /** Steps next to each other with the same number form a Parallel: read-only agents that run at once. */
+  parallel?: number;
+  /** A step of a Branch: it runs only when this holds. */
+  when?: StepWhen;
+  /** A step of the scenario's Loop (one, of steps next to each other): it runs again until the reviewers approve. */
+  loop?: { rounds?: number };
 }
 
 /** The model and effort of the agent that reads a Jira issue or Confluence page through an MCP server. */
@@ -378,6 +408,12 @@ export interface Spec {
 export type TaskStatus = 'active' | 'waiting' | 'stopped' | 'done';
 export type TaskPhase = 'intake' | 'stages' | 'finish' | 'done';
 
+export interface GroupProgress {
+  id: number;
+  done: Step[];
+  failed: { step: Step; error: string; blocked?: true }[];
+}
+
 export interface Checkpoint {
   id: CheckpointId;
   options: string[];
@@ -470,6 +506,11 @@ export interface TaskState {
   feedback: string | null;
   /** The steps an agent works on now: one, or the members of a parallel group. */
   running: Step[];
+  /**
+   * A parallel group under way: its members that ended well, and the ones that failed. The task moves on once none
+   * runs; a failure then asks you about it, one at a time.
+   */
+  parallel?: GroupProgress;
   checkpoint: Checkpoint | null;
   review: ReviewState;
   finishStep: 'commit' | 'confirm' | 'publish' | null;

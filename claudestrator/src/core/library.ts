@@ -8,6 +8,7 @@ import * as path from 'path';
 import * as YAML from 'yaml';
 import { CONFIG_DIR, LIBRARY_FILE, PROMPTS_DIR, editProjectConfig, editYamlFile, libraryFile, libraryLabel, projectConfigFile, readProjectLayer, userConfigFile, withConfigRollback, withStepTexts, writeIn } from './config';
 import { exists, writeAtomic } from './files';
+import { agentOf, flattenSteps } from './steps';
 import { validateConfigLayer, validateLibraryLayer } from './protocol';
 import type { AgentLayer, ConfigLayer, CustomScenarioLayer } from './config';
 import type { LibraryView as LibraryInfo } from './wire';
@@ -141,8 +142,8 @@ async function moveToLibrary({ library, agents = [], scenarios = [], ...where }:
   for (const id of scenarios) {
     const entry = project.scenarios?.[id];
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error(`"${id}" is not a scenario of this project's own`);
-    for (const step of entry.agents) {
-      const name = typeof step === 'string' ? step : step.agent;
+    for (const { step } of flattenSteps(entry.agents)) {
+      const name = agentOf(step);
       if (own[name]) names.add(name);
     }
   }

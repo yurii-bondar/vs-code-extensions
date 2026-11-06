@@ -9,6 +9,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as YAML from 'yaml';
 import { CONFIG_DIR, PROMPTS_DIR, loadConfig, projectConfigFile, readProjectLayer, removeScenario, setAgentLayer, setCustomScenario, setPipeline, setScenario, withConfigRollback, withStepTexts } from './config';
+import { agentOf, flattenSteps } from './steps';
 import { validateConfigLayer } from './protocol';
 import { writeAtomic } from './files';
 import type { AgentLayer, ConfigLayer } from './config';
@@ -175,8 +176,7 @@ function parseBackup(text: string): ParsedBackup {
 /** The agents a scenario runs. A built-in report scenario is a bare list (or `false`); a custom one has steps. */
 function agentsOf(entry: ScenarioEntry): string[] {
   if (entry === false) return [];
-  const steps = Array.isArray(entry) ? entry : entry.agents;
-  return steps.map((step) => (typeof step === 'string' ? step : step.agent));
+  return Array.isArray(entry) ? entry : flattenSteps(entry.agents).map((f) => agentOf(f.step));
 }
 
 const listed = (names: string[]): string => names.map((n) => `"${n}"`).join(', ');
@@ -270,7 +270,12 @@ async function writeScenario(workspace: string, id: string, entry: ScenarioEntry
   if (entry === false) await removeScenario(workspace, id);
   else if (Array.isArray(entry)) await setScenario(workspace, id, entry);
   else {
-    const agents = entry.agents.map((step): ScenarioStep => (typeof step === 'string' ? { name: step } : { name: step.agent, ...(step.model && { model: step.model }), ...(step.effort && { effort: step.effort }), ...(typeof step.instructions === 'string' && { instructions: step.instructions }) }));
+    const agents = flattenSteps(entry.agents).map(({ step, parallel, when, loop }): ScenarioStep => ({
+      ...(typeof step === 'string' ? { name: step } : { name: step.agent, ...(step.model && { model: step.model }), ...(step.effort && { effort: step.effort }), ...(typeof step.instructions === 'string' && { instructions: step.instructions }) }),
+      ...(parallel !== undefined && { parallel }),
+      ...(when && { when }),
+      ...(loop && { loop }),
+    }));
     await setCustomScenario(workspace, id, { label: entry.label || id, description: entry.description, agents, intake: entry.intake });
   }
 }

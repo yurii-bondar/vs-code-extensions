@@ -2,6 +2,7 @@
 // event (a skipped approval, an extra review round, a push before it was confirmed) is rejected.
 import { CHECKPOINT_OPTIONS, INTAKE, JIRA_ONLY_OPTIONS, REPO_NAME, isBlocking, isInfoEvent } from './protocol';
 import { onRepos, reposBeforePlan } from './pipeline';
+import { stepRuns } from './conditions';
 import type { Checkpoint, CheckpointId, Finding, NextMode, Output, OrchEvent, PlanMeta, PlanQuestion, PlanRepo, ProtectedChange, RecordedVerdict, Stage, Step, StepRef, TaskState, Transition } from './types';
 
 /** The event of one type: `Ev<'stopped'>`. */
@@ -57,6 +58,12 @@ function transition(state: TaskState | null, event: OrchEvent): Transition {
       s.running.splice(at, 1);
       // What it changed of the settings before it failed is not lost: it comes up when the step ends well.
       if (event.protectedChanges && event.protectedChanges.length) s.proposed = mergeProposed(s.proposed ?? [], event.protectedChanges);
+      // A member of a parallel group: the others finish first, then you are asked.
+      if (s.parallel && s.pipeline.stages[step.stage]!.group === s.parallel.id) {
+        s.parallel.failed.push({ step, error: event.error, ...(event.blocked && { blocked: true as const }) });
+        settleGroup(s, event.at);
+        return ok(s);
+      }
       openCheckpoint(s, 'agent-failure', { at: event.at, step, reason: event.error, ...(event.blocked && { blocked: true }) });
       return ok(s);
     }
@@ -132,7 +139,8 @@ function created(e: Ev<'task_created'>): TaskState {
     feedback: null,
     running: [],
     checkpoint: null,
-    review: { round: 1, maxRounds: e.limits.reviewRounds, fixing: false, fixRepos: [], emptyRounds: 0, verdicts: [], lastVerdicts: [], openFindings: [] },
+    // A scenario's own Loop says how many rounds it runs; the one outputs make runs `limits.reviewRounds`.
+    review: { round: 1, maxRounds: e.pipeline.reviewLoop && e.pipeline.reviewLoop.explicit ? e.pipeline.reviewLoop.maxRounds : e.limits.reviewRounds, fixing: false, fixRepos: [], emptyRounds: 0, verdicts: [], lastVerdicts: [], openFindings: [] },
     finishStep: null,
     gateFailures: [],
     artifacts: [],
@@ -175,16 +183,22 @@ function intakeCompleted(s: TaskState, e: Ev<'intake_completed'>): Transition {
   }
   s.spec = e.spec;
   s.phase = 'stages';
-  setNext(s, passSteps(s)[0] ?? null, 'initial');
+  setNext(s, firstRunnable(s, passSteps(s), 0), 'initial');
   return ok(s);
 }
 
 function stageStarted(s: TaskState, e: Ev<'stage_started'>): Transition {
   if (s.phase !== 'stages') return fail('not_in_stages', `no stage can start during ${s.phase}`);
-  if (s.running.length) return fail('already_running', `${describe(s.running[0]!)} is still running`);
+  // Members of a parallel group start in any order, while the others run.
+  const mate = groupPending(s).find((m) => sameStep(m, e));
+  if (s.running.length) {
+    if (!mate) return fail('already_running', `${describe(s.running[0]!)} is still running`);
+    startStep(s, mate);
+    return ok(s);
+  }
   if (!s.next) return fail('nothing_next', 'no stage is due');
-  if (!sameStep(s.next, e)) return fail('wrong_stage', `expected ${describe(s.next)}, got ${describe(e)}`);
-  s.running = [s.next];
+  if (!sameStep(s.next, e) && !mate) return fail('wrong_stage', `expected ${describe(s.next)}, got ${describe(e)}`);
+  startStep(s, mate ?? s.next);
   s.next = null;
   // The feedback stays with the running step until it ends: run again after a Stop or a reload, it still has it.
   return ok(s);
@@ -227,14 +241,16 @@ function stageCompleted(s: TaskState, e: Ev<'stage_completed'>): Transition {
       return ok(s);
     case 'verdict':
       s.review.verdicts.push({ agent: step.agent, artifact: e.artifact, status: e.verdict!.status, findings: e.verdict!.findings, ...(e.emptyDiff && { emptyDiff: true }) });
-      if (s.pipeline.reviewLoop && s.pipeline.reviewLoop.end === step.stage) evaluateRound(s, e.at);
+      if (inGroup(s, step)) memberDone(s, step, e.at);
+      else if (s.pipeline.reviewLoop && s.pipeline.reviewLoop.end === step.stage) evaluateRound(s, e.at);
       else advance(s, step);
       return ok(s);
     case 'readiness':
     case 'audit':
       // One report per agent; a retried agent replaces its earlier one.
       s.reports = [...(s.reports || []).filter((r) => r.agent !== step.agent), { agent: step.agent, output: stage.output, artifact: e.artifact, value: e[stage.output] }];
-      advance(s, step);
+      if (inGroup(s, step)) memberDone(s, step, e.at);
+      else advance(s, step);
       return ok(s);
   }
   return fail('unknown_output', `unknown output ${stage.output as string}`);
@@ -310,6 +326,8 @@ function editableFrom(s: TaskState): number {
   const current = s.running[0] || (s.checkpoint && s.checkpoint.step) || s.next;
   let at = current ? current.stage : reviewLoop ? reviewLoop.end : stages.length - 1;
   while (stages[at]!.scope === 'repo' && at + 1 < stages.length && stages[at + 1]!.scope === 'repo') at++;
+  // A parallel group counts whole, as it runs at once.
+  while (stages[at]!.group !== undefined && at + 1 < stages.length && stages[at + 1]!.group === stages[at]!.group) at++;
   if (s.review.fixing && reviewLoop) at = Math.max(at, reviewLoop.end);
   return at + 1;
 }
@@ -434,8 +452,69 @@ function openPlanApproval(s: TaskState, step: Step, at: string): void {
 function advance(s: TaskState, from: Step): void {
   const pass = passSteps(s);
   const i = pass.findIndex((p) => p.stage === from.stage && sameStep(p, from));
-  const next = i >= 0 ? pass[i + 1] : undefined;
-  setNext(s, next ?? null, s.review.fixing ? 'fix' : 'initial');
+  setNext(s, i >= 0 ? firstRunnable(s, pass, i + 1) : null, s.review.fixing ? 'fix' : 'initial');
+}
+
+/** The first step of `pass` from `from` on that runs: a step of a branch whose condition does not hold is skipped. */
+function firstRunnable(s: TaskState, pass: Step[], from: number): Step | null {
+  return pass.slice(from).find((p) => stepRuns(s, s.pipeline.stages[p.stage]!.when)) ?? null;
+}
+
+// ---------- parallel groups ----------
+
+/** The steps of the pass in the parallel group of `step`, in order; none when it is in no group. */
+function groupSteps(s: TaskState, step: Step): Step[] {
+  const id = s.pipeline.stages[step.stage]!.group;
+  if (id === undefined) return [];
+  return passSteps(s).filter((p) => s.pipeline.stages[p.stage]!.group === id);
+}
+
+const inGroup = (s: TaskState, step: Step): boolean => Boolean(s.parallel) && s.pipeline.stages[step.stage]!.group === s.parallel!.id;
+
+/**
+ * Members of the group under way (or of the one `next` opens) that may start: not running, not done, not failed. A
+ * failed one runs again only when you retry it.
+ */
+function groupPending(s: TaskState): Step[] {
+  const anchor = s.running[0] || s.next;
+  if (!anchor) return [];
+  const members = groupSteps(s, anchor);
+  const p = s.parallel;
+  return members.filter((m) => !s.running.some((r) => sameStep(r, m)) && !(p && (p.done.some((d) => sameStep(d, m)) || p.failed.some((f) => sameStep(f.step, m)))));
+}
+
+function startStep(s: TaskState, step: Step): void {
+  s.running.push(step);
+  const id = s.pipeline.stages[step.stage]!.group;
+  if (id === undefined) return;
+  if (!s.parallel || s.parallel.id !== id) s.parallel = { id, done: [], failed: [] };
+  // A failed member you retry is a member again.
+  s.parallel.failed = s.parallel.failed.filter((f) => !sameStep(f.step, step));
+}
+
+function memberDone(s: TaskState, step: Step, at: string): void {
+  s.parallel!.done.push(step);
+  settleGroup(s, at);
+}
+
+/**
+ * Once no member runs: a member that never started (the task stopped first) is next; a failure is yours to answer;
+ * else the group is through and the task goes on after it, through the review loop when the group ends it.
+ */
+function settleGroup(s: TaskState, at: string): void {
+  if (s.running.length) return;
+  const g = s.parallel!;
+  const anchor = g.done[0] || (g.failed[0] && g.failed[0].step);
+  const members = anchor ? groupSteps(s, anchor) : [];
+  const waiting = members.find((m) => !g.done.some((d) => sameStep(d, m)) && !g.failed.some((f) => sameStep(f.step, m)));
+  if (waiting) return setNext(s, waiting, s.review.fixing ? 'fix' : 'initial');
+  const failed = g.failed[0];
+  if (failed) return openCheckpoint(s, 'agent-failure', { at, step: failed.step, reason: failed.error, ...(failed.blocked && { blocked: true }) });
+  delete s.parallel;
+  const last = members[members.length - 1]!;
+  const loop = s.pipeline.reviewLoop;
+  if (loop && members.some((m) => m.stage === loop.end)) evaluateRound(s, at);
+  else advance(s, last);
 }
 
 /** Review rounds in a row with an empty diff after which the loop stops: another fix round would change nothing either. */
@@ -475,7 +554,7 @@ function startFixRound(s: TaskState, feedback: string | null): void {
   s.review.round += 1;
   s.review.fixing = true;
   s.review.roundFeedback = feedback;
-  setNext(s, passSteps(s)[0] ?? null, 'fix', feedback);
+  setNext(s, firstRunnable(s, passSteps(s), 0), 'fix', feedback);
 }
 
 /** Leaves the loop: minors (and, if shipped anyway, the blocking findings) go to the PR body. */
@@ -487,7 +566,9 @@ function passReview(s: TaskState, shipBlocking: boolean): void {
   s.review.fixing = false;
   s.review.roundFeedback = null;
   const end = s.pipeline.reviewLoop!.end;
-  setNext(s, passSteps(s).find((p) => p.stage > end) ?? null, 'initial');
+  const pass = passSteps(s);
+  const after = pass.findIndex((p) => p.stage > end);
+  setNext(s, after === -1 ? null : firstRunnable(s, pass, after), 'initial');
 }
 
 function enterFinish(s: TaskState): void {
@@ -657,4 +738,4 @@ function branchName(s: TaskState): string | null {
 }
 
 export type { NextAction, RunAction, SessionTotals };
-export { MAX_EMPTY_ROUNDS, blockingQuestions, onlyHumanFindings, sessionTotals, spentOf, transition, replay, canPush, passSteps, editableFrom, stepRepos, nextAction, runOf, artifactPath, branchName, sameStep, unknownRepos, TASK_FILES };
+export { MAX_EMPTY_ROUNDS, groupSteps, groupPending, blockingQuestions, onlyHumanFindings, sessionTotals, spentOf, transition, replay, canPush, passSteps, editableFrom, stepRepos, nextAction, runOf, artifactPath, branchName, sameStep, unknownRepos, TASK_FILES };

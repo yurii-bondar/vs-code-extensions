@@ -7,8 +7,8 @@ import { EventEmitter } from 'events';
 import { loadConfig, configPaths } from './config';
 import { exists, ownTemp, ownTempRoot } from './files';
 import { EFFORTS, REPO_NAME, SCENARIOS } from './protocol';
-import { buildPipeline, scenarioKind, taskPipeline, fitsScenario, onRepos, reposBeforePlan } from './pipeline';
-import { nextAction, runOf, artifactPath, branchName, sameStep, editableFrom, spentOf, stepRepos, unknownRepos, onlyHumanFindings, TASK_FILES, type NextAction, type RunAction } from './machine';
+import { buildPipeline, fixedFlow, scenarioKind, taskPipeline, fitsScenario, onRepos, reposBeforePlan } from './pipeline';
+import { nextAction, groupPending, runOf, artifactPath, branchName, sameStep, editableFrom, spentOf, stepRepos, unknownRepos, onlyHumanFindings, TASK_FILES, type NextAction, type RunAction } from './machine';
 import { contentAfter, humanFinding, isInstructionsOnly, isProtectedFile, refusedSettings } from './protected';
 import { parseInvocation, classifyInput, detectScenario, runIntake, renderTicket, IntakeError, extractAcceptanceCriteria, otherSite, planFromTicket, capSpec, projectAllowed } from './intake';
 import { TaskService, type DispatchResult } from './store';
@@ -30,7 +30,7 @@ import type { StageSource } from './pipeline';
 import type { RepoGates } from './gates';
 import type { TaskRepo } from './git';
 import type { BlockedRepo, CheckpointContext, CommentResult, ComposerArgs, Preview, TranscriptItem, UsageItem } from './wire';
-import type { AgentStoppedPayload, Checkpoint, Config, Effort, EventBody, EventOf, GatesStatus, Pipeline, PlanMeta, PlanRepo, ProtectedChange, ProtectedMode, Source, Spec, Step, TaskGroup, TaskInstruction, TaskState, WorkReport } from './types';
+import type { AgentStoppedPayload, Checkpoint, Config, Effort, EventBody, EventOf, GatesStatus, Pipeline, PlanMeta, PlanRepo, ProtectedChange, ProtectedMode, Source, Spec, Step, StepRef, TaskGroup, TaskInstruction, TaskState, WorkReport } from './types';
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 const REPORT_OUTPUTS = new Set(['readiness', 'audit']);
@@ -363,7 +363,8 @@ class Engine extends EventEmitter {
   sandbox: (policy: SandboxPolicy) => Launcher;
   /** Whether the sandbox started here once: it is not probed again. */
   sandboxReady = false;
-  sessions: Map<string, ClaudeSession>;
+  /** The agent sessions each task runs now: one, or one per member of a parallel group. */
+  sessions: Map<string, ClaudeSession[]>;
   /** The first pause before a turn that failed on the API side is tried again; it doubles each time. */
   retryDelayMs = RETRY_DELAY_MS;
   /** What Stop ends besides the agent: the checks of a step, a commit hook, a pre-push hook. */
@@ -778,9 +779,12 @@ class Engine extends EventEmitter {
             await this.intake(s);
             break;
           case 'run':
-          case 'running':
-            await this.runStep(s, next);
+          case 'running': {
+            const group = this.groupRuns(s, next);
+            if (group.length > 1) await this.runGroup(s, group);
+            else await this.runStep(s, next);
             break;
+          }
           case 'commit':
             await this.commit(s);
             break;
@@ -798,6 +802,28 @@ class Engine extends EventEmitter {
       this.setLive(taskId, null);
       this.emit('changed', taskId);
     }
+  }
+
+  /**
+   * The runs of a parallel group that are due with `next`: the members that run (again, after a stop or a reload) and
+   * the ones still to start. Just `next` outside a group.
+   */
+  groupRuns(s: TaskState, next: RunAction | Extract<NextAction, { kind: 'running' }>): (RunAction | Extract<NextAction, { kind: 'running' }>)[] {
+    if (s.pipeline.stages[next.step.stage]!.group === undefined) return [next];
+    const again = next.kind === 'running' ? s.running.map((step) => ({ kind: 'running' as const, step })) : [next];
+    const start = groupPending(s).filter((m) => !again.some((r) => sameStep(r.step, m))).map((m) => runOf(s, m));
+    return [...again, ...start];
+  }
+
+  /**
+   * The members of a parallel group, each in its own session at the same time. Each records its own start and end;
+   * an error of one (it did not start) is thrown once the others ended.
+   */
+  async runGroup(s: TaskState, runs: (RunAction | Extract<NextAction, { kind: 'running' }>)[]): Promise<void> {
+    this.log('info', `${runs.map((r) => stepLabel(r.step)).join(', ')} work at once`, s.taskId);
+    const ended = await Promise.allSettled(runs.map((r) => this.runStep(s, r)));
+    const failed = ended.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+    if (failed) throw failed.reason;
   }
 
   async intake(s: TaskState): Promise<void> {
@@ -954,7 +980,7 @@ class Engine extends EventEmitter {
       this.hooks.unregister(hook.token);
       throw e;
     });
-    this.sessions.set(s.taskId, session);
+    this.addSession(s.taskId, session);
     let t: TurnResult = { ok: false, report: '' };
     try {
       if ((await this.svc.state(s.taskId)).status === 'stopped') {
@@ -994,7 +1020,7 @@ class Engine extends EventEmitter {
       };
     } finally {
       session.close();
-      this.sessions.delete(s.taskId);
+      this.dropSession(s.taskId, session);
       this.hooks.unregister(hook.token);
       this.liveUsage.delete(s.taskId);
       this.liveCost.delete(s.taskId);
@@ -1155,7 +1181,8 @@ class Engine extends EventEmitter {
     const spent = budget !== undefined ? await this.spentUsd(taskId) : 0;
     if (budget !== undefined && spent >= budget) {
       this.log('warn', `Budget of $${budget} spent ($${spent.toFixed(2)}); the task stopped`, taskId);
-      await this.dispatch(taskId, { type: 'stopped', reason: `budget of $${budget} spent` });
+      // The members of a parallel group each find it spent: the task stops once.
+      if ((await this.svc.state(taskId)).status !== 'stopped') await this.dispatch(taskId, { type: 'stopped', reason: `budget of $${budget} spent` });
       return;
     }
     const usedUp = usedUpWindow(this.limits, Date.now());
@@ -1303,7 +1330,7 @@ class Engine extends EventEmitter {
       await fail(`the agent did not start: ${(e as Error).message}`);
       return;
     }
-    this.sessions.set(taskId, session);
+    this.addSession(taskId, session);
     this.setLive(taskId, { phase: 'agent', step, key, text: `${label} is working` });
 
     let t: TurnResult = { ok: false, report: '' };
@@ -1482,9 +1509,9 @@ class Engine extends EventEmitter {
       if (REPORT_OUTPUTS.has(stage.output)) await this.writeReport(taskId, config.language);
     } finally {
       session.close();
-      this.sessions.delete(taskId);
+      this.dropSession(taskId, session);
       this.hooks.unregister(hook.token);
-      this.denyPermissions(taskId, 'the agent session ended');
+      this.denyPermissions(taskId, 'the agent session ended', step);
       this.liveCost.delete(taskId);
       this.liveUsage.delete(taskId);
       this.activity.delete(taskId);
@@ -1651,8 +1678,19 @@ class Engine extends EventEmitter {
     return true;
   }
 
-  denyPermissions(taskId: string, message: string): void {
-    for (const [id, p] of this.permissions) if (p.request.taskId === taskId) this.permissionReply(id, false, message);
+  /** Refuses the task's open questions about a tool: of one step (its session ended), or all of them. */
+  denyPermissions(taskId: string, message: string, step?: StepRef): void {
+    for (const [id, p] of this.permissions) if (p.request.taskId === taskId && (!step || sameStep(p.request, step))) this.permissionReply(id, false, message);
+  }
+
+  addSession(taskId: string, session: ClaudeSession): void {
+    this.sessions.set(taskId, [...(this.sessions.get(taskId) ?? []), session]);
+  }
+
+  dropSession(taskId: string, session: ClaudeSession): void {
+    const left = (this.sessions.get(taskId) ?? []).filter((x) => x !== session);
+    if (left.length) this.sessions.set(taskId, left);
+    else this.sessions.delete(taskId);
   }
 
   // ---------- finishing ----------
@@ -1950,6 +1988,8 @@ class Engine extends EventEmitter {
   async editPipeline(taskId: string, names: string[]): Promise<{ warnings: string[] }> {
     const s = await this.svc.state(taskId);
     if (editableFrom(s) === -1) throw new EngineError('pipeline_locked', 'The stages of this task are through; its pipeline can no longer change');
+    // Its Parallel, Branch and Loop are the scenario's: a list of agents would lose them.
+    if (fixedFlow(s.pipeline)) throw new EngineError('pipeline_fixed', 'This task runs a scenario with Parallel, Branch or Loop steps, which a list of agents cannot keep; change the scenario, and start a new task with it');
     const config = await this.config();
     const agents: StageSource[] = names.map((name) => {
       const kept = s.pipeline.stages.find((st) => st.agent === name);
@@ -2042,8 +2082,10 @@ class Engine extends EventEmitter {
   }
 
   sendMessage(taskId: string, text: string): void {
-    const session = this.sessions.get(taskId);
-    if (!session) throw new EngineError('no_agent', 'No agent is running for this task right now');
+    const sessions = this.sessions.get(taskId) ?? [];
+    if (!sessions.length) throw new EngineError('no_agent', 'No agent is running for this task right now');
+    if (sessions.length > 1) throw new EngineError('agents_parallel', 'Several agents of this task work at once; a message would reach only one of them. Send it when the group is through, or stop the task and say it in its retry');
+    const session = sessions[0]!;
     if (!this.inTurn.has(taskId)) throw new EngineError('agent_busy', 'The agent is not working right now (its checks run, or its report is read); send it once it works again');
     session.send(text);
   }
@@ -2055,8 +2097,7 @@ class Engine extends EventEmitter {
     this.denyPermissions(taskId, 'the task was stopped');
     const gates = this.gateRuns.get(taskId);
     if (gates) gates.abort();
-    const session = this.sessions.get(taskId);
-    if (session) await session.interrupt();
+    await Promise.all((this.sessions.get(taskId) ?? []).map((x) => x.interrupt()));
   }
 
   /**
@@ -2068,8 +2109,7 @@ class Engine extends EventEmitter {
     this.denyPermissions(taskId, 'the task was stopped');
     const gates = this.gateRuns.get(taskId);
     if (gates) gates.abort();
-    const session = this.sessions.get(taskId);
-    if (session) await session.interrupt();
+    await Promise.all((this.sessions.get(taskId) ?? []).map((x) => x.interrupt()));
   }
 
   /**
@@ -2078,7 +2118,7 @@ class Engine extends EventEmitter {
    */
   async stopAll(graceMs = 2500): Promise<void> {
     const ids = [...this.running];
-    const sessions = ids.map((id) => this.sessions.get(id)).filter((x): x is ClaudeSession => x !== undefined);
+    const sessions = ids.flatMap((id) => this.sessions.get(id) ?? []);
     await Promise.all(ids.map((id) => this.stop(id, 'VS Code closed the workspace').catch(() => {})));
     await Promise.all(sessions.map((x) => x.terminate(graceMs)));
     // Then a moment for each run to record how its session ended (its cost, where to resume it).

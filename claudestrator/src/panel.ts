@@ -11,7 +11,7 @@ import { exists } from './core/files';
 import * as cfg from './core/config';
 import * as backups from './core/backup';
 import * as libraries from './core/library';
-import { buildPipeline, outline, scenarioPipeline, taskPipeline, fitsScenario } from './core/pipeline';
+import { buildPipeline, fixedFlow, outline, scenarioPipeline, taskPipeline, fitsScenario } from './core/pipeline';
 import { editableFrom } from './core/machine';
 import { taskRepos, taskDiff, launch, getChildEnv } from './core/git';
 import { findRepos, describeRepo, reposFromFolders, repoLayerOf, WORKSPACE_MAP, safeName } from './core/setup';
@@ -359,7 +359,8 @@ class DashboardPanel implements RpcHandlers {
   /** What the task's pipeline editor shows: its stages, from which one they can change, and the agents to add. */
   async pipelineEdit(state: TaskState): Promise<PipelineEdit | null> {
     const from = editableFrom(state);
-    if (from === -1) return null;
+    // A scenario's Parallel, Branch or Loop is changed in the scenario, not as this list.
+    if (from === -1 || fixedFlow(state.pipeline)) return null;
     const r = await this.orch.config();
     const agents: Record<string, Agent> = r.ok ? r.config.agents : {};
     const stages = state.pipeline.stages.map((st) => ({ agent: st.agent, output: st.output, scope: st.scope, color: agents[st.agent] && agents[st.agent]!.color }));
@@ -749,7 +750,7 @@ class DashboardPanel implements RpcHandlers {
   }
 
   /** What a scenario with these steps would run (approvals, review loop, warnings), before it is saved. */
-  async $previewScenario({ agents, auto }: { agents: { name: string }[]; auto?: boolean }) {
+  async $previewScenario({ agents, auto }: Rpc['previewScenario']['params']) {
     const r = await this.orch.config();
     if (!r.ok) throw new Error(r.errors[0]!.message);
     const pipeline = scenarioPipeline(r.config, agents, { auto });

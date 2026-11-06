@@ -11,6 +11,9 @@ import { ORCH_DIR } from './store';
 import { ENV_FILE, SECRET_PATHS, GITHUB_TOKENS } from './settings';
 import { signature, writeAtomic } from './files';
 import type { Agent, Config, CustomScenario, Diagnostic, Effort, Gate, GitMode, GroupType, Output, Policy, RepoConfig, Runs, ScenarioStep, TaskGroup, TaskInstruction } from './types';
+import { flattenSteps, nestSteps } from './steps';
+import { conditionOutput, describeCondition } from './conditions';
+import type { AgentStepLayer, FlatStep, ScenarioStepLayer } from './steps';
 
 // ---------- the shapes of a config layer, as written in config.yaml ----------
 
@@ -32,7 +35,6 @@ interface AgentLayer {
   instructions?: InstructionsInput;
 }
 
-type ScenarioStepLayer = string | { agent: string; model?: string; effort?: Effort; instructions?: string | { file: string } };
 
 interface CustomScenarioLayer {
   label?: string;
@@ -757,7 +759,7 @@ function customEntries(merged: Record<string, ScenarioEntry>): Record<string, Sc
 /** The instruction files the steps of custom scenarios name, as ops (checked and read like an agent's). */
 function stepFileOps(merged: Record<string, ScenarioEntry>): InstructionOp[] {
   return Object.values(customEntries(merged)).flatMap((entry) =>
-    entry.value.agents.flatMap((st) => (typeof st === 'object' && st.instructions && typeof st.instructions === 'object' ? [{ mode: 'replace', file: path.resolve(entry.dir, st.instructions.file), source: entry.source, dir: entry.dir, layer: entry.source }] : []))
+    flattenSteps(entry.value.agents).flatMap(({ step: st }) => (typeof st === 'object' && st.instructions && typeof st.instructions === 'object' ? [{ mode: 'replace', file: path.resolve(entry.dir, st.instructions.file), source: entry.source, dir: entry.dir, layer: entry.source }] : []))
   );
 }
 
@@ -769,9 +771,10 @@ function resolveCustomScenarios(merged: Record<string, ScenarioEntry>, drafts: M
   const out: Record<string, CustomScenario> = {};
   for (const [id, entry] of Object.entries(customEntries(merged))) {
     const def = entry.value;
-    const steps: ScenarioStep[] = def.agents.map((st) => {
-      if (typeof st === 'string') return { name: st };
-      const step: ScenarioStep = { name: st.agent, ...(st.model && { model: st.model }), ...(st.effort && { effort: st.effort }) };
+    const steps: ScenarioStep[] = flattenSteps(def.agents).map(({ step: st, parallel, when, loop }) => {
+      const blocks = { ...(parallel !== undefined && { parallel }), ...(when && { when }), ...(loop && { loop }) };
+      if (typeof st === 'string') return { name: st, ...blocks };
+      const step: ScenarioStep = { name: st.agent, ...(st.model && { model: st.model }), ...(st.effort && { effort: st.effort }), ...blocks };
       const ins = st.instructions;
       if (typeof ins === 'string') return { ...step, instructions: ins.replaceAll('{{dir}}', entry.dir).trim() };
       if (!ins) return step;
@@ -791,10 +794,44 @@ function resolveCustomScenarios(merged: Record<string, ScenarioEntry>, drafts: M
       seen.add(name);
       if (agents[name]) kinds.add(Object.values(SCENARIO_OUTPUT).includes(agents[name]!.output) ? agents[name]!.output : 'deliver');
     }
+    blockProblems(id, steps, agents).forEach(([code, agent, message]) => diags.push({ level: 'error', code, ...(agent && { agent }), source: entry.source, message }));
     if (kinds.size > 1) {
       diags.push({ level: 'error', code: 'scenario_mixed', source: entry.source, message: `scenario "${id}" mixes agents that change code with report agents (${[...kinds].join(', ')}); keep one kind per scenario` });
     }
     out[id] = { id, label: def.label || id, ...(def.description && { description: def.description }), ...(def.intake && Object.keys(def.intake).length && { intake: { ...def.intake } }), kind: kinds.size ? [...kinds][0]! : null, agents: steps, source: entry.source };
+  }
+  return out;
+}
+
+/** Outputs that may run at once: they read, and write only their own report. */
+const PARALLEL_OUTPUTS: Output[] = ['verdict', 'readiness', 'audit'];
+
+/**
+ * What is wrong with the blocks of a scenario's steps, as `[code, agent, message]`: a Parallel of agents that write,
+ * a Branch on a step that does not come before it or reports no such result, a Loop that is not one block or does not
+ * end with a review.
+ */
+function blockProblems(id: string, steps: readonly ScenarioStep[], agents: Record<string, Agent>): [string, string | undefined, string][] {
+  const out: [string, string | undefined, string][] = [];
+  const output = (name: string): Output | undefined => agents[name]?.output;
+  for (const st of steps) {
+    const o = output(st.name);
+    if (st.parallel !== undefined && o && !PARALLEL_OUTPUTS.includes(o)) out.push(['parallel_writes', st.name, `scenario "${id}" runs "${st.name}" in a Parallel, but it writes ${o}: only reviewers, readiness and audit agents run at once`]);
+    if (st.when) {
+      const i = steps.indexOf(st);
+      const source = steps.findIndex((x) => x.name === st.when!.on);
+      const from = steps.findIndex((x) => x.when && x.when.on === st.when!.on && JSON.stringify(x.when.if) === JSON.stringify(st.when!.if));
+      const so = output(st.when.on);
+      if (source === -1 || source >= Math.min(i, from)) out.push(['branch_source', st.name, `scenario "${id}" branches on "${st.when.on}", which is not a step before the branch`]);
+      else if (so && !conditionOutput(st.when.if).includes(so)) out.push(['branch_condition', st.name, `scenario "${id}" asks for ${describeCondition(st.when.on, st.when.if)}, but "${st.when.on}" writes ${so}`]);
+      if (st.loop || st.parallel !== undefined) out.push(['branch_nested', st.name, `scenario "${id}": a Branch holds only agents, not a Loop or a Parallel`]);
+    }
+  }
+  const looped = steps.map((st, i) => (st.loop ? i : -1)).filter((i) => i !== -1);
+  if (looped.length) {
+    if (looped[looped.length - 1]! - looped[0]! + 1 !== looped.length) out.push(['loop_twice', undefined, `scenario "${id}" has more than one Loop; it may have one`]);
+    const last = steps[looped[looped.length - 1]!]!;
+    if (output(last.name) && output(last.name) !== 'verdict') out.push(['loop_without_review', last.name, `scenario "${id}" has a Loop that ends with "${last.name}", not a reviewer: a Loop runs again until the reviewers at its end approve`]);
   }
   return out;
 }
@@ -1329,10 +1366,13 @@ async function setScenario(workspace: string, scenario: string, agents: string[]
  * A step without its own model, effort or instructions is written as the bare agent name. `oldId` renames it.
  */
 async function setCustomScenario(workspace: string, id: string, def: { label: string; description?: string | undefined; agents: ScenarioStep[]; intake?: IntakeLayer | undefined }, oldId?: string): Promise<string> {
-  const agents = def.agents.map((st): ScenarioStepLayer => {
-    const instructions = stepInstructionsLayer(workspace, st);
-    return st.model || st.effort || instructions ? { agent: st.name, ...(st.model && { model: st.model }), ...(st.effort && { effort: st.effort }), ...(instructions && { instructions }) } : st.name;
-  });
+  const agents = nestSteps(
+    def.agents.map((st): FlatStep => {
+      const instructions = stepInstructionsLayer(workspace, st);
+      const step: AgentStepLayer = st.model || st.effort || instructions ? { agent: st.name, ...(st.model && { model: st.model }), ...(st.effort && { effort: st.effort }), ...(instructions && { instructions }) } : st.name;
+      return { step, ...(st.parallel !== undefined && { parallel: st.parallel }), ...(st.when && { when: st.when }), ...(st.loop && { loop: st.loop }) };
+    })
+  );
   return editProjectConfig(workspace, (doc) => {
     if (oldId && oldId !== id) renameIn(doc, ['scenarios'], oldId, id);
     const intake = def.intake && (def.intake.model || def.intake.effort) ? def.intake : undefined;
@@ -1447,14 +1487,15 @@ function ensureInstructionsFile(workspace: string, agentName: string, resolved?:
  * read stays named, and the config that gets it says so.
  */
 async function withStepTexts(entry: CustomScenarioLayer, dir: string): Promise<CustomScenarioLayer> {
-  const agents = await Promise.all(
-    entry.agents.map(async (st): Promise<ScenarioStepLayer> => {
-      if (typeof st === 'string' || !st.instructions || typeof st.instructions === 'string') return st;
+  const flat = await Promise.all(
+    flattenSteps(entry.agents).map(async (f): Promise<FlatStep> => {
+      const st = f.step;
+      if (typeof st === 'string' || !st.instructions || typeof st.instructions === 'string') return f;
       const text = await readIfThere(path.resolve(dir, st.instructions.file)).catch(() => null);
-      return text !== null && text.trim() ? { ...st, instructions: text.trim() } : text !== null ? { agent: st.agent, ...(st.model && { model: st.model }), ...(st.effort && { effort: st.effort }) } : st;
+      return { ...f, step: text !== null && text.trim() ? { ...st, instructions: text.trim() } : text !== null ? { agent: st.agent, ...(st.model && { model: st.model }), ...(st.effort && { effort: st.effort }) } : st };
     })
   );
-  return { ...entry, agents };
+  return { ...entry, agents: nestSteps(flat) };
 }
 
 /**

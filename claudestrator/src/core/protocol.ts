@@ -159,7 +159,36 @@ const AGENT_LAYER: Record<string, Check> = {
  * A step of a custom scenario: an agent name, or the agent with the model and effort it runs with in this scenario and
  * what it does there, after its own instructions (the text, or a file of it).
  */
-const SCENARIO_STEP = T.any(agentName, T.obj({ agent: agentName, 'model?': T.str(1), 'effort?': T.oneOf(EFFORTS), 'instructions?': T.any(T.str(1), T.obj({ file: T.str(1) })) }));
+const AGENT_STEP = T.any(agentName, T.obj({ agent: agentName, 'model?': T.str(1), 'effort?': T.oneOf(EFFORTS), 'instructions?': T.any(T.str(1), T.obj({ file: T.str(1) })) }));
+/** What a branch looks at: one result of the step it names. */
+const CONDITION: Check = (v, p) => {
+  if (kind(v) !== 'object') return [`${at(p)}: expected a condition such as { verdict: approved }, got ${kind(v)}`];
+  const keys = Object.keys(asRecord(v));
+  const shapes: Record<string, Check> = {
+    verdict: T.obj({ verdict: T.oneOf(['approved', 'changes_requested']) }),
+    severity: T.obj({ severity: T.oneOf(SEVERITIES) }),
+    readiness: T.obj({ readiness: T.oneOf(['ready', 'not_ready', 'needs_check']) }),
+    audit: T.obj({ audit: T.oneOf(REPORT_SEVERITIES) }),
+    gates: T.obj({ gates: T.oneOf(['pass', 'fail']) }),
+  };
+  const shape = keys.length === 1 && shapes[keys[0]!];
+  return shape ? shape(v, p) : [`${at(p)}: expected one of ${Object.keys(shapes).join(', ')}, got ${keys.join(', ') || 'nothing'}`];
+};
+/** Read-only agents that run at once. */
+const PARALLEL_STEP = T.obj({ parallel: T.arr(AGENT_STEP, 2) });
+const BLOCKS: Record<string, Check> = {
+  parallel: PARALLEL_STEP,
+  branch: T.obj({ branch: T.obj({ on: agentName, if: CONDITION, 'then?': T.arr(AGENT_STEP), 'else?': T.arr(AGENT_STEP) }) }),
+  loop: T.obj({ loop: T.obj({ 'rounds?': T.int(1, 20), steps: T.arr(T.any(AGENT_STEP, PARALLEL_STEP), 1) }) }),
+};
+/**
+ * A step of a custom scenario: an agent (see AGENT_STEP), or a block of them: `parallel: [a, b]`, `branch: { on, if,
+ * then, else }`, `loop: { rounds, steps }`.
+ */
+const SCENARIO_STEP: Check = (v, p) => {
+  const block = kind(v) === 'object' && Object.keys(asRecord(v)).find((k) => BLOCKS[k]);
+  return block ? BLOCKS[block]!(v, p) : AGENT_STEP(v, p);
+};
 /** What reads a ticket through an MCP server when no config says otherwise: a short read, which a small model does well. */
 const INTAKE: IntakeSettings = { model: 'haiku', effort: 'low' };
 /** The model and effort that read a ticket through an MCP server. */
@@ -428,6 +457,7 @@ export {
   SCENARIO_OUTPUT,
   SCENARIO_ID,
   REPORT_SEVERITIES,
+  CONDITION,
   CRITERION_STATUSES,
   SEVERITIES,
   SLUG_PATTERN,

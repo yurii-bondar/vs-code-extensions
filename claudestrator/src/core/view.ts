@@ -2,11 +2,15 @@
 import * as path from 'path';
 import { transition, passSteps, sameStep, branchName, spentOf, blockingQuestions, onlyHumanFindings, MAX_EMPTY_ROUNDS } from './machine';
 import { onRepos } from './pipeline';
+import { evaluate, stepRuns } from './conditions';
 import { describeEvent, checkpointTitle } from './describe';
 import { transcriptKey } from './engine';
 import { resultOf } from './report';
 import { parseInvocation } from './intake';
-import type { GroupType, OrchEvent, Source, StepRef, TaskState } from './types';
+import type { GroupType, OrchEvent, Source, StepRef, StepWhen, TaskState } from './types';
+
+/** A step of a branch whose condition is known already and keeps it out. */
+const skipped = (s: TaskState, when: StepWhen | undefined): boolean => Boolean(when) && evaluate(s, when!.on, when!.if) !== null && !stepRuns(s, when);
 
 import type { Card, FeedEvent, Live, PermissionRequest, Status, StepItem, TaskDetail, TaskError, TaskPush, TaskSection, TaskSource, UsageItem } from './wire';
 /** The part of the engine the UI models read. */
@@ -166,14 +170,21 @@ function stepsOf(events: OrchEvent[], state: TaskState, { running }: { running: 
       const pass = passSteps(state);
       const i = current ? pass.findIndex((p) => p.stage === current.stage && sameStep(p, current)) : -1;
       const rest = i === -1 ? (current || state.checkpoint ? [] : pass) : pass.slice(after ? i + 1 : i);
-      for (const p of rest) upcoming.push({ kind: 'agent', agent: p.agent, repo: p.repo, round: state.review.round, status: state.next && sameStep(state.next, p) && p.stage === state.next.stage ? 'next' : 'pending' });
+      for (const p of rest) {
+        // The other members of a parallel group under way are listed above, as they started.
+        if (state.running.some((r) => sameStep(r, p)) || (state.parallel && [...state.parallel.done, ...state.parallel.failed.map((f) => f.step)].some((d) => sameStep(d, p)))) continue;
+        upcoming.push({ kind: 'agent', agent: p.agent, repo: p.repo, round: state.review.round, status: state.next && sameStep(state.next, p) && p.stage === state.next.stage ? 'next' : skipped(state, state.pipeline.stages[p.stage]!.when) ? 'skipped' : 'pending' });
+      }
       // Stages after a running review loop only show up once the loop is left.
       if (state.review.fixing && state.pipeline.reviewLoop) {
         for (const st of state.pipeline.stages.slice(state.pipeline.reviewLoop.end + 1)) upcoming.push({ kind: 'agent', agent: st.agent, perRepo: st.scope === 'repo', allRepos: st.scope === 'repos', status: 'pending' });
       }
     } else {
       const from = current ? current.stage + (after ? 1 : 0) : 0;
-      for (const st of state.pipeline.stages.slice(from)) upcoming.push({ kind: 'agent', agent: st.agent, perRepo: st.scope === 'repo', allRepos: st.scope === 'repos', status: current && st === state.pipeline.stages[current.stage] ? 'next' : 'pending' });
+      for (const st of state.pipeline.stages.slice(from)) {
+        if (state.running.some((r) => r.agent === st.agent)) continue;
+        upcoming.push({ kind: 'agent', agent: st.agent, perRepo: st.scope === 'repo', allRepos: st.scope === 'repos', status: current && st === state.pipeline.stages[current.stage] ? 'next' : skipped(state, st.when) ? 'skipped' : 'pending' });
+      }
     }
   }
   const hasRepoStages = state.pipeline.stages.some(onRepos);

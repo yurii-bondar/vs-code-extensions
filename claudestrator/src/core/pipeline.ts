@@ -1,6 +1,6 @@
 // Turns the resolved config into stages and loop rules. Routing depends on outputs only, never on names.
 
-import type { Agent, Config, Output, Pipeline, PipelineWarning, ReviewLoop, Runs, Scope, Stage, StoredPipeline } from './types';
+import type { Agent, Config, Output, Pipeline, PipelineWarning, ReviewLoop, Runs, ScenarioStep, Scope, Stage, StoredPipeline } from './types';
 
 const isWork = (o: Output): boolean => o === 'code' || o === 'tests';
 const REPORT_OUTPUTS: Output[] = ['readiness', 'audit'];
@@ -21,6 +21,12 @@ interface StageSource {
 }
 type PlainStage = Omit<Stage, 'approval'>;
 const stageOf = (a: StageSource): PlainStage => ({ agent: a.name, output: a.output, scope: a.scope || (SCOPE[a.output] && ((a.runs && RUNS_SCOPE[a.runs]) || SCOPE[a.output])) || 'task' });
+/** A scenario's own Loop over stages `from..to`, with its rounds. */
+interface OwnLoop {
+  from: number;
+  to: number;
+  rounds: number | undefined;
+}
 /** Whether a stage works in the plan's repos (and so the task branches, commits and opens PRs). */
 const onRepos = (st: { scope: Scope }): boolean => st.scope === 'repo' || st.scope === 'repos';
 
@@ -48,12 +54,20 @@ function buildPipeline(config: Config, opts: { scenario?: string | undefined; au
  * What a custom scenario with these steps runs: the report its agents write, or a delivery routed by their outputs.
  * Turned-off agents are left out. Also what its editor shows of steps not saved yet.
  */
-function scenarioPipeline(config: Pick<Config, 'agents' | 'limits'>, steps: readonly { name: string }[], opts: { auto?: boolean | undefined } = {}): Pipeline {
-  const known = steps.map((st) => config.agents[st.name]).filter((a): a is Agent => Boolean(a));
-  const report = known.find((a) => REPORT_OUTPUTS.includes(a.output));
-  const enabled = known.filter((a) => a.enabled);
-  if (report) return reportStages(enabled, report.output);
-  return routed(enabled.map(stageOf), { auto: opts.auto, maxRounds: config.limits.reviewRounds });
+function scenarioPipeline(config: Pick<Config, 'agents' | 'limits'>, steps: readonly Pick<ScenarioStep, 'name' | 'parallel' | 'when' | 'loop'>[], opts: { auto?: boolean | undefined } = {}): Pipeline {
+  const known = steps.flatMap((st) => (config.agents[st.name] ? [{ st, a: config.agents[st.name]! }] : []));
+  const report = known.find(({ a }) => REPORT_OUTPUTS.includes(a.output));
+  const enabled = known.filter(({ a }) => a.enabled);
+  // A Parallel left with one agent (the others turned off) is that agent alone.
+  const size = (g: number | undefined): number => enabled.filter(({ st }) => st.parallel === g).length;
+  const plain: PlainStage[] = enabled.map(({ st, a }) => ({ ...stageOf(a), ...(st.parallel !== undefined && size(st.parallel) > 1 && { group: st.parallel }), ...(st.when && { when: st.when }) }));
+  if (report) return reportStages(plain, report.a.output);
+  const looped = enabled.map(({ st }, i) => (st.loop ? i : -1)).filter((i) => i !== -1);
+  const loop = looped.length ? { from: looped[0]!, to: looped[looped.length - 1]!, rounds: enabled[looped[0]!]!.st.loop!.rounds } : undefined;
+  const p = routed(plain, { auto: opts.auto, maxRounds: config.limits.reviewRounds, loop });
+  // A branch on a step that does not run never holds: its other arm runs.
+  for (const { st } of enabled) if (st.when && !enabled.some(({ st: x }) => x.name === st.when!.on)) p.warnings.push({ level: 'warning', code: 'branch_source_off', agent: st.name, message: `"${st.name}" waits on "${st.when.on}", which does not run (turned off): its branch's other arm runs` });
+  return p;
 }
 
 /** What a scenario runs as: `deliver`, `readiness` or `audit`. A custom scenario without agents counts as a delivery. */
@@ -71,10 +85,13 @@ function taskPipeline(agents: StageSource[], { scenario = 'deliver', auto, maxRo
   return routed(agents.map(stageOf), { auto, maxRounds });
 }
 
+/** Whether a pipeline has a scenario's Parallel, Branch or Loop, which a task's list of agents cannot change. */
+const fixedFlow = (p: Pick<StoredPipeline, 'stages' | 'reviewLoop'>): boolean => p.stages.some((st) => st.group !== undefined || st.when !== undefined) || Boolean(p.reviewLoop && p.reviewLoop.explicit);
+
 /** Whether an agent with this output can join a task of this scenario. */
 const fitsScenario = (output: Output, scenario = 'deliver'): boolean => (scenario === 'deliver' ? !REPORT_OUTPUTS.includes(output) : output === scenario);
 
-function routed(plain: PlainStage[], { auto, maxRounds }: { auto?: boolean | undefined; maxRounds: number }): Pipeline {
+function routed(plain: PlainStage[], { auto, maxRounds, loop }: { auto?: boolean | undefined; maxRounds: number; loop?: OwnLoop | undefined }): Pipeline {
   const warnings: PipelineWarning[] = [];
   const stages: Stage[] = plain.map((st, i) => ({
     ...st,
@@ -113,16 +130,21 @@ function routed(plain: PlainStage[], { auto, maxRounds }: { auto?: boolean | und
   }
 
   let reviewLoop: ReviewLoop | null = null;
-  const restartAt = lastVerdict === -1 ? -1 : firstIndex((s) => isWork(s.output));
-  if (restartAt !== -1 && restartAt < lastVerdict) {
-    const span = stages.slice(restartAt, lastVerdict + 1);
-    reviewLoop = {
-      restartAt,
-      end: lastVerdict,
-      fixers: span.filter((s) => isWork(s.output)).map((s) => s.agent),
-      reviewers: span.filter((s) => s.output === 'verdict').map((s) => s.agent),
-      maxRounds,
-    };
+  const span = (from: number, to: number) => stages.slice(from, to + 1);
+  if (loop) {
+    // The scenario's own Loop: its steps, its rounds. It ends with a review (config checks that), else it is no loop.
+    const body = span(loop.from, loop.to);
+    if (stages[loop.to]!.output === 'verdict' && body.some((s) => isWork(s.output))) {
+      reviewLoop = { restartAt: loop.from, end: loop.to, fixers: body.filter((s) => isWork(s.output)).map((s) => s.agent), reviewers: body.filter((s) => s.output === 'verdict').map((s) => s.agent), maxRounds: loop.rounds ?? maxRounds, explicit: true };
+    } else warn('loop_without_work', 'the Loop has no agent that changes code before its review, so there is nothing to fix: it runs once');
+  } else {
+    // A step of a branch may be skipped, so it never ends the loop the outputs make, nor opens it.
+    const end = lastIndex((s) => s.output === 'verdict' && !s.when);
+    const restartAt = end === -1 ? -1 : firstIndex((s) => isWork(s.output) && !s.when);
+    if (restartAt !== -1 && restartAt < end) {
+      const body = span(restartAt, end);
+      reviewLoop = { restartAt, end, fixers: body.filter((s) => isWork(s.output)).map((s) => s.agent), reviewers: body.filter((s) => s.output === 'verdict').map((s) => s.agent), maxRounds };
+    }
   }
 
   return { mode: modeOf(stages, reviewLoop), scenario: 'deliver', stages, reviewLoop, warnings };
@@ -134,8 +156,8 @@ function reportPipeline(config: Config, scenario: string): Pipeline {
   return reportStages(names.map((n) => config.agents[n]).filter((a): a is Agent => Boolean(a && a.enabled)), scenario);
 }
 
-function reportStages(agents: Pick<Agent, 'name' | 'output'>[], scenario: string): Pipeline {
-  const stages: Stage[] = agents.map((a) => ({ agent: a.name, output: a.output, scope: 'task', approval: false }));
+function reportStages(agents: (Pick<Agent, 'name' | 'output'> | PlainStage)[], scenario: string): Pipeline {
+  const stages: Stage[] = agents.map((a) => ('agent' in a ? { ...a, scope: 'task', approval: false } : { agent: a.name, output: a.output, scope: 'task', approval: false }));
   return { mode: scenario, scenario, stages, reviewLoop: null, warnings: [] };
 }
 
@@ -186,4 +208,4 @@ function outline(pipeline: Pick<StoredPipeline, 'stages' | 'reviewLoop' | 'scena
 }
 
 export type { Chip, StageSource };
-export { buildPipeline, scenarioPipeline, scenarioKind, taskPipeline, fitsScenario, onRepos, reposBeforePlan, outline };
+export { buildPipeline, fixedFlow, scenarioPipeline, scenarioKind, taskPipeline, fitsScenario, onRepos, reposBeforePlan, outline };
