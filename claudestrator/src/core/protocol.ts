@@ -2,7 +2,7 @@
 // for what agents hand back (plan and verdict blocks) and for config layers.
 // The on-disk formats match the claudestrator CLI and plugin, so both can work on the same tasks.
 
-import type { Audit, AuditFinding, CheckpointId, Effort, Finding, GroupType, JsonObject, OrchEvent, Output, ParseResult, PlanMeta, Readiness, ReadinessValue, ReadinessVerdict, ReportSeverity, Runs, Scenario, Severity, CriterionStatus, WorkReport } from './types';
+import type { Audit, AuditFinding, CheckpointId, Effort, Finding, GroupType, IntakeSettings, JsonObject, OrchEvent, Output, ParseResult, PlanMeta, Readiness, ReadinessValue, ReadinessVerdict, ReportSeverity, Runs, Scenario, Severity, CriterionStatus, WorkReport } from './types';
 
 import { PROTECTED_MODES } from './protected';
 const OUTPUTS: Output[] = ['plan', 'code', 'tests', 'verdict', 'readiness', 'audit'];
@@ -160,7 +160,11 @@ const AGENT_LAYER: Record<string, Check> = {
  * what it does there, after its own instructions (the text, or a file of it).
  */
 const SCENARIO_STEP = T.any(agentName, T.obj({ agent: agentName, 'model?': T.str(1), 'effort?': T.oneOf(EFFORTS), 'instructions?': T.any(T.str(1), T.obj({ file: T.str(1) })) }));
-const CUSTOM_SCENARIO = T.obj({ 'label?': T.str(1, 60), 'description?': T.str(), agents: T.arr(SCENARIO_STEP) });
+/** What reads a ticket through an MCP server when no config says otherwise: a short read, which a small model does well. */
+const INTAKE: IntakeSettings = { model: 'haiku', effort: 'low' };
+/** The model and effort that read a ticket through an MCP server. */
+const INTAKE_LAYER = T.obj({ 'model?': T.str(1), 'effort?': T.oneOf(EFFORTS) });
+const CUSTOM_SCENARIO = T.obj({ 'label?': T.str(1, 60), 'description?': T.str(), 'intake?': INTAKE_LAYER, agents: T.arr(SCENARIO_STEP) });
 
 /** `readiness` and `audit` list their agents, or are `false` when removed; any other name is a custom scenario. */
 const scenariosLayer: Check = (v, p) => {
@@ -236,6 +240,7 @@ const CONFIG_LAYER = T.obj({
   'limits?': T.obj({ 'reviewRounds?': T.int(0, 20), 'gateAttempts?': T.int(1, 20), 'budgetUsd?': T.nonNegative(), 'parallelTasks?': T.int(1, 20) }),
   'language?': T.str(1),
   'baseBranch?': BRANCH,
+  'intake?': INTAKE_LAYER,
   'repos?': T.rec(T.re(REPO_NAME, 'a repo name is letters, digits, ".", "_" and "-", e.g. api or web-app'), T.obj({ 'role?': T.str(1), 'path?': T.str(1), 'baseBranch?': BRANCH, 'gates?': GATES })),
   'jira?': T.obj({ 'allowedProjects?': T.arr(T.str(1)) }),
   // The sandbox's lists go to sandbox-runtime as its settings: a few entries each, never an unbounded list to validate.
@@ -417,6 +422,7 @@ function parseAudit(raw: unknown): ParseResult<Audit> {
 export type { Check };
 export {
   T,
+  INTAKE,
   OUTPUTS,
   SCENARIOS,
   SCENARIO_OUTPUT,

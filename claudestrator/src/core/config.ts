@@ -6,7 +6,7 @@ import * as path from 'path';
 import * as YAML from 'yaml';
 import { AsyncLocalStorage } from 'async_hooks';
 import { isDeepStrictEqual } from 'util';
-import { validateConfigLayer, validateAgentPatch, validateLibraryLayer, SCENARIO_OUTPUT, JIRA_KEY, BRANCH_PATTERN } from './protocol';
+import { validateConfigLayer, validateAgentPatch, validateLibraryLayer, INTAKE, SCENARIO_OUTPUT, JIRA_KEY, BRANCH_PATTERN } from './protocol';
 import { ORCH_DIR } from './store';
 import { ENV_FILE, SECRET_PATHS, GITHUB_TOKENS } from './settings';
 import { signature, writeAtomic } from './files';
@@ -37,7 +37,15 @@ type ScenarioStepLayer = string | { agent: string; model?: string; effort?: Effo
 interface CustomScenarioLayer {
   label?: string;
   description?: string;
+  /** The model and effort that read its tickets, over the config's `intake`. */
+  intake?: IntakeLayer;
   agents: ScenarioStepLayer[];
+}
+
+/** The model and effort of the agent that reads a Jira issue or Confluence page through an MCP server. */
+interface IntakeLayer {
+  model?: string;
+  effort?: Effort;
 }
 
 type GroupLayer = Omit<TaskGroup, 'id'>;
@@ -59,6 +67,7 @@ interface ConfigLayer {
   limits?: { reviewRounds?: number; gateAttempts?: number; budgetUsd?: number; parallelTasks?: number };
   language?: string;
   baseBranch?: string;
+  intake?: IntakeLayer;
   repos?: Record<string, RepoLayer>;
   jira?: { allowedProjects?: string[] };
   policy?: Partial<Policy>;
@@ -118,6 +127,7 @@ interface Merged {
   pipeline?: { names: string[]; source: string };
   language?: string;
   baseBranch?: string;
+  intake: IntakeLayer;
   gitMode?: GitMode;
   context?: string[];
 }
@@ -450,7 +460,7 @@ function toOp(layer: Layer, input: InstructionsInput | undefined): InstructionOp
 }
 
 function mergeLayers(layers: Layer[]): Merged {
-  const merged: Merged = { agents: new Map(), limits: {}, repos: new Map(), jira: {}, policy: {}, scenarios: {}, groups: {}, instructions: {}, origins: {} };
+  const merged: Merged = { agents: new Map(), limits: {}, repos: new Map(), jira: {}, policy: {}, scenarios: {}, groups: {}, instructions: {}, origins: {}, intake: {} };
   for (const layer of layers) {
     const c = layer.config;
     for (const [name, agent] of Object.entries(c.agents ?? {})) {
@@ -469,6 +479,7 @@ function mergeLayers(layers: Layer[]): Merged {
     if (c.limits) merged.limits = { ...merged.limits, ...defined(c.limits) };
     if (c.language) merged.language = c.language;
     if (c.baseBranch) merged.baseBranch = c.baseBranch;
+    if (c.intake) merged.intake = { ...merged.intake, ...defined(c.intake) };
     if (c.jira && c.jira.allowedProjects) merged.jira = { allowedProjects: [...c.jira.allowedProjects] };
     if (c.policy) merged.policy = { ...merged.policy, ...defined(c.policy) };
     if (c.git && c.git.mode) merged.gitMode = c.git.mode;
@@ -618,6 +629,7 @@ function resolveConfig(layers: Layer[], opts: { flags?: Flags | undefined; readF
       },
       language: merged.language ?? 'English',
       baseBranch,
+      intake: { model: merged.intake.model ?? INTAKE.model, effort: merged.intake.effort ?? INTAKE.effort },
       repos,
       jira: { allowedProjects: merged.jira.allowedProjects ?? [] },
       policy: {
@@ -782,7 +794,7 @@ function resolveCustomScenarios(merged: Record<string, ScenarioEntry>, drafts: M
     if (kinds.size > 1) {
       diags.push({ level: 'error', code: 'scenario_mixed', source: entry.source, message: `scenario "${id}" mixes agents that change code with report agents (${[...kinds].join(', ')}); keep one kind per scenario` });
     }
-    out[id] = { id, label: def.label || id, ...(def.description && { description: def.description }), kind: kinds.size ? [...kinds][0]! : null, agents: steps, source: entry.source };
+    out[id] = { id, label: def.label || id, ...(def.description && { description: def.description }), ...(def.intake && Object.keys(def.intake).length && { intake: { ...def.intake } }), kind: kinds.size ? [...kinds][0]! : null, agents: steps, source: entry.source };
   }
   return out;
 }
@@ -1664,7 +1676,7 @@ async function addAgent({ workspace, home, name, base, description, output, mode
   });
 }
 
-export type { AgentLayer, ConfigLayer, CustomScenarioLayer, EntrySection, Flags, GroupLayer, InstructionLayer, Layer, RepoLayer, ResolveResult, ScenarioStepLayer };
+export type { AgentLayer, ConfigLayer, CustomScenarioLayer, EntrySection, Flags, GroupLayer, InstructionLayer, IntakeLayer, Layer, RepoLayer, ResolveResult, ScenarioStepLayer };
 export {
   CONFIG_DIR,
   CONFIG_FILE,

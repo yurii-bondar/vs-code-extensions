@@ -641,6 +641,8 @@ class Engine extends EventEmitter {
       effort: taskEffort as Record<string, Effort>,
       model: taskModel,
       stepInstructions,
+      // Only a ticket from Jira or Confluence is read by an agent.
+      ...(source.kind !== 'text' && { intake: { ...config.intake, ...(config.custom[sc.name] && config.custom[sc.name]!.intake) } }),
       ...((key || inv.key) && { taskId: key || inv.key }),
     });
     await this.svc.setCurrent(started.taskId);
@@ -933,7 +935,7 @@ class Engine extends EventEmitter {
     const prompt = `Read ${what} using the "${via.server}" MCP server's tools and write the ticket as your instructions say.`;
     const emitItem = this.emitter(s.taskId, INTAKE_KEY);
     emitItem({ type: 'prompt', text: prompt });
-    const agent = { name: 'intake', description: 'Reads the task source', model: 'haiku', effort: 'low' as const, instructions: INTAKE_INSTRUCTIONS, output: 'plan' };
+    const agent = { name: 'intake', description: 'Reads the task source', model: s.intake.model, effort: s.intake.effort, instructions: INTAKE_INSTRUCTIONS, output: 'plan' };
     const webHosts = await this.webHosts(s, await this.config());
     await this.guardListening();
     const hook = this.hooks.register(async ({ tool, input }) => {

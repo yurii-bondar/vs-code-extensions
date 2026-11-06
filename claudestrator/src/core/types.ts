@@ -225,10 +225,18 @@ export interface ScenarioStep {
   instructionsFile?: string;
 }
 
+/** The model and effort of the agent that reads a Jira issue or Confluence page through an MCP server. */
+export interface IntakeSettings {
+  model: string;
+  effort: Effort;
+}
+
 export interface CustomScenario {
   id: string;
   label: string;
   description?: string;
+  /** What it reads its tickets with, over the config's `intake`. */
+  intake?: Partial<IntakeSettings>;
   kind: string | null;
   agents: ScenarioStep[];
   /** The layer that defines it: `project`, `user`, or `library:<name>`. */
@@ -317,6 +325,7 @@ export interface Config {
   pipelineSource: string;
   limits: Limits;
   language: string;
+  intake: IntakeSettings;
   baseBranch: string;
   repos: Record<string, RepoConfig>;
   jira: { allowedProjects: string[] };
@@ -450,6 +459,8 @@ export interface TaskState {
   model: Record<string, string>;
   /** Per agent, what its custom scenario's step adds to its instructions, as it was when the task started. */
   stepInstructions: Record<string, string>;
+  /** What reads its ticket through an MCP server, as it was when the task started. */
+  intake: IntakeSettings;
   limits: Pick<Limits, 'reviewRounds' | 'gateAttempts'>;
   status: TaskStatus;
   phase: TaskPhase;
@@ -521,6 +532,7 @@ export type OrchEvent = EventBase &
         effort?: Record<string, Effort> | undefined;
         model?: Record<string, string> | undefined;
         stepInstructions?: Record<string, string> | undefined;
+        intake?: IntakeSettings | undefined;
         limits: Pick<Limits, 'reviewRounds' | 'gateAttempts'>;
       }
     | { type: 'intake_completed'; spec: Spec; repos?: PlanRepo[]; plan?: PlanMeta }

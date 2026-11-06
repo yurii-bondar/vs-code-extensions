@@ -1,6 +1,6 @@
 // The task state machine. Pure: the same events always give the same state, and an illegal
 // event (a skipped approval, an extra review round, a push before it was confirmed) is rejected.
-import { CHECKPOINT_OPTIONS, JIRA_ONLY_OPTIONS, REPO_NAME, isBlocking, isInfoEvent } from './protocol';
+import { CHECKPOINT_OPTIONS, INTAKE, JIRA_ONLY_OPTIONS, REPO_NAME, isBlocking, isInfoEvent } from './protocol';
 import { onRepos, reposBeforePlan } from './pipeline';
 import type { Checkpoint, CheckpointId, Finding, NextMode, Output, OrchEvent, PlanMeta, PlanQuestion, PlanRepo, ProtectedChange, RecordedVerdict, Stage, Step, StepRef, TaskState, Transition } from './types';
 
@@ -120,6 +120,8 @@ function created(e: Ev<'task_created'>): TaskState {
     model: e.model ?? {},
     /** What a custom scenario's steps add to their agents' instructions. */
     stepInstructions: e.stepInstructions ?? {},
+    /** Logs written before it was set read their tickets as Claudestrator always did. */
+    intake: e.intake ?? { ...INTAKE },
     limits: e.limits,
     status: 'active',
     phase: 'intake',

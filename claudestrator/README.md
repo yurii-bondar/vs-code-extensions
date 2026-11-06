@@ -184,6 +184,7 @@ scenarios:                      # read-only agents of the report scenarios (buil
 limits: { reviewRounds: 2, gateAttempts: 3, budgetUsd: 20, parallelTasks: 2 }
 language: Ukrainian
 baseBranch: main
+intake: { model: haiku, effort: low }   # what reads a Jira issue or Confluence page through an MCP server (the default); a scenario can set its own
 context: [./workspace.md]
 git: { mode: worktree }
 groups:                          # what a task can belong to: epic, story or group, with an optional Jira key
