@@ -476,7 +476,7 @@ interface Views {
     patch('nav', `${root}${tree && tasksOpen ? tree : ''}${NAV.filter((n) => n.group === 'setup').map((n) => item(n)).join('')}`);
     patch('topbar-title', esc(NAV.find((n) => n.name === active)?.label || 'Claudestrator'));
     patch('workspace', o && o.rootName ? esc(o.rootName) : '');
-    patch('rail-foot', `${railHealth(o && o.health)}${limitsPanel(o && o.limits)}${accountSwitcher(o)}`);
+    patch('rail-foot', `${railHealth(o && o.health)}${limitsPanel(o && o.limits)}${accountSwitcher(o, Boolean(o && o.health && !o.health.checking && !healthProblem(o.health)))}`);
     renderGlobalPermissions();
     const a = o && o.account;
     patch('global-alerts', a && a.loggedIn === false ? `<div class="perm-strip"><div class="banner error">${icon('alert')}<div class="grow"><b>Claude Code is signed out for ${esc(a.email || a.label)}</b> <span class="muted small">(${esc(a.shownDir.replace(/^\/Users\/[^/]+/, '~'))})</span><div class="small">Agents cannot run under this account. Sign in again, or switch to a signed-in account.</div></div><div class="banner-actions"><button class="btn sm primary" data-action="claude-login">${icon('user')}Sign in</button><button class="btn sm" data-action="open-account-menu">Switch account</button></div></div></div>` : '');
@@ -541,7 +541,7 @@ interface Views {
   }
 
   /** Which Claude Code account the agents, MCP and limits use; one click to switch. */
-  function accountSwitcher(o: Overview | null) {
+  function accountSwitcher(o: Overview | null, toolsOk: boolean) {
     if (!o || !o.account) return '';
     const a = o.account;
     const who = a.email || a.label;
@@ -549,7 +549,7 @@ interface Views {
       .map((x) => `<button data-action="set-account" data-dir="${esc(x.dir)}" class="${x.current ? 'current' : ''}">${x.current ? icon('check') : '<span class="ic"></span>'}<span class="acc-row"><b>${esc(x.email || x.label)}${x.loggedIn === false ? ' <span class="badge tone-error">signed out</span>' : ''}</b><span class="muted small">${esc(x.label)} · ${esc(x.dir.replace(/^\/Users\/[^/]+/, '~'))}</span></span></button>`)
       .join('');
     return `<span class="menu-wrap acc-wrap">
-      <button class="acc-btn ${a.loggedIn === false ? 'signed-out' : ''}" data-action="eff-menu" title="${esc(`${a.loggedIn === false ? 'Signed out — ' : ''}Claude account for agents, MCP and limits: ${who} (${a.shownDir}) — ${a.sourceText}`)}">${icon('user')}<span>${esc(who)}</span>▾</button>
+      <button class="acc-btn ${a.loggedIn === false ? 'signed-out' : ''}" data-action="eff-menu" title="${esc(`${a.loggedIn === false ? 'Signed out — ' : ''}Claude account for agents, MCP and limits: ${who} (${a.shownDir}) — ${a.sourceText}`)}">${icon('user')}<span>${esc(who)}</span>${toolsOk ? `<i class="acc-ok" title="All tools ready">${icon('check')}</i>` : ''}▾</button>
       <div class="menu acc-menu">
         <div class="menu-title">Claude account for agents, MCP servers and limits</div>
         ${rows}
@@ -562,7 +562,7 @@ interface Views {
   function limitsPanel(l: StoredLimits | null) {
     if (!l) return '';
     const win = (label: string, w: LimitWindow | undefined) =>
-      w ? `<div class="lim" title="${esc(`${label === 'Session' ? '5-hour session' : 'Weekly'} limit: ${w.pct}% used${w.reset ? ' (window reset)' : w.resetsAt ? `, resets in ${resetIn(w.resetsAt)}` : ''}`)}"><div class="lim-head"><b>${label}</b><span class="muted">${w.resetsAt ? `resets ${resetIn(w.resetsAt)}` : ''}</span><span class="lim-pct ${level(w.pct)}">${w.pct}%</span></div>${meter(w.pct)}</div>` : '';
+      w ? `<div class="lim" title="${esc(`${label === 'Session' ? '5-hour session' : 'Weekly'} limit: ${w.pct}% used${w.reset ? ' (window reset)' : w.resetsAt ? `, resets in ${resetIn(w.resetsAt)}` : ''}`)}"><b>${label}</b>${meter(w.pct)}<span class="lim-pct ${level(w.pct)}">${w.pct}%</span><span class="muted lim-reset">${w.resetsAt ? `↻ ${resetIn(w.resetsAt)}` : ''}</span></div>` : '';
     const when = l.at ? ago(new Date(l.at).toISOString()) : '';
     return `<div class="limits" title="${esc(`${l.source === 'statusline' ? 'From your Claude Code status line' : 'Reported to the agents'}, ${when}`)}">${win('Session', l.fiveHour)}${win('Week', l.sevenDay)}</div>`;
   }
@@ -853,7 +853,7 @@ interface Views {
     if (!h) return '';
     if (h.checking) return `<div class="rail-health"><span class="spinner xs"></span><span>Checking tools…</span></div>`;
     const p = healthProblem(h);
-    if (!p) return `<div class="rail-health ok">${icon('check')}<span>All tools ready</span></div>`;
+    if (!p) return ''; // the account row's check says so
     return `<button class="rail-health bad" data-action="nav" data-name="${p.section}">${icon('alert')}<span>${esc(p.text)}</span>${icon('chevron')}</button>`;
   }
 
