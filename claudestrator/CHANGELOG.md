@@ -1,3 +1,38 @@
+## [0.15.0](https://github.com/yurii-bondar/vs-code-extensions/compare/claudestrator-v0.14.1...claudestrator-v0.15.0) (2026-11-06)
+
+### Features
+
+* **claudestrator:** a built-in scenario opens as a copy on the diagram ([adb8e3b](https://github.com/yurii-bondar/vs-code-extensions/commit/adb8e3be7270394519b796ea13bb0f18c88eb9b2))
+* **claudestrator:** a task's pipeline as a diagram ([a539fa4](https://github.com/yurii-bondar/vs-code-extensions/commit/a539fa4f6262491515aa53a7c46be8d834500ce0))
+* **claudestrator:** create an agent without adding it to a pipeline ([0e60cee](https://github.com/yurii-bondar/vs-code-extensions/commit/0e60ceecc720a67933d5168c54b6cdcb699389f6))
+* **claudestrator:** instructions per scenario step ([5d5ae4a](https://github.com/yurii-bondar/vs-code-extensions/commit/5d5ae4acde28aa024d2a17c2442bfcce96410024))
+* **claudestrator:** model and effort for reading tickets ([41bd2c6](https://github.com/yurii-bondar/vs-code-extensions/commit/41bd2c6f3650496fd2b87d6f4a9adc2d0a930436))
+* **claudestrator:** Parallel, Branch and Loop on the scenario diagram ([da04f68](https://github.com/yurii-bondar/vs-code-extensions/commit/da04f687d540f52636e80d0d575db290ef62573f))
+* **claudestrator:** Parallel, Branch and Loop steps in scenarios ([5a8eff4](https://github.com/yurii-bondar/vs-code-extensions/commit/5a8eff489be120d1c95ad37992acea45ecfbc211))
+* **claudestrator:** preview the route of a scenario before it is saved ([7b8d767](https://github.com/yurii-bondar/vs-code-extensions/commit/7b8d767703d8a67dc0172d1b587df75fe07ec478))
+* **claudestrator:** scenario diagram editor ([6ba8530](https://github.com/yurii-bondar/vs-code-extensions/commit/6ba85305388ff34eb0d4352ed7001ccc8eb5448d))
+* **claudestrator:** set the model that reads tickets on the Integrations page ([5c5bdf7](https://github.com/yurii-bondar/vs-code-extensions/commit/5c5bdf7ca8d24a369c4ea96f936dfaf684d988e5))
+* **claudestrator:** the rail's limits and tools take three lines ([bdef3d8](https://github.com/yurii-bondar/vs-code-extensions/commit/bdef3d826e780635dd2a76972ea3ae96fad7111f))
+* **claudestrator:** You approve steps in scenarios ([d00fc3d](https://github.com/yurii-bondar/vs-code-extensions/commit/d00fc3dd8db1b3cede1cb3cf6362d9e530c814af))
+
+### Bug Fixes
+
+* **claudestrator:** a backup or a library copies no file the project's config may not name ([4dcb7ba](https://github.com/yurii-bondar/vs-code-extensions/commit/4dcb7baeba8db3428494aeae21ab255e4bac8e3c))
+* **claudestrator:** a branch on a step's checks reads the checks of this round ([802984b](https://github.com/yurii-bondar/vs-code-extensions/commit/802984b7d54033c70d6fc77f094a0333f134e919))
+* **claudestrator:** a budget spent before a Parallel stops the task once ([f374227](https://github.com/yurii-bondar/vs-code-extensions/commit/f374227f73bb63c4d759d84f760268bc5044785f))
+* **claudestrator:** a Loop whose reviewer is turned off says so ([57c3c07](https://github.com/yurii-bondar/vs-code-extensions/commit/57c3c070682f1d11fe8ee6eb8610e48e81a52e99))
+* **claudestrator:** a session is watched by its own signs of work, apart from other tasks' ([91789e0](https://github.com/yurii-bondar/vs-code-extensions/commit/91789e0384f55cc61ae37795f93b4ac0fee9fef9))
+* **claudestrator:** each member of a parallel group is watched on its own ([119330f](https://github.com/yurii-bondar/vs-code-extensions/commit/119330fd063724fc81421709c170013116461855))
+* **claudestrator:** moving a step on the diagram keeps a block's You approve with the block ([9683533](https://github.com/yurii-bondar/vs-code-extensions/commit/9683533741c9a07e06f32902dea55a48e343d1ff))
+* **claudestrator:** Run it again at You approve after a per-repo step runs every repo ([3c54547](https://github.com/yurii-bondar/vs-code-extensions/commit/3c5454778590e38121aa397af34315c4c4f17a75))
+* **claudestrator:** saving a scenario keeps its step instructions and reading settings ([2866e45](https://github.com/yurii-bondar/vs-code-extensions/commit/2866e459641cc21fae11a0d0935352b2c3857ae3))
+* **claudestrator:** the Diagram item of New scenario says what it has now ([7170d64](https://github.com/yurii-bondar/vs-code-extensions/commit/7170d6400197137f46e793a80490ffd07975bb96))
+* **claudestrator:** the report of a Parallel of audits has every member's ([eb32201](https://github.com/yurii-bondar/vs-code-extensions/commit/eb32201e1065217fcf7c9731ddb1a6972fb80913))
+* **claudestrator:** the reviewers of a Parallel share one diff of the round ([074416f](https://github.com/yurii-bondar/vs-code-extensions/commit/074416f2042c82eda58f2cdcaca0c475263f615d))
+* **claudestrator:** the task diagram's approvals are done only once the task is past them ([b6e2517](https://github.com/yurii-bondar/vs-code-extensions/commit/b6e251786d15594a97418a30bc04dd80b8328362))
+* **claudestrator:** You approve after a Parallel shows each member's report ([da4bac4](https://github.com/yurii-bondar/vs-code-extensions/commit/da4bac4f0a09440c8a0b95398729c09952093023))
+* **claudestrator:** You approve after a turned-off agent still waits for you ([602ff61](https://github.com/yurii-bondar/vs-code-extensions/commit/602ff619608501b0016c40fd49582311fca293ac))
+
 ## [0.14.1](https://github.com/yurii-bondar/vs-code-extensions/compare/claudestrator-v0.14.0...claudestrator-v0.14.1) (2026-11-04)
 
 ### Bug Fixes
