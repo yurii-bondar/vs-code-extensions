@@ -270,11 +270,12 @@ async function writeScenario(workspace: string, id: string, entry: ScenarioEntry
   if (entry === false) await removeScenario(workspace, id);
   else if (Array.isArray(entry)) await setScenario(workspace, id, entry);
   else {
-    const agents = flattenSteps(entry.agents).map(({ step, parallel, when, loop }): ScenarioStep => ({
+    const agents = flattenSteps(entry.agents).map(({ step, parallel, when, loop, approve }): ScenarioStep => ({
       ...(typeof step === 'string' ? { name: step } : { name: step.agent, ...(step.model && { model: step.model }), ...(step.effort && { effort: step.effort }), ...(typeof step.instructions === 'string' && { instructions: step.instructions }) }),
       ...(parallel !== undefined && { parallel }),
       ...(when && { when }),
       ...(loop && { loop }),
+      ...(approve && { approve }),
     }));
     await setCustomScenario(workspace, id, { label: entry.label || id, description: entry.description, agents, intake: entry.intake });
   }

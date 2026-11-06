@@ -24,6 +24,7 @@ type DgSelection =
   | { kind: 'start' }
   | { kind: 'step'; i: number }
   | { kind: 'block'; type: 'parallel' | 'branch' | 'loop'; i: number }
+  | { kind: 'approve'; i: number }
   | { kind: 'create'; at: number; parallel?: number; when?: StepWhen; loop?: { rounds?: number } };
 
 interface DiagramView extends View {
@@ -225,11 +226,12 @@ interface UiState {
           .join('') || `<div class="muted small dg-menu-empty">${q ? 'No agent matches.' : 'Every agent is in this scenario already.'}</div>`}
       </div>
       <button class="dg-create" data-action="dg-create" data-i="${i}">${icon('plus')}Create agent…</button>
+      ${mode === 'agent' && ctx.parallel === undefined && ctx.when ? `<h4>Flow</h4>${flow('dg-approve-add', 'user', 'You approve', 'The task waits for you here, when this arm runs', approveWhy(d, ctx))}` : ''}
       ${mode === 'agent' && ctx.parallel === undefined && !ctx.when ? `<h4>Flow</h4>
       ${flow('dg-mode-parallel', 'activity', 'Parallel', 'Start several read-only agents together', '')}
       ${flow('dg-mode-branch', 'branch', 'Branch', 'Steps that run only when an earlier result holds', ctx.loop ? 'A Loop holds no branch' : branch ? '' : 'Needs a step before it that reports a result: a review, readiness, audit or checks')}
       ${flow('dg-loop-on', 'refresh', 'Loop', 'Choose which steps run again, and how many rounds', canLoop ? '' : d.steps.some((st) => st.loop) ? 'This scenario has its Loop' : 'Needs an agent that changes code and a reviewer after it')}
-      <div class="dg-menu-later" title="Comes in a later version">${icon('user')}<span class="grow"><b>You approve</b><span class="muted small">The task waits for you here</span></span><span class="chip small dg-later">${icon('clock')}later</span></div>` : ''}
+      ${flow('dg-approve-add', 'user', 'You approve', 'The task waits for you here', approveWhy(d, ctx))}` : ''}
     </div>`;
   }
 
@@ -255,6 +257,21 @@ interface UiState {
     </div>`;
   }
 
+  /** Why You approve cannot go on this arrow, or '' when it can: it marks the step right before it. */
+  function approveWhy(d: DiagramDraft, ctx: EdgeCtx): string {
+    const prev = d.steps[ctx.at - 1];
+    if (!prev) return 'Needs a step before it';
+    if (ctx.parallel !== undefined) return 'Not inside a Parallel: put it after it';
+    if (ctx.loop) return 'Not inside the Loop: put it after it, where the reviewers approved';
+    if (ctx.when ? !sameWhen(prev.when, ctx.when) || Boolean(prev.when!.else) !== Boolean(ctx.when.else) : Boolean(prev.when)) return ctx.when ? 'Needs a step before it in this arm' : 'Not right after a Branch: put it in one of its arms';
+    if (prev.approve) return 'The task waits for you here already';
+    if (agentOf(prev.name)?.output === 'plan') return 'A plan waits for your approval already';
+    return '';
+  }
+  const approveHtml = (st: ScenarioStep, i: number) =>
+    st.approve
+      ? `<div class="dg-line short"></div><div class="dg-node dg-pill dg-approve ${v().sel.kind === 'approve' && (v().sel as { i: number }).i === i ? 'selected' : ''}" data-action="dg-approve" data-i="${i}" tabindex="0" title="The task waits for you here">${icon('user')}<b>You approve</b><span class="muted small dg-approve-text">${esc(st.approve.text || `what ${st.name} did`)}</span></div>`
+      : '';
   const approvalHtml = (st: ScenarioStep) => (stageOf(st.name)?.approval ? `<div class="dg-line short"></div><div class="dg-node dg-pill dg-derived" title="Made from the step's output: a plan waits for you before anything changes">${icon('user')}<b>You approve the plan</b><span class="grow"></span><span class="chip small">auto · after a plan</span></div>` : '');
   const blockSelected = (type: string, i: number) => { const s = v().sel; return s.kind === 'block' && s.type === type && s.i === i; };
 
@@ -279,7 +296,7 @@ interface UiState {
         <div class="dg-loop-head" data-action="dg-block" data-kind="loop" data-i="${i}" role="button" tabindex="0">${icon('refresh')}<b>Loop</b><span class="muted small">until the reviewers at its end approve · up to ${plural(rounds, 'round')}</span><span class="grow"></span><span class="chip small">yours</span></div>
         ${chainHtml(d, i, j, { ...base, loop: st.loop }, { inLoop: true, tail: true })}
         <div class="dg-loop-foot">${icon('back')}changes requested → fix round</div>
-      </div>`;
+      </div>${approveHtml(d.steps[j - 1]!, j - 1)}`;
     }
     if (st.when) {
       const yes = d.steps.slice(i, j).map((x, k) => [x, i + k] as const).filter(([x]) => !x.when!.else);
@@ -287,7 +304,7 @@ interface UiState {
       const when = { on: st.when.on, if: st.when.if };
       const loop = base.loop ? { loop: base.loop } : {};
       const arm = (list: (readonly [ScenarioStep, number])[], w: StepWhen, at: number) =>
-        `${list.map(([x, k], n) => stepHtml(x, k) + (n < list.length - 1 ? edgeHtml({ at: k + 1, when: w, ...loop }, d) : '')).join('')}${edgeHtml({ at, when: w, ...loop }, d, { end: true })}`;
+        `${list.map(([x, k], n) => stepHtml(x, k) + approveHtml(x, k) + (n < list.length - 1 ? edgeHtml({ at: k + 1, when: w, ...loop }, d) : '')).join('')}${edgeHtml({ at, when: w, ...loop }, d, { end: true })}`;
       const yesEnd = yes.length ? yes[yes.length - 1]![1] + 1 : no.length ? no[0]![1] : i;
       return `<div class="dg-branch ${blockSelected('branch', i) ? 'selected' : ''}">
         <div class="dg-branch-head" data-action="dg-block" data-kind="branch" data-i="${i}" role="button" tabindex="0">${icon('branch')}<b>Branch</b><span class="muted small">on ${esc(st.when.on)}</span></div>
@@ -302,9 +319,9 @@ interface UiState {
       return `<div class="dg-parallel ${blockSelected('parallel', i) ? 'selected' : ''}">
         <div class="dg-parallel-head" data-action="dg-block" data-kind="parallel" data-i="${i}" role="button" tabindex="0">${icon('activity')}<b>Parallel</b><span class="muted small">${j - i > 1 ? 'they start together · the next step waits for all' : 'add another read-only agent with +'}</span></div>
         <div class="dg-lanes">${d.steps.slice(i, j).map((x, k) => `<div class="dg-lane">${stepHtml(x, i + k)}</div>`).join('')}<div class="dg-lane dg-lane-add">${edgeHtml({ at: j, ...ctx }, d, { end: true })}</div></div>
-      </div>`;
+      </div>${base.loop ? '' : approveHtml(d.steps[j - 1]!, j - 1)}`;
     }
-    return stepHtml(st, i) + approvalHtml(st);
+    return stepHtml(st, i) + approvalHtml(st) + (inLoop ? '' : approveHtml(st, i));
   }
 
   function flowHtml(d: DiagramDraft) {
@@ -441,6 +458,32 @@ interface UiState {
     </section>`;
   }
 
+  /** Whether a step is in the loop the outputs make, before its end (where it runs again each round). */
+  function inReviewLoop(st: ScenarioStep): boolean {
+    const p = v().preview?.pipeline;
+    const loop = p?.reviewLoop;
+    if (!p || !loop || st.loop) return false;
+    const k = p.stages.findIndex((x) => x.agent === st.name);
+    if (k < loop.restartAt || k > loop.end) return false;
+    // The loop's end (or a Parallel that ends it) asks once, after the reviewers approved.
+    const end = p.stages[loop.end]!;
+    return k !== loop.end && !(end.group !== undefined && p.stages[k]!.group === end.group);
+  }
+
+  /** You approve after a step: what the task shows you there, and how to take it away. */
+  function approveSide(d: DiagramDraft, i: number) {
+    const st = d.steps[i];
+    if (!st || !st.approve) return '';
+    return `<section class="card dg-side-card">
+      <div class="dg-side-head"><span class="muted small">YOU APPROVE</span><button class="icon-btn" data-action="dg-deselect" aria-label="Close">${icon('x')}</button></div>
+      <h3>${icon('user')}You approve</h3>
+      <p class="muted small">After ${esc(st.name)}${st.parallel !== undefined ? ' and the rest of its Parallel' : st.loop ? ', once the Loop\'s reviewers approved,' : ''} the task waits for you: it shows what the step wrote, and you approve, or have the step run again with your words${st.parallel !== undefined ? ' (not in a Parallel, which runs as one)' : ''}.</p>
+      ${inReviewLoop(st) ? `<div class="dg-fact small">${icon('refresh')}<span>It is in the review loop, so it asks you in every round. After the loop instead: put it after the last reviewer.</span></div>` : ''}
+      <label class="field"><span>What to look at <span class="muted">(optional, shown above it)</span></span><input class="input" data-input="dg-approve-text" data-i="${i}" value="${esc(st.approve.text || '')}" placeholder="e.g. Security fixes need a look"></label>
+      <div class="row dg-remove"><button class="btn ghost sm danger" data-action="dg-approve-remove" data-i="${i}">${icon('x')}Remove: the task goes on by itself</button></div>
+    </section>`;
+  }
+
   /** A Parallel, a Branch or a Loop: what it does, what it is set to, and how to undo it. */
   function blockSide(d: DiagramDraft, type: 'parallel' | 'branch' | 'loop', i: number) {
     const st = d.steps[i];
@@ -507,6 +550,7 @@ interface UiState {
     const items = [
       ...problems(d).map(bad),
       p.pipeline.stages.some((s) => s.approval) ? ok('The plan comes first and is approved by you.') : '',
+      ...d.steps.filter((st) => st.approve).map((st) => ok(`The task waits for you after ${st.name}${st.when ? ', when its branch runs' : ''}.`)),
       p.pipeline.stages.some((s) => s.group !== undefined) ? ok('Agents in a Parallel start together; the next step waits for all of them.') : '',
       p.pipeline.reviewLoop ? ok(`Every change in the loop is reviewed, up to ${plural(p.pipeline.reviewLoop.maxRounds, 'round')}.`) : '',
       ...p.pipeline.warnings.map((w) => warn(w.message)),
@@ -534,7 +578,7 @@ interface UiState {
         <div data-region="dg-head"></div>
         <div class="dg-layout">
           <div class="dg-canvas" tabindex="-1">
-            <div class="dg-bar"><div class="dg-toolbar"><span class="muted small">Add</span><button class="btn ghost sm" data-action="dg-add" data-i="-1" title="Add an agent at the end">${icon('users')}Agent</button><span class="dg-tool-later" title="Comes in a later version">${icon('user')}You approve</span><button class="btn ghost sm" data-action="dg-add" data-i="-1" data-kind="parallel" title="A new Parallel at the end: read-only agents that start together">${icon('activity')}Parallel</button><button class="btn ghost sm" data-action="dg-add" data-i="-1" data-kind="branch" title="A new Branch at the end: steps that run only when an earlier result holds">${icon('branch')}Branch</button><button class="btn ghost sm" data-action="dg-loop-on" title="Choose which steps run again, and how many rounds">${icon('refresh')}Loop</button></div>
+            <div class="dg-bar"><div class="dg-toolbar"><span class="muted small">Add</span><button class="btn ghost sm" data-action="dg-add" data-i="-1" title="Add an agent at the end">${icon('users')}Agent</button><button class="btn ghost sm" data-action="dg-approve-add" data-i="-1" title="The task waits for you after the selected step, or after the last one">${icon('user')}You approve</button><button class="btn ghost sm" data-action="dg-add" data-i="-1" data-kind="parallel" title="A new Parallel at the end: read-only agents that start together">${icon('activity')}Parallel</button><button class="btn ghost sm" data-action="dg-add" data-i="-1" data-kind="branch" title="A new Branch at the end: steps that run only when an earlier result holds">${icon('branch')}Branch</button><button class="btn ghost sm" data-action="dg-loop-on" title="Choose which steps run again, and how many rounds">${icon('refresh')}Loop</button></div>
             <div class="dg-zoom"><button class="icon-btn" data-action="dg-zoom" data-level="-1" aria-label="Zoom out">−</button><span class="small" data-region="dg-zoom">100%</span><button class="icon-btn" data-action="dg-zoom" data-level="1" aria-label="Zoom in">${icon('plus')}</button><button class="btn ghost sm" data-action="dg-fit">${icon('eye')}Fit</button></div></div>
             <div class="dg-flow" data-region="dg-flow"></div>
           </div>
@@ -621,7 +665,7 @@ interface UiState {
     renderSide() {
       const d = this.draft();
       const sel = this.sel;
-      const main = sel.kind === 'start' ? startSide(d) : sel.kind === 'step' ? stepSide(d, sel.i) : sel.kind === 'block' ? blockSide(d, sel.type, sel.i) : sel.kind === 'create' ? createSide(d, sel.at) : scenarioSide(d);
+      const main = sel.kind === 'start' ? startSide(d) : sel.kind === 'step' ? stepSide(d, sel.i) : sel.kind === 'block' ? blockSide(d, sel.type, sel.i) : sel.kind === 'approve' ? approveSide(d, sel.i) : sel.kind === 'create' ? createSide(d, sel.at) : scenarioSide(d);
       patch('dg-side', main + routeHtml(d));
     },
     /** Applies a change to the draft and draws it; the right column only when `side` (typing there keeps it). */
@@ -697,6 +741,30 @@ interface UiState {
         const { kind: _k, ...ctx } = sel;
         insertAt({ ...ctx, at: Math.min(ctx.at, v().draft().steps.length) }, name);
         toast(`${name} created and added. Write its instructions in the file that opened; save the scenario to keep the step.`, 'ok');
+      },
+      'dg-approve': (el) => select({ kind: 'approve', i: Number(el.dataset.i) }),
+      // From an arrow's menu: after the step before it; from the toolbar: after the step selected, else the last one.
+      'dg-approve-add': (el) => {
+        const view = v();
+        const d = view.draft();
+        const sel = view.sel;
+        const ctx: EdgeCtx | undefined = Number(el.dataset.i) >= 0 ? edgeCtx(Number(el.dataset.i)) : sel.kind === 'step' ? { at: sel.i + 1, ...(d.steps[sel.i]!.when && { when: d.steps[sel.i]!.when }) } : { at: d.steps.length };
+        if (!ctx) return;
+        // A step of a Parallel or the Loop: You approve goes after its block, on the block's last step.
+        let at = ctx.at;
+        const prev = d.steps[at - 1];
+        if (prev && !ctx.when && (prev.parallel !== undefined || prev.loop)) at = blockEnd(d.steps, d.steps.findIndex((x) => (prev.loop ? Boolean(x.loop) : x.parallel === prev.parallel)), false);
+        const why = approveWhy(d, { at, ...(ctx.when && { when: ctx.when }) });
+        if (why) return toast(why, 'warn');
+        view.adding = null;
+        view.change((dd) => void (dd.steps[at - 1]!.approve = {}));
+        select({ kind: 'approve', i: at - 1 });
+        $<HTMLInputElement>('[data-input="dg-approve-text"]')?.focus();
+      },
+      'dg-approve-remove': (el) => {
+        const i = Number(el.dataset.i);
+        v().change((d) => void delete d.steps[i]!.approve);
+        select({ kind: 'step', i });
       },
       'dg-block': (el) => {
         const type = el.dataset.kind;
@@ -806,6 +874,11 @@ interface UiState {
     inputs: {
       'dg-label': (el) => v().change((d) => void (d.label = el.value), { side: false }),
       'dg-desc': (el) => v().change((d) => void (d.description = el.value), { side: false }),
+      'dg-approve-text': (el) =>
+        v().change((d) => {
+          const st = d.steps[Number(el.dataset.i)];
+          if (st) st.approve = el.value.trim() ? { text: el.value.trim() } : {};
+        }, { side: false }),
       'dg-query': (el) => {
         v().query = el.value;
         v().renderFlow();
@@ -859,7 +932,7 @@ interface UiState {
 
   async function refreshPreview() {
     const d = v().draft();
-    const agents = d.steps.map((st) => ({ name: st.name, ...(st.parallel !== undefined && { parallel: st.parallel }), ...(st.when && { when: st.when }), ...(st.loop && { loop: st.loop }) }));
+    const agents = d.steps.map((st) => ({ name: st.name, ...(st.parallel !== undefined && { parallel: st.parallel }), ...(st.when && { when: st.when }), ...(st.loop && { loop: st.loop }), ...(st.approve && { approve: st.approve }) }));
     v().preview = await call('previewScenario', { agents }).catch(() => null);
   }
 

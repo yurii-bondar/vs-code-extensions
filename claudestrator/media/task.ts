@@ -36,6 +36,16 @@ interface Views {
   }
 
   const CP_UI: Record<string, CpUi> = {
+    'approve-step': {
+      title: 'Your approval',
+      lead: 'The scenario waits for you here. Read what the step did, then let the task go on, or have the step run again with what to change.',
+      options: {
+        approve: { label: 'Approve and go on', kind: 'primary', icon: 'check' },
+        retry: { label: 'Run it again', kind: 'secondary', icon: 'refresh', feedback: 'required' },
+        stop: { label: 'Stop task', kind: 'ghost', icon: 'stop' },
+      },
+      placeholder: 'What the step should do differently, e.g. "also cover the refund endpoint"',
+    },
     'approve-plan': {
       title: 'Review the plan',
       lead: 'Nothing has changed in your repos yet. Approve the plan to start development, or tell the planner what to change.',
@@ -682,6 +692,9 @@ interface Views {
       if (hooks.length) {
         body += `<div class="banner warn">${icon('alert')}<div class="grow"><b>The agents changed what acts outside the sandbox.</b> Git hooks run when you use git in ${hooks.length === 1 ? 'that repo' : 'those repos'}, <code>.lfsconfig</code> says where Git LFS uploads, every Claude Code session there takes <code>CLAUDE.md</code> as instructions, and Claude Code's and VS Code's settings (<code>.claude/</code>, <code>.mcp.json</code>, <code>.vscode/</code>) run hooks, MCP servers and tasks: read them first.<ul>${hooks.map((h) => `<li><code>${esc(h.repo)}/${esc(h.file)}</code></li>`).join('')}</ul></div></div>`;
       }
+    } else if (cp.id === 'approve-step') {
+      // What the step wrote (one report per repo), each without its data block.
+      body = `<div class="doc-frame"><div class="markdown">${(ctx.text || '').split('\n\n---\n\n').map((part) => md(stripJsonBlock(part))).join('<hr>')}</div></div>`;
     } else {
       body = ctx.text ? `<pre class="log ${cp.id === 'gate-failure' || cp.id === 'hook-failure' ? 'error' : ''}">${esc(ctx.text)}</pre>` : '';
       // An agent that failed because Claude Code is signed out needs a sign-in, not a retry.

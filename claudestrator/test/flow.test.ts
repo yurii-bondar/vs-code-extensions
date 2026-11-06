@@ -161,3 +161,37 @@ test('loop: a scenario\'s own loop runs its rounds, the one outputs make runs th
   assert.equal(own.review.maxRounds, 4);
   assert.equal(task(REVIEWED).state().review.maxRounds, 2);
 });
+
+test('you approve: the task waits after the step, goes on once you approve, and runs it again with your words', () => {
+  const t = task({ mode: 'custom', stages: [st('developer', 'code', { approve: { text: 'Look at the migration' } }), st('reviewer', 'verdict')], reviewLoop: null });
+  t.apply({ type: 'stage_started', agent: 'developer', repo: 'api' });
+  t.apply({ type: 'stage_completed', agent: 'developer', repo: 'api', artifact: 'd', gates: 'pass' });
+  assert.equal(t.state().checkpoint!.id, 'approve-step');
+  assert.deepEqual(t.state().checkpoint!.options, ['approve', 'retry', 'stop']);
+  t.apply({ type: 'checkpoint_answered', id: 'approve-step', option: 'retry', feedback: 'keep the old column' });
+  assert.equal(t.state().next!.agent, 'developer');
+  assert.equal(t.state().nextMode, 'retry');
+  assert.equal(t.state().feedback, 'keep the old column');
+  t.apply({ type: 'stage_started', agent: 'developer', repo: 'api' });
+  t.apply({ type: 'stage_completed', agent: 'developer', repo: 'api', artifact: 'd2', gates: 'pass' });
+  t.apply({ type: 'checkpoint_answered', id: 'approve-step', option: 'approve' });
+  assert.equal(t.state().next!.agent, 'reviewer');
+  assert.deepEqual(replay(t.events), t.state());
+});
+
+test('you approve: after a Parallel that ends the loop, once both approved; the group does not run again on its own', () => {
+  const pipeline = { ...REVIEWED, stages: REVIEWED.stages.map((s) => (s.agent === 'security' ? { ...s, approve: {} } : s)) };
+  const t = task(pipeline);
+  t.apply({ type: 'stage_started', agent: 'developer', repo: 'api' });
+  t.apply({ type: 'stage_completed', agent: 'developer', repo: 'api', artifact: 'd', gates: 'pass' });
+  t.apply({ type: 'stage_started', agent: 'reviewer' });
+  t.apply({ type: 'stage_started', agent: 'security' });
+  t.apply({ type: 'stage_completed', agent: 'reviewer', artifact: 'r', verdict: approved });
+  assert.equal(t.state().checkpoint, null);
+  t.apply({ type: 'stage_completed', agent: 'security', artifact: 's', verdict: approved });
+  assert.equal(t.state().checkpoint!.id, 'approve-step');
+  assert.deepEqual(t.state().checkpoint!.options, ['approve', 'stop'], 'a member alone does not run again');
+  t.apply({ type: 'checkpoint_answered', id: 'approve-step', option: 'approve' });
+  assert.equal(t.state().phase, 'finish');
+  assert.deepEqual(replay(t.events), t.state());
+});

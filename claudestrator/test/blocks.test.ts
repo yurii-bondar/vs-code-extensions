@@ -125,3 +125,31 @@ test('blocks: a Parallel left with one agent runs it alone, a branch on a step t
   assert.equal(p.stages.find((s) => s.agent === 'reviewer')!.group, undefined);
   assert.ok(p.warnings.some((w) => w.code === 'branch_source_off'));
 });
+
+test('blocks: approve after a step, after a block and in a branch\'s arm marks the step before it, and writes back', async () => {
+  const layers: ScenarioStepLayer[] = [
+    'developer',
+    { approve: 'Look at the migration' },
+    { parallel: ['reviewer', 'security-reviewer'] },
+    { approve: true },
+    { branch: { on: 'security-reviewer', if: { severity: 'minor' }, then: ['security-fixer', { approve: 'You check the fixes' }] } },
+  ];
+  const flat = flattenSteps(layers);
+  assert.deepEqual(flat.map((f) => [f.step, f.approve ?? null]), [
+    ['developer', { text: 'Look at the migration' }],
+    ['reviewer', null],
+    ['security-reviewer', {}],
+    ['security-fixer', { text: 'You check the fixes' }],
+  ]);
+  assert.deepEqual(nestSteps(flat), layers);
+
+  const home = tmp('cs-blocks-h-');
+  const ws = workspace(`${AGENTS}scenarios:\n  s:\n    label: S\n    agents:\n      - developer\n      - approve: Look at the migration\n      - reviewer\n`);
+  const r = await config.loadConfig({ workspace: ws, home });
+  assert.ok(r.ok, JSON.stringify(!r.ok && r.errors));
+  const p = buildPipeline(r.config, { scenario: 's' });
+  assert.deepEqual(p.stages[0]!.approve, { text: 'Look at the migration' });
+  assert.ok(fixedFlow(p));
+  await config.saveCustomScenario({ workspace: ws, home, id: 's', label: 'S', agents: r.config.custom.s!.agents });
+  assert.match(fs.readFileSync(config.projectConfigFile(ws), 'utf8'), /- developer\n\s+- approve: Look at the migration\n\s+- reviewer/);
+});

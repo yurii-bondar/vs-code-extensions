@@ -1192,6 +1192,10 @@ b.err, .lim-pct.err { color: var(--cs-status-err-text); }
 .dg-finish { width: 400px; cursor: default; }
 .dg-finish .muted { font-size: var(--cs-font-sm); }
 .dg-derived { border-style: dashed; background: transparent; cursor: default; }
+.dg-approve { border-color: color-mix(in srgb, var(--cs-border-focus) 55%, var(--cs-border-strong)); }
+.dg-approve .ic { color: var(--cs-border-focus); }
+.dg-approve-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dg-arm .dg-approve { width: 260px; }
 .dg-line { width: 1px; height: 40px; background: var(--cs-border-strong); }
 .dg-line.short { height: 16px; }
 .dg-edge { position: relative; width: 1px; height: 44px; background: var(--cs-border-strong); display: flex; align-items: center; justify-content: center; }

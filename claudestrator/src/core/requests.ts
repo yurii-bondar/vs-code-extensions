@@ -18,7 +18,7 @@ const nullable = (check: Check): Check => (v, p) => (v === null ? [] : check(v, 
 
 const id = T.str(1);
 /** The blocks a scenario's step is in: its Parallel, its Branch, its Loop. */
-const stepBlocks = { 'parallel?': T.int(1), 'when?': obj({ on: T.str(1), if: CONDITION, 'else?': T.oneOf([true]) }), 'loop?': obj({ 'rounds?': T.int(1, 20) }) };
+const stepBlocks = { 'parallel?': T.int(1), 'when?': obj({ on: T.str(1), if: CONDITION, 'else?': T.oneOf([true]) }), 'loop?': obj({ 'rounds?': T.int(1, 20) }), 'approve?': obj({ 'text?': T.str() }) };
 const named = obj({ name: id });
 const byId = obj({ id });
 const task = obj({ taskId: id });

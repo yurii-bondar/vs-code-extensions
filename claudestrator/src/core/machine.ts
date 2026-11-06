@@ -231,7 +231,7 @@ function stageCompleted(s: TaskState, e: Ev<'stage_completed'>): Transition {
       s.repos = e.plan!.repos.filter((r, i, all) => all.findIndex((x) => x.name === r.name) === i);
       // A question only you can answer stops the plan, also where it is not approved by hand (a task on auto).
       if (stage.approval || blockingQuestions(s.plan).length) openPlanApproval(s, step, e.at);
-      else advance(s, step);
+      else advance(s, step, e.at);
       return ok(s);
     case 'code':
     case 'tests':
@@ -242,15 +242,15 @@ function stageCompleted(s: TaskState, e: Ev<'stage_completed'>): Transition {
     case 'verdict':
       s.review.verdicts.push({ agent: step.agent, artifact: e.artifact, status: e.verdict!.status, findings: e.verdict!.findings, ...(e.emptyDiff && { emptyDiff: true }) });
       if (inGroup(s, step)) memberDone(s, step, e.at);
-      else if (s.pipeline.reviewLoop && s.pipeline.reviewLoop.end === step.stage) evaluateRound(s, e.at);
-      else advance(s, step);
+      else if (s.pipeline.reviewLoop && s.pipeline.reviewLoop.end === step.stage) evaluateRound(s, e.at, step);
+      else advance(s, step, e.at);
       return ok(s);
     case 'readiness':
     case 'audit':
       // One report per agent; a retried agent replaces its earlier one.
       s.reports = [...(s.reports || []).filter((r) => r.agent !== step.agent), { agent: step.agent, output: stage.output, artifact: e.artifact, value: e[stage.output] }];
       if (inGroup(s, step)) memberDone(s, step, e.at);
-      else advance(s, step);
+      else advance(s, step, e.at);
       return ok(s);
   }
   return fail('unknown_output', `unknown output ${stage.output as string}`);
@@ -274,9 +274,20 @@ function checkpointAnswered(s: TaskState, e: Ev<'checkpoint_answered'>): Transit
   }
 
   switch (cp.id) {
+    case 'approve-step': {
+      const step = cp.step!;
+      const loop = s.pipeline.reviewLoop;
+      if (e.option === 'retry') {
+        // Its result goes, so the run again is the one that counts.
+        s.review.verdicts = s.review.verdicts.filter((v) => v.agent !== step.agent);
+        setNext(s, step, 'retry', feedback);
+      } else if (loop && [step, ...groupSteps(s, step)].some((m) => m.stage === loop.end)) passReview(s, false);
+      else advance(s, step, e.at, true);
+      break;
+    }
     case 'approve-plan':
       if (e.option === 'change') setNext(s, cp.step!, 'replan', feedback);
-      else advance(s, cp.step!);
+      else advance(s, cp.step!, e.at);
       break;
     case 'gate-failure':
       if (e.option === 'retry') setNext(s, cp.step!, 'retry', feedback);
@@ -300,7 +311,7 @@ function checkpointAnswered(s: TaskState, e: Ev<'checkpoint_answered'>): Transit
       else {
         // Applied (the engine wrote them before it answered) or left: either way they are no longer waiting.
         delete s.proposed;
-        advance(s, cp.step!);
+        advance(s, cp.step!, e.at);
       }
       break;
     case 'hook-failure':
@@ -437,7 +448,7 @@ function mergeProposed(was: ProtectedChange[], now: ProtectedChange[]): Protecte
 /** After a code or tests step: its changes to the repos' settings go to you first, then the task moves on. */
 function afterWork(s: TaskState, step: Step, at: string): void {
   if (s.proposed && s.proposed.length) openCheckpoint(s, 'protected-changes', { at, step });
-  else advance(s, step);
+  else advance(s, step, at);
 }
 
 /** The plan's questions only you can answer: with any, it is not approved until a new plan has none. */
@@ -449,10 +460,27 @@ function openPlanApproval(s: TaskState, step: Step, at: string): void {
   if (blockingQuestions(s.plan).length) s.checkpoint!.options = s.checkpoint!.options.filter((o) => o !== 'approve' && o !== 'approve-post');
 }
 
-function advance(s: TaskState, from: Step): void {
+/** Moves on after `from`; where the scenario says You approve after it, the task waits for you first. */
+function advance(s: TaskState, from: Step, at: string, approved = false): void {
   const pass = passSteps(s);
   const i = pass.findIndex((p) => p.stage === from.stage && sameStep(p, from));
+  if (!approved && i >= 0 && waitsForYou(s, from, pass.slice(i + 1))) return openApproval(s, from, at);
   setNext(s, i >= 0 ? firstRunnable(s, pass, i + 1) : null, s.review.fixing ? 'fix' : 'initial');
+}
+
+/**
+ * Whether the task waits for you after `step`: its stage says You approve, and `rest` of the pass holds no more of it
+ * (a per-repo stage waits after its last repo). A plan has its own approval.
+ */
+function waitsForYou(s: TaskState, step: Step, rest: readonly Step[]): boolean {
+  const st = s.pipeline.stages[step.stage]!;
+  return Boolean(st.approve) && st.output !== 'plan' && !rest.some((p) => p.stage === step.stage);
+}
+
+/** You approve: go on, run the step again with your words (not one of a Parallel, which runs as one), or stop. */
+function openApproval(s: TaskState, step: Step, at: string): void {
+  openCheckpoint(s, 'approve-step', { at, step });
+  if (s.pipeline.stages[step.stage]!.group !== undefined) s.checkpoint!.options = s.checkpoint!.options.filter((o) => o !== 'retry');
 }
 
 /** The first step of `pass` from `from` on that runs: a step of a branch whose condition does not hold is skipped. */
@@ -513,8 +541,8 @@ function settleGroup(s: TaskState, at: string): void {
   delete s.parallel;
   const last = members[members.length - 1]!;
   const loop = s.pipeline.reviewLoop;
-  if (loop && members.some((m) => m.stage === loop.end)) evaluateRound(s, at);
-  else advance(s, last);
+  if (loop && members.some((m) => m.stage === loop.end)) evaluateRound(s, at, last);
+  else advance(s, last, at);
 }
 
 /** Review rounds in a row with an empty diff after which the loop stops: another fix round would change nothing either. */
@@ -530,13 +558,15 @@ function onlyHumanFindings(verdicts: readonly RecordedVerdict[]): string[] | nul
   return [...new Set(blocking.map((f) => (f.repo ? `${f.repo}/${f.file}` : f.file!)))];
 }
 
-function evaluateRound(s: TaskState, at: string): void {
+function evaluateRound(s: TaskState, at: string, step: Step): void {
   const blocking = s.review.verdicts.some((v) => v.status === 'changes_requested');
   const empty = s.review.verdicts.length > 0 && s.review.verdicts.every((v) => v.emptyDiff);
   s.review.emptyRounds = empty ? s.review.emptyRounds + 1 : 0;
   const yours = blocking ? onlyHumanFindings(s.review.verdicts) : null;
-  if (!blocking) passReview(s, false);
-  else if (yours) openCheckpoint(s, 'review-limit', { at, reason: `the blocking findings are about the repos' Claude Code or VS Code settings (${yours.join(', ')}), which no agent changes: make the change yourself, then retry for another review` });
+  if (!blocking) {
+    if (waitsForYou(s, step, [])) openApproval(s, step, at);
+    else passReview(s, false);
+  } else if (yours) openCheckpoint(s, 'review-limit', { at, reason: `the blocking findings are about the repos' Claude Code or VS Code settings (${yours.join(', ')}), which no agent changes: make the change yourself, then retry for another review` });
   else if (s.review.emptyRounds >= MAX_EMPTY_ROUNDS) openCheckpoint(s, 'review-limit', { at, reason: `the diff was empty in ${s.review.emptyRounds} review rounds in a row: the agents changed nothing, so another fix round would not help` });
   else if (s.review.round < s.review.maxRounds) startFixRound(s, null);
   else openCheckpoint(s, 'review-limit', { at, reason: `round ${s.review.round} of ${s.review.maxRounds} still has blocking findings` });

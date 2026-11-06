@@ -9,15 +9,19 @@ type AgentStepLayer = string | { agent: string; model?: string; effort?: Effort;
 interface ParallelLayer {
   parallel: AgentStepLayer[];
 }
+/** The task waits for you after the step or block before it: `true`, or what to look at. */
+interface ApproveLayer {
+  approve: string | true;
+}
 /** Steps that run only when the result of `on` meets `if` (`then`), or only when it does not (`else`). */
 interface BranchLayer {
-  branch: { on: string; if: Condition; then?: AgentStepLayer[]; else?: AgentStepLayer[] };
+  branch: { on: string; if: Condition; then?: (AgentStepLayer | ApproveLayer)[]; else?: (AgentStepLayer | ApproveLayer)[] };
 }
 /** Steps that run again until the reviewers at their end approve, up to `rounds` times. */
 interface LoopLayer {
   loop: { rounds?: number; steps: (AgentStepLayer | ParallelLayer)[] };
 }
-type ScenarioStepLayer = AgentStepLayer | ParallelLayer | BranchLayer | LoopLayer;
+type ScenarioStepLayer = AgentStepLayer | ParallelLayer | BranchLayer | LoopLayer | ApproveLayer;
 
 /** An agent step with the blocks it is in. Parallel blocks are numbered from 1 in the order they come. */
 interface FlatStep<S = AgentStepLayer> {
@@ -25,12 +29,16 @@ interface FlatStep<S = AgentStepLayer> {
   parallel?: number;
   when?: StepWhen;
   loop?: { rounds?: number };
+  approve?: { text?: string };
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const isParallel = (s: unknown): s is ParallelLayer => isObject(s) && Array.isArray(s.parallel);
 const isBranch = (s: unknown): s is BranchLayer => isObject(s) && isObject(s.branch);
 const isLoop = (s: unknown): s is LoopLayer => isObject(s) && isObject(s.loop);
+const isApprove = (s: unknown): s is ApproveLayer => isObject(s) && 'approve' in s;
+const approveOf = (a: ApproveLayer): { text?: string } => (typeof a.approve === 'string' ? { text: a.approve } : {});
+const approveLayer = (a: { text?: string }): ApproveLayer => ({ approve: a.text || true });
 const agentOf = (s: AgentStepLayer): string => (typeof s === 'string' ? s : s.agent);
 
 /** The agent steps of `layers` in order, each with the blocks it is in. */
@@ -42,14 +50,24 @@ function flattenSteps(layers: readonly ScenarioStepLayer[]): FlatStep[] {
     group += 1;
     for (const m of s.parallel) out.push({ step: m, ...extra, parallel: group });
   };
+  // An approve marks the step before it (the last of a block before it); one with nothing before it is dropped.
+  const approve = (a: ApproveLayer, from: number): void => {
+    if (out.length > from) out[out.length - 1]!.approve = approveOf(a);
+  };
   for (const s of layers) {
-    if (isLoop(s)) {
+    if (isApprove(s)) approve(s, 0);
+    else if (isLoop(s)) {
       const loop = s.loop.rounds !== undefined ? { rounds: s.loop.rounds } : {};
       for (const b of s.loop.steps) plain(b, { loop });
     } else if (isBranch(s)) {
       const { on, if: cond } = s.branch;
-      for (const t of s.branch.then ?? []) out.push({ step: t, when: { on, if: cond } });
-      for (const e of s.branch.else ?? []) out.push({ step: e, when: { on, if: cond, else: true } });
+      for (const [arm, when] of [[s.branch.then, { on, if: cond }], [s.branch.else, { on, if: cond, else: true as const }]] as const) {
+        const from = out.length;
+        for (const t of arm ?? []) {
+          if (isApprove(t)) approve(t, from);
+          else out.push({ step: t, when });
+        }
+      }
     } else plain(s);
   }
   return out;
@@ -82,13 +100,17 @@ function nestSteps(flat: readonly FlatStep[]): ScenarioStepLayer[] {
     } else if (f.when) {
       while (j < flat.length && flat[j]!.when && sameCondition(flat[j]!.when!, f.when)) j++;
       const arm = flat.slice(i, j);
-      const then = arm.filter((x) => !x.when!.else).map((x) => x.step);
-      const otherwise = arm.filter((x) => x.when!.else).map((x) => x.step);
+      const steps = (list: FlatStep[]) => list.flatMap((x) => (x.approve ? [x.step, approveLayer(x.approve)] : [x.step]));
+      const then = steps(arm.filter((x) => !x.when!.else));
+      const otherwise = steps(arm.filter((x) => x.when!.else));
       out.push({ branch: { on: f.when.on, if: f.when.if, ...(then.length && { then }), ...(otherwise.length && { else: otherwise }) } });
     } else {
       if (f.parallel !== undefined) while (j < flat.length && flat[j]!.parallel === f.parallel && !flat[j]!.loop && !flat[j]!.when) j++;
       out.push(...nestPlain(flat.slice(i, j)));
     }
+    // After a step or a block (not inside a branch's arm, which keeps its own): the task waits for you there.
+    const approved = flat.slice(i, j).filter((x) => !x.when).find((x) => x.approve);
+    if (approved) out.push(approveLayer(approved.approve!));
     i = j;
   }
   return out;
@@ -99,5 +121,5 @@ function mapAgentSteps(layers: readonly ScenarioStepLayer[], fn: (s: AgentStepLa
   return nestSteps(flattenSteps(layers).map((f) => ({ ...f, step: fn(f.step) })));
 }
 
-export type { AgentStepLayer, BranchLayer, FlatStep, LoopLayer, ParallelLayer, ScenarioStepLayer };
+export type { AgentStepLayer, ApproveLayer, BranchLayer, FlatStep, LoopLayer, ParallelLayer, ScenarioStepLayer };
 export { agentOf, flattenSteps, mapAgentSteps, nestSteps };

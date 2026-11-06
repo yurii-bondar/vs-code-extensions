@@ -2130,6 +2130,15 @@ class Engine extends EventEmitter {
     if (!cp) return { format: 'markdown', text: '' };
     const read = async (rel?: string): Promise<string> => (rel ? this.svc.readArtifact(s.taskId, rel) : '');
     switch (cp.id) {
+      case 'approve-step': {
+        // What the step wrote this round (each repo's, for a per-repo step), under what the scenario asks you to look at.
+        const step = cp.step!;
+        const ask = s.pipeline.stages[step.stage]!.approve?.text;
+        const mine = s.artifacts.filter((a) => a.agent === step.agent && a.round === s.review.round);
+        const texts = await Promise.all(mine.map((a) => read(a.path)));
+        const last = mine[mine.length - 1];
+        return { format: 'markdown', text: `${ask ? `**${ask}**\n\n` : ''}${texts.join('\n\n---\n\n')}`, ...(last && { file: last.path }) };
+      }
       case 'approve-plan': {
         const plans = s.artifacts.filter((a) => a.output === 'plan');
         const last = plans[plans.length - 1];

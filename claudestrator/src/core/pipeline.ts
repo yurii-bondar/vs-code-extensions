@@ -54,13 +54,13 @@ function buildPipeline(config: Config, opts: { scenario?: string | undefined; au
  * What a custom scenario with these steps runs: the report its agents write, or a delivery routed by their outputs.
  * Turned-off agents are left out. Also what its editor shows of steps not saved yet.
  */
-function scenarioPipeline(config: Pick<Config, 'agents' | 'limits'>, steps: readonly Pick<ScenarioStep, 'name' | 'parallel' | 'when' | 'loop'>[], opts: { auto?: boolean | undefined } = {}): Pipeline {
+function scenarioPipeline(config: Pick<Config, 'agents' | 'limits'>, steps: readonly Pick<ScenarioStep, 'name' | 'parallel' | 'when' | 'loop' | 'approve'>[], opts: { auto?: boolean | undefined } = {}): Pipeline {
   const known = steps.flatMap((st) => (config.agents[st.name] ? [{ st, a: config.agents[st.name]! }] : []));
   const report = known.find(({ a }) => REPORT_OUTPUTS.includes(a.output));
   const enabled = known.filter(({ a }) => a.enabled);
   // A Parallel left with one agent (the others turned off) is that agent alone.
   const size = (g: number | undefined): number => enabled.filter(({ st }) => st.parallel === g).length;
-  const plain: PlainStage[] = enabled.map(({ st, a }) => ({ ...stageOf(a), ...(st.parallel !== undefined && size(st.parallel) > 1 && { group: st.parallel }), ...(st.when && { when: st.when }) }));
+  const plain: PlainStage[] = enabled.map(({ st, a }) => ({ ...stageOf(a), ...(st.parallel !== undefined && size(st.parallel) > 1 && { group: st.parallel }), ...(st.when && { when: st.when }), ...(st.approve && { approve: st.approve }) }));
   if (report) return reportStages(plain, report.a.output);
   const looped = enabled.map(({ st }, i) => (st.loop ? i : -1)).filter((i) => i !== -1);
   const loop = looped.length ? { from: looped[0]!, to: looped[looped.length - 1]!, rounds: enabled[looped[0]!]!.st.loop!.rounds } : undefined;
@@ -85,8 +85,8 @@ function taskPipeline(agents: StageSource[], { scenario = 'deliver', auto, maxRo
   return routed(agents.map(stageOf), { auto, maxRounds });
 }
 
-/** Whether a pipeline has a scenario's Parallel, Branch or Loop, which a task's list of agents cannot change. */
-const fixedFlow = (p: Pick<StoredPipeline, 'stages' | 'reviewLoop'>): boolean => p.stages.some((st) => st.group !== undefined || st.when !== undefined) || Boolean(p.reviewLoop && p.reviewLoop.explicit);
+/** Whether a pipeline has a scenario's Parallel, Branch, Loop or You approve, which a task's list of agents cannot change. */
+const fixedFlow = (p: Pick<StoredPipeline, 'stages' | 'reviewLoop'>): boolean => p.stages.some((st) => st.group !== undefined || st.when !== undefined || st.approve !== undefined) || Boolean(p.reviewLoop && p.reviewLoop.explicit);
 
 /** Whether an agent with this output can join a task of this scenario. */
 const fitsScenario = (output: Output, scenario = 'deliver'): boolean => (scenario === 'deliver' ? !REPORT_OUTPUTS.includes(output) : output === scenario);

@@ -44,6 +44,7 @@ const SEVERITIES: Severity[] = ['blocker', 'major', 'minor'];
 
 /** Where a human must decide. Ids are shared with the CLI and the plugin. */
 const CHECKPOINT_OPTIONS: Record<CheckpointId, string[]> = {
+  'approve-step': ['approve', 'retry', 'stop'],
   'approve-plan': ['approve', 'approve-post', 'change', 'stop'],
   'gate-failure': ['retry', 'continue', 'stop'],
   'agent-failure': ['retry', 'stop'],
@@ -176,14 +177,18 @@ const CONDITION: Check = (v, p) => {
 };
 /** Read-only agents that run at once. */
 const PARALLEL_STEP = T.obj({ parallel: T.arr(AGENT_STEP, 2) });
+/** The task waits for you after the step or block before it: `true`, or what to look at. */
+const APPROVE_STEP = T.obj({ approve: T.any(T.str(1), T.oneOf([true])) });
+const ARM_STEP: Check = (v, p) => (kind(v) === 'object' && 'approve' in asRecord(v) ? APPROVE_STEP(v, p) : AGENT_STEP(v, p));
 const BLOCKS: Record<string, Check> = {
   parallel: PARALLEL_STEP,
-  branch: T.obj({ branch: T.obj({ on: agentName, if: CONDITION, 'then?': T.arr(AGENT_STEP), 'else?': T.arr(AGENT_STEP) }) }),
+  approve: APPROVE_STEP,
+  branch: T.obj({ branch: T.obj({ on: agentName, if: CONDITION, 'then?': T.arr(ARM_STEP), 'else?': T.arr(ARM_STEP) }) }),
   loop: T.obj({ loop: T.obj({ 'rounds?': T.int(1, 20), steps: T.arr(T.any(AGENT_STEP, PARALLEL_STEP), 1) }) }),
 };
 /**
  * A step of a custom scenario: an agent (see AGENT_STEP), or a block of them: `parallel: [a, b]`, `branch: { on, if,
- * then, else }`, `loop: { rounds, steps }`.
+ * then, else }`, `loop: { rounds, steps }`; or `approve: <what to look at>` after one.
  */
 const SCENARIO_STEP: Check = (v, p) => {
   const block = kind(v) === 'object' && Object.keys(asRecord(v)).find((k) => BLOCKS[k]);

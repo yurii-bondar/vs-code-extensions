@@ -45,6 +45,7 @@ interface TaskEntry {
 const VERDICT_LABEL: Record<string, string> = { ready: 'Ready', not_ready: 'Not ready', needs_check: 'Needs a human check' };
 
 const CHECKPOINT_HINT: Record<string, string> = {
+  'approve-step': 'The scenario waits for you here. Read what the step did, then go on, or have it run again with your words.',
   'approve-plan': 'Read the plan. Approve it, or say what to change and the planner revises it.',
   'gate-failure': 'The repo checks stayed red after the agent tried to fix them.',
   'agent-failure': 'An agent stopped before finishing its report.',

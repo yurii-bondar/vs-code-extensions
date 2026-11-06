@@ -11,7 +11,7 @@ export type ReportSeverity = 'critical' | 'high' | 'medium' | 'low';
 export type CriterionStatus = 'met' | 'partial' | 'not_met' | 'unverifiable';
 export type ReadinessVerdict = 'ready' | 'not_ready' | 'needs_check';
 export type GitMode = 'branch' | 'worktree';
-export type CheckpointId = 'approve-plan' | 'gate-failure' | 'agent-failure' | 'review-limit' | 'protected-changes' | 'hook-failure' | 'confirm-push';
+export type CheckpointId = 'approve-step' | 'approve-plan' | 'gate-failure' | 'agent-failure' | 'review-limit' | 'protected-changes' | 'hook-failure' | 'confirm-push';
 export type NextMode = 'initial' | 'retry' | 'replan' | 'fix';
 export type GroupType = 'epic' | 'story' | 'group';
 
@@ -29,6 +29,8 @@ export interface Stage {
   group?: number;
   /** The stage runs only when this holds (a branch of a scenario); otherwise it is skipped. */
   when?: StepWhen;
+  /** After it, the task waits for you (a scenario's You approve): `text` is what to look at. */
+  approve?: { text?: string };
 }
 
 /**
@@ -253,6 +255,8 @@ export interface ScenarioStep {
   when?: StepWhen;
   /** A step of the scenario's Loop (one, of steps next to each other): it runs again until the reviewers approve. */
   loop?: { rounds?: number };
+  /** After it (after its Parallel, for one in a Parallel), the task waits for you: You approve. */
+  approve?: { text?: string };
 }
 
 /** The model and effort of the agent that reads a Jira issue or Confluence page through an MCP server. */

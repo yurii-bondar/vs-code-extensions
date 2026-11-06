@@ -771,8 +771,8 @@ function resolveCustomScenarios(merged: Record<string, ScenarioEntry>, drafts: M
   const out: Record<string, CustomScenario> = {};
   for (const [id, entry] of Object.entries(customEntries(merged))) {
     const def = entry.value;
-    const steps: ScenarioStep[] = flattenSteps(def.agents).map(({ step: st, parallel, when, loop }) => {
-      const blocks = { ...(parallel !== undefined && { parallel }), ...(when && { when }), ...(loop && { loop }) };
+    const steps: ScenarioStep[] = flattenSteps(def.agents).map(({ step: st, parallel, when, loop, approve }) => {
+      const blocks = { ...(parallel !== undefined && { parallel }), ...(when && { when }), ...(loop && { loop }), ...(approve && { approve }) };
       if (typeof st === 'string') return { name: st, ...blocks };
       const step: ScenarioStep = { name: st.agent, ...(st.model && { model: st.model }), ...(st.effort && { effort: st.effort }), ...blocks };
       const ins = st.instructions;
@@ -1370,7 +1370,7 @@ async function setCustomScenario(workspace: string, id: string, def: { label: st
     def.agents.map((st): FlatStep => {
       const instructions = stepInstructionsLayer(workspace, st);
       const step: AgentStepLayer = st.model || st.effort || instructions ? { agent: st.name, ...(st.model && { model: st.model }), ...(st.effort && { effort: st.effort }), ...(instructions && { instructions }) } : st.name;
-      return { step, ...(st.parallel !== undefined && { parallel: st.parallel }), ...(st.when && { when: st.when }), ...(st.loop && { loop: st.loop }) };
+      return { step, ...(st.parallel !== undefined && { parallel: st.parallel }), ...(st.when && { when: st.when }), ...(st.loop && { loop: st.loop }), ...(st.approve && { approve: st.approve }) };
     })
   );
   return editProjectConfig(workspace, (doc) => {
