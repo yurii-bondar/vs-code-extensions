@@ -550,7 +550,8 @@ interface UiState {
     const items = [
       ...problems(d).map(bad),
       p.pipeline.stages.some((s) => s.approval) ? ok('The plan comes first and is approved by you.') : '',
-      ...d.steps.filter((st) => st.approve).map((st) => ok(`The task waits for you after ${st.name}${st.when ? ', when its branch runs' : ''}.`)),
+      // One after a turned-off agent: the route's warning says where it waits instead.
+      ...d.steps.filter((st) => st.approve && agentOf(st.name)?.enabled !== false).map((st) => ok(`The task waits for you after ${st.name}${st.when ? ', when its branch runs' : ''}.`)),
       p.pipeline.stages.some((s) => s.group !== undefined) ? ok('Agents in a Parallel start together; the next step waits for all of them.') : '',
       p.pipeline.reviewLoop ? ok(`Every change in the loop is reviewed, up to ${plural(p.pipeline.reviewLoop.maxRounds, 'round')}.`) : '',
       ...p.pipeline.warnings.map((w) => warn(w.message)),

@@ -126,6 +126,29 @@ test('blocks: a Parallel left with one agent runs it alone, a branch on a step t
   assert.ok(p.warnings.some((w) => w.code === 'branch_source_off'));
 });
 
+test('blocks: You approve after a turned-off agent waits after the step before it in its block, and says so', async () => {
+  const home = tmp('cs-blocks-h-');
+  const yaml = `${AGENTS.replace('security-reviewer: { extends: reviewer,', 'security-reviewer: { extends: reviewer, enabled: false,')}scenarios:
+  ship:
+    label: Ship
+    agents:
+      - developer
+      - parallel: [reviewer, security-reviewer]
+      - approve: Read both reviews
+      - security-fixer
+`;
+  const r = await config.loadConfig({ workspace: workspace(yaml), home });
+  assert.ok(r.ok, JSON.stringify(!r.ok && r.errors));
+  const p = scenarioPipeline(r.config, r.config.custom.ship!.agents);
+  assert.deepEqual(p.stages.find((s) => s.agent === 'reviewer')!.approve, { text: 'Read both reviews' }, 'the Parallel still waits for you');
+  assert.ok(p.warnings.some((w) => w.code === 'approve_moved' && w.agent === 'security-reviewer'));
+
+  // Nothing before it in its block runs: the approval goes, and the route says so.
+  const alone = scenarioPipeline(r.config, [{ name: 'developer' }, { name: 'security-reviewer', when: { on: 'developer', if: { gates: 'fail' } }, approve: {} }]);
+  assert.ok(alone.stages.every((s) => !s.approve));
+  assert.ok(alone.warnings.some((w) => w.code === 'approve_dropped'));
+});
+
 test('blocks: approve after a step, after a block and in a branch\'s arm marks the step before it, and writes back', async () => {
   const layers: ScenarioStepLayer[] = [
     'developer',

@@ -1,5 +1,6 @@
 // Turns the resolved config into stages and loop rules. Routing depends on outputs only, never on names.
 
+import { sameArm } from './conditions';
 import type { Agent, Config, Output, Pipeline, PipelineWarning, ReviewLoop, Runs, ScenarioStep, Scope, Stage, StoredPipeline } from './types';
 
 const isWork = (o: Output): boolean => o === 'code' || o === 'tests';
@@ -58,16 +59,46 @@ function scenarioPipeline(config: Pick<Config, 'agents' | 'limits'>, steps: read
   const known = steps.flatMap((st) => (config.agents[st.name] ? [{ st, a: config.agents[st.name]! }] : []));
   const report = known.find(({ a }) => REPORT_OUTPUTS.includes(a.output));
   const enabled = known.filter(({ a }) => a.enabled);
+  const { approveOf, warnings } = movedApprovals(known);
   // A Parallel left with one agent (the others turned off) is that agent alone.
   const size = (g: number | undefined): number => enabled.filter(({ st }) => st.parallel === g).length;
-  const plain: PlainStage[] = enabled.map(({ st, a }) => ({ ...stageOf(a), ...(st.parallel !== undefined && size(st.parallel) > 1 && { group: st.parallel }), ...(st.when && { when: st.when }), ...(st.approve && { approve: st.approve }) }));
-  if (report) return reportStages(plain, report.a.output);
+  const plain: PlainStage[] = enabled.map(({ st, a }) => {
+    const approve = approveOf.get(st);
+    return { ...stageOf(a), ...(st.parallel !== undefined && size(st.parallel) > 1 && { group: st.parallel }), ...(st.when && { when: st.when }), ...(approve && { approve }) };
+  });
+  if (report) return { ...reportStages(plain, report.a.output), warnings };
   const looped = enabled.map(({ st }, i) => (st.loop ? i : -1)).filter((i) => i !== -1);
   const loop = looped.length ? { from: looped[0]!, to: looped[looped.length - 1]!, rounds: enabled[looped[0]!]!.st.loop!.rounds } : undefined;
   const p = routed(plain, { auto: opts.auto, maxRounds: config.limits.reviewRounds, loop });
+  p.warnings.push(...warnings);
   // A branch on a step that does not run never holds: its other arm runs.
   for (const { st } of enabled) if (st.when && !enabled.some(({ st: x }) => x.name === st.when!.on)) p.warnings.push({ level: 'warning', code: 'branch_source_off', agent: st.name, message: `"${st.name}" waits on "${st.when.on}", which does not run (turned off): its branch's other arm runs` });
   return p;
+}
+
+type BlockStep = Pick<ScenarioStep, 'name' | 'parallel' | 'when' | 'loop' | 'approve'>;
+
+/**
+ * Where each You approve waits: after its own step, or, where that agent is turned off, after the step before it in
+ * the same block (the rest of its Parallel, its arm of a Branch, its Loop), so the task still stops there for you. One
+ * with no step there that runs is dropped, and said so.
+ */
+function movedApprovals(known: readonly { st: BlockStep; a: Agent }[]): { approveOf: Map<BlockStep, { text?: string }>; warnings: PipelineWarning[] } {
+  const approveOf = new Map<BlockStep, { text?: string }>();
+  const warnings: PipelineWarning[] = [];
+  known.forEach(({ st, a }, k) => {
+    if (!st.approve) return;
+    if (a.enabled) return void approveOf.set(st, st.approve);
+    const to = known
+      .slice(0, k)
+      .reverse()
+      .find(({ st: x, a: y }) => y.enabled && sameArm(x.when, st.when) && Boolean(x.loop) === Boolean(st.loop));
+    if (to && !to.st.approve) {
+      approveOf.set(to.st, st.approve);
+      warnings.push({ level: 'warning', code: 'approve_moved', agent: st.name, message: `"${st.name}" is turned off: the task waits for you after "${to.st.name}" instead` });
+    } else if (!to) warnings.push({ level: 'warning', code: 'approve_dropped', agent: st.name, message: `"${st.name}" is turned off and no step before it in its block runs: the task does not wait for you there` });
+  });
+  return { approveOf, warnings };
 }
 
 /** What a scenario runs as: `deliver`, `readiness` or `audit`. A custom scenario without agents counts as a delivery. */
