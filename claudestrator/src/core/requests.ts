@@ -142,5 +142,17 @@ function openable(file: string, roots: string[]): boolean {
   });
 }
 
+/**
+ * The task a command is run for: a task id, the sidebar tree's row, or a task right-clicked on the dashboard (VS Code
+ * passes the row's `data-vscode-context`). Undefined from the command palette: the command asks which task.
+ */
+function commandTaskId(arg: unknown): string | undefined {
+  if (typeof arg === 'string') return arg || undefined;
+  if (typeof arg !== 'object' || arg === null) return undefined;
+  const { card, taskId } = arg as { card?: unknown; taskId?: unknown };
+  if (typeof taskId === 'string' && taskId) return taskId;
+  return typeof card === 'object' && card !== null ? commandTaskId((card as { taskId?: unknown }).taskId) : undefined;
+}
+
 export type { PageRequest };
-export { parsePageRequest, openable, SESSION_ID };
+export { parsePageRequest, openable, commandTaskId, SESSION_ID };

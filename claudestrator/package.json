@@ -2,7 +2,7 @@
   "name": "claudestrator",
   "displayName": "Claudestrator",
   "description": "A Claude Code agent pipeline in VS Code: plan → your approval → code and tests per repo → review with fix rounds → commit → confirmed push → draft PRs. Also checks a ticket's readiness against its acceptance criteria and audits projects for bugs and bottlenecks.",
-  "version": "0.14.1",
+  "version": "0.17.0",
   "publisher": "bondevn",
   "license": "MIT",
   "author": "Yurii Bondar",
@@ -337,6 +337,38 @@
         {
           "command": "claudestrator.deleteTask",
           "when": "view == claudestrator.tasks && viewItem =~ /^task/ && !(viewItem =~ /stoppable/)",
+          "group": "3_danger@1"
+        }
+      ],
+      "webview/context": [
+        {
+          "command": "claudestrator.openTask",
+          "when": "webviewId == 'claudestrator.dashboard' && webviewSection == 'task'",
+          "group": "1_task@1"
+        },
+        {
+          "command": "claudestrator.answer",
+          "when": "webviewId == 'claudestrator.dashboard' && webviewSection == 'task' && taskStatus == 'waiting'",
+          "group": "1_task@2"
+        },
+        {
+          "command": "claudestrator.runTask",
+          "when": "webviewId == 'claudestrator.dashboard' && webviewSection == 'task' && taskResumable",
+          "group": "1_task@3"
+        },
+        {
+          "command": "claudestrator.stopTask",
+          "when": "webviewId == 'claudestrator.dashboard' && webviewSection == 'task' && taskStatus == 'running'",
+          "group": "1_task@4"
+        },
+        {
+          "command": "claudestrator.revealTaskFolder",
+          "when": "webviewId == 'claudestrator.dashboard' && webviewSection == 'task'",
+          "group": "2_misc@1"
+        },
+        {
+          "command": "claudestrator.deleteTask",
+          "when": "webviewId == 'claudestrator.dashboard' && webviewSection == 'task' && taskStatus != 'running'",
           "group": "3_danger@1"
         }
       ],

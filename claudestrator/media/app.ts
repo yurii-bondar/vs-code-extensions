@@ -202,6 +202,12 @@ interface Views {
   const money = (n: number) => (n >= 10 ? `$${n.toFixed(1)}` : `$${(n || 0).toFixed(2)}`);
   const size = (n: number) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`);
   const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+  /** Warnings in one chip, their count; each of them in full while the pointer is on it or it has focus. */
+  const warnTip = (warnings: readonly string[] | undefined) =>
+    warnings && warnings.length
+      ? `<button type="button" class="warn-tip" aria-label="${esc(`${plural(warnings.length, 'warning')}: ${warnings.join('; ')}`)}">${icon('alert')}<span>${plural(warnings.length, 'warning')}</span><span class="warn-tip-body" role="tooltip">${warnings.map((w) => `<span class="warn-tip-row">${icon('info')}<span>${esc(w)}</span></span>`).join('')}</span></button>`
+      : '';
   const stepName = (s: { agent?: string | undefined; label?: string | undefined; repo?: string | undefined; perRepo?: boolean | undefined }) => `${s.agent || s.label}${s.repo ? ` @ ${s.repo}` : s.perRepo ? ' · per repo' : ''}`;
 
   const OUTPUT_INFO: Record<string, { label: string; hint: string }> = {
@@ -498,12 +504,18 @@ interface Views {
     return s.tone === 'ok' ? 'check' : s.tone === 'error' ? 'x' : s.group === 'running' ? 'activity' : s.group === 'attention' ? 'bell' : s.group === 'stopped' ? 'pause' : 'dots';
   }
 
+  /**
+   * What VS Code's menu on a task of the rail gets (`webview/context` in package.json): the same items as the sidebar
+   * tree's, by the same status. JetBrains has no such menu.
+   */
+  const taskMenu = (t: Card) => esc(JSON.stringify({ webviewSection: 'task', taskId: t.taskId, taskStatus: t.status.key, taskResumable: t.status.resumable, preventDefaultContextMenuItems: true }));
+
   /** A task in the rail's tree: its status icon, its title, and what it is at in a word or a time. */
   function treeTask(t: Card) {
     const on = S.route.name === 'task' && S.route.taskId === t.taskId;
     const since = t.status.key === 'running' && t.live && t.live.since;
     const hint = since ? `<span data-since="${since}"></span>` : t.status.group === 'done' ? esc(ago(t.updatedAt)) : t.status.group === 'attention' ? esc((t.checkpoint && CHECKPOINT_WORD[t.checkpoint.id]) || t.status.label) : '';
-    return `<button class="tree-task tone-${t.status.tone} ${on ? 'active' : ''}" data-action="open-task" data-id="${esc(t.taskId)}" title="${esc(`${t.title} · ${t.taskId} · ${t.status.label}`)}"${on ? ' aria-current="page"' : ''}>${icon(statusIcon(t))}<span class="tt-title">${esc(t.title)}</span>${hint ? `<span class="tt-hint">${hint}</span>` : ''}</button>`;
+    return `<button class="tree-task tone-${t.status.tone} ${on ? 'active' : ''}" data-action="open-task" data-id="${esc(t.taskId)}" data-vscode-context="${taskMenu(t)}" title="${esc(`${t.title} · ${t.taskId} · ${t.status.label}`)}"${on ? ' aria-current="page"' : ''}>${icon(statusIcon(t))}<span class="tt-title">${esc(t.title)}</span>${hint ? `<span class="tt-hint">${hint}</span>` : ''}</button>`;
   }
 
   /**
@@ -1217,9 +1229,9 @@ interface Views {
             ${p.scenario === 'readiness' && p.source.kind === 'text' && /\b[A-Z][A-Z0-9_]+-\d+\b/.test(S.draft.text) ? `<span class="detect warn">${icon('info')}Checked against your words only: name exactly one Jira issue to read it from Jira</span>` : ''}
             ${p.problem ? `<span class="detect error">${icon('alert')}${esc(p.problem)}</span>` : ''}
             ${needsAtlassian ? `<span class="detect warn">${icon('alert')}Jira/Confluence is not connected. <a data-action="nav" data-name="mcp">Sign in to Atlassian MCP</a> or <a data-action="nav" data-name="settings">add a token</a></span>` : ''}
+            ${warnTip(p.warnings)}
           </div>
-          <div class="detect-outline">${outlineHtml(p.outline, colors)}</div>
-          ${p.warnings.length ? `<div class="detect-warn">${p.warnings.map((w) => `<div>${icon('info')}${esc(w)}</div>`).join('')}</div>` : ''}`
+          <div class="detect-outline">${outlineHtml(p.outline, colors)}</div>`
         );
       }, 250);
     },
@@ -2050,6 +2062,17 @@ interface Views {
     el.dataset.autoTitle = '';
   });
 
+  /** A warnings chip near the right edge opens its list moved left, as far as it takes to stay in view. */
+  const placeWarnTip = (e: Event) => {
+    const body = e.target instanceof Element ? e.target.closest('.warn-tip')?.querySelector<HTMLElement>('.warn-tip-body') : null;
+    if (!body) return;
+    body.style.left = '';
+    const over = body.getBoundingClientRect().right - (document.documentElement.clientWidth - 8);
+    if (over > 0) body.style.left = `${-over}px`;
+  };
+  document.addEventListener('mouseover', placeWarnTip);
+  document.addEventListener('focusin', placeWarnTip);
+
   document.addEventListener('click', (e) => {
     const target = e.target instanceof Element ? e.target : null;
     // A click outside an open menu closes it.
@@ -2181,7 +2204,7 @@ interface Views {
   // Live durations ("2m 13s") tick without re-rendering anything else.
   setInterval(() => tick(), 1000);
 
-  window.CS = { vscode, call, attempt, toast, icon, esc, md, $, $$, ago, clock, dur, money, fmtTokens, resetIn, meter, level, EFFORT_LABEL, effortTag, size, plural, stepName, OUTPUT_INFO, SCENARIO_INFO, scInfo, modelChoices, scenarioChip, groupChip, sevCounts, agentColor, S, views, pipeRowHtml, libraryBlock, libraryMove, pipeEditors, pipeDragging: () => Boolean(pipeDrag), go, patch, debounce, persist, statusBadge, miniSteps, sourceChip, outlineHtml, permissionCard, loadOverview, autosize, shake, refreshSoon, actions, changes, inputs,
+  window.CS = { vscode, call, attempt, toast, icon, esc, md, $, $$, ago, clock, dur, money, fmtTokens, resetIn, meter, level, EFFORT_LABEL, effortTag, size, plural, warnTip, stepName, OUTPUT_INFO, SCENARIO_INFO, scInfo, modelChoices, scenarioChip, groupChip, sevCounts, agentColor, S, views, pipeRowHtml, libraryBlock, libraryMove, pipeEditors, pipeDragging: () => Boolean(pipeDrag), go, patch, debounce, persist, statusBadge, miniSteps, sourceChip, outlineHtml, permissionCard, loadOverview, autosize, shake, refreshSoon, actions, changes, inputs,
     // Called by the last script to load (config.js) once every view is registered.
     boot: async () => {
       renderShell();

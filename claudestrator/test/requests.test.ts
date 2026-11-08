@@ -2,7 +2,7 @@
 import test from 'node:test';
 import * as assert from 'node:assert/strict';
 
-import { parsePageRequest, openable, SESSION_ID } from '../src/core/requests';
+import { parsePageRequest, openable, commandTaskId, SESSION_ID } from '../src/core/requests';
 
 test('requests: only a known request with parameters of its shape reaches a handler', async () => {
   const ok = parsePageRequest({ type: 'req', id: 1, method: 'answer', params: { taskId: 'PROJ-1', checkpointId: 'approve-plan', option: 'approve' } });
@@ -39,4 +39,11 @@ test('requests: a path from the page opens only inside the workspace, its repos 
   for (const file of ['/etc/passwd', '/home/u/.ssh/id_rsa', '/ws/../etc/hosts', '/wsx/a', '/home/u/libs/agents/other.yaml']) assert.equal(openable(file, roots), false, file);
   assert.ok(SESSION_ID.test('3f1c2a4e-9b7d-4c1e-8f2a-1234567890ab'));
   for (const id of ['x; rm -rf ~', '$(curl evil)', '', 'a b']) assert.equal(SESSION_ID.test(id), false, id);
+});
+
+test('requests: a task command takes its task from an id, the sidebar row or the dashboard row right-clicked', () => {
+  assert.equal(commandTaskId('T-1'), 'T-1');
+  assert.equal(commandTaskId({ card: { taskId: 'T-2' } }), 'T-2', 'the sidebar tree');
+  assert.equal(commandTaskId({ webview: 'claudestrator.dashboard', webviewSection: 'task', taskId: 'T-3', taskStatus: 'done' }), 'T-3', "the rail's data-vscode-context");
+  for (const arg of [undefined, '', {}, { taskId: 7 }, { card: null }, { card: { taskId: '' } }, null]) assert.equal(commandTaskId(arg), undefined, JSON.stringify(arg));
 });
