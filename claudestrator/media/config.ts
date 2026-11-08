@@ -67,7 +67,7 @@ interface Views {
 }
 
 (function () {
-  const { call, attempt, toast, icon, esc, $, $$, plural, OUTPUT_INFO, SCENARIO_INFO, agentColor, views, patch, outlineHtml, dur, ago, EFFORT_LABEL, modelChoices, libraryMove } = window.CS;
+  const { call, attempt, toast, icon, esc, $, $$, plural, warnTip, OUTPUT_INFO, SCENARIO_INFO, agentColor, views, patch, outlineHtml, dur, ago, EFFORT_LABEL, modelChoices, libraryMove } = window.CS;
   const REPORT_SCENARIOS = ['readiness', 'audit'];
   const EFFORT_HINT: Record<string, string> = { '': 'the model\'s default', low: 'fastest, cheapest', medium: 'balanced', high: 'thorough', xhigh: 'very thorough', max: 'deepest, slowest' };
   const ALL_EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -92,7 +92,7 @@ interface Views {
   function errorsHtml(errors: readonly string[]) {
     return `<div class="banner error">${icon('alert')}<div class="grow"><b>The config has errors:</b><ul>${errors.map((e) => `<li>${esc(e)}</li>`).join('')}</ul></div><div class="banner-actions"><button class="btn sm" data-action="open-config">Open config.yaml</button></div></div>`;
   }
-  const warningsHtml = (warnings: readonly string[] | undefined) => (warnings && warnings.length ? `<div class="banner warn">${icon('info')}<div class="grow">${warnings.map((w) => `<div>${esc(w)}</div>`).join('')}</div></div>` : '');
+  const warningsHtml = (warnings: readonly string[] | undefined) => (warnings && warnings.length ? `<div class="page-warn">${warnTip(warnings)}</div>` : '');
 
   /** Sends a change; `ok` is the toast on success, `null` for none. Resolves to whether it went through. */
   async function save<M extends keyof Rpc>(method: M, params: Rpc[M]['params'], ok: string | null = 'Saved') {
@@ -769,6 +769,7 @@ interface Views {
         'settings',
         `<h1>${icon('gear')}Settings</h1>
         ${!c.ok ? errorsHtml(c.errors) : ''}
+        ${warningsHtml(c.warnings)}
         <div class="settings-layout">
         <nav class="settings-nav" aria-label="Settings sections">${SETTINGS_SECTIONS.map(([id, label], i) => `<button class="nav-item ${i ? '' : 'active'}" data-action="settings-jump" data-sec="${id}"><span class="nav-label">${label}</span></button>`).join('')}</nav>
         <div class="settings-sections">

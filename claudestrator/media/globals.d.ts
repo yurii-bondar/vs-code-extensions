@@ -255,6 +255,8 @@ interface CSApi {
   effortTag(e: string | undefined | null): string;
   size(n: number): string;
   plural(n: number, one: string, many?: string): string;
+  /** Warnings as one chip with their count; all of them in full on hover or focus. */
+  warnTip(warnings: readonly string[] | undefined): string;
   stepName(s: { agent?: string | undefined; label?: string | undefined; repo?: string | undefined; perRepo?: boolean | undefined }): string;
   OUTPUT_INFO: Record<string, { label: string; hint: string }>;
   SCENARIO_INFO: Record<string, ScenarioInfo>;

@@ -450,8 +450,16 @@ button.chip:hover, .link-chip:hover { border-color: var(--cs-border-focus); text
 .detect.error, .detect .error { color: var(--cs-status-err-text); display: inline-flex; gap: 5px; align-items: center; }
 .detect.warn, .detect .warn { color: var(--cs-status-warn-text); display: inline-flex; gap: 5px; align-items: center; }
 .detect-outline { margin-top: 8px; }
-.detect-warn { margin-top: 6px; color: var(--cs-status-warn-text); font-size: var(--cs-font-sm); }
-.detect-warn div { display: flex; gap: 6px; align-items: center; }
+/* Warnings as a count; every one of them in full on hover or focus. */
+.warn-tip { position: relative; display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border: 1px solid color-mix(in srgb, var(--cs-status-warn-text) 45%, transparent); border-radius: var(--cs-radius-full); background: color-mix(in srgb, var(--cs-status-warn-text) 8%, transparent); color: var(--cs-status-warn-text); font: inherit; font-size: var(--cs-font-sm); cursor: help; }
+.warn-tip:focus-visible { outline: 1px solid var(--cs-border-focus); outline-offset: 2px; }
+.warn-tip-body { display: none; position: absolute; top: calc(100% + 6px); left: 0; z-index: var(--cs-z-menu); width: max-content; max-width: min(640px, 90vw); flex-direction: column; gap: 6px; padding: var(--cs-space-2) var(--cs-space-3); background: var(--cs-menu-bg); color: var(--cs-text-primary); border: 1px solid var(--cs-border-default); border-radius: var(--cs-radius-md); box-shadow: var(--cs-shadow); text-align: left; white-space: normal; cursor: auto; }
+/* The gap between the chip and the list keeps the hover, so the pointer can go on to the text. */
+.warn-tip-body::before { content: ''; position: absolute; left: 0; right: 0; top: -8px; height: 8px; }
+.warn-tip:hover .warn-tip-body, .warn-tip:focus-within .warn-tip-body { display: flex; }
+.warn-tip-row { display: flex; gap: 6px; align-items: flex-start; }
+.warn-tip-row .ic { color: var(--cs-status-warn-text); margin-top: 2px; }
+.page-warn { margin-bottom: 14px; }
 .composer-row { display: flex; align-items: center; gap: var(--cs-space-3); flex-wrap: wrap; padding-top: var(--cs-space-3); }
 .agents-chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .chips-label { margin-right: 2px; }
