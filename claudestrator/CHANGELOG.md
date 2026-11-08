@@ -1,3 +1,9 @@
+## [0.17.0](https://github.com/yurii-bondar/vs-code-extensions/compare/claudestrator-v0.16.0...claudestrator-v0.17.0) (2026-11-08)
+
+### Features
+
+* **claudestrator:** the config's warnings in one chip, in full on hover ([9274166](https://github.com/yurii-bondar/vs-code-extensions/commit/927416653b5be34f0a5e86c1baa0272a63699a77))
+
 ## [0.16.0](https://github.com/yurii-bondar/vs-code-extensions/compare/claudestrator-v0.15.0...claudestrator-v0.16.0) (2026-11-08)
 
 ### Features
