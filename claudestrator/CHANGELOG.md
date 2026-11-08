@@ -1,3 +1,9 @@
+## [0.16.0](https://github.com/yurii-bondar/vs-code-extensions/compare/claudestrator-v0.15.0...claudestrator-v0.16.0) (2026-11-08)
+
+### Features
+
+* **claudestrator:** a task's menu in the dashboard's rail ([8e7fed8](https://github.com/yurii-bondar/vs-code-extensions/commit/8e7fed80d5d6a4d970ba7cc311ece7fa8b37321d))
+
 ## [0.15.0](https://github.com/yurii-bondar/vs-code-extensions/compare/claudestrator-v0.14.1...claudestrator-v0.15.0) (2026-11-06)
 
 ### Features
