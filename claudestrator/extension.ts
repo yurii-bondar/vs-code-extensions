@@ -4,6 +4,7 @@ import { Orchestrator, settings } from './src/orchestrator';
 import { SectionColors, TaskTree, escapeMd } from './src/tree';
 import { DashboardPanel, deleteTask, openConfig } from './src/panel';
 import * as view from './src/core/view';
+import { commandTaskId } from './src/core/requests';
 import { CHECKPOINT_TITLE } from './src/core/describe';
 import type { Route } from './src/panel';
 import type { StoredLimits } from './src/orchestrator';
@@ -34,10 +35,6 @@ async function pickTask(placeHolder: string, filter: (card: view.Card) => boolea
   return picked && picked.taskId;
 }
 
-/** What a command gets: a task id, or the tree node it was run on. */
-type TaskArg = string | { card?: { taskId: string } } | undefined;
-
-const idOf = (arg: TaskArg): string | undefined => (typeof arg === 'string' ? arg : arg && arg.card ? arg.card.taskId : undefined);
 
 function updateStatus(item: vscode.StatusBarItem, tree: TaskTree): void {
   const c = tree.counts();
@@ -158,7 +155,7 @@ function activate(context: vscode.ExtensionContext) {
     }
   }, null, context.subscriptions);
 
-  const reg = (id: string, fn: (arg: TaskArg) => unknown): vscode.Disposable => vscode.commands.registerCommand(id, fn);
+  const reg = (id: string, fn: (arg: unknown) => unknown): vscode.Disposable => vscode.commands.registerCommand(id, fn);
   context.subscriptions.push(
     orch,
     treeView,
@@ -176,15 +173,15 @@ function activate(context: vscode.ExtensionContext) {
       open(context, { name: 'home', compose: text ? `${text}${where}` : '' });
     }),
     reg('claudestrator.openTask', async (arg) => {
-      const taskId = idOf(arg) || (await pickTask('Open which task?'));
+      const taskId = commandTaskId(arg) || (await pickTask('Open which task?'));
       if (taskId) open(context, { name: 'task', taskId });
     }),
     reg('claudestrator.answer', async (arg) => {
-      const taskId = idOf(arg) || (await pickTask('Which task?', (c) => c.status.key === 'waiting'));
+      const taskId = commandTaskId(arg) || (await pickTask('Which task?', (c) => c.status.key === 'waiting'));
       if (taskId) open(context, { name: 'task', taskId, focus: 'checkpoint' });
     }),
     reg('claudestrator.runTask', async (arg) => {
-      const taskId = idOf(arg) || (await pickTask('Resume which task?', (c) => c.status.resumable));
+      const taskId = commandTaskId(arg) || (await pickTask('Resume which task?', (c) => c.status.resumable));
       if (!taskId) return;
       await orch.ensureReady();
       try {
@@ -195,17 +192,17 @@ function activate(context: vscode.ExtensionContext) {
       }
     }),
     reg('claudestrator.stopTask', async (arg) => {
-      const taskId = idOf(arg) || (await pickTask('Stop which task?', (c) => c.status.key === 'running'));
+      const taskId = commandTaskId(arg) || (await pickTask('Stop which task?', (c) => c.status.key === 'running'));
       const engine = taskId && orch.engineOf(taskId);
       if (engine) await engine.stop(taskId);
     }),
     reg('claudestrator.revealTaskFolder', (arg) => {
-      const taskId = idOf(arg);
+      const taskId = commandTaskId(arg);
       if (taskId) vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(path.join(orch.engine!.svc.dir(taskId), 'events.ndjson')));
     }),
     // From the sidebar, without opening the dashboard; one that shows the task leaves it.
     reg('claudestrator.deleteTask', async (arg) => {
-      const taskId = idOf(arg) || (await pickTask('Delete which task?', (c) => c.status.key !== 'running'));
+      const taskId = commandTaskId(arg) || (await pickTask('Delete which task?', (c) => c.status.key !== 'running'));
       const engine = orch.engine;
       if (!taskId || !engine) return;
       try {

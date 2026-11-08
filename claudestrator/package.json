@@ -340,6 +340,38 @@
           "group": "3_danger@1"
         }
       ],
+      "webview/context": [
+        {
+          "command": "claudestrator.openTask",
+          "when": "webviewId == 'claudestrator.dashboard' && webviewSection == 'task'",
+          "group": "1_task@1"
+        },
+        {
+          "command": "claudestrator.answer",
+          "when": "webviewId == 'claudestrator.dashboard' && webviewSection == 'task' && taskStatus == 'waiting'",
+          "group": "1_task@2"
+        },
+        {
+          "command": "claudestrator.runTask",
+          "when": "webviewId == 'claudestrator.dashboard' && webviewSection == 'task' && taskResumable",
+          "group": "1_task@3"
+        },
+        {
+          "command": "claudestrator.stopTask",
+          "when": "webviewId == 'claudestrator.dashboard' && webviewSection == 'task' && taskStatus == 'running'",
+          "group": "1_task@4"
+        },
+        {
+          "command": "claudestrator.revealTaskFolder",
+          "when": "webviewId == 'claudestrator.dashboard' && webviewSection == 'task'",
+          "group": "2_misc@1"
+        },
+        {
+          "command": "claudestrator.deleteTask",
+          "when": "webviewId == 'claudestrator.dashboard' && webviewSection == 'task' && taskStatus != 'running'",
+          "group": "3_danger@1"
+        }
+      ],
       "editor/context": [
         {
           "command": "claudestrator.newTaskFromSelection",

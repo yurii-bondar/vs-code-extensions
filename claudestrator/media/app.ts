@@ -498,12 +498,18 @@ interface Views {
     return s.tone === 'ok' ? 'check' : s.tone === 'error' ? 'x' : s.group === 'running' ? 'activity' : s.group === 'attention' ? 'bell' : s.group === 'stopped' ? 'pause' : 'dots';
   }
 
+  /**
+   * What VS Code's menu on a task of the rail gets (`webview/context` in package.json): the same items as the sidebar
+   * tree's, by the same status. JetBrains has no such menu.
+   */
+  const taskMenu = (t: Card) => esc(JSON.stringify({ webviewSection: 'task', taskId: t.taskId, taskStatus: t.status.key, taskResumable: t.status.resumable, preventDefaultContextMenuItems: true }));
+
   /** A task in the rail's tree: its status icon, its title, and what it is at in a word or a time. */
   function treeTask(t: Card) {
     const on = S.route.name === 'task' && S.route.taskId === t.taskId;
     const since = t.status.key === 'running' && t.live && t.live.since;
     const hint = since ? `<span data-since="${since}"></span>` : t.status.group === 'done' ? esc(ago(t.updatedAt)) : t.status.group === 'attention' ? esc((t.checkpoint && CHECKPOINT_WORD[t.checkpoint.id]) || t.status.label) : '';
-    return `<button class="tree-task tone-${t.status.tone} ${on ? 'active' : ''}" data-action="open-task" data-id="${esc(t.taskId)}" title="${esc(`${t.title} · ${t.taskId} · ${t.status.label}`)}"${on ? ' aria-current="page"' : ''}>${icon(statusIcon(t))}<span class="tt-title">${esc(t.title)}</span>${hint ? `<span class="tt-hint">${hint}</span>` : ''}</button>`;
+    return `<button class="tree-task tone-${t.status.tone} ${on ? 'active' : ''}" data-action="open-task" data-id="${esc(t.taskId)}" data-vscode-context="${taskMenu(t)}" title="${esc(`${t.title} · ${t.taskId} · ${t.status.label}`)}"${on ? ' aria-current="page"' : ''}>${icon(statusIcon(t))}<span class="tt-title">${esc(t.title)}</span>${hint ? `<span class="tt-hint">${hint}</span>` : ''}</button>`;
   }
 
   /**
