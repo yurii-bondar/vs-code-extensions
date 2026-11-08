@@ -1,3 +1,10 @@
+## [0.10.0](https://github.com/yurii-bondar/vs-code-extensions/compare/jetbrains-claudestrator-v0.9.0...jetbrains-claudestrator-v0.10.0) (2026-11-08)
+
+### Features
+
+* **claudestrator:** a task's menu in the dashboard's rail ([8e7fed8](https://github.com/yurii-bondar/vs-code-extensions/commit/8e7fed80d5d6a4d970ba7cc311ece7fa8b37321d))
+* **claudestrator:** the config's warnings in one chip, in full on hover ([9274166](https://github.com/yurii-bondar/vs-code-extensions/commit/927416653b5be34f0a5e86c1baa0272a63699a77))
+
 ## [0.9.0](https://github.com/yurii-bondar/vs-code-extensions/compare/jetbrains-claudestrator-v0.8.1...jetbrains-claudestrator-v0.9.0) (2026-11-06)
 
 ### Features
