@@ -6,8 +6,8 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    // design-sync: Node scripts, and two that run elsewhere: walker.js in the page, builder.js in Penpot's plugin.
-    files: ['scripts/**/*.{js,mjs}'],
+    // design-sync and the browser tests: Node scripts, and two that run elsewhere: walker.js in the page, builder.js in Penpot's plugin.
+    files: ['scripts/**/*.{js,mjs}', 'test/**/*.mjs'],
     languageOptions: {
       globals: {
         process: 'readonly', console: 'readonly', fetch: 'readonly', WebSocket: 'readonly', Buffer: 'readonly', setTimeout: 'readonly', URL: 'readonly',

@@ -234,7 +234,8 @@ interface Chip {
   agents?: { agent: string; output: Output }[];
 }
 
-function outline(pipeline: Pick<StoredPipeline, 'stages' | 'reviewLoop' | 'scenario'>): Chip[] {
+/** `pr`: the task reviews a pull request, and ends with the review posted to it once you say so. */
+function outline(pipeline: Pick<StoredPipeline, 'stages' | 'reviewLoop' | 'scenario'>, { pr = false }: { pr?: boolean } = {}): Chip[] {
   const out: Chip[] = [];
   const { stages, reviewLoop } = pipeline;
   let i = 0;
@@ -254,8 +255,9 @@ function outline(pipeline: Pick<StoredPipeline, 'stages' | 'reviewLoop' | 'scena
     }
     if (reviewLoop && i - 1 === reviewLoop.end) out.push({ kind: 'loop-end', text: 'fix rounds' });
   }
-  if (stages.some(onRepos)) out.push({ kind: 'finish', text: 'commit' }, { kind: 'human', text: 'you confirm push' }, { kind: 'finish', text: 'draft PRs' });
-  else if (pipeline.scenario && stages.length) out.push({ kind: 'finish', text: pipeline.scenario === 'audit' ? 'audit report' : 'readiness report' });
+  if (pr && stages.length) out.push({ kind: 'human', text: 'you decide' }, { kind: 'finish', text: 'review posted to the PR' });
+  else if (stages.some(onRepos)) out.push({ kind: 'finish', text: 'commit' }, { kind: 'human', text: 'you confirm push' }, { kind: 'finish', text: 'draft PRs' });
+  else if ((pipeline.scenario === 'audit' || pipeline.scenario === 'readiness') && stages.length) out.push({ kind: 'finish', text: `${pipeline.scenario} report` });
   return out;
 }
 

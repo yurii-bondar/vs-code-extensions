@@ -84,6 +84,11 @@ function transition(state: TaskState | null, event: OrchEvent): Transition {
       s.prs = { ...s.prs, ...event.prs };
       finish(s, 'published');
       return ok(s);
+    case 'review_posted':
+      if (s.phase !== 'finish' || s.finishStep !== 'post') return fail('post_not_confirmed', 'posting the review was not confirmed');
+      s.reviewPosted = { url: event.url, inline: event.inline };
+      finish(s, 'posted');
+      return ok(s);
     default: {
       // A new event type must be handled above; the compiler says so here.
       const unhandled: never = event;
@@ -325,6 +330,13 @@ function checkpointAnswered(s: TaskState, e: Ev<'checkpoint_answered'>): Transit
     case 'confirm-push':
       if (e.option === 'local') finish(s, 'local');
       else s.finishStep = 'publish';
+      break;
+    case 'post-review':
+      if (e.option === 'skip') finish(s, 'completed');
+      else {
+        s.finishStep = 'post';
+        if (e.omit && e.omit.length) s.reviewOmit = e.omit;
+      }
       break;
   }
   return ok(s);
@@ -615,6 +627,11 @@ function enterFinish(s: TaskState): void {
   if (worked) {
     s.phase = 'finish';
     s.finishStep = 'commit';
+  } else if (s.source.kind === 'pr' && s.review.verdicts.length) {
+    // A pull request's review goes to it only once you say so: what it would post is in front of you.
+    s.phase = 'finish';
+    s.finishStep = 'confirm';
+    openCheckpoint(s, 'post-review', { at: s.updatedAt });
   } else finish(s, 'completed');
 }
 
@@ -694,6 +711,7 @@ type NextAction =
   | { kind: 'intake' }
   | { kind: 'running'; step: Step }
   | { kind: 'publish'; repos: string[]; openFindings: Finding[] }
+  | { kind: 'post-review' }
   | { kind: 'commit'; repos: string[] }
   | RunAction;
 
@@ -717,6 +735,7 @@ function nextAction(s: TaskState): NextAction {
   if (s.running.length) return { kind: 'running', step: s.running[0]! };
   const repos = s.repos.map((r) => r.name);
   if (s.phase === 'finish') {
+    if (s.finishStep === 'post') return { kind: 'post-review' };
     return s.finishStep === 'publish' ? { kind: 'publish', repos, openFindings: s.review.openFindings } : { kind: 'commit', repos };
   }
   const step = s.next!;
@@ -769,10 +788,13 @@ function inputsFor(s: TaskState, step: Step, output: Output): string[] {
 
 const unique = <T>(xs: T[]): T[] => [...new Set(xs)];
 
-/** `<type>/<KEY>-<slug>` for a Jira task, `<type>/<slug>` otherwise. Null until a plan exists. */
+/**
+ * `<type>/<KEY>-<slug>` for a task of an issue (Jira, Linear: whose integrations link a branch by its key; GitHub,
+ * GitLab: `api-12`), `<type>/<slug>` otherwise. Null until a plan exists.
+ */
 function branchName(s: TaskState): string | null {
   if (!s.plan) return null;
-  const key = s.source.kind === 'jira' ? `${s.taskId}-` : '';
+  const key = s.source.kind !== 'text' && s.source.kind !== 'confluence' ? `${s.taskId}-` : '';
   return `${s.plan.type}/${key}${s.plan.slug}`;
 }
 

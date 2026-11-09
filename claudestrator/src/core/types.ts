@@ -11,7 +11,7 @@ export type ReportSeverity = 'critical' | 'high' | 'medium' | 'low';
 export type CriterionStatus = 'met' | 'partial' | 'not_met' | 'unverifiable';
 export type ReadinessVerdict = 'ready' | 'not_ready' | 'needs_check';
 export type GitMode = 'branch' | 'worktree';
-export type CheckpointId = 'approve-step' | 'approve-plan' | 'gate-failure' | 'agent-failure' | 'review-limit' | 'protected-changes' | 'hook-failure' | 'confirm-push';
+export type CheckpointId = 'approve-step' | 'approve-plan' | 'gate-failure' | 'agent-failure' | 'review-limit' | 'protected-changes' | 'hook-failure' | 'confirm-push' | 'post-review';
 export type NextMode = 'initial' | 'retry' | 'replan' | 'fix';
 export type GroupType = 'epic' | 'story' | 'group';
 
@@ -219,6 +219,8 @@ export interface RepoConfig {
   path: string;
   baseBranch: string;
   gates: Gate[];
+  /** Where its PRs go when origin's host does not say (a self-managed GitLab on `git.acme.com`). */
+  forge?: ForgeOverride;
 }
 
 export interface Agent {
@@ -382,9 +384,25 @@ export interface Diagnostic {
 
 // ---------- tickets ----------
 
+/** Where a repo's pull or merge requests go: GitHub, GitLab (also where a task's issue may be), Bitbucket Cloud. */
+export type ForgeKind = 'github' | 'gitlab' | 'bitbucket';
+/** The forges `repos.<name>.forge` can name, for a host whose name does not say (Bitbucket Cloud is bitbucket.org). */
+export type ForgeOverride = 'github' | 'gitlab';
+
 export type Source = (
   | { kind: 'jira'; key: string; site?: string }
   | { kind: 'confluence'; pageId: string; url: string }
+  /** A GitHub issue: `repo` is `owner/name`, `host` github.com or a GitHub Enterprise host. */
+  | { kind: 'github'; host: string; repo: string; number: number }
+  /** A GitLab issue: `project` is its full path (`group/sub/name`), `host` gitlab.com or a self-managed host. */
+  | { kind: 'gitlab'; host: string; project: string; number: number }
+  /** A Linear issue, read through the account's Linear MCP server. */
+  | { kind: 'linear'; key: string; url: string }
+  /**
+   * A pull request (GitHub, Bitbucket) or merge request (GitLab) to review: `project` is the repo's path on the forge
+   * (`owner/name`, `group/sub/name`, `workspace/repo`).
+   */
+  | { kind: 'pr'; forge: ForgeKind; host: string; project: string; number: number }
   | { kind: 'text'; text: string }
 ) & {
   /** What the user wrote next to the issue key ("check it is ready"). */
@@ -396,6 +414,21 @@ export interface SpecLink {
   url: string;
 }
 
+/** A pull request under review, as its forge described it when the task read it. */
+export interface PullRequestInfo {
+  url: string;
+  /** The workspace's repo whose origin it is on. */
+  repo: string;
+  /** Where it merges into, and the branch it comes from. */
+  base: string;
+  head: string;
+  /** The commit reviewed: its comments are made on it. */
+  headSha: string;
+  /** GitLab's diff refs, which an MR's inline comment names. */
+  baseSha?: string;
+  startSha?: string;
+}
+
 export interface Spec {
   id: string;
   source: Source;
@@ -405,6 +438,8 @@ export interface Spec {
   links: SpecLink[];
   request?: string;
   context?: string;
+  /** A pull request under review. */
+  pr?: PullRequestInfo;
 }
 
 // ---------- task state ----------
@@ -522,12 +557,17 @@ export interface TaskState {
   rerun?: { stage: number; feedback: string | null };
   checkpoint: Checkpoint | null;
   review: ReviewState;
-  finishStep: 'commit' | 'confirm' | 'publish' | null;
+  /** `post`: a pull request's review goes to it, as you said. */
+  finishStep: 'commit' | 'confirm' | 'publish' | 'post' | null;
   gateFailures: Step[];
   artifacts: Artifact[];
   reports: Report[];
   answers: Answer[];
   prs: Record<string, string>;
+  /** A pull request's review, once posted to it. */
+  reviewPosted?: { url: string; inline: number };
+  /** The findings of a pull request's review you left out of what is posted. */
+  reviewOmit?: string[];
   createdAt: string;
   updatedAt: string;
   spec?: Spec;
@@ -612,10 +652,13 @@ export type OrchEvent = EventBase &
         /** What the step changed of the repos' settings before it failed, kept for you as when it completes. */
         protectedChanges?: ProtectedChange[];
       }
-    | { type: 'checkpoint_answered'; id: string; option: string; feedback?: string }
+    /** `omit`: posting a pull request's review, the findings you left out (their ids, `<verdict>.<finding>`). */
+    | { type: 'checkpoint_answered'; id: string; option: string; feedback?: string; omit?: string[] }
     | { type: 'committed'; repos: string[] }
     | { type: 'commit_failed'; repo: string; output: string }
     | { type: 'published'; prs: Record<string, string> }
+    /** A pull request's review, posted to it: where, and how many comments on its lines. */
+    | { type: 'review_posted'; url: string; inline: number }
     | { type: 'stopped'; reason?: string }
     | { type: 'resumed' }
     | { type: 'pipeline_changed'; pipeline: StoredPipeline }

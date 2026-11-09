@@ -8,7 +8,7 @@ import * as path from 'path';
 
 import { AtlassianClient, AtlassianError, IntakeError, classifyInput, otherSite, runIntake } from '../src/core/intake';
 import { Engine, type EngineOptions } from '../src/core/engine';
-import type { TaskState } from '../src/core/types';
+import type { Source, TaskState } from '../src/core/types';
 
 const AUTH = { site: 'acme.atlassian.net', email: 'dev@example.com', token: 't' };
 
@@ -68,7 +68,7 @@ test('atlassian: a comment is posted again only when the server says it did not 
 test("atlassian: a link to another site is not read or commented on with this site's token", async () => {
   const none = scripted([]);
   const client = new AtlassianClient(AUTH, { fetch: none.fetch, sleep: async () => {} });
-  const elsewhere = classifyInput('https://clientb.atlassian.net/browse/PROJ-12');
+  const elsewhere = classifyInput('https://clientb.atlassian.net/browse/PROJ-12') as Source;
   assert.equal(otherSite(elsewhere, client.site), 'clientb.atlassian.net');
   assert.equal(otherSite(classifyInput('https://ACME.atlassian.net/browse/PROJ-12'), client.site), null, 'the same site, any case');
   assert.equal(otherSite(classifyInput('PROJ-12'), client.site), null, 'a bare key is on the token\'s site');

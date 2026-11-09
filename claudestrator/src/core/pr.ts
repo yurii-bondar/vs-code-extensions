@@ -49,7 +49,8 @@ function planTitle(state: TaskState, forbidAttribution: boolean): string {
   return (forbidAttribution ? withoutAttribution(title) : title).replace(/\s+/g, ' ').trim() || slug;
 }
 const commitSubject = (state: TaskState, forbidAttribution = false): string => `${state.plan!.type}: ${planTitle(state, forbidAttribution)}`;
-const prTitle = (state: TaskState, forbidAttribution = false): string => `${state.plan!.type}: ${planTitle(state, forbidAttribution)}${state.source.kind === 'jira' ? ` (${state.taskId})` : ''}`;
+/** A Jira or Linear task's PR title ends with its key, which links the PR to the issue there (`… (CP-12)`). */
+const prTitle = (state: TaskState, forbidAttribution = false): string => `${state.plan!.type}: ${planTitle(state, forbidAttribution)}${state.source.kind === 'jira' || state.source.kind === 'linear' ? ` (${state.taskId})` : ''}`;
 
 interface PrBodyArgs {
   state: TaskState;
@@ -60,6 +61,8 @@ interface PrBodyArgs {
   prs?: Record<string, string>;
   /** `policy.forbidAiAttribution`: what the agents wrote (plan, findings) goes in without lines crediting an AI. */
   forbidAttribution?: boolean;
+  /** `Closes #12` (or `Refs …`): ties the PR to the task's issue on the same forge. */
+  issueLine?: string;
 }
 
 /** GitHub refuses a PR body over 65,536 characters; a plan or a list of findings can be longer. */
@@ -67,7 +70,7 @@ const MAX_BODY = 60000;
 const MAX_SUMMARY = 20000;
 const MAX_FINDINGS = 50;
 
-async function prBody({ state, repo, taskDir, language, prs = {}, forbidAttribution = false }: PrBodyArgs): Promise<string> {
+async function prBody({ state, repo, taskDir, language, prs = {}, forbidAttribution = false, issueLine }: PrBodyArgs): Promise<string> {
   const t = /ukrain|україн/i.test(language) ? UK : EN;
   const link = state.spec && state.spec.links[0];
   const order = state.repos.map((r, i) => `${i + 1}. ${r.name === repo ? `**${r.name}** ←` : r.name}`).join('\n');
@@ -82,7 +85,7 @@ async function prBody({ state, repo, taskDir, language, prs = {}, forbidAttribut
     `## ${t.what}`,
     summary.length > MAX_SUMMARY ? `${summary.slice(0, MAX_SUMMARY)}\n\n…` : summary,
     `## ${t.why}`,
-    link ? `[${link.title}](${link.url})` : (state.spec && state.spec.title) || state.input,
+    [link ? `[${link.title}](${link.url})` : (state.spec && state.spec.title) || state.input, issueLine].filter(Boolean).join('\n\n'),
     `## ${t.gates}`,
     failed.length ? failed.map((g) => `- ${g.agent}: ${t.failed}`).join('\n') : `_${t.none}_`,
     `## ${t.findings}`,

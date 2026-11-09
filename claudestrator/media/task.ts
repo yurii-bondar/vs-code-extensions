@@ -108,6 +108,14 @@ interface Views {
         local: { label: 'Keep it local', kind: 'secondary', icon: 'commit', hint: 'Branches and commits stay; push them yourself later.' },
       },
     },
+    'post-review': {
+      title: 'Post the review to the pull request?',
+      lead: 'The reviewers are done. Below is what would be posted: comments on the lines the pull request changed, and one summary with the rest. Nothing is posted until you choose.',
+      options: {
+        post: { label: 'Post the review', kind: 'primary', icon: 'pr' },
+        skip: { label: 'Finish without posting', kind: 'secondary', icon: 'check', hint: 'The review stays here, in the steps and their reports.' },
+      },
+    },
   };
 
   const STATUS_ICON: Record<string, string | null> = { done: 'check', running: null, failed: 'alert', waiting: 'bell', paused: 'pause', interrupted: 'alert', next: 'play', pending: null, skipped: 'x' };
@@ -415,7 +423,9 @@ interface Views {
         }
         $$<HTMLButtonElement>('.checkpoint button').forEach((b) => (b.disabled = true));
         el.classList.add('busy');
-        const ok = await attempt('answer', { taskId: T.taskId, checkpointId, option, feedback: spec?.feedback ? feedback || undefined : undefined, at: T.d!.checkpointFull!.at });
+        // Posting a review: the findings you unticked stay out of it.
+        const omit = checkpointId === 'post-review' && option === 'post' ? $$<HTMLInputElement>('.rv-pick').filter((c) => !c.checked).map((c) => c.dataset.id ?? '').filter(Boolean) : [];
+        const ok = await attempt('answer', { taskId: T.taskId, checkpointId, option, feedback: spec?.feedback ? feedback || undefined : undefined, at: T.d!.checkpointFull!.at, ...(omit.length && { omit }) });
         $$<HTMLButtonElement>('.checkpoint button').forEach((b) => (b.disabled = false));
         el.classList.remove('busy');
         if (ok !== undefined) {
@@ -666,7 +676,7 @@ interface Views {
       const plan = d.plan;
       const questions = plan ? plan.openQuestions : [];
       body = `
-        ${plan ? `<div class="plan-meta"><span class="chip">${esc(plan.type)}</span><span class="chip mono">${icon('branch')}${esc(`${plan.type}/${d.source && d.source.kind === 'jira' ? `${d.taskId}-` : ''}${plan.slug}`)}</span>${plan.repos.map((r) => `<span class="chip" ${r.baseBranch ? `title="The task's branch starts from ${esc(r.baseBranch)}, and its PR goes into it"` : ''}>${icon('repo')}${esc(r.name)}${r.mode === 'tests_only' ? ' · tests only' : ''}${r.baseBranch ? ` · from ${esc(r.baseBranch)}` : ''}</span>`).join('')}</div>` : ''}
+        ${plan ? `<div class="plan-meta"><span class="chip">${esc(plan.type)}</span><span class="chip mono">${icon('branch')}${esc(`${plan.type}/${d.source && d.source.kind !== 'text' && d.source.kind !== 'confluence' ? `${d.taskId}-` : ''}${plan.slug}`)}</span>${plan.repos.map((r) => `<span class="chip" ${r.baseBranch ? `title="The task's branch starts from ${esc(r.baseBranch)}, and its PR goes into it"` : ''}>${icon('repo')}${esc(r.name)}${r.mode === 'tests_only' ? ' · tests only' : ''}${r.baseBranch ? ` · from ${esc(r.baseBranch)}` : ''}</span>`).join('')}</div>` : ''}
         ${questions.length ? `<div class="questions"><h4>${icon('info')}Open questions <span class="muted">(the planner's default applies unless you say otherwise${waits ? '; the ones marked need your answer' : ''})</span></h4>${questions.map((q) => `<div class="q">${q.blocking ? `<span class="chip warn">${icon('user')}needs your answer</span>` : ''}<div>${esc(q.question)}</div><div class="muted small">${q.blocking ? 'Without an answer' : 'Default'}: ${esc(q.default)}</div></div>`).join('')}</div>` : ''}
         <div class="doc-frame"><div class="markdown">${md(stripJsonBlock(ctx.text || ''))}</div></div>
         ${ctx.file ? `<button class="link small" data-action="open-artifact" data-file="${esc(ctx.file)}" data-preview="1">${icon('ext')}Open the plan in an editor</button>` : ''}`;
@@ -694,6 +704,8 @@ interface Views {
       if (hooks.length) {
         body += `<div class="banner warn">${icon('alert')}<div class="grow"><b>The agents changed what acts outside the sandbox.</b> Git hooks run when you use git in ${hooks.length === 1 ? 'that repo' : 'those repos'}, <code>.lfsconfig</code> says where Git LFS uploads, every Claude Code session there takes <code>CLAUDE.md</code> as instructions, and Claude Code's and VS Code's settings (<code>.claude/</code>, <code>.mcp.json</code>, <code>.vscode/</code>) run hooks, MCP servers and tasks: read them first.<ul>${hooks.map((h) => `<li><code>${esc(h.repo)}/${esc(h.file)}</code></li>`).join('')}</ul></div></div>`;
       }
+    } else if (cp.id === 'post-review') {
+      body = postReviewHtml(ctx);
     } else if (cp.id === 'approve-step') {
       // What the step wrote (one report per repo), each without its data block.
       body = `<div class="doc-frame"><div class="markdown">${(ctx.text || '').split('\n\n---\n\n').map((part) => md(stripJsonBlock(part))).join('<hr>')}</div></div>`;
@@ -720,7 +732,7 @@ interface Views {
     const keyed = submitOption(cp, ui);
     return `<section class="checkpoint card cp-${cp.id}">
       <div class="cp-head">
-        <div class="cp-icon">${icon(cp.id === 'confirm-push' ? 'pr' : cp.id === 'approve-plan' ? 'eye' : 'alert')}</div>
+        <div class="cp-icon">${icon(cp.id === 'confirm-push' || cp.id === 'post-review' ? 'pr' : cp.id === 'approve-plan' ? 'eye' : 'alert')}</div>
         <div><h2>${esc(ui.title)}</h2><p>${esc(ui.lead)}</p>${stopped ? '<p class="muted small">The task is paused here; answering continues it.</p>' : ''}</div>
       </div>
       ${cp.step ? `<div class="muted small cp-step">At ${esc(stepName(cp.step))}</div>` : ''}
@@ -728,6 +740,21 @@ interface Views {
       ${needsFeedback ? `<textarea id="cp-feedback" class="input autosize" rows="2" data-input="cp-feedback" placeholder="${esc(ui.placeholder || 'Feedback (optional)')}">${esc(T.feedback)}</textarea>` : ''}
       <div class="cp-actions">${buttons}${d.fix === 'checkpoint' ? fixButton('') : ''}<span class="muted small kbd-hint"><kbd>⌘↵</kbd> <span id="cp-kbd">${esc((keyed !== undefined && ui.options[keyed]?.label) || '')}</span></span></div>
     </section>`;
+  }
+
+  /**
+   * A pull request's review before it is posted: each finding, ticked, where it would go (a comment on its line, or the
+   * summary), for you to untick what should not; then the whole of it as it would be posted.
+   */
+  function postReviewHtml(ctx: Partial<CheckpointContext>): string {
+    const items = (ctx.review && ctx.review.items) || [];
+    const item = (i: ReviewItemView) =>
+      `<label class="rv-item sev-${esc(i.severity)}"><input type="checkbox" class="rv-pick" data-id="${esc(i.id)}" checked><span class="sev">${esc(i.severity)}</span><span class="grow">${i.path ? `<code>${esc(i.path)}${i.line !== undefined ? `:${i.line}` : ''}</code> ` : ''}${esc(i.problem)}${i.fix ? `<span class="muted"> → ${esc(i.fix)}</span>` : ''}</span><span class="muted small">${esc(i.agent)}</span></label>`;
+    const list = (title: string, of: ReviewItemView[]) => (of.length ? `<h4>${esc(title)}</h4><div class="rv-list">${of.map(item).join('')}</div>` : '');
+    const lists = items.length
+      ? `${list('Comments on the changed lines', items.filter((i) => i.inline))}${list('In the summary comment', items.filter((i) => !i.inline))}<p class="muted small">Untick what should not go. The summary with the reviewers' verdicts goes in any case.</p>`
+      : '<p class="muted">The reviewers found nothing: only the summary with their verdicts goes.</p>';
+    return `${lists}<details class="log-details"><summary>As it would be posted</summary><div class="doc-frame"><div class="markdown">${md(ctx.text || '')}</div></div></details>`;
   }
 
   /** The changes an agent made to the repo's settings: each file as written, and as it is now. */

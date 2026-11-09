@@ -1,4 +1,8 @@
 // Intake: what the user typed → a task source → a ticket every agent reads first.
+import { ForgeError, forgeOfHost, issueRef, prRef, readIssue, readPullRequest } from './forge';
+import { ATTEMPTS, RETRY_STATUS, RETRY_STATUS_POST, retryAfterMs } from './http';
+import type { Run } from './forge';
+import type { BitbucketClient } from './bitbucket';
 import type { PlanMeta, Source, Spec } from './types';
 
 const FLAG_RE = /(^|\s)--(auto|no|only|key|effort|scenario|repos)(?=[\s=]|$)/;
@@ -116,15 +120,25 @@ const JIRA_KEY = /^[A-Z][A-Z0-9_]+-\d+$/;
 const NOT_A_KEY = /^(UTF|ISO|SHA|RFC|HTTP|TLS|SSL|ES|MD|AES|RSA|CVE|GPT|COVID|IPV|IP|X)-/;
 
 /**
- * A bare key, a Jira link (browse or `selectedIssue=`), a Confluence page link, or else plain text.
+ * What the input names before the workspace's repos are asked: a source, or an issue of a project not yet known
+ * (`#12`, `owner/name#12`), which the engine finds on the forge of the repos' origins.
+ */
+type Classified = Source | { kind: 'issue'; number: number; project?: string };
+
+/** `#12` or `owner/name#12` (`group/sub/name#12` on GitLab), and nothing else. */
+const ISSUE_REF = /^(?:([\w.-]+(?:\/[\w.-]+)+))?#(\d+)$/;
+
+/**
+ * A bare key, a Jira link (browse or `selectedIssue=`), a Confluence page link, a GitHub, GitLab or Linear issue link,
+ * an issue reference (`#12`, `owner/name#12`), or else plain text.
  * With `embedded`, a sentence that names exactly one issue ("CP-123 check it is ready") is that issue, and the rest of
  * the words come back as `note`. `projects` narrows which keys count.
  */
-type Classified = Source;
-
 function classifyInput(input: string, { embedded = false, projects = [] }: { embedded?: boolean; projects?: string[] } = {}): Classified {
   const text = input.trim();
   if (JIRA_KEY.test(text)) return { kind: 'jira', key: text };
+  const ref = text.match(ISSUE_REF);
+  if (ref && Number(ref[2]) > 0) return { kind: 'issue', number: Number(ref[2]), ...(ref[1] && { project: ref[1] }) };
   if (embedded && !/^https?:\/\/\S+$/.test(text)) {
     const hit = embeddedIssue(text, projects);
     if (hit) return hit;
@@ -145,8 +159,35 @@ function classifyInput(input: string, { embedded = false, projects = [] }: { emb
     const query = url.searchParams.get('pageId');
     const pageId = (page && page[1]) || (query && /^\d+$/.test(query) ? query : undefined);
     if (url.pathname.startsWith('/wiki/') && pageId) return { kind: 'confluence', pageId, url: text };
+    const issue = forgeIssue(url);
+    if (issue) return issue;
   }
   return { kind: 'text', text };
+}
+
+/**
+ * A forge's or Linear's issue link: `https://github.com/owner/name/issues/12`, `https://<host>/group/name/-/issues/12`
+ * (GitLab's `/-/` is its own, on any host; `/-/work_items/12` too), `https://linear.app/<team>/issue/ENG-12/<slug>`.
+ * Or a pull request to review: `https://github.com/owner/name/pull/12`, `https://<host>/group/name/-/merge_requests/7`,
+ * `https://bitbucket.org/<workspace>/<repo>/pull-requests/3`, also on one of its tabs (`/files`, `/diffs`).
+ */
+function forgeIssue(url: URL): Source | null {
+  if (!/^https?:$/.test(url.protocol)) return null;
+  const host = url.host.toLowerCase();
+  const path = decodeURIComponent(url.pathname).replace(/\/+$/, '');
+  const ghPr = path.match(/^\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)(?:\/[\w-]*)?$/);
+  if (ghPr && forgeOfHost(host) === 'github') return { kind: 'pr', forge: 'github', host, project: ghPr[1]!, number: Number(ghPr[2]) };
+  const glMr = path.match(/^\/(.+?)\/-\/merge_requests\/(\d+)(?:\/[\w-]*)?$/);
+  if (glMr) return { kind: 'pr', forge: 'gitlab', host, project: glMr[1]!, number: Number(glMr[2]) };
+  const bbPr = path.match(/^\/([\w.-]+\/[\w.-]+)\/pull-requests\/(\d+)(?:\/[\w-]*)?$/);
+  if (bbPr && forgeOfHost(host) === 'bitbucket') return { kind: 'pr', forge: 'bitbucket', host, project: bbPr[1]!, number: Number(bbPr[2]) };
+  const linear = path.match(/^\/[\w.-]+\/issue\/([A-Za-z][A-Za-z0-9]*-\d+)(?:\/|$)/);
+  if (linear && /(^|\.)linear\.app$/.test(host)) return { kind: 'linear', key: linear[1]!.toUpperCase(), url: url.href };
+  const gitlab = path.match(/^\/(.+?)\/-\/(?:issues|work_items)\/(\d+)$/);
+  if (gitlab) return { kind: 'gitlab', host, project: gitlab[1]!, number: Number(gitlab[2]) };
+  const github = path.match(/^\/([\w.-]+\/[\w.-]+)\/issues\/(\d+)$/);
+  if (github && forgeOfHost(host) === 'github') return { kind: 'github', host, repo: github[1]!, number: Number(github[2]) };
+  return null;
 }
 
 /** Whether a Jira key's project is one of `allowed`, written in any case; an empty list allows every project. */
@@ -155,7 +196,7 @@ function projectAllowed(key: string, allowed: readonly string[]): boolean {
   return !allowed.length || allowed.some((p) => p.trim().toUpperCase() === project);
 }
 
-function embeddedIssue(text: string, projects: string[]): Classified | null {
+function embeddedIssue(text: string, projects: string[]): Source | null {
   const keys = new Map<string, Extract<Source, { kind: 'jira' }> & { raw: string }>();
   for (const m of text.matchAll(/https?:\/\/\S+/g)) {
     const c = classifyInput(m[0].replace(/[).,;]+$/, ''));
@@ -179,20 +220,55 @@ const stamp = (now: Date): string => `${now.getUTCFullYear()}${pad(now.getUTCMon
 const SCENARIO_SUFFIX: Record<string, string> = { readiness: 'check', audit: 'audit' };
 
 /**
- * Jira → the key, Confluence → `DOC-<pageId>`, text → `T-<YYYYMMDD-HHMM>` (UTC).
+ * Jira and Linear → the key, Confluence → `DOC-<pageId>`, a GitHub or GitLab issue → `<repo>-<number>` (`api-12`),
+ * text → `T-<YYYYMMDD-HHMM>` (UTC).
  * A report scenario gets its own id next to the delivery task: `CP-1-check`, `CHECK-<stamp>`, `AUDIT-<stamp>`.
  */
 function deriveTaskId(source: Source, now: Date, scenario = 'deliver'): string {
   const suffix = SCENARIO_SUFFIX[scenario];
+  const id = (base: string): string => (suffix ? `${base}-${suffix}` : base);
   switch (source.kind) {
     case 'jira':
-      return suffix ? `${source.key}-${suffix}` : source.key;
+    case 'linear':
+      return id(source.key);
     case 'confluence':
-      return suffix ? `DOC-${source.pageId}-${suffix}` : `DOC-${source.pageId}`;
-    default:
+      return id(`DOC-${source.pageId}`);
+    case 'github':
+    case 'gitlab':
+      return id(`${repoSlug(source.kind === 'github' ? source.repo : source.project)}-${source.number}`);
+    case 'pr':
+      return id(`${repoSlug(source.project)}-${source.forge === 'gitlab' ? 'mr' : 'pr'}-${source.number}`);
+    case 'text':
       return suffix ? `${suffix.toUpperCase()}-${stamp(now)}` : `T-${stamp(now)}`;
   }
 }
+
+/** A project's last path segment as a task id may start with it: `acme/api` → `api`. */
+function repoSlug(project: string): string {
+  return project.split('/').pop()!.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[^A-Za-z0-9]+/, '') || 'issue';
+}
+
+/**
+ * How the task's issue is written where people refer to it: `CP-12`, `ENG-7`, `owner/name#12`, a merge request
+ * `group/name!7`; none for text or a page.
+ */
+function sourceRef(source: Source): string | undefined {
+  switch (source.kind) {
+    case 'jira':
+    case 'linear':
+      return source.key;
+    case 'github':
+    case 'gitlab':
+      return issueRef(source);
+    case 'pr':
+      return prRef(source);
+    default:
+      return undefined;
+  }
+}
+
+/** The task's source in a sentence: `CP-12`, `owner/name#12`, `the Confluence page`, `the description`. */
+const sourceName = (source: Source): string => sourceRef(source) ?? (source.kind === 'confluence' ? 'the Confluence page' : 'the description');
 
 class IntakeError extends Error {
   code: string;
@@ -221,11 +297,29 @@ function capSpec(spec: Spec): Spec {
   };
 }
 
+interface IntakeOptions {
+  allowedProjects?: string[] | undefined;
+  atlassian?: AtlassianClient | null | undefined;
+  /** How `gh` and `glab` run, for a GitHub or GitLab issue or pull request. */
+  run?: Run | undefined;
+  /** Bitbucket Cloud's client, for one of its pull requests. */
+  bitbucket?: BitbucketClient | null | undefined;
+  /** The workspace's repo a pull request is on (the engine finds it by the repos' origins). */
+  prRepo?: string | undefined;
+}
+
 /** Turns a classified source into a task spec. Refuses disallowed Jira projects before any request is made. */
-async function runIntake(taskId: string, source: Source, opts: { allowedProjects?: string[] | undefined; atlassian?: AtlassianClient | null | undefined } = {}): Promise<Spec> {
+async function runIntake(taskId: string, source: Source, opts: IntakeOptions = {}): Promise<Spec> {
   switch (source.kind) {
     case 'text':
       return fromText(taskId, source);
+    case 'github':
+    case 'gitlab':
+      return fromForge(taskId, source, opts.run);
+    case 'linear':
+      throw new IntakeError('linear_mcp', `${source.key} is read through a Linear MCP server, not here`);
+    case 'pr':
+      return fromPullRequest(taskId, source, opts);
     case 'jira': {
       const allowed = opts.allowedProjects ?? [];
       if (!projectAllowed(source.key, allowed)) {
@@ -262,6 +356,57 @@ async function runIntake(taskId: string, source: Source, opts: { allowedProjects
   throw new IntakeError('fetch_failed', `unknown source ${(source as { kind: string }).kind}`);
 }
 
+/** A GitHub or GitLab issue, read with gh or glab under your login: its body is the description, its comments the context. */
+async function fromForge(taskId: string, source: Extract<Source, { kind: 'github' | 'gitlab' }>, run: Run | undefined): Promise<Spec> {
+  if (!run) throw new IntakeError('fetch_failed', `${issueRef(source)} cannot be read here`);
+  let issue;
+  try {
+    issue = await readIssue(source, run);
+  } catch (e) {
+    if (e instanceof ForgeError) throw new IntakeError(e.code, e.message);
+    throw e;
+  }
+  const parts = [
+    ...(issue.labels.length ? [`## Labels\n\n${issue.labels.join(', ')}`] : []),
+    ...(issue.comments.length ? [`## Comments\n\n${issue.comments.map((c) => `**${c.author}** (${c.created.slice(0, 10)}):\n${c.body}`).join('\n\n')}`] : []),
+  ];
+  return {
+    id: taskId,
+    source,
+    title: issue.title.trim() || issueRef(source),
+    description: issue.body,
+    acceptanceCriteria: extractAcceptanceCriteria(issue.body),
+    links: [{ title: issueRef(source), url: issue.url }],
+    ...(parts.length && { context: parts.join('\n\n') }),
+  };
+}
+
+/**
+ * A pull request to review: its title and description are the ticket, its comments the context, and where it comes
+ * from and goes to (with the commit reviewed) what the engine checks out and comments on.
+ */
+async function fromPullRequest(taskId: string, source: Extract<Source, { kind: 'pr' }>, opts: IntakeOptions): Promise<Spec> {
+  if (!opts.run || !opts.prRepo) throw new IntakeError('fetch_failed', `${prRef(source)} cannot be read here`);
+  let pr;
+  try {
+    pr = await readPullRequest(source, opts.run, opts.bitbucket ?? null);
+  } catch (e) {
+    if (e instanceof ForgeError) throw new IntakeError(e.code, e.message);
+    throw e;
+  }
+  const context = pr.comments.length ? `## Comments\n\n${pr.comments.map((c) => `**${c.author}** (${c.created.slice(0, 10)}):\n${c.body}`).join('\n\n')}` : undefined;
+  return {
+    id: taskId,
+    source,
+    title: pr.title.trim() || prRef(source),
+    description: pr.body,
+    acceptanceCriteria: extractAcceptanceCriteria(pr.body),
+    links: [{ title: prRef(source), url: pr.url }],
+    ...(context && { context }),
+    pr: { url: pr.url, repo: opts.prRepo, base: pr.base, head: pr.head, headSha: pr.headSha, ...(pr.baseSha && { baseSha: pr.baseSha }), ...(pr.startSha && { startSha: pr.startSha }) },
+  };
+}
+
 function fromText(taskId: string, source: Extract<Source, { kind: 'text' }>): Spec {
   const firstLine = source.text.split('\n').find((l) => l.trim()) || source.text;
   const clean = firstLine.trim().replace(/^#+\s*/, '');
@@ -280,7 +425,7 @@ function requireClient(opts: { atlassian?: AtlassianClient | null | undefined },
  * The site a pasted Jira or Confluence link is on when it is not `site` (the one the API token is for), or null. The
  * same key on another site is another issue: read or commented on with that token, it would be the wrong one.
  */
-function otherSite(source: Source, site: string): string | null {
+function otherSite(source: Classified, site: string): string | null {
   const host = (s: string): string => s.replace(/^[a-z]+:\/\//i, '').split(/[/?#]/)[0]!.toLowerCase();
   const own = source.kind === 'jira' ? source.site : source.kind === 'confluence' ? source.url : undefined;
   return own && host(own) !== host(site) ? host(own) : null;
@@ -680,20 +825,6 @@ interface ClientOptions {
   sleep?: (ms: number) => Promise<void>;
 }
 
-/** Attempts per request: the first one and two retries. */
-const ATTEMPTS = 3;
-/** Statuses that mean "try again later": the request was not handled. */
-const RETRY_STATUS = new Set([429, 502, 503, 504]);
-/** A POST that may have reached the server is never sent twice (a comment would be posted twice): only these say it was not. */
-const RETRY_STATUS_POST = new Set([429, 503]);
-
-/** Seconds from a Retry-After header (seconds or an HTTP date), capped so a request never waits long. */
-function retryAfterMs(header: string | null, fallbackMs: number): number {
-  if (!header) return fallbackMs;
-  const s = Number(header);
-  const ms = Number.isFinite(s) ? s * 1000 : Date.parse(header) - Date.now();
-  return Number.isFinite(ms) && ms >= 0 ? Math.min(ms, 30000) : fallbackMs;
-}
 
 /** A failed REST call. `status` is the HTTP status, or null when no answer came; the message says what to do about it. */
 class AtlassianError extends Error {
@@ -883,7 +1014,7 @@ class AtlassianClient {
  * already: the slug and the subject take the summary after it.
  */
 function planFromTicket(spec: Pick<Spec, 'title' | 'source'>, input: string, repos: string[]): PlanMeta {
-  const summary = spec.source.kind === 'jira' ? withoutKey(spec.title, spec.source.key) : spec.title;
+  const summary = spec.source.kind === 'jira' || spec.source.kind === 'linear' ? withoutKey(spec.title, spec.source.key) : spec.title;
   const title = summary.replace(/\s+/g, ' ').trim().slice(0, 100);
   const slug =
     title
@@ -913,6 +1044,8 @@ export {
   detectScenario,
   classifyInput,
   deriveTaskId,
+  sourceRef,
+  sourceName,
   IntakeError,
   runIntake,
   renderTicket,

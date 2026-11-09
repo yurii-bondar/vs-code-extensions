@@ -6,11 +6,20 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-import type { HostMessage, TranscriptItem } from '../src/core/wire';
+import { BitbucketClient } from '../src/core/bitbucket';
+import type { HealthReport, HostMessage, SettingsData, TranscriptItem } from '../src/core/wire';
 
 // panel.ts loads `vscode`: the dialogs a test answers, nothing else.
 /* eslint-disable @typescript-eslint/no-require-imports */
-const vscodeStub = { window: {} as Record<string, unknown>, workspace: { onDidChangeConfiguration: () => ({ dispose() {} }) }, Uri: { file: (fsPath: string) => ({ fsPath }) }, ThemeIcon: class {} };
+/** Settings a test sets, as VS Code's configuration answers them. */
+const settingValues = new Map<string, unknown>();
+const vscodeStub = {
+  window: {} as Record<string, unknown>,
+  workspace: { onDidChangeConfiguration: () => ({ dispose() {} }), getConfiguration: () => ({ get: (k: string) => settingValues.get(k), update: async (k: string, v: unknown) => void settingValues.set(k, v) }) },
+  Uri: { file: (fsPath: string) => ({ fsPath }) },
+  ThemeIcon: class {},
+  ConfigurationTarget: { Global: 1 },
+};
 const loader = Module as unknown as { _load: (request: string, ...rest: unknown[]) => unknown };
 const load = loader._load;
 loader._load = function (this: unknown, request: string, ...rest: unknown[]) {
@@ -157,7 +166,7 @@ test('panel: Fix in chat opens Claude in the repo of the failure, with it as the
   let checkpoint: { id: string; at: string } | null = { id: 'hook-failure', at: 'now' };
   const contexts: string[] = [];
   const engine = {
-    svc: { state: async () => ({ taskId: 'T-1', gitMode: 'branch', repos: [{ name: 'api' }, { name: 'web' }], checkpoint }) },
+    svc: { state: async () => ({ taskId: 'T-1', source: { kind: 'text', text: 'x' }, gitMode: 'branch', repos: [{ name: 'api' }, { name: 'web' }], checkpoint }) },
     checkpointContext: async (_s: unknown, cp: { id: string }) => (contexts.push(cp.id), { format: 'log', text: lint }),
   };
   const p = Object.assign(Object.create(DashboardPanel.prototype) as InstanceType<typeof DashboardPanel>, {
@@ -229,7 +238,7 @@ test('panel: the sidebar deletes a task and opens config.yaml without a dashboar
   const { deleteTask, openConfig } = await import('../src/panel');
   const done: string[] = [];
   const engine = {
-    svc: { state: async () => ({ gitMode: 'worktree', repos: [{ name: 'api' }] }), runsElsewhere: async () => null },
+    svc: { state: async () => ({ source: { kind: 'text', text: 'x' }, gitMode: 'worktree', repos: [{ name: 'api' }] }), runsElsewhere: async () => null },
     isRunning: () => true,
     stop: async () => void done.push('stop'),
     settled: async () => void done.push('settled'),
@@ -274,4 +283,66 @@ test("panel: a deleted task's screen hears so, and goes home", async () => {
   const svc = { exists: async () => false };
   Object.assign(p, { orch: { engine: { svc } }, viewing: 'T-1' });
   await assert.rejects(() => p.$task({ taskId: 'T-1' }), (e: { code?: string }) => e.code === 'no_task');
+});
+
+/** A panel over an orchestrator with only what Settings and the tools' health read. */
+function integrationsPanel(orch: Record<string, unknown>) {
+  const base = {
+    health: null,
+    token: undefined,
+    bitbucketToken: undefined,
+    atlassianAuth: () => null,
+    bitbucketAuth: () => null,
+    accounts: async () => [],
+    account: async () => null,
+    mcpIntakeServer: async () => null,
+    ensureReady: async () => {},
+  };
+  return Object.assign(Object.create(DashboardPanel.prototype) as InstanceType<typeof DashboardPanel>, { orch: { ...base, root: '/ws', ...orch } });
+}
+
+test('panel: Settings say whether Bitbucket has a token, from storage or the environment, without the token', async () => {
+  settingValues.clear();
+  const env = process.env.BITBUCKET_API_TOKEN;
+  delete process.env.BITBUCKET_API_TOKEN;
+  try {
+    const none = (await integrationsPanel({}).$settings()) as SettingsData;
+    assert.deepEqual(none.bitbucket, { email: '', hasToken: false, fromEnv: false, connected: false });
+
+    settingValues.set('bitbucket.email', 'ci@acme.com');
+    const saved = (await integrationsPanel({ bitbucketToken: 'bb-secret', bitbucketAuth: () => ({ email: 'ci@acme.com', token: 'bb-secret' }) }).$settings()) as SettingsData;
+    assert.deepEqual(saved.bitbucket, { email: 'ci@acme.com', hasToken: true, fromEnv: false, connected: true });
+    assert.ok(!JSON.stringify(saved).includes('bb-secret'), 'the page never gets the token');
+
+    process.env.BITBUCKET_API_TOKEN = 'from-env';
+    const fromEnv = (await integrationsPanel({ bitbucketAuth: () => ({ email: 'ci@acme.com', token: 'from-env' }) }).$settings()) as SettingsData;
+    assert.deepEqual(fromEnv.bitbucket, { email: 'ci@acme.com', hasToken: false, fromEnv: true, connected: true });
+  } finally {
+    if (env === undefined) delete process.env.BITBUCKET_API_TOKEN;
+    else process.env.BITBUCKET_API_TOKEN = env;
+  }
+});
+
+test('panel: Bitbucket is saved trimmed, and tested only once it can be', async () => {
+  const saves: unknown[] = [];
+  const p = integrationsPanel({ saveBitbucket: async (x: unknown) => void saves.push(x), bitbucket: () => null });
+  await p.$saveBitbucket({ email: '  ci@acme.com ', token: 'tok' });
+  await p.$saveBitbucket({ email: 'ci@acme.com' });
+  assert.deepEqual(saves, [{ email: 'ci@acme.com', token: 'tok' }, { email: 'ci@acme.com', token: undefined }], 'no token given: the saved one stays');
+  await assert.rejects(p.$testBitbucket(), /Fill in the email and API token first/);
+
+  const fetch = (async () => new Response(JSON.stringify({ display_name: 'CI Bot' }), { status: 200 })) as unknown as typeof globalThis.fetch;
+  const ready = integrationsPanel({ bitbucket: () => new BitbucketClient({ email: 'ci@acme.com', token: 'tok-123456789' }, { fetch }) });
+  assert.deepEqual(await ready.$testBitbucket(), { name: 'CI Bot', email: 'ci@acme.com' });
+});
+
+test("panel: the tools' health has GitLab's CLI and the Linear MCP server, next to GitHub's and Atlassian's", async () => {
+  const cli = (ok: boolean, extra: Record<string, unknown> = {}) => ({ ok, path: ok ? '/usr/bin/x' : null, version: ok ? '1.0' : undefined, account: ok ? 'ann' : undefined, error: ok ? undefined : 'not installed (needed only for GitLab)', ...extra });
+  const health = { checkedAt: 'now', claude: { ok: true }, git: { ok: true, version: '2' }, gh: cli(true), glab: cli(false) };
+  const p = integrationsPanel({ health, mcpIntakeServer: async (t: string) => (t === 'linear' ? { server: 'linear' } : { server: 'Atlassian', site: 'acme.atlassian.net' }) });
+  const h = (await p.healthSummary()) as HealthReport;
+  assert.deepEqual(h.glab, { ok: false, version: undefined, account: undefined, error: 'not installed (needed only for GitLab)', installed: false });
+  assert.deepEqual(h.gh, { ok: true, version: '1.0', account: 'ann', error: undefined, installed: true });
+  assert.equal(h.linearMcp, 'linear');
+  assert.equal(h.atlassianMcp, 'Atlassian');
 });

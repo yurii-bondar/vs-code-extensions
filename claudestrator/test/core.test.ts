@@ -1247,7 +1247,14 @@ test('scenarios: custom scenarios with their own agents, models and effort; buil
 test('scenarios: the built-in ones in full run as they are, warn of nothing, and are removed and brought back like the reports', async () => {
   const r = passed(resolve([config.builtinLayer()]));
   const builtin = Object.values(r.config.custom).filter((sc) => sc.source === 'built-in');
-  assert.deepEqual(builtin.map((sc) => [sc.id, sc.kind]), [['investigate', 'audit'], ['cover-tests', 'deliver'], ['refactor', 'deliver']]);
+  assert.deepEqual(builtin.map((sc) => [sc.id, sc.kind]), [['investigate', 'audit'], ['cover-tests', 'deliver'], ['pr-review', 'deliver'], ['refactor', 'deliver']]);
+  // PR review: the reviewer and the appsec reviewer at once, the second off until you turn it on, as in Deliver.
+  assert.deepEqual(r.config.custom['pr-review']!.agents.map((st) => [st.name, st.parallel !== undefined]), [['reviewer', true], ['appsec-reviewer', true]]);
+  assert.deepEqual(bp(r.config, { scenario: 'pr-review' }).stages.map((st) => st.agent), ['reviewer']);
+  const on = passed(resolve([config.builtinLayer(), layer({ agents: { 'appsec-reviewer': { enabled: true } } })]));
+  const both = bp(on.config, { scenario: 'pr-review' }).stages;
+  assert.deepEqual(both.map((st) => [st.agent, st.output, st.scope]), [['reviewer', 'verdict', 'task'], ['appsec-reviewer', 'verdict', 'task']]);
+  assert.ok(both[0]!.group !== undefined && both[0]!.group === both[1]!.group, 'at once');
   for (const sc of builtin) assert.deepEqual(bp(r.config, { scenario: sc.id }).warnings, [], sc.id);
   // What a step adds goes after the agent's own instructions, as for a scenario of yours.
   assert.match(r.config.custom['cover-tests']!.agents[0]!.instructions!, /"mode": "tests_only"/);

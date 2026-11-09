@@ -1,6 +1,7 @@
 // The first user message of an agent run, and the report parsing that checks what it hands back.
 import * as path from 'path';
 import { parsePlanMeta, parseVerdict, parseReadiness, parseAudit, parseWork } from './protocol';
+import { deriveTaskId, sourceRef } from './intake';
 import type { RunAction } from './machine';
 import type { Audit, GroupType, NextMode, Output, ParseResult, PlanMeta, Readiness, TaskState, Verdict, WorkReport } from './types';
 
@@ -53,6 +54,8 @@ interface PromptArgs {
   /** For a review: the checks the user went on past while red, as they last ran. */
   redChecks?: string | undefined;
   repos?: PromptRepo[] | undefined;
+  /** A pull request under review: where it is, and the branches it goes from and into. */
+  pullRequest?: { url: string; repo: string; base: string; head: string } | undefined;
   /** The stage's shell commands run in Claudestrator's sandbox (`policy.sandbox`), which only you widen. */
   sandboxed?: boolean | undefined;
   /** `policy.checkEnv`: credential-like variables the checks and git hooks get, and the agent's shell never does. */
@@ -71,7 +74,7 @@ function withStepInstructions(own: string, step: string, scenario: string | unde
 /** The files of a repo agents never write, as a prompt names them. */
 const SETTINGS_FILES = "A repo's Claude Code and VS Code settings (.claude/, .mcp.json, .vscode/)";
 
-function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, diffPath, prsPath, rerun, repos, failed, redChecks, sandboxed, checkEnv }: PromptArgs): string {
+function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, diffPath, prsPath, rerun, repos, pullRequest, failed, redChecks, sandboxed, checkEnv }: PromptArgs): string {
   const inputs = next.inputs.map((p) => path.resolve(taskDir, p));
   if (diffPath) inputs.push(diffPath);
   if (prsPath) inputs.push(prsPath);
@@ -92,8 +95,16 @@ function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, 
     lines.push('', 'Repositories (read them where they are; change nothing):', ...repos.map((r) => `- ${r.name} at ${r.dir} (base branch ${r.baseBranch})${r.role ? `: ${r.role}` : ''}`));
     if (next.output === 'plan') lines.push('Name the repos of your plan exactly as listed here.');
   }
-  if (state.source && state.source.kind === 'jira' && next.output === 'readiness') {
-    lines.push('', `Jira issue: ${state.source.key}. Search branches and commits for this key${prsPath ? `; the pull requests GitHub has for it are listed in ${prsPath}` : ''}.`);
+  if (pullRequest) {
+    const at = repos && repos.find((r) => r.name === pullRequest.repo);
+    lines.push('', `The pull request under review: ${pullRequest.url}, from ${pullRequest.head} into ${pullRequest.base}, in the repo ${pullRequest.repo}.${at ? ` Its code at the commit under review is checked out at ${at.dir}.` : ''}${diffPath ? ` Its diff is in ${diffPath}.` : ''}`);
+  }
+  if (state.source && (state.source.kind === 'jira' || state.source.kind === 'linear') && next.output === 'readiness') {
+    lines.push('', `${state.source.kind === 'jira' ? 'Jira' : 'Linear'} issue: ${state.source.key}. Search branches and commits for this key${prsPath ? `; the pull and merge requests that mention it are listed in ${prsPath}` : ''}.`);
+  }
+  if (state.source && (state.source.kind === 'github' || state.source.kind === 'gitlab') && next.output === 'readiness') {
+    const ref = sourceRef(state.source);
+    lines.push('', `${state.source.kind === 'github' ? 'GitHub' : 'GitLab'} issue: ${ref}. Its work is on branches named <type>/${deriveTaskId(state.source, new Date(0))}-<slug>, and its commits say "Refs: ${ref}": search branches and commits for both.`);
   }
   lines.push('', 'Read these files first, in this order:', ...inputs.map((p) => `- ${p}`));
   // The ticket comes from Jira or Confluence, where anyone with access writes; the repos and earlier reports are not

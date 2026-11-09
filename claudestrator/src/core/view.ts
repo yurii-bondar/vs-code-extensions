@@ -53,6 +53,7 @@ const CHECKPOINT_HINT: Record<string, string> = {
   'protected-changes': "An agent changed the repo's Claude Code or VS Code settings, which no agent writes. Read the change, then apply it or leave it.",
   'hook-failure': 'A git hook rejected the commit.',
   'confirm-push': 'Everything is committed locally. Push the branches and open draft PRs?',
+  'post-review': 'The review is done. Post it to the pull request as comments?',
 };
 
 const HUMAN_FINDINGS_HINT = "The blocking findings are about the repo's Claude Code or VS Code settings, which no agent changes: make the change yourself, then retry for another review.";
@@ -89,6 +90,10 @@ function sourceOf(s: TaskState | null | undefined): TaskSource | null {
   const link = s.spec && s.spec.links && s.spec.links[0];
   if (src.kind === 'jira') return { kind: 'jira', label: src.key, url: (link && link.url) || (src.site ? `https://${src.site}/browse/${src.key}` : undefined) };
   if (src.kind === 'confluence') return { kind: 'confluence', label: 'Confluence page', url: src.url };
+  if (src.kind === 'linear') return { kind: 'linear', label: src.key, url: src.url };
+  if (src.kind === 'github') return { kind: 'github', label: `${src.repo}#${src.number}`, url: (link && link.url) || `https://${src.host}/${src.repo}/issues/${src.number}` };
+  if (src.kind === 'gitlab') return { kind: 'gitlab', label: `${src.project}#${src.number}`, url: (link && link.url) || `https://${src.host}/${src.project}/-/issues/${src.number}` };
+  if (src.kind === 'pr') return { kind: 'pr', label: `${src.project}${src.forge === 'gitlab' ? '!' : '#'}${src.number}`, url: (link && link.url) || undefined };
   return { kind: 'text', label: 'Description' };
 }
 
@@ -230,7 +235,7 @@ function baseStatus(state: TaskState | null, { running, elsewhere, error, corrup
       const serious = r.counts.critical! + r.counts.high!;
       return { key: 'done', label: r.findings.length ? `${r.findings.length} finding${r.findings.length === 1 ? '' : 's'}${serious ? ` · ${serious} serious` : ''}` : 'No findings', tone: r.counts.critical ? 'error' : serious ? 'warn' : 'ok', group: 'done' };
     }
-    const label = state!.outcome === 'published' ? 'PRs opened' : state!.outcome === 'local' ? 'Kept local' : 'Done';
+    const label = state!.outcome === 'published' ? 'PRs opened' : state!.outcome === 'local' ? 'Kept local' : state!.outcome === 'posted' ? 'Review posted' : state!.source.kind === 'pr' ? 'Reviewed' : 'Done';
     return { key: 'done', label, tone: 'ok', group: 'done' };
   }
   if (state!.status === 'stopped') return { key: 'stopped', label: state!.checkpoint ? `Stopped at: ${checkpointTitle(state!.checkpoint)}` : 'Stopped', tone: 'muted', group: 'stopped' };

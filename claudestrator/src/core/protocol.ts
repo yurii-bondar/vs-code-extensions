@@ -52,6 +52,7 @@ const CHECKPOINT_OPTIONS: Record<CheckpointId, string[]> = {
   'protected-changes': ['apply', 'retry', 'skip', 'stop'],
   'hook-failure': ['retry', 'stop'],
   'confirm-push': ['push', 'push-comment', 'local'],
+  'post-review': ['post', 'skip'],
 };
 const JIRA_ONLY_OPTIONS = ['approve-post', 'push-comment'];
 
@@ -64,7 +65,7 @@ const isInfoEvent = (e: OrchEvent): e is InfoEvent => INFO_EVENTS.has(e.type);
 
 const STATE_EVENTS = new Set<string>([
   'task_created', 'intake_completed', 'stage_started', 'stage_completed', 'stage_failed',
-  'checkpoint_answered', 'committed', 'commit_failed', 'published', 'stopped', 'resumed', 'pipeline_changed',
+  'checkpoint_answered', 'committed', 'commit_failed', 'published', 'review_posted', 'stopped', 'resumed', 'pipeline_changed',
 ]);
 
 const isBlocking = (f: { severity: string }): boolean => f.severity !== 'minor';
@@ -279,7 +280,7 @@ const CONFIG_LAYER = T.obj({
   'language?': T.str(1),
   'baseBranch?': BRANCH,
   'intake?': INTAKE_LAYER,
-  'repos?': T.rec(T.re(REPO_NAME, 'a repo name is letters, digits, ".", "_" and "-", e.g. api or web-app'), T.obj({ 'role?': T.str(1), 'path?': T.str(1), 'baseBranch?': BRANCH, 'gates?': GATES })),
+  'repos?': T.rec(T.re(REPO_NAME, 'a repo name is letters, digits, ".", "_" and "-", e.g. api or web-app'), T.obj({ 'role?': T.str(1), 'path?': T.str(1), 'baseBranch?': BRANCH, 'gates?': GATES, 'forge?': T.oneOf(['github', 'gitlab']) })),
   'jira?': T.obj({ 'allowedProjects?': T.arr(T.str(1)) }),
   // The sandbox's lists go to sandbox-runtime as its settings: a few entries each, never an unbounded list to validate.
   'policy?': T.obj({ 'protectedBranches?': T.arr(T.str(1), 0, SANDBOX_LIST), 'draftPrsOnly?': T.bool(), 'forbidAiAttribution?': T.bool(), 'allowNoVerify?': T.bool(), 'sandbox?': T.bool(), 'localPorts?': T.bool(), 'network?': T.arr(T.re(/^[A-Za-z0-9*.:[\]-]+$/, 'a host name, e.g. npm.acme.corp or *.acme.corp'), 0, SANDBOX_LIST), 'writable?': T.arr(T.re(/^(~[\\/]|\/|[A-Za-z]:[\\/])(?=.*[^\\/~.\s])/, 'a folder below ~ or the filesystem root, e.g. ~/.cache/go-build'), 0, SANDBOX_LIST), 'checkEnv?': T.arr(T.re(/^[A-Za-z_][A-Za-z0-9_]*$/, 'a variable name, e.g. DATABASE_URL'), 0, SANDBOX_LIST), 'protectedChanges?': T.oneOf(PROTECTED_MODES) }),

@@ -284,9 +284,12 @@ class DashboardPanel implements RpcHandlers {
       claude: { ok: h.claude.ok, version: h.claude.version, path: h.claude.path, error: h.claude.error },
       git: { ok: h.git.ok, version: h.git.version },
       gh: { ok: h.gh.ok, version: h.gh.version, account: h.gh.account, error: h.gh.error, installed: Boolean(h.gh.path) },
+      glab: { ok: h.glab.ok, version: h.glab.version, account: h.glab.account, error: h.glab.error, installed: Boolean(h.glab.path) },
       account,
       atlassian: Boolean(this.orch.atlassianAuth()),
-      atlassianMcp: ((await this.orch.mcpIntakeServer()) || ({} as { server?: string })).server || null,
+      atlassianMcp: ((await this.orch.mcpIntakeServer('atlassian')) || ({} as { server?: string })).server || null,
+      linearMcp: ((await this.orch.mcpIntakeServer('linear')) || ({} as { server?: string })).server || null,
+      bitbucket: Boolean(this.orch.bitbucketAuth()),
     };
   }
 
@@ -325,7 +328,7 @@ class DashboardPanel implements RpcHandlers {
 
   async $preview(p: ComposerArgs): Promise<Preview> {
     const r = await this.engine.preview(p);
-    return r.ok && !r.empty ? { ...r, outline: outline(r.pipeline) } : r;
+    return r.ok && !r.empty ? { ...r, outline: outline(r.pipeline, { pr: r.source.kind === 'pr' }) } : r;
   }
 
   async $start(p: ComposerArgs) {
@@ -391,9 +394,9 @@ class DashboardPanel implements RpcHandlers {
     await (this.orch.engineOf(taskId) ?? this.engine).stop(taskId);
   }
 
-  async $answer({ taskId, checkpointId, option, feedback, at }: Rpc['answer']['params']) {
+  async $answer({ taskId, checkpointId, option, feedback, at, omit }: Rpc['answer']['params']) {
     await this.orch.ensureReady();
-    await this.engine.answer(taskId, checkpointId, option, feedback, at);
+    await this.engine.answer(taskId, checkpointId, option, { feedback, at, omit });
   }
 
   async $postReport({ taskId }: { taskId: string }) {
@@ -914,6 +917,7 @@ class DashboardPanel implements RpcHandlers {
       accounts: await this.orch.accounts(),
       account: await this.orch.account(),
       atlassian: { site: s.get('atlassian.site') || '', email: s.get('atlassian.email') || '', hasToken: Boolean(this.orch.token), fromEnv: !this.orch.token && Boolean(process.env.ATLASSIAN_API_TOKEN), connected: Boolean(auth), mcp: await this.orch.mcpIntakeServer() },
+      bitbucket: { email: s.get('bitbucket.email') || '', hasToken: Boolean(this.orch.bitbucketToken), fromEnv: !this.orch.bitbucketToken && Boolean(process.env.BITBUCKET_API_TOKEN), connected: Boolean(this.orch.bitbucketAuth()) },
       health: await this.healthSummary(),
     };
   }
@@ -940,6 +944,16 @@ class DashboardPanel implements RpcHandlers {
   async $testAtlassian() {
     const client = this.orch.atlassian();
     if (!client) throw new Error('Fill in the site, email and API token first');
+    return client.myself();
+  }
+
+  async $saveBitbucket({ email, token }: { email?: string; token?: string }) {
+    await this.orch.saveBitbucket({ email: (email || '').trim(), token });
+  }
+
+  async $testBitbucket() {
+    const client = this.orch.bitbucket();
+    if (!client) throw new Error('Fill in the email and API token first');
     return client.myself();
   }
 

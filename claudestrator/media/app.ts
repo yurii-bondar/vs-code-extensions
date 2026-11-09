@@ -146,6 +146,7 @@ interface Views {
     dollar: 'M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6',
     jira: 'M11.5 2 4 9.5l3.5 3.5L15 5.5zM12.5 22l7.5-7.5-3.5-3.5L9 18.5z',
     doc: 'M4 4h16v16H4zM8 8h8M8 12h8M8 16h5',
+    issue: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 11a1 1 0 1 0 0 2 1 1 0 0 0 0-2z',
     text: 'M17 6H3M21 12H3M15 18H3',
     dots: 'M12 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2M19 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2M5 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2',
     link: 'M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71',
@@ -221,8 +222,8 @@ interface Views {
 
   /** What a task is for. The composer picks one from your words unless you choose. */
   const SCENARIO_INFO: Record<string, ScenarioInfo> = {
-    deliver: { label: 'Deliver', icon: 'pr', hint: 'Plan → your approval → code and tests per repo → review → draft PRs', placeholder: 'Describe a task in plain words, or paste a Jira key (PROJ-123), a Jira link or a Confluence page link…' },
-    readiness: { label: 'Check readiness', icon: 'checklist', hint: 'Finds the work for a ticket and checks every acceptance criterion. Changes nothing.', placeholder: 'Paste a Jira key or link, e.g. “PROJ-123 check it is ready and every acceptance criterion is met”, or describe what should be done…' },
+    deliver: { label: 'Deliver', icon: 'pr', hint: 'Plan → your approval → code and tests per repo → review → draft PRs', placeholder: 'Describe a task in plain words, or paste a Jira key (PROJ-123), an issue (#12, owner/repo#12) or a link to a Jira, GitHub, GitLab or Linear issue or a Confluence page…' },
+    readiness: { label: 'Check readiness', icon: 'checklist', hint: 'Finds the work for a ticket and checks every acceptance criterion. Changes nothing.', placeholder: 'Paste a Jira key or an issue link (Jira, GitHub, GitLab, Linear), e.g. “PROJ-123 check it is ready and every acceptance criterion is met”, or describe what should be done…' },
     audit: { label: 'Audit', icon: 'search', hint: 'Looks for bugs, bottlenecks, performance and security issues; a report rated critical / high / medium / low. Changes nothing.', placeholder: 'What to audit, e.g. “Audit the api repo: bottlenecks, performance, bugs” — or leave it general…' },
   };
   /**
@@ -807,7 +808,7 @@ interface Views {
 
   function sourceChip(src: TaskSource | null | undefined) {
     if (!src) return '';
-    const ic = src.kind === 'jira' ? 'jira' : src.kind === 'confluence' ? 'doc' : 'text';
+    const ic = src.kind === 'jira' ? 'jira' : src.kind === 'confluence' ? 'doc' : src.kind === 'text' ? 'text' : src.kind === 'pr' ? 'pr' : 'issue';
     if (src.url) return `<a class="chip link-chip" data-action="open-url" data-url="${esc(src.url)}" title="${esc(src.url)}">${icon(ic)}${esc(src.label)}</a>`;
     return `<span class="chip">${icon(ic)}${esc(src.label)}</span>`;
   }
@@ -843,6 +844,7 @@ interface Views {
       ${h.account ? `<span class="hi">${icon('user')}<b>Account</b><span>${esc(h.account.email || h.account.label)}</span></span>` : ''}
       ${item(h.git.ok, 'Git', h.git.version)}
       ${item(h.gh.ok, 'GitHub CLI', h.gh.ok ? h.gh.account || h.gh.version : h.gh.error)}
+      ${h.glab.installed ? item(h.glab.ok, 'GitLab CLI', h.glab.ok ? h.glab.account || h.glab.version : h.glab.error) : ''}
       ${h.atlassian ? item(true, 'Jira', 'API token') : h.atlassianMcp ? item(true, 'Jira', `via MCP “${h.atlassianMcp}”`) : ''}
       ${mcpHealth()}
       <button class="icon-btn" data-action="recheck" title="Check again">${icon('refresh')}</button>
@@ -854,7 +856,7 @@ interface Views {
     if (!h || h.checking) return null;
     if (!h.claude.ok) return { text: 'Claude Code is not ready', section: 'settings' };
     if (!h.git.ok) return { text: 'Git is not found', section: 'settings' };
-    if (!h.gh.ok) return { text: 'GitHub CLI is not ready', section: 'settings' };
+    if (!h.gh.ok && !h.glab.ok) return { text: 'GitHub CLI is not ready', section: 'settings' };
     const m = S.overview && S.overview.mcp;
     if (m && m.problems) return { text: `MCP: ${m.problems} of ${m.total} need attention`, section: 'mcp' };
     return null;
@@ -877,7 +879,7 @@ interface Views {
     const n = (g: string) => tasks.filter((t) => t.status.group === g).length;
     const done = tasks.filter((t) => t.status.group === 'done' && new Date(t.updatedAt).toDateString() === today).length;
     const parts = [n('attention') ? `${n('attention')} need you` : '', n('running') ? `${n('running')} running` : '', done ? `${done} finished today` : ''].filter(Boolean);
-    return parts.length ? parts.join(' · ') : tasks.length ? 'Nothing waits for you' : 'Describe a task, or paste a Jira key or link';
+    return parts.length ? parts.join(' · ') : tasks.length ? 'Nothing waits for you' : 'Describe a task, or paste a Jira key or an issue link';
   }
 
   /** The finished tasks in one line of the Tasks page: they stay in the rail's tree, and the page lists them on request. */
@@ -1216,9 +1218,28 @@ interface Views {
           this.renderAgentsChips();
         }
         const colors = Object.fromEntries(((okConfig()?.agents) || []).map((a): [string, string | undefined] => [a.name, a.color]));
-        const kind = p.source.kind === 'jira' ? `${icon('jira')}Jira issue <b>${esc(p.source.key)}</b>${p.source.note ? ` <span class="muted">+ your note</span>` : ''}` : p.source.kind === 'confluence' ? `${icon('doc')}Confluence page <b>${esc(p.source.pageId)}</b>` : `${icon('text')}${p.scenario === 'audit' ? 'Audit scope in your words' : p.scenario === 'readiness' ? 'What to check, in your words' : 'Task described in your words'}`;
+        const src = p.source;
+        const kind =
+          src.kind === 'jira'
+            ? `${icon('jira')}Jira issue <b>${esc(src.key)}</b>${src.note ? ` <span class="muted">+ your note</span>` : ''}`
+            : src.kind === 'confluence'
+              ? `${icon('doc')}Confluence page <b>${esc(src.pageId)}</b>`
+              : src.kind === 'github'
+                ? `${icon('issue')}GitHub issue <b>${esc(`${src.repo}#${src.number}`)}</b>`
+                : src.kind === 'gitlab'
+                  ? `${icon('issue')}GitLab issue <b>${esc(`${src.project}#${src.number}`)}</b>`
+                  : src.kind === 'linear'
+                    ? `${icon('issue')}Linear issue <b>${esc(src.key)}</b>`
+                    : src.kind === 'pr'
+                      ? `${icon('pr')}${src.forge === 'gitlab' ? 'Merge request' : 'Pull request'} <b>${esc(`${src.project}${src.forge === 'gitlab' ? '!' : '#'}${src.number}`)}</b>`
+                    : `${icon('text')}${p.scenario === 'audit' ? 'Audit scope in your words' : p.scenario === 'readiness' ? 'What to check, in your words' : 'Task described in your words'}`;
         const health = S.overview!.health;
-        const needsAtlassian = p.source.kind !== 'text' && !(!health.checking && (health.atlassian || health.atlassianMcp));
+        const ready = !health.checking;
+        const needsAtlassian = (src.kind === 'jira' || src.kind === 'confluence') && !(ready && (health.atlassian || health.atlassianMcp));
+        // What reads the issue or pull request: gh or glab under your login, Bitbucket's token, Linear's MCP server.
+        const forge = src.kind === 'pr' ? src.forge : src.kind;
+        const missing =
+          !ready ? '' : forge === 'bitbucket' && !health.bitbucket ? `Bitbucket is not connected: <a data-action="nav" data-name="mcp" data-section="bitbucket">add its API token</a>` : forge === 'github' && !health.gh.ok ? `GitHub CLI is not ready (${esc(health.gh.error || 'gh')}): run <code>gh auth login</code>` : forge === 'gitlab' && !health.glab.ok ? `GitLab CLI is not ready (${esc(health.glab.error || 'glab')}): run <code>glab auth login</code>` : src.kind === 'linear' && !health.linearMcp ? `Linear is not connected: add its MCP server (<code>claude mcp add --transport http linear https://mcp.linear.app/mcp</code>) and <a data-action="nav" data-name="mcp">sign in</a>` : '';
         patch(
           'detect',
           `<div class="detect">
@@ -1229,6 +1250,7 @@ interface Views {
             ${p.scenario === 'readiness' && p.source.kind === 'text' && /\b[A-Z][A-Z0-9_]+-\d+\b/.test(S.draft.text) ? `<span class="detect warn">${icon('info')}Checked against your words only: name exactly one Jira issue to read it from Jira</span>` : ''}
             ${p.problem ? `<span class="detect error">${icon('alert')}${esc(p.problem)}</span>` : ''}
             ${needsAtlassian ? `<span class="detect warn">${icon('alert')}Jira/Confluence is not connected. <a data-action="nav" data-name="mcp">Sign in to Atlassian MCP</a> or <a data-action="nav" data-name="settings">add a token</a></span>` : ''}
+            ${missing ? `<span class="detect warn">${icon('alert')}${missing}</span>` : ''}
             ${warnTip(p.warnings)}
           </div>
           <div class="detect-outline">${outlineHtml(p.outline, colors)}</div>`
@@ -1511,7 +1533,8 @@ interface Views {
             <h3>Tools</h3>
             ${h && !h.checking ? `${tool(h.claude.ok, 'Claude Code CLI', h.claude.ok ? h.claude.version : h.claude.error, 'Install it from <a data-action="open-url" data-url="https://docs.claude.com/en/docs/claude-code/setup">docs.claude.com</a> or set its path in Settings.')}
             ${tool(h.git.ok, 'Git', h.git.version)}
-            ${tool(h.gh.ok, 'GitHub CLI', h.gh.ok ? `logged in${h.gh.account ? ` as ${h.gh.account}` : ''}` : h.gh.error, 'Optional: needed only to open PRs. Run <code>gh auth login</code>.')}` : '<div class="muted">Checking…</div>'}
+            ${tool(h.gh.ok, 'GitHub CLI', h.gh.ok ? `logged in${h.gh.account ? ` as ${h.gh.account}` : ''}` : h.gh.error, 'Optional: needed only to open PRs and read GitHub issues. Run <code>gh auth login</code>.')}
+            ${tool(h.glab.ok, 'GitLab CLI', h.glab.ok ? `logged in${h.glab.account ? ` as ${h.glab.account}` : ''}` : h.glab.error, 'Optional: needed only for repos and issues on GitLab. Run <code>glab auth login</code>.')}` : '<div class="muted">Checking…</div>'}
           </div></section>
           <section class="card step-card"><div class="step-no">2</div><div class="step-body">
             <h3>Repositories agents may change</h3>
@@ -1568,7 +1591,7 @@ interface Views {
   const actions: Record<string, ActionFn> = {
     nav: (el) => {
       setNavOpen(false);
-      go({ name: el.dataset.name });
+      go({ name: el.dataset.name, ...(el.dataset.section && { section: el.dataset.section }) });
     },
     'toggle-nav': () => setNavOpen(!$('.shell')?.classList.contains('nav-open')),
     'nav-settings': () => go({ name: 'settings' }),

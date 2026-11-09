@@ -14,6 +14,7 @@ const CHECKPOINT_TITLE: Record<string, string> = {
   'protected-changes': 'Settings changes to apply',
   'hook-failure': 'Commit failed',
   'confirm-push': 'Confirm push',
+  'post-review': 'Post the review',
 };
 
 /** What a checkpoint is called where it is listed: an agent that said it cannot go on is blocked, not failed. */
@@ -62,6 +63,8 @@ function describeEvent(e: OrchEvent): Described | null {
       return { tone: 'error', icon: 'error', text: `Commit failed in ${e.repo}` };
     case 'published':
       return { tone: 'ok', icon: 'git-pull-request', text: `Draft PRs opened: ${Object.keys(e.prs).join(', ')}` };
+    case 'review_posted':
+      return { tone: 'ok', icon: 'comment', text: `Review posted to the pull request${e.inline ? ` · ${e.inline} on its lines` : ''}` };
     case 'stopped':
       return { tone: 'warn', icon: 'debug-stop', text: `Stopped${e.reason ? `: ${e.reason}` : ''}` };
     case 'resumed':

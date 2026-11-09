@@ -11,6 +11,7 @@ import { resolveDefaults } from './core/defaults';
 import * as mcp from './core/mcp';
 import { exec } from './core/git';
 import { AtlassianClient } from './core/intake';
+import { BitbucketClient } from './core/bitbucket';
 import * as os from 'os';
 import { probe, expand, accountLabel, statuslineSnapshot, claudeAccounts } from './core/env';
 import { projectConfigFile, loadConfig, type ResolveResult } from './core/config';
@@ -24,6 +25,7 @@ import type { Account, AccountEntry, EngineEvent, LimitWindow, StoredLimits, Per
 type AccountChoice = Pick<Account, 'dir' | 'shownDir' | 'label' | 'source' | 'sourceText'>;
 
 const SECRET_KEY = 'claudestrator.atlassianToken';
+const BITBUCKET_SECRET_KEY = 'claudestrator.bitbucketToken';
 
 /** What the machine check found. After a failed probe only `error` and a failed `claude` are known. */
 interface Health {
@@ -33,6 +35,7 @@ interface Health {
   claude: Partial<Probe['claude']> & { ok: boolean };
   git: Partial<Probe['git']>;
   gh: Partial<Probe['gh']>;
+  glab: Partial<Probe['glab']>;
   checkedAt?: string;
 }
 
@@ -86,6 +89,8 @@ class Orchestrator {
   retired: Engine[] = [];
   root: string | null;
   token: string | undefined;
+  /** Bitbucket Cloud's API token, from VS Code's secret storage. */
+  bitbucketToken: string | undefined;
   watchers: vscode.FileSystemWatcher[];
   _onDidChange: vscode.EventEmitter<void>;
   onDidChange: vscode.Event<void>;
@@ -114,6 +119,7 @@ class Orchestrator {
     this.engine = null;
     this.root = null;
     this.token = undefined;
+    this.bitbucketToken = undefined;
     this.watchers = [];
     this._onDidChange = new vscode.EventEmitter();
     this.onDidChange = this._onDidChange.event;
@@ -141,6 +147,7 @@ class Orchestrator {
     });
     // The guard's server starts with the first agent (Engine.guardListening), not with VS Code.
     this.token = await this.context.secrets.get(SECRET_KEY);
+    this.bitbucketToken = await this.context.secrets.get(BITBUCKET_SECRET_KEY);
     // No processes at activation: the health checks (and the model, sign-in and MCP checks after them) start the
     // first time something needs them, see ensureReady.
     await this.rebuild();
@@ -170,7 +177,7 @@ class Orchestrator {
       this.refreshAuth();
       if (!this.mcp.checkedAt) void this.refreshMcp();
     } catch (e) {
-      this.health = { error: (e as Error).message, claude: { ok: false, error: (e as Error).message }, git: {}, gh: {} };
+      this.health = { error: (e as Error).message, claude: { ok: false, error: (e as Error).message }, git: {}, gh: {}, glab: {} };
     }
     this.fire();
     return this.health;
@@ -218,7 +225,8 @@ class Orchestrator {
       runner,
       hooks: this.hooks,
       atlassian: () => this.atlassian(),
-      mcpIntake: () => this.mcpIntakeServer(),
+      bitbucket: () => this.bitbucket(),
+      mcpIntake: (tracker) => this.mcpIntakeServer(tracker),
       askPermissions: () => settings().get('askPermissions') === true,
       secretFiles: () => [this.agentMcpFile()],
     });
@@ -503,12 +511,17 @@ class Orchestrator {
     this.fire();
   }
 
-  /** A connected (or, before the first check, configured) Atlassian MCP server the intake can read Jira with. */
-  async mcpIntakeServer() {
-    const isAtlassian = (x: mcp.McpServer): boolean => /atlassian|jira|confluence/i.test(`${x.name} ${x.target || ''}`) && !x.missing && !x.disabled;
+  /**
+   * A connected (or, before the first check, configured) MCP server the intake can read a tracker's ticket with:
+   * Atlassian's for Jira and Confluence, Linear's for Linear.
+   */
+  async mcpIntakeServer(tracker: 'atlassian' | 'linear' = 'atlassian') {
+    const names = tracker === 'linear' ? /linear/i : /atlassian|jira|confluence/i;
+    const fits = (x: mcp.McpServer): boolean => names.test(`${x.name} ${x.target || ''}`) && !x.missing && !x.disabled;
     const list = this.mcp.servers.length ? this.mcp.servers : this.root ? await mcp.configuredMcpServers(this.root, this.agentEnv().CLAUDE_CONFIG_DIR) : [];
-    const hit = list.find((x) => isAtlassian(x) && x.state === 'connected') || (!this.mcp.checkedAt && list.find(isAtlassian));
-    return hit ? { server: hit.name, site: settings().get<string>('atlassian.site') || undefined } : null;
+    const hit = list.find((x) => fits(x) && x.state === 'connected') || (!this.mcp.checkedAt && list.find(fits));
+    if (!hit) return null;
+    return { server: hit.name, site: tracker === 'atlassian' ? settings().get<string>('atlassian.site') || undefined : undefined };
   }
 
   mcpState() {
@@ -595,6 +608,28 @@ class Orchestrator {
       if (token) await this.context.secrets.store(SECRET_KEY, token);
       else await this.context.secrets.delete(SECRET_KEY);
       this.token = token || undefined;
+    }
+  }
+
+  /** Bitbucket Cloud's credentials: its email (else the Atlassian one) and the API token; null until both are there. */
+  bitbucketAuth() {
+    const s = settings();
+    const email = s.get<string>('bitbucket.email') || process.env.BITBUCKET_EMAIL || s.get<string>('atlassian.email') || process.env.ATLASSIAN_EMAIL;
+    const token = this.bitbucketToken || process.env.BITBUCKET_API_TOKEN;
+    return email && token ? { email, token } : null;
+  }
+
+  bitbucket() {
+    const auth = this.bitbucketAuth();
+    return auth ? new BitbucketClient(auth) : null;
+  }
+
+  async saveBitbucket({ email, token }: { email?: string; token?: string | undefined }): Promise<void> {
+    await settings().update('bitbucket.email', email || '', vscode.ConfigurationTarget.Global);
+    if (token !== undefined) {
+      if (token) await this.context.secrets.store(BITBUCKET_SECRET_KEY, token);
+      else await this.context.secrets.delete(BITBUCKET_SECRET_KEY);
+      this.bitbucketToken = token || undefined;
     }
   }
 

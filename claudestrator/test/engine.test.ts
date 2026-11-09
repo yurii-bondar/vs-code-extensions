@@ -307,7 +307,7 @@ test('engine: "PROJ-805 перевір готовність…" runs a read-only
 
     const prompt = fs.readFileSync(path.join(h.state, 'prompt-verifier.txt'), 'utf8');
     assert.match(prompt, new RegExp(`- api at ${path.join(ws, 'api').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\(base branch main\\): Betting API`));
-    assert.match(prompt, /Jira issue: PROJ-805\. Search branches and commits for this key; the pull requests GitHub has for it are listed in .*github\/prs\.md/);
+    assert.match(prompt, /Jira issue: PROJ-805\. Search branches and commits for this key; the pull and merge requests that mention it are listed in .*github\/prs\.md/);
     assert.match(await h.engine.svc.readArtifact(taskId, 'github/prs.md'), /## api\n\n- #42 \[merged, merged 2026-10-01\] PROJ-805 cap bets: feat\/PROJ-805-cap → main, https:\/\/github\.com\/acme\/api\/pull\/42/);
     assert.ok(!fs.existsSync(path.join(ws, 'api', 'audit-notes.txt')), 'the verifier cannot write');
     assert.ok(h.outputs.some((o) => o.item.type === 'blocked' && /does not change files/.test(text(o.item.reason))));
@@ -422,6 +422,25 @@ test('engine: checks and git hooks get no credential of yours, and the pre-push 
   }
 });
 
+test('engine: a repo on Bitbucket without a saved token stops the publish before anything is pushed', async () => {
+  const ws = workspace(['api'], 'pipeline: [planner, developer]\nrepos:\n  api: {}\n');
+  const { path: PATH } = remoteSetup(ws, '#!/bin/sh\necho ran >> "$FAKE_STATE/pre-push.log"\n');
+  git(path.join(ws, 'api'), 'remote', 'set-url', 'origin', 'git@bitbucket.org:acme/api.git');
+  const h = await harness(ws, { FAKE_REPOS: 'api', PATH });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
+    await runTask(h.engine, taskId);
+    await h.engine.answer(taskId, 'confirm-push', 'push');
+    await waitFor(async () => !h.engine.isRunning(taskId));
+    const err = h.engine.lastError(taskId);
+    assert.equal(err && err.code, 'pr_failed');
+    assert.match(err!.message, /^api: acme\/api is on Bitbucket.*API token.*Integrations → Bitbucket/);
+    assert.ok(!fs.existsSync(path.join(h.state, 'pre-push.log')), 'not even the pre-push hook ran');
+  } finally {
+    h.hooks.dispose();
+  }
+});
+
 test('engine: a failing pre-push hook stops the push and says why', async () => {
   const ws = workspace(['api'], 'pipeline: [planner, developer]\nrepos:\n  api: {}\n');
   const { remote, path: PATH } = remoteSetup(ws, '#!/bin/sh\necho "lint: 3 problems"\nexit 1\n');
@@ -500,9 +519,9 @@ test('engine: an answer from a page that showed an earlier question does not ans
     const s = await runTask(h.engine, taskId);
     assert.equal(s.checkpoint && s.checkpoint.id, 'approve-plan');
     // The page still showed the plan before a re-plan: its question was asked at another time.
-    await assert.rejects(() => h.engine.answer(taskId, 'approve-plan', 'approve', undefined, '2020-01-01T00:00:00.000Z'), /question changed since this page showed it/);
+    await assert.rejects(() => h.engine.answer(taskId, 'approve-plan', 'approve', { at: '2020-01-01T00:00:00.000Z' }), /question changed since this page showed it/);
     assert.equal((await h.engine.svc.state(taskId)).checkpoint!.id, 'approve-plan', 'still asked');
-    await h.engine.answer(taskId, 'approve-plan', 'approve', undefined, s.checkpoint!.at);
+    await h.engine.answer(taskId, 'approve-plan', 'approve', { at: s.checkpoint!.at });
     const after = await waitFor(async () => (h.engine.isRunning(taskId) ? null : await h.engine.svc.state(taskId)));
     assert.equal(after.checkpoint && after.checkpoint.id, 'confirm-push', 'the plan it was asked about was approved');
   } finally {

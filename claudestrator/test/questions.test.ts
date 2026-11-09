@@ -83,7 +83,7 @@ test('engine: a task on auto stops at a plan whose question only you can answer,
     assert.equal(s.checkpoint!.id, 'approve-plan', JSON.stringify(h.engine.lastError(taskId)));
     assert.deepEqual(s.checkpoint!.options, ['change', 'stop']);
     assert.ok(!(await h.engine.svc.events(taskId)).some((e) => e.type === 'stage_started' && e.agent === 'developer'), 'no developer ran');
-    await h.engine.answer(taskId, 'approve-plan', 'change', 'Legal approved: "Ante doubles your chance".');
+    await h.engine.answer(taskId, 'approve-plan', 'change', { feedback: 'Legal approved: "Ante doubles your chance".' });
     s = await waitFor(async () => {
       const st = await h.engine.svc.state(taskId);
       return !h.engine.isRunning(taskId) && st.checkpoint ? st : null;
