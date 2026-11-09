@@ -2,7 +2,7 @@
   "name": "claudestrator",
   "displayName": "Claudestrator",
   "description": "Multi-agent Claude Code pipeline: a ticket in, reviewed draft PRs out, across several repos. Plan → your approval → code and tests per repo → parallel review with fix rounds → confirmed push. Plus readiness checks, audits, bug investigation, test coverage and refactoring.",
-  "version": "0.18.0",
+  "version": "0.19.0",
   "publisher": "bondevn",
   "license": "MIT",
   "author": "Yurii Bondar",
