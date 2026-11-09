@@ -1,28 +1,49 @@
 # Claudestrator
 
-A standalone agent pipeline for Claude Code, driven from VS Code. You describe a task (or paste a Jira key, a Jira link or a Confluence page), and a pipeline of Claude Code agents takes it to draft PRs:
+**A team of Claude Code agents in VS Code: a ticket in, reviewed draft PRs out, across several repos.**
+
+[![Version](https://img.shields.io/visual-studio-marketplace/v/bondevn.claudestrator)](https://marketplace.visualstudio.com/items?itemName=bondevn.claudestrator) [![Installs](https://img.shields.io/visual-studio-marketplace/i/bondevn.claudestrator)](https://marketplace.visualstudio.com/items?itemName=bondevn.claudestrator) [![Rating](https://img.shields.io/visual-studio-marketplace/r/bondevn.claudestrator)](https://marketplace.visualstudio.com/items?itemName=bondevn.claudestrator) [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](https://github.com/yurii-bondar/vs-code-extensions/blob/main/claudestrator/LICENSE)
+
+![A task from plain words to draft PRs: the plan, your approval, developers per repo, two reviewers at once, a fix round, and the push you confirm](https://raw.githubusercontent.com/yurii-bondar/vs-code-extensions/main/claudestrator/media/screenshots/demo.gif)
+
+You describe a task in plain words, or paste a Jira key, a Jira link or a Confluence page. A planner writes a plan for you to approve; a developer works in each repo, with its checks after it; a tester covers the change across the repos; reviewers check the whole diff with fresh eyes and send what they find back for a fix round. Everything is committed locally, and nothing is pushed until you say so: then the draft PRs open.
 
 ```
 ticket → planner → [you approve the plan] → per repo: developer (checks after each) → tester across all repos (checks in each)
        → reviewer (fresh context, whole diff) [+ appsec-reviewer at once, when on] → fix rounds → commit → [you confirm the push] → draft PRs
 ```
 
-Deliver has a second reviewer, `appsec-reviewer`, off until you turn it on (Agents page). It reviews the diff for security only (authorization, injection, secrets, unsafe parsing, SSRF, the boundaries, new dependencies). Turned on, it runs at the same time as the `reviewer`, each in its own session, in every review round, and its blocker and major findings go into the same fix rounds. In fact any reviewers next to each other in the pipeline run at once.
+## Quick start
 
-Besides delivering a change, two read-only scenarios end with a report instead of PRs:
+1. Install [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) 2.1.302 or newer and log in (`claude --version`). The agents run under your own login and account. See [Requirements](#requirements) for the rest (Git, the GitHub CLI for PRs).
+2. Open the folder that holds your repos and run *Set up this workspace* from the Claudestrator view: it finds the git repos and suggests their checks (lint, typecheck, tests).
+3. Click *New task* (`⌘⌥N`), describe what you want, and press *Start*. The task waits for you at the plan and before the push.
 
-- **Check readiness**: "PROJ-123 перевір готовність виконання таски і закриття всіх критеріїв приймання". The `verifier` reads the issue, finds its branches and commits in every repo and the PRs GitHub has for it (Claudestrator lists them with your `gh`; agents do not reach GitHub), and judges each acceptance criterion (met, partial, not met, check by hand) with file:line evidence, plus gaps that block a release. The verdict (ready, not ready, needs a human check) follows from the statuses.
-- **Audit**: "Аудит проекту: вузькі місця, перформанс, помилки". The `auditor` looks for bugs, performance bottlenecks, reliability and security issues and rates each one critical, high, medium or low.
+## What it does
 
-Three more built-in scenarios cover frequent jobs. Pick them in the composer's scenario menu or with `--scenario <id>`:
+Pick a scenario in the task composer, or let your words pick it. Any language works; the examples are in English.
 
-- **Investigate a bug** (`investigate`, read-only): the `investigator` follows the symptom through the code, the git history, and the logs, metrics and traces your MCP servers reach (Grafana, Loki, Tempo, Sentry…). Its report names the root cause with its evidence, the hypotheses it could not confirm, and the fix with the test that would catch the bug; *Start a task to fix it* turns it into a delivery.
-- **Cover with tests** (`cover-tests`): planner, tester and reviewer, and no developer. The plan marks every repo `tests_only` and names the behaviour no test pins; the reviewer blocks any change outside the tests.
-- **Refactor** (`refactor`): planner, developer and reviewer, and no tester. Behaviour stays as it is: the developer changes no test's expectations, and the reviewer blocks any change in what the code does.
+| Scenario | Example | What you get |
+|---|---|---|
+| **Deliver** | "Add input validation to the signup form: email format, a 12+ character password, errors inline" | A plan for your approval, code and tests in every repo it touches, a review loop, then draft PRs once you confirm the push |
+| **Check readiness** | "PROJ-123: check the work is done and every acceptance criterion is met" | The `verifier` finds the issue's branches, commits and PRs and judges each criterion (met, partial, not met, check by hand) with file:line evidence, plus the gaps that block a release |
+| **Audit** | "Audit the api repo: bottlenecks, performance, bugs" | The `auditor` reports bugs, bottlenecks, reliability and security issues, each rated critical, high, medium or low |
+| **Investigate a bug** | "Checkout fails with 500 since Tuesday's deploy" | The `investigator` follows the symptom through the code, the git history, and the logs, metrics and traces your MCP servers reach (Grafana, Loki, Tempo, Sentry…): the root cause with its evidence, and the fix with the test that would catch it |
+| **Cover with tests** | "Cover the orders module with tests" | Tests for code that is already there; the reviewer blocks any change outside the tests |
+| **Refactor** | "Split OrderService into reading and writing parts" | The structure changes, the behaviour does not: no test's expectations change, and the reviewer blocks any change in what the code does |
+| **Your own** | | Your agents in your order, built as a list or as a diagram with Parallel, Branch, Loop and *You approve* steps |
 
-They are scenarios like yours: *Open as diagram* shows their steps, with what each step adds to its agent's instructions. A change you make is kept in this project's config, and the built-in one stays as it is under it.
+Report scenarios (readiness, audit, investigation) change nothing in your repos; *Start a task to fix it* turns a report into a delivery. Deliver has a second reviewer, `appsec-reviewer`, off until you turn it on (Agents page): it reviews the diff for security only, at the same time as the `reviewer`, and its blocker and major findings go into the same fix rounds.
 
-The orchestration is code, not a prompt: a pure state machine decides what runs next and rejects anything out of order (no skipped approval, no extra review round, no push before you confirm). Each agent is a `claude -p` session of your installed Claude Code CLI, under your login and account.
+## Safe by design
+
+- **Nothing leaves your machine until you confirm.** The task commits locally; you look at the diff and push, or keep it local.
+- **The orchestrator owns git,** not the agents: they cannot commit, push, switch branches or rewrite history.
+- **Agents and checks run in a sandbox:** they write only in their repo, never get your credentials, and reach only the hosts you allow.
+- **The orchestration is code, not a prompt:** a state machine decides what runs next and rejects anything out of order (no skipped approval, no extra review round, no push before you confirm).
+- **Every step shows its cost** (tokens, context, dollars), and a budget per task stops one that runs away.
+
+Each agent is a `claude -p` session of your installed Claude Code CLI, under your login and account.
 
 ## Screenshots
 

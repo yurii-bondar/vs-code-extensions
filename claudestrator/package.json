@@ -1,7 +1,7 @@
 {
   "name": "claudestrator",
   "displayName": "Claudestrator",
-  "description": "A Claude Code agent pipeline in VS Code: plan → your approval → code and tests per repo → review with fix rounds → commit → confirmed push → draft PRs. Also checks a ticket's readiness against its acceptance criteria and audits projects for bugs and bottlenecks.",
+  "description": "Multi-agent Claude Code pipeline: a ticket in, reviewed draft PRs out, across several repos. Plan → your approval → code and tests per repo → parallel review with fix rounds → confirmed push. Plus readiness checks, audits, bug investigation, test coverage and refactoring.",
   "version": "0.18.0",
   "publisher": "bondevn",
   "license": "MIT",
@@ -16,18 +16,42 @@
   },
   "categories": [
     "AI",
-    "Other"
+    "Testing"
   ],
   "keywords": [
     "claude",
     "claude code",
-    "agents",
+    "anthropic",
+    "ai",
+    "ai agents",
+    "agentic",
+    "multi-agent",
     "orchestrator",
     "pipeline",
+    "code review",
+    "ai code review",
+    "security review",
+    "test generation",
+    "refactoring",
+    "bug investigation",
     "jira",
-    "pull request"
+    "confluence",
+    "pull request",
+    "draft pr",
+    "monorepo",
+    "microservices",
+    "workflow",
+    "automation"
   ],
   "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#1f1f1f",
+    "theme": "dark"
+  },
+  "homepage": "https://github.com/yurii-bondar/vs-code-extensions/tree/main/claudestrator#readme",
+  "bugs": {
+    "url": "https://github.com/yurii-bondar/vs-code-extensions/issues"
+  },
   "main": "./dist/extension.js",
   "capabilities": {
     "untrustedWorkspaces": {
@@ -477,6 +501,8 @@
     "@types/node": "^22.20.5",
     "@types/vscode": "~1.101.0",
     "eslint": "^9.39.5",
+    "gifenc": "^1.0.3",
+    "pngjs": "^7.0.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.72.1"
   }
