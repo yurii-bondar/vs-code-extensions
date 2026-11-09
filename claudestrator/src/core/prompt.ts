@@ -131,7 +131,7 @@ function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, 
   if (next.output === 'verdict' && next.round > 1) {
     lines.push('', `This is review round ${next.round}: the previous round's review is among the inputs. Check first that each of its blocker and major findings is fixed, and report again any that is not. Raise a new blocker or major finding only for what the fixes broke or what truly blocks the change, not for what the earlier round could have raised.`);
   }
-  lines.push('Do not commit, push, stash or switch branches: Claudestrator owns git.', 'Your final message is your report; nothing may follow it but the json or the status asked for above.');
+  lines.push('Do not commit, push, stash, reset, rebase or switch branches: Claudestrator owns git.', 'Your final message is your report; nothing may follow it but the json or the status asked for above.');
   return lines.join('\n');
 }
 

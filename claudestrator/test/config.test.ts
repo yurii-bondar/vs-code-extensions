@@ -200,7 +200,7 @@ test('config edits: scenarios, groups, instructions, agents and lists keep their
   assert.match(text, /scenarios:\n {2}quick:\n {4}label: Hot fix # what the menu shows\n/);
   assert.match(text, / {2}reviewer:\n {4}model: opus {5}# the strongest one\npipeline:/);
   const r = passed(await config.loadConfig({ workspace: ws, home }));
-  assert.deepEqual(Object.keys(r.config.custom), ['quick']);
+  assert.deepEqual(Object.values(r.config.custom).filter((sc) => sc.source !== 'built-in').map((sc) => sc.id), ['quick']);
   assert.equal(r.config.agents.reviewer!.effort, 'high', 'back to the built-in effort');
 });
 
@@ -383,4 +383,25 @@ test("config: the planner's json shows where a repo's base branch goes, so a bra
   const planner = r.config.agents.planner!.instructions;
   assert.match(planner, /add "baseBranch": "<branch>" to that repo in the json/);
   assert.match(planner, /"repos": \[\{"name": "<repo>", "mode": "full\|tests_only", "baseBranch": "<only as step 6 says; else leave this key out>"\}\]/);
+});
+
+test('config: the planner writes the sections the next stages read, and knows what a mode and the repos order do', () => {
+  const r = config.resolveConfig([config.builtinLayer()]);
+  assert.ok(r.ok);
+  const { planner, tester } = r.config.agents;
+  const plan = planner!.instructions;
+  const at = (heading: string): number => plan.indexOf(`"${heading}`);
+  assert.ok([at('## Summary'), at('## Contracts'), at('## Changes'), at('### <repo>'), at('## Test plan'), at('## Out of scope')].every((i, k, all) => i > 0 && (k === 0 || i > all[k - 1]!)), 'Summary first (the PR description is the first section), then each repo under Changes, then the test plan');
+  assert.match(plan, /"tests_only" when only its tests change/);
+  assert.match(plan, /List the repos in the json in the order they must change and merge/);
+  assert.match(tester!.instructions, /plan's "Test plan"/, 'the tester works from the section the planner writes for it');
+});
+
+test("config: the built-in agents leave git and how a json is handed over to the prompt, so the two cannot drift apart", () => {
+  const r = config.resolveConfig([config.builtinLayer()]);
+  assert.ok(r.ok);
+  for (const [name, agent] of Object.entries(r.config.agents)) {
+    assert.doesNotMatch(agent.instructions, /owns git|StructuredOutput/, `${name} says it again`);
+    if (/End with the json/.test(agent.instructions)) assert.match(agent.instructions, /the prompt says how to hand it over/, name);
+  }
 });

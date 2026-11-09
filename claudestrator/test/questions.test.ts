@@ -45,8 +45,8 @@ test('plan: a question is blocking only when the planner says so', () => {
     assert.ok(c.ok);
     return c.config.agents.planner!.instructions;
   })();
-  assert.match(planner, /Mark it "blocking": true when only the user can answer it/);
-  assert.match(planner, /A default that changes nothing means the question is blocking/);
+  assert.match(planner, /Mark it "blocking": true when only the user can decide it/);
+  assert.match(planner, /or when no default is safe to build on/);
 });
 
 test('machine: a plan with a question only you can answer is not approved as it is: your answer goes back to the planner', () => {

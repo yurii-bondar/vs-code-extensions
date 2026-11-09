@@ -601,7 +601,8 @@ export type ConfigSummary =
       warnings: string[];
       agents: AgentSummary[];
       custom: CustomScenarioSummary[];
-      removedScenarios: string[];
+      /** The built-in scenarios this config removed, with what the Scenarios page offers to bring back. */
+      removedScenarios: { id: string; label: string; description?: string }[];
       catalog: CatalogEntry[];
       pipelineWarnings: string[];
       repos: string[];

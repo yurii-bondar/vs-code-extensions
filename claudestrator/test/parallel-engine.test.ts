@@ -43,6 +43,23 @@ test('engine: the reviewers of a Parallel work at once, and the review loop judg
   }
 });
 
+test("engine: Deliver with its second reviewer turned on runs both reviewers at once, and the loop judges both", async () => {
+  const ws = workspace(['api'], "agents:\n  appsec-reviewer: { enabled: true }\n");
+  const h = await harness(ws, { FAKE_REPOS: 'api', FAKE_REVIEW: 'fail-once' });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
+    const s = await runTask(h.engine, taskId);
+    assert.equal(s.checkpoint && s.checkpoint.id, 'confirm-push', JSON.stringify(s.checkpoint || h.engine.lastError(taskId)));
+    const events = await h.engine.svc.events(taskId);
+    const steps = events.filter((e) => e.type === 'stage_started' || e.type === 'stage_completed').map((e) => `${e.type === 'stage_started' ? '>' : '<'}${(e as { agent: string }).agent}`);
+    const firstEnd = steps.findIndex((x) => x === '<reviewer' || x === '<appsec-reviewer');
+    assert.ok(steps.slice(0, firstEnd).includes('>reviewer') && steps.slice(0, firstEnd).includes('>appsec-reviewer'), steps.join(' '));
+    assert.equal(only(events, 'stage_started').filter((e) => e.agent === 'appsec-reviewer').length, 2, 'it reviews again in the fix round');
+  } finally {
+    h.hooks.dispose();
+  }
+});
+
 test('engine: a member of a group that hangs is stopped while the other one works, and the task shows both', async () => {
   const ws = workspace(['api'], SCENARIO);
   const h = await harness(ws, { FAKE_REPOS: 'api' });

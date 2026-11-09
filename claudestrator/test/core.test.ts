@@ -5,7 +5,7 @@ import os from 'os';
 import * as path from 'path';
 
 import { transition, replay, nextAction, passSteps, stepRepos, editableFrom, runOf as rerunOf } from '../src/core/machine';
-import { buildPipeline, outline, taskPipeline } from '../src/core/pipeline';
+import { buildPipeline, fixedFlow, outline, taskPipeline } from '../src/core/pipeline';
 import * as config from '../src/core/config';
 import * as backups from '../src/core/backup';
 import * as libraries from '../src/core/library';
@@ -119,6 +119,26 @@ test('pipeline: the built-in agents make a full pipeline with a review loop', as
   assert.deepEqual(pipeline.reviewLoop, { restartAt: 1, end: 3, fixers: ['developer', 'tester'], reviewers: ['reviewer'], maxRounds: 2 });
   assert.deepEqual(outline(pipeline).map((o) => o.kind), ['stage', 'human', 'loop-start', 'repo-block', 'stage', 'stage', 'loop-end', 'finish', 'human', 'finish']);
   assert.equal(bp(defaultPipeline().config, { auto: true }).stages[0]!.approval, false);
+});
+
+test('pipeline: Deliver has a second reviewer, off until you turn it on; then both review at once, in every round', () => {
+  const r = passed(resolve([config.builtinLayer()]));
+  assert.deepEqual(r.config.pipeline, ['planner', 'developer', 'tester', 'reviewer', 'appsec-reviewer']);
+  assert.equal(r.config.agents['appsec-reviewer']!.enabled, false);
+
+  const on = passed(resolve([config.builtinLayer(), layer({ agents: { 'appsec-reviewer': { enabled: true } } })]));
+  const p = bp(on.config);
+  assert.deepEqual(p.stages.map((s) => [s.agent, s.group ?? null]), [['planner', null], ['developer', null], ['tester', null], ['reviewer', 1], ['appsec-reviewer', 1]]);
+  assert.deepEqual(p.reviewLoop, { restartAt: 1, end: 4, fixers: ['developer', 'tester'], reviewers: ['reviewer', 'appsec-reviewer'], maxRounds: 2 });
+  assert.deepEqual(p.warnings, []);
+  assert.equal(fixedFlow(p), false, "a task's agents can still be changed: its reviewers run at once again");
+  // Changing a task's list keeps them together; one left alone runs as it did.
+  const both = taskPipeline([{ name: 'developer', output: 'code' }, { name: 'reviewer', output: 'verdict' }, { name: 'appsec-reviewer', output: 'verdict' }], { maxRounds: 2 });
+  assert.deepEqual(both.stages.map((s) => s.group ?? null), [null, 1, 1]);
+  const alone = taskPipeline([{ name: 'developer', output: 'code' }, { name: 'reviewer', output: 'verdict' }], { maxRounds: 2 });
+  assert.deepEqual(alone.stages.map((s) => s.group ?? null), [null, null]);
+  // A scenario's own Parallel of something else than reviewers still fixes its flow.
+  assert.equal(fixedFlow({ stages: [{ agent: 'a', output: 'audit', scope: 'task', approval: false, group: 1 }], reviewLoop: null }), true);
 });
 
 test('machine: plan → approval → per-repo work → review fix round → commit → push', async () => {
@@ -325,6 +345,8 @@ test('prompt: a code stage hands its report over with its status, in the structu
   // The status comes after the report, so nothing may follow the report but it.
   assert.doesNotMatch(prompt, /nothing may follow it\./);
   assert.match(prompt, /nothing may follow it but the json or the status asked for above/);
+  // The one place that says it, for every agent, built in or not: their instructions do not repeat it.
+  assert.match(prompt, /Do not commit, push, stash, reset, rebase or switch branches: Claudestrator owns git\./);
   // A status alone (what agents sent before the report was part of it) goes back, saying where the report goes.
   assert.match(failed(parseStageReport('code', '', { status: 'done' })).error, /only its status: hand over the status again with the whole report in its `report` field/);
 });
@@ -827,7 +849,7 @@ test('config: effort is validated and inherited along extends', async () => {
   const r = passed(await loadCfg({ workspace: ws, home: tmp('cs-h-') }));
   assert.equal(r.config.agents.security!.effort, 'high');
   assert.equal(r.config.agents.planner!.effort, 'high', 'the built-in effort of the planner');
-  assert.equal(r.config.agents.verifier!.effort, undefined);
+  assert.deepEqual(['verifier', 'auditor'].map((n) => r.config.agents[n]!.effort), ['high', 'high'], 'the report agents dig as deep as the reviewer');
   assert.deepEqual(['planner', 'developer', 'tester', 'reviewer'].map((n) => r.config.agents[n]!.mcp), [undefined, false, false, false], 'only agents that work on the repo run without MCP');
   assert.equal(r.config.agents.security!.mcp, false, 'an agent that extends the reviewer inherits it');
   await config.updateAgentConfig(ws, 'developer', { mcp: true });
@@ -1216,10 +1238,45 @@ test('scenarios: custom scenarios with their own agents, models and effort; buil
   await config.setCustomScenario(ws, 'quick-fix', { label: 'Quick fix', agents: [{ name: 'developer' }] }, 'hotfix');
   await config.restoreScenario(ws, 'audit');
   const after = passed(await loadCfg({ workspace: ws, home: tmp('cs-h-') }));
-  assert.deepEqual(Object.keys(after.config.custom), ['quick-fix'], 'renamed');
+  assert.deepEqual(Object.values(after.config.custom).filter((sc) => sc.source !== 'built-in').map((sc) => sc.id), ['quick-fix'], 'renamed');
   assert.deepEqual(after.config.removedScenarios, []);
   await config.removeScenario(ws, 'quick-fix');
-  assert.deepEqual(Object.keys(passed(await loadCfg({ workspace: ws, home: tmp('cs-h-') })).config.custom), []);
+  assert.deepEqual(Object.values(passed(await loadCfg({ workspace: ws, home: tmp('cs-h-') })).config.custom).filter((sc) => sc.source !== 'built-in'), []);
+});
+
+test('scenarios: the built-in ones in full run as they are, warn of nothing, and are removed and brought back like the reports', async () => {
+  const r = passed(resolve([config.builtinLayer()]));
+  const builtin = Object.values(r.config.custom).filter((sc) => sc.source === 'built-in');
+  assert.deepEqual(builtin.map((sc) => [sc.id, sc.kind]), [['investigate', 'audit'], ['cover-tests', 'deliver'], ['refactor', 'deliver']]);
+  for (const sc of builtin) assert.deepEqual(bp(r.config, { scenario: sc.id }).warnings, [], sc.id);
+  // What a step adds goes after the agent's own instructions, as for a scenario of yours.
+  assert.match(r.config.custom['cover-tests']!.agents[0]!.instructions!, /"mode": "tests_only"/);
+  assert.match(r.config.custom.refactor!.agents.find((st) => st.name === 'reviewer')!.instructions!, /must not change behaviour/);
+  assert.deepEqual(['appsec-reviewer', 'investigator'].map((n) => r.config.agents[n]!.output), ['verdict', 'audit']);
+
+  // Removed: `false` in the project, so the built-in layer under it cannot bring it back; listed with its name.
+  const ws = tmp('cs-builtin-sc-');
+  const home = tmp('cs-h-');
+  await config.removeScenario(ws, 'refactor');
+  assert.match(fs.readFileSync(config.projectConfigFile(ws), 'utf8'), /refactor: false/);
+  const gone = passed(await loadCfg({ workspace: ws, home }));
+  assert.equal(gone.config.custom.refactor, undefined);
+  assert.deepEqual(gone.config.removedScenarios, ['refactor']);
+  assert.deepEqual(config.builtinScenarioInfo('refactor'), { label: 'Refactor', description: 'Restructures code without changing what it does; no tester' });
+  await config.restoreScenario(ws, 'refactor', { home });
+  const back = passed(await loadCfg({ workspace: ws, home }));
+  assert.equal(back.config.custom.refactor!.source, 'built-in', 'the built-in one, not a copy of it');
+  assert.deepEqual(back.config.removedScenarios, []);
+
+  // Removed in your own config too: the project gets the built-in one back in full.
+  fs.mkdirSync(path.join(home, config.CONFIG_DIR), { recursive: true });
+  fs.writeFileSync(config.userConfigFile(home), 'scenarios:\n  investigate: false\n');
+  await config.restoreScenario(ws, 'investigate', { home });
+  const restored = passed(await loadCfg({ workspace: ws, home })).config.custom.investigate!;
+  assert.deepEqual([restored.source, restored.label, restored.agents.map((st) => st.name)], ['project', 'Investigate a bug', ['investigator']]);
+
+  // A scenario of yours with the same name gets another id.
+  assert.equal(await config.saveCustomScenario({ workspace: ws, home, label: 'Refactor!', agents: [{ name: 'developer' }] }), 'refactor-2');
 });
 
 test('config edits from the dashboard: new scenarios and agents, kept only when the config still works', async () => {
@@ -1247,7 +1304,7 @@ test('config edits from the dashboard: new scenarios and agents, kept only when 
   const file = await config.addAgent({ workspace: ws, home, name: 'security-reviewer', base: 'developer', description: 'Checks for injection' });
   assert.equal(file, path.join(ws, config.CONFIG_DIR, config.PROMPTS_DIR, 'security-reviewer.md'));
   assert.match(fs.readFileSync(file, 'utf8'), /Added to the instructions of "developer"/);
-  assert.deepEqual((await resolved()).pipeline, ['planner', 'developer', 'security-reviewer', 'tester', 'reviewer']);
+  assert.deepEqual((await resolved()).pipeline, ['planner', 'developer', 'security-reviewer', 'tester', 'reviewer', 'appsec-reviewer']);
   // One that writes a readiness report joins that scenario, not the pipeline.
   // Without a description an agent of its own would break the config: the old panel left it so, this undoes it.
   await assert.rejects(() => config.addAgent({ workspace: ws, home, name: 'qa-check', output: 'readiness' }), /needs a description/);
@@ -1384,7 +1441,7 @@ test('libraries: agents and scenarios from a folder of their own merge in, a pro
   assert.match(agent.instructions, /Look for injection first/, 'instruction files resolve from the library folder');
   assert.ok(agent.instructions.includes(`The checklist is ${lib}/checklist.md.`), '{{dir}} names the library folder, wherever it is kept');
   assert.equal(r.config.custom['secure-delivery']!.source, `library:${label}`);
-  assert.deepEqual(r.config.pipeline, ['planner', 'developer', 'tester', 'reviewer'], 'a library agent is not run by default');
+  assert.deepEqual(r.config.pipeline, ['planner', 'developer', 'tester', 'reviewer', 'appsec-reviewer'], 'a library agent is not run by default');
   assert.ok(!r.warnings.some((w) => w.code === 'not_in_pipeline'), 'nor is it reported as never running');
   assert.deepEqual(bp(r.config, { scenario: 'secure-delivery' }).stages.map((st) => st.agent), ['planner', 'developer', 'security-reviewer']);
 
@@ -1540,7 +1597,7 @@ test('backup: restore into another project writes the agents with their instruct
   assert.match(after.config.agents['security-reviewer']!.instructions, /Look for injection first\./);
   assert.equal(after.config.agents.developer!.model, 'opus');
   assert.deepEqual((await config.readProjectLayer(to)).pipeline, ['planner', 'developer', 'tester', 'security-reviewer']);
-  assert.deepEqual(Object.keys(after.config.custom).sort(), ['hotfix', 'mine'], 'a scenario that is not in the backup is not touched');
+  assert.deepEqual(Object.values(after.config.custom).filter((sc) => sc.source !== 'built-in').map((sc) => sc.id).sort(), ['hotfix', 'mine'], 'a scenario that is not in the backup is not touched');
   assert.deepEqual(after.config.removedScenarios, ['audit']);
 
   // The same backup again replaces what is there, an agent entirely, instruction file included.

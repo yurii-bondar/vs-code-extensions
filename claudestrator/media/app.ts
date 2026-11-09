@@ -1050,7 +1050,7 @@ interface Views {
     /** Every scenario the menu offers: Deliver, the built-in reports not removed, then your own. */
     scenarioIds() {
       const c = okConfig();
-      const removed = (c && c.removedScenarios) || [];
+      const removed = ((c && c.removedScenarios) || []).map((r) => r.id);
       return [...Object.keys(SCENARIO_INFO).filter((id) => !removed.includes(id)), ...((c && c.custom) || []).map((x) => x.id)];
     },
     /** A scenario's agents as the config lists them, switched-off ones included. */
@@ -1338,7 +1338,7 @@ interface Views {
       if (pipeDrag && pipeDrag.id === 'scenario') return;
       const origin = (id: string) => {
         const own = c.custom.find((x) => x.id === id);
-        if (!own) return '<span class="chip small" title="Comes with Claudestrator">built-in</span>';
+        if (!own || own.source === 'built-in') return '<span class="chip small" title="Comes with Claudestrator">built-in</span>';
         const lib = own.source && own.source.startsWith('library:') ? own.source.slice('library:'.length) : '';
         return lib ? `<span class="chip small lib-chip" title="${esc(`From the library ${lib}`)}">${icon('folder')}${esc(lib)}</span>` : '<span class="chip small" title="Defined in this project\'s or your own config.yaml">yours</span>';
       };
@@ -1385,7 +1385,7 @@ interface Views {
         <div class="sc-layout">
           <div class="sc-list">
             ${ids.map(item).join('')}
-            ${removed.length ? `<h4 class="sc-list-head">Removed</h4>${removed.map((id) => `<button class="btn ghost sm" data-action="sc-restore" data-id="${esc(id)}" title="${esc(SCENARIO_INFO[id]!.hint)}">${icon('refresh')}Bring back ${esc(SCENARIO_INFO[id]!.label)}</button>`).join('')}` : ''}
+            ${removed.length ? `<h4 class="sc-list-head">Removed</h4>${removed.map((r) => { const label = SCENARIO_INFO[r.id]?.label ?? r.label; return `<button class="btn ghost sm" data-action="sc-restore" data-id="${esc(r.id)}" data-label="${esc(label)}" title="${esc(SCENARIO_INFO[r.id]?.hint ?? r.description ?? '')}">${icon('refresh')}Bring back ${esc(label)}</button>`; }).join('')}` : ''}
           </div>
           <div class="sc-list sc-libs">
             <h4 class="sc-list-head" title="Your own scenarios with the agents they run, in a folder of their own (library.yaml, instructions in prompts/), for all your projects or for this one. They load before your config, so this project can change them without touching the library.">Libraries</h4>
@@ -1857,7 +1857,7 @@ interface Views {
       if ((await attempt('restoreScenario', { id: el.dataset.id })) === undefined) return;
       await loadOverview();
       scRefresh();
-      toast(`${SCENARIO_INFO[el.dataset.id]!.label} is back`, 'ok');
+      toast(`${el.dataset.label} is back`, 'ok');
     },
     'backup-save': async () => {
       closeMenus();
