@@ -200,7 +200,7 @@ test('config edits: scenarios, groups, instructions, agents and lists keep their
   assert.match(text, /scenarios:\n {2}quick:\n {4}label: Hot fix # what the menu shows\n/);
   assert.match(text, / {2}reviewer:\n {4}model: opus {5}# the strongest one\npipeline:/);
   const r = passed(await config.loadConfig({ workspace: ws, home }));
-  assert.deepEqual(Object.keys(r.config.custom), ['quick']);
+  assert.deepEqual(Object.values(r.config.custom).filter((sc) => sc.source !== 'built-in').map((sc) => sc.id), ['quick']);
   assert.equal(r.config.agents.reviewer!.effort, 'high', 'back to the built-in effort');
 });
 

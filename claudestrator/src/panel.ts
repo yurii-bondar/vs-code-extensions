@@ -258,7 +258,7 @@ class DashboardPanel implements RpcHandlers {
         }),
       // Custom scenarios for the composer's menu and the Scenarios page, and the built-in ones that were removed.
       custom: Object.values(c.custom).map((sc) => ({ id: sc.id, label: sc.label, description: sc.description, kind: sc.kind, ...(sc.source && { source: sc.source }), ...(sc.intake && { intake: sc.intake }) })),
-      removedScenarios: c.removedScenarios,
+      removedScenarios: c.removedScenarios.map((id) => ({ id, ...cfg.builtinScenarioInfo(id) })),
       // Every agent, for the composer's scenario editor to add from.
       catalog: Object.values(c.agents).map((a) => ({ name: a.name, output: a.output, runs: a.runs, color: a.color, enabled: a.enabled, description: a.description })),
       pipelineWarnings: buildPipeline(c).warnings.map((w) => w.message),
@@ -624,7 +624,7 @@ class DashboardPanel implements RpcHandlers {
   async $deleteScenario({ id }: { id: string }) {
     const r = await this.orch.config();
     const label = (r.ok && r.config.custom[id] && r.config.custom[id]!.label) || ({ readiness: 'Check readiness', audit: 'Audit' } as Record<string, string>)[id] || id;
-    const builtin = id === 'readiness' || id === 'audit';
+    const builtin = cfg.builtinScenarioIds().includes(id);
     const ok = await vscode.window.showWarningMessage(`Delete the scenario "${label}"?`, { modal: true, detail: builtin ? 'It disappears from the menu. You can bring it back from the same menu.' : 'Its agents stay; only this scenario (their order, models and effort) is removed from config.yaml. Tasks already started keep running.' }, 'Delete');
     if (!ok) return { deleted: false };
     await cfg.removeScenario(this.root, id);

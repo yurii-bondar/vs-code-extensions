@@ -200,14 +200,18 @@ const INTAKE: IntakeSettings = { model: 'haiku', effort: 'low' };
 const INTAKE_LAYER = T.obj({ 'model?': T.str(1), 'effort?': T.oneOf(EFFORTS) });
 const CUSTOM_SCENARIO = T.obj({ 'label?': T.str(1, 60), 'description?': T.str(), 'intake?': INTAKE_LAYER, agents: T.arr(SCENARIO_STEP) });
 
-/** `readiness` and `audit` list their agents, or are `false` when removed; any other name is a custom scenario. */
+/**
+ * `readiness` and `audit` list their agents; any other name is a custom scenario. `false` removes one a layer under
+ * this one brings (built in, a library, your config).
+ */
 const scenariosLayer: Check = (v, p) => {
   if (kind(v) !== 'object') return [`${at(p)}: expected a map, got ${kind(v)}`];
   return Object.entries(asRecord(v)).flatMap(([id, x]) => {
     const sub = `${p}.${id}`;
     if (id === 'deliver' || id === 'auto') return [`${sub}: "${id}" is reserved; the delivery pipeline is set with pipeline`];
     if (!SCENARIO_ID.test(id)) return [`${sub}: scenario names are lowercase kebab-case and start with a letter`];
-    if (SCENARIO_OUTPUT[id]) return x === false ? [] : T.arr(agentName)(x, sub);
+    if (x === false) return [];
+    if (SCENARIO_OUTPUT[id]) return T.arr(agentName)(x, sub);
     return CUSTOM_SCENARIO(x, sub);
   });
 };

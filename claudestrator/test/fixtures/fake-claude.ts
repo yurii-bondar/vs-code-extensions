@@ -273,8 +273,9 @@ function main(): void {
         if (process.env.FAKE_BLOCKED === 'tester') return reply(`The new test fails: discount() returns a negative price over 100%.\n\`\`\`json\n${JSON.stringify({ status: 'blocked', blockers: ['discount() returns a negative price for percent > 100 (src/price.js:6)'] })}\n\`\`\``, uuid);
         return reply(`Added feature.test.txt in ${dirs.length || 1} repo(s).`, uuid);
       }
-      // `security`: a second reviewer, as a scenario's Parallel runs next to the first.
+      // `security`: a second reviewer, as a scenario's Parallel runs next to the first; `appsec-reviewer`, Deliver's own.
       case 'security':
+      case 'appsec-reviewer':
       case 'reviewer': {
         const marker = path.join(state!, 'reviewed-once');
         if (process.env.FAKE_REVIEW === 'fail-once' && !fs.existsSync(marker)) {

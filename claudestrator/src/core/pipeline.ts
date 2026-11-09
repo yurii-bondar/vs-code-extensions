@@ -48,7 +48,21 @@ function buildPipeline(config: Config, opts: { scenario?: string | undefined; au
   if (custom) return scenarioPipeline(config, custom.agents, opts);
   if (scenario !== 'deliver') return reportPipeline(config, scenario);
   const enabled = config.pipeline.map((n) => config.agents[n]).filter((a): a is Agent => Boolean(a && a.enabled));
-  return routed(enabled.map(stageOf), { auto: opts.auto, maxRounds: config.limits.reviewRounds });
+  return routed(reviewersAtOnce(enabled.map(stageOf)), { auto: opts.auto, maxRounds: config.limits.reviewRounds });
+}
+
+/**
+ * In a delivery's list of agents, reviewers next to each other run at once, each in its own session: a Parallel of
+ * their own. One left alone (the others turned off or skipped) runs as it did.
+ */
+function reviewersAtOnce(stages: PlainStage[]): PlainStage[] {
+  let group = 0;
+  const review = (st: PlainStage | undefined): boolean => st !== undefined && st.output === 'verdict';
+  return stages.map((st, i) => {
+    if (!review(st) || (!review(stages[i - 1]) && !review(stages[i + 1]))) return st;
+    if (!review(stages[i - 1])) group++;
+    return { ...st, group };
+  });
 }
 
 /**
@@ -113,11 +127,14 @@ function scenarioKind(config: Pick<Config, 'custom'>, scenario = 'deliver'): str
  */
 function taskPipeline(agents: StageSource[], { scenario = 'deliver', auto, maxRounds }: { scenario?: string; auto?: boolean | undefined; maxRounds: number }): Pipeline {
   if (scenario !== 'deliver') return { mode: scenario, scenario, stages: agents.map((a) => ({ ...stageOf(a), scope: 'task', approval: false })), reviewLoop: null, warnings: [] };
-  return routed(agents.map(stageOf), { auto, maxRounds });
+  return routed(reviewersAtOnce(agents.map(stageOf)), { auto, maxRounds });
 }
 
-/** Whether a pipeline has a scenario's Parallel, Branch, Loop or You approve, which a task's list of agents cannot change. */
-const fixedFlow = (p: Pick<StoredPipeline, 'stages' | 'reviewLoop'>): boolean => p.stages.some((st) => st.group !== undefined || st.when !== undefined || st.approve !== undefined) || Boolean(p.reviewLoop && p.reviewLoop.explicit);
+/**
+ * Whether a pipeline has a scenario's Parallel, Branch, Loop or You approve, which a task's list of agents cannot change.
+ * A Parallel of reviewers is no such thing: a list of agents runs reviewers next to each other at once anyway.
+ */
+const fixedFlow = (p: Pick<StoredPipeline, 'stages' | 'reviewLoop'>): boolean => p.stages.some((st) => (st.group !== undefined && st.output !== 'verdict') || st.when !== undefined || st.approve !== undefined) || Boolean(p.reviewLoop && p.reviewLoop.explicit);
 
 /** Whether an agent with this output can join a task of this scenario. */
 const fitsScenario = (output: Output, scenario = 'deliver'): boolean => (scenario === 'deliver' ? !REPORT_OUTPUTS.includes(output) : output === scenario);
@@ -143,7 +160,8 @@ function routed(plain: PlainStage[], { auto, maxRounds, loop }: { auto?: boolean
 
   const firstCode = firstIndex((s) => s.output === 'code');
   const firstTests = firstIndex((s) => s.output === 'tests');
-  if (firstTests !== -1 && (firstCode === -1 || firstTests < firstCode)) {
+  // With no code stage at all, testing the existing branch is the point (Cover with tests); before one, it is a mistake.
+  if (firstTests !== -1 && firstCode !== -1 && firstTests < firstCode) {
     warn('tests_without_code', `"${stages[firstTests]!.agent}" tests code no stage before it wrote; it will test the existing branch`, stages[firstTests]!.agent);
   }
 

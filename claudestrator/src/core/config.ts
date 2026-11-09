@@ -287,9 +287,64 @@ Write the report for a human: a summary, then the findings by severity, each wit
 ${HAND_OVER}
 {"summary": "...", "scope": ["<repo>"], "findings": [{"severity": "critical|high|medium|low", "category": "bug|performance|reliability|security|maintainability", "repo": "...", "file": "...", "line": 1, "title": "<one line>", "problem": "...", "impact": "...", "fix": "...", "effort": "S|M|L"}]}`;
 
+const SECURITY_REVIEWER = `You review a task's combined diff for security only, with fresh eyes. You did not write it. You change no files; Bash is for read-only commands. Another reviewer covers correctness, tests and scope: leave those to it.
+
+${COMMON}
+
+Read the repos' CLAUDE.md and .claude/rules for their security rules, and hold the diff to them.
+Follow the data the diff touches from where it comes in (a request, a message, a file, an environment variable, another service's reply) to where it is used, and check:
+- authorization: every new or changed entry point checks who may call it and on whose data, before it acts;
+- injection: input that reaches a query, a shell command, a file path, a template, HTML, a header or a log line without the repo's own parameters or escaping;
+- secrets: keys, tokens or passwords in code, config, logs, error messages or test fixtures; a secret sent to a client or a service that does not need it;
+- unsafe parsing: untrusted data into eval, a deserializer that builds objects, a YAML or XML parser with unsafe features on;
+- outbound calls: a URL, host or redirect from input that reaches a request the server makes (SSRF);
+- the boundaries: size, type and range checks on what comes in, and errors that do not leak internals;
+- dependencies the diff adds: a known-vulnerable version, or a name that imitates another package's.
+Skip code the diff did not touch, unless the change makes an old weakness reachable.
+Verify every finding in the code before you raise it, and quote file:line along the path the data takes. A blocker or major finding sends the change into another round, and the rounds are few: no finding you cannot point at.
+
+Severities: blocker (exploitable: an attacker reads or changes data they should not, runs code or reaches an internal host), major (a missing check or a leak not exploitable yet, a secret in the repo), minor (hardening with a real benefit).
+${HAND_OVER}
+{"status": "approved|changes_requested", "summary": "...", "findings": [{"severity": "blocker|major|minor", "repo": "...", "file": "...", "line": 1, "problem": "...", "fix": "..."}]}
+status is changes_requested exactly when there is a blocker or major finding.`;
+
+const INVESTIGATOR = `You find the root cause of one bug: why the software does what the ticket says it does. You change no files.
+Bash is for read-only commands, plus the repo's own tests when one of them shows the bug.
+
+${COMMON}
+
+1. Read the ticket and pin down the symptom: what happens, what should happen instead, where and since when. Take the stack traces, error messages, ids and times it gives.
+2. For each repo the prompt lists, read its CLAUDE.md and .claude/rules, then follow the symptom through the code: from the entry point (a request, a job, an event) to where it goes wrong. Name real files and symbols.
+3. When you have MCP tools for logs, metrics or traces (Grafana, Loki, Tempo, Sentry and the like), confirm with them: the errors around the time the ticket names, the requests that failed, what changed then. Only read: never change a dashboard, an alert or an incident.
+4. Look at what changed: git log and git blame of the code on that path, and the commits around the time the bug began.
+5. Where an existing test covers the path, run it. You cannot add one: describe the test that would show the bug, with the fix.
+6. Keep what you showed apart from what you suppose. The root cause is one you can point at (file:line) with evidence; anything you could not confirm is a hypothesis, with what would confirm or rule it out. Never guess a cause into a root cause.
+
+Write the report for a human: the symptom, the root cause with its evidence (the code path, logs, commits), the hypotheses you ruled out or could not, the fix with the test that would catch the bug, and what a human must check when you could not confirm the cause.
+
+One finding per cause. category is "root-cause" for the cause you showed, "hypothesis" for one you could not confirm (its problem says what would confirm it), "related" for another real problem you met on the way. Severity is the bug's impact: critical (data loss or corruption, money or security, an outage), high (wrong behaviour users hit), medium (an edge case), low (minor). Effort is the size of the fix: S an hour or less, M a day or less, L more.
+${HAND_OVER}
+{"summary": "<the cause in a sentence or two, or that it is not found>", "scope": ["<repo>"], "findings": [{"severity": "critical|high|medium|low", "category": "root-cause|hypothesis|related", "repo": "...", "file": "...", "line": 1, "title": "<one line>", "problem": "<what goes wrong and why, with the evidence>", "impact": "...", "fix": "<the fix, and the test that would catch the bug>", "effort": "S|M|L"}]}`;
+
+// What a step of a built-in scenario adds to its agent's own instructions (withStepInstructions).
+const COVER_PLANNER = `This task adds tests to code that is already there: no production code changes. Give every repo of the plan "mode": "tests_only", and the plan the type "chore".
+Read the existing tests first. Under "## Changes", say per repo which modules to cover and which test files to add or extend. Under "## Test plan", name the behaviour no test pins today, its edge cases and its failure behaviour, the riskiest first.`;
+
+const COVER_TESTER = `The code stays as it is. Your tests pin what it does now; where that looks wrong, do not test the wrong behaviour in: leave a failing test and report the bug, as your instructions say.`;
+
+const COVER_REVIEWER = `No production code may change in this task: a change outside the tests is a blocker. Judge whether the tests pin the behaviour the plan's "Test plan" names, and whether each would fail if that behaviour broke.`;
+
+const REFACTOR_PLANNER = `This task changes the structure of the code, not what it does. Plan steps that each leave the behaviour as it was, and use the type "refactor".
+Under "## Test plan", name the existing tests that cover the code you change. Where none do, say so: this scenario runs no tester, so such code is covered by another task first (Cover with tests), or changed with care.`;
+
+const REFACTOR_DEVELOPER = `Behaviour does not change: results, errors, side effects and public interfaces stay as they are, unless the plan names one. Existing tests stay green. Change a test only where it reaches into what you restructure (an internal you renamed or moved), never what it expects. A test whose expectation you would have to change means the behaviour changed: stop and report it as blocked.`;
+
+const REFACTOR_REVIEWER = `This task must not change behaviour. A change to what the code does (results, errors, side effects, public interfaces, the cost of a hot path) that the plan does not name is a blocker, and so is a change to what a test expects. A test changed only to follow an internal that was renamed or moved is fine.`;
+
 interface BuiltinConfig extends ConfigLayer {
   agents: Record<string, AgentLayer>;
-  scenarios: Record<string, string[]>;
+  /** A report scenario's agents (`readiness`, `audit`), or a scenario in full, as a config.yaml writes it. */
+  scenarios: Record<string, string[] | CustomScenarioLayer>;
 }
 
 const BUILTIN: BuiltinConfig = {
@@ -351,9 +406,57 @@ const BUILTIN: BuiltinConfig = {
       output: 'audit',
       instructions: AUDITOR,
     },
+    'appsec-reviewer': {
+      description: 'Fresh-context, read-only security review of the combined diff: authorization, injection, secrets, unsafe parsing, SSRF.',
+      // Off until you turn it on: then it reviews next to the reviewer, at once, in every round.
+      enabled: false,
+      model: 'opus',
+      effort: 'high',
+      tools: READ_ONLY,
+      mcp: false,
+      color: 'orange',
+      output: 'verdict',
+      instructions: SECURITY_REVIEWER,
+    },
+    investigator: {
+      description: "Read-only. Finds a bug's root cause from its symptom: the code path, git history, and logs and metrics through MCP.",
+      model: 'opus',
+      effort: 'high',
+      tools: READ_ONLY,
+      color: 'pink',
+      output: 'audit',
+      instructions: INVESTIGATOR,
+    },
   },
-  pipeline: ['planner', 'developer', 'tester', 'reviewer'],
-  scenarios: { readiness: ['verifier'], audit: ['auditor'] },
+  // appsec-reviewer is off; turned on, it runs at once with the reviewer (reviewersAtOnce).
+  pipeline: ['planner', 'developer', 'tester', 'reviewer', 'appsec-reviewer'],
+  scenarios: {
+    readiness: ['verifier'],
+    audit: ['auditor'],
+    investigate: {
+      label: 'Investigate a bug',
+      description: "Finds a bug's root cause and proposes the fix; changes nothing",
+      agents: ['investigator'],
+    },
+    'cover-tests': {
+      label: 'Cover with tests',
+      description: 'Tests for code that is already there; production code stays as it is',
+      agents: [
+        { agent: 'planner', instructions: COVER_PLANNER },
+        { agent: 'tester', instructions: COVER_TESTER },
+        { agent: 'reviewer', instructions: COVER_REVIEWER },
+      ],
+    },
+    refactor: {
+      label: 'Refactor',
+      description: 'Restructures code without changing what it does; no tester',
+      agents: [
+        { agent: 'planner', instructions: REFACTOR_PLANNER },
+        { agent: 'developer', instructions: REFACTOR_DEVELOPER },
+        { agent: 'reviewer', instructions: REFACTOR_REVIEWER },
+      ],
+    },
+  },
   // A task that spends this much has gone wrong somewhere: it stops, and you raise the limit or resume it. 0: no limit.
   limits: { reviewRounds: 2, gateAttempts: 3, budgetUsd: 25 },
   language: 'English',
@@ -363,6 +466,12 @@ const BUILTIN: BuiltinConfig = {
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 const builtinLayer = (): Layer => ({ name: 'built-in', baseDir: '/', config: clone(BUILTIN) });
 const builtinAgentNames = (): string[] => Object.keys(BUILTIN.agents);
+const builtinScenarioIds = (): string[] => Object.keys(BUILTIN.scenarios);
+/** A built-in scenario's name and description, for one that was removed and is not in the config any more. */
+function builtinScenarioInfo(id: string): { label: string; description?: string } {
+  const sc = BUILTIN.scenarios[id];
+  return sc && !Array.isArray(sc) ? { label: sc.label || id, ...(sc.description && { description: sc.description }) } : { label: id };
+}
 
 const projectConfigFile = (workspace: string): string => path.join(workspace, CONFIG_DIR, CONFIG_FILE);
 const userConfigFile = (home: string = os.homedir()): string => path.join(home, CONFIG_DIR, CONFIG_FILE);
@@ -769,6 +878,8 @@ function resolveScenarios(merged: Record<string, ScenarioEntry>, drafts: Map<str
     }
     out[scenario] = names;
   }
+  // A built-in scenario given in full is a custom scenario like yours; `false` over it removes it the same way.
+  for (const id of builtinScenarioIds()) if (!SCENARIO_OUTPUT[id] && merged[id] && merged[id].value === false) removed.push(id);
   return { scenarios: out, removed };
 }
 
@@ -1419,10 +1530,10 @@ function stepInstructionsLayer(workspace: string, st: ScenarioStep): string | { 
   return text || undefined;
 }
 
-/** A custom scenario is deleted; a built-in report scenario is switched off with `false` so a lower layer cannot bring it back. */
+/** A custom scenario is deleted; a built-in one is switched off with `false` so a lower layer cannot bring it back. */
 async function removeScenario(workspace: string, id: string): Promise<string> {
   return editProjectConfig(workspace, (doc) => {
-    if (SCENARIO_OUTPUT[id]) doc.setIn(['scenarios', id], false);
+    if (builtinScenarioIds().includes(id)) doc.setIn(['scenarios', id], false);
     else doc.deleteIn(['scenarios', id]);
     const node = doc.getIn(['scenarios'], true) as YamlCollection | undefined;
     if (node && node.items && node.items.length === 0) doc.deleteIn(['scenarios']);
@@ -1430,14 +1541,17 @@ async function removeScenario(workspace: string, id: string): Promise<string> {
 }
 
 /**
- * Brings a removed built-in report scenario back. When the layers under the project (built in, libraries, your config)
- * still list its agents, the project's `false` goes and their list counts again, yours (`readiness: [verifier,
- * my-verifier]`) included. When they removed it too, the project lists the built-in agents.
+ * Brings a removed built-in scenario back. When the layers under the project (built in, libraries, your config)
+ * still have it, the project's `false` goes and theirs counts again, yours (`readiness: [verifier, my-verifier]`)
+ * included. When they removed it too, the project gets the built-in one.
  */
 async function restoreScenario(workspace: string, id: string, { home }: { home?: string | undefined } = {}): Promise<string> {
   const { layers } = await loadLayers({ workspace, ...(home && { home }) });
   const under = mergeLayers(layers.filter((l) => l.name !== 'project')).scenarios[id];
-  if (!under || !Array.isArray(under.value)) return setScenario(workspace, id, BUILTIN.scenarios[id] || []);
+  const builtin = BUILTIN.scenarios[id];
+  if (builtin && !Array.isArray(builtin)) {
+    if (!under || under.value === false) return editProjectConfig(workspace, (doc) => writeIn(doc, ['scenarios', id], clone(builtin)));
+  } else if (!under || !Array.isArray(under.value)) return setScenario(workspace, id, builtin || []);
   return editProjectConfig(workspace, (doc) => {
     writeIn(doc, ['scenarios', id], undefined);
     const left = doc.getIn(['scenarios'], true);
@@ -1620,8 +1734,8 @@ function idFromLabel(label: string, taken: Set<string>, fallback: string): strin
   return id;
 }
 
-/** Scenario ids nobody can take: the delivery pipeline, the composer's "pick for me", and the built-in reports. */
-const RESERVED_SCENARIOS = ['deliver', 'auto', ...Object.keys(SCENARIO_OUTPUT)];
+/** Scenario ids nobody can take: the delivery pipeline, the composer's "pick for me", and the built-in scenarios. */
+const RESERVED_SCENARIOS = ['deliver', 'auto', ...Object.keys(SCENARIO_OUTPUT), ...builtinScenarioIds()];
 
 /**
  * Creates or changes a custom scenario. Without `id` a new one is named after its label (`Quick fix` → `quick-fix`,
@@ -1764,6 +1878,8 @@ export {
   BUILTIN,
   builtinLayer,
   builtinAgentNames,
+  builtinScenarioIds,
+  builtinScenarioInfo,
   projectConfigFile,
   userConfigFile,
   loadLayerFile,
