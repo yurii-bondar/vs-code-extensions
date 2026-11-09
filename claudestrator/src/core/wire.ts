@@ -143,9 +143,11 @@ export interface HealthReport {
   claude: { ok: boolean; version: string | undefined; path: string | null | undefined; error: string | undefined };
   git: { ok: boolean | undefined; version: string | undefined };
   gh: { ok: boolean | undefined; version: string | undefined; account: string | undefined; error: string | undefined; installed: boolean };
+  glab: { ok: boolean | undefined; version: string | undefined; account: string | undefined; error: string | undefined; installed: boolean };
   account: Account;
   atlassian: boolean;
   atlassianMcp: string | null;
+  linearMcp: string | null;
 }
 
 export type HealthSummary = HealthChecking | HealthReport;
@@ -810,6 +812,7 @@ export interface SettingsData {
   accounts: AccountEntry[];
   account: Account;
   atlassian: { site: string; email: string; hasToken: boolean; fromEnv: boolean; connected: boolean; mcp: { server: string; site: string | undefined } | null };
+  bitbucket: { email: string; hasToken: boolean; fromEnv: boolean; connected: boolean };
   health: HealthSummary;
 }
 
@@ -871,6 +874,8 @@ export interface Rpc {
   pickClaude: { params: void; result: string | null };
   saveAtlassian: { params: { site?: string; email?: string; token?: string }; result: Void };
   testAtlassian: { params: void; result: AtlassianUser };
+  saveBitbucket: { params: { email?: string; token?: string }; result: Void };
+  testBitbucket: { params: void; result: AtlassianUser };
   mcp: { params: { refresh?: boolean }; result: McpData };
   mcpLogin: { params: { name: string }; result: Void };
   mcpShowLogin: { params: { name: string }; result: Void };

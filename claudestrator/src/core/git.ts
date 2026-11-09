@@ -218,6 +218,15 @@ class GitRepo {
     return r.code === 0 ? true : r.code === 2 ? false : null;
   }
 
+  /**
+   * Origin's URL as configured, or null for a repo without one. Not as `git remote get-url` gives it: that applies
+   * `url.<base>.insteadOf`, and a mirror or a rewrite to another host would hide which forge the project is on.
+   */
+  async originUrl(): Promise<string | null> {
+    const r = await this.git('config', '--get', 'remote.origin.url');
+    return r.code === 0 && r.stdout.trim() ? r.stdout.trim() : null;
+  }
+
   /** Where `of` (HEAD, or a branch) left the base: merge-base with origin/<base>, else with <base>, else HEAD. */
   async baseRef(base: string, of = 'HEAD'): Promise<string> {
     for (const ref of [`origin/${base}`, base]) {

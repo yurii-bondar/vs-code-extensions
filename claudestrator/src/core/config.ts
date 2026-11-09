@@ -10,7 +10,7 @@ import { validateConfigLayer, validateAgentPatch, validateLibraryLayer, INTAKE, 
 import { ORCH_DIR } from './store';
 import { ENV_FILE, SECRET_PATHS, GITHUB_TOKENS } from './settings';
 import { signature, writeAtomic } from './files';
-import type { Agent, Config, CustomScenario, Diagnostic, Effort, Gate, GitMode, GroupType, Output, Policy, RepoConfig, Runs, ScenarioStep, TaskGroup, TaskInstruction } from './types';
+import type { Agent, Config, CustomScenario, Diagnostic, Effort, ForgeOverride, Gate, GitMode, GroupType, Output, Policy, RepoConfig, Runs, ScenarioStep, TaskGroup, TaskInstruction } from './types';
 import { flattenSteps, nestSteps } from './steps';
 import { conditionOutput, describeCondition, sameBranch } from './conditions';
 import type { AgentStepLayer, FlatStep, ScenarioStepLayer } from './steps';
@@ -58,6 +58,8 @@ interface RepoLayer {
   path?: string;
   baseBranch?: string;
   gates?: Gate[];
+  /** `github` or `gitlab`, when origin's host does not say which. */
+  forge?: ForgeOverride;
 }
 
 interface ConfigLayer {
@@ -727,7 +729,7 @@ function resolveConfig(layers: Layer[], opts: { flags?: Flags | undefined; readF
   const baseBranch = merged.baseBranch ?? 'main';
   const repos: Record<string, RepoConfig> = {};
   for (const [name, repo] of merged.repos) {
-    repos[name] = { name, ...(repo.role && { role: repo.role }), path: repo.path ?? name, baseBranch: repo.baseBranch ?? baseBranch, gates: repo.gates ?? [] };
+    repos[name] = { name, ...(repo.role && { role: repo.role }), path: repo.path ?? name, baseBranch: repo.baseBranch ?? baseBranch, gates: repo.gates ?? [], ...(repo.forge && { forge: repo.forge }) };
   }
 
   // A group ticks only instructions that exist; one it names that is gone is left out, not an error.
@@ -1576,10 +1578,13 @@ async function setProjectValue(workspace: string, keyPath: string[], value: unkn
   });
 }
 
+/** Writes a repo's entry as the Repos page has it; `forge`, which the page does not edit, stays as written. */
 async function setRepo(workspace: string, name: string, layer: RepoLayer | undefined, oldName?: string): Promise<string> {
   return editProjectConfig(workspace, (doc) => {
+    const forge = doc.getIn(['repos', oldName || name, 'forge']);
     if (oldName && oldName !== name) renameIn(doc, ['repos'], oldName, name);
-    writeIn(doc, ['repos', name], layer);
+    const kept = layer && !layer.forge && (forge === 'github' || forge === 'gitlab') ? { ...layer, forge } : layer;
+    writeIn(doc, ['repos', name], kept);
   });
 }
 

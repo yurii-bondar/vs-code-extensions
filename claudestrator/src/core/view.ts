@@ -89,6 +89,9 @@ function sourceOf(s: TaskState | null | undefined): TaskSource | null {
   const link = s.spec && s.spec.links && s.spec.links[0];
   if (src.kind === 'jira') return { kind: 'jira', label: src.key, url: (link && link.url) || (src.site ? `https://${src.site}/browse/${src.key}` : undefined) };
   if (src.kind === 'confluence') return { kind: 'confluence', label: 'Confluence page', url: src.url };
+  if (src.kind === 'linear') return { kind: 'linear', label: src.key, url: src.url };
+  if (src.kind === 'github') return { kind: 'github', label: `${src.repo}#${src.number}`, url: (link && link.url) || `https://${src.host}/${src.repo}/issues/${src.number}` };
+  if (src.kind === 'gitlab') return { kind: 'gitlab', label: `${src.project}#${src.number}`, url: (link && link.url) || `https://${src.host}/${src.project}/-/issues/${src.number}` };
   return { kind: 'text', label: 'Description' };
 }
 

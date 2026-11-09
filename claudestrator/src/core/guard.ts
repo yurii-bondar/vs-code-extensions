@@ -742,6 +742,7 @@ async function checkCommand({ cmd, args, herestring }: Call, dir: Dir, ctx: Guar
   if (cmd === 'find') return checkFind(args, dir, ctx);
   if (cmd === 'git') return checkGit(args, dir, ctx);
   if (cmd === 'gh') return checkGh(args, dir, ctx);
+  if (cmd === 'glab') return checkGlab(args, dir, ctx);
   if (cmd === 'rm') return checkRm(args, dir, ctx);
   // `npm@10`, `yarn@4` (through corepack or npx) are npm and yarn.
   const tool = cmd.replace(/(?<=.)@.*$/, '');
@@ -1586,6 +1587,32 @@ async function checkGh(all: string[], dir: Dir, ctx: GuardContext): Promise<Verd
       if (ctx.task && !ctx.task.canPush) return deny(`task ${ctx.task.taskId} has not reached publish: open PRs only after the user confirms the push`);
     }
     return attributionIn(optionValues(args, ['--body', '-b', '--title', '-t']), optionValues(args, ['--body-file', '-F']), dir, ctx);
+  }
+  return allow;
+}
+
+/** glab actions an agent may use, for reading only (`ci trace` prints a job's log). */
+const AGENT_GLAB_READ = new Set<string>(['view', 'list', 'diff', 'status', 'trace']);
+
+/**
+ * GitLab's CLI, as gh: agents only read (merge requests, issues, pipelines), never sign in or read glab's config (it
+ * holds the token), and nobody merges. An MR is opened as a draft, and only once the task may push.
+ */
+async function checkGlab(all: string[], dir: Dir, ctx: GuardContext): Promise<Verdict> {
+  const [group, action, ...args] = all;
+  if (ctx.agent && (group === 'auth' || group === 'config' || group === 'token')) return deny(`agents do not use glab ${group}: it can print your GitLab token`);
+  if (ctx.agent && group !== 'api' && !AGENT_GLAB_READ.has(action ?? '')) return deny(`agents only read with glab (view, list, diff, status); glab ${group ?? ''} ${action ?? ''} is the orchestrator's`);
+  if (ctx.agent && group === 'api' && ghApiWrites(all)) return deny('agents only read with glab api (GET)');
+  if (group === 'mr' && (action === 'merge' || action === 'approve')) return deny('merging MRs is for humans');
+  if (group === 'api' && all.some((a) => /\/merge_requests\/[^/\s]+\/merge(\b|$)/.test(a))) return deny('merging MRs is for humans');
+  if (group === 'repo' && ['delete', 'archive', 'transfer'].includes(action ?? '')) return deny('repository settings are out of scope');
+  if (group === 'mr' && (action === 'create' || action === 'update')) {
+    if (action === 'create') {
+      const flags = flagSet(args);
+      if (ctx.policy.draftPrsOnly && !flags.has('--draft') && !flags.has('--wip')) return deny('MRs are opened as drafts only: add --draft (policy.draftPrsOnly)');
+      if (ctx.task && !ctx.task.canPush) return deny(`task ${ctx.task.taskId} has not reached publish: open MRs only after the user confirms the push`);
+    }
+    return attributionIn(optionValues(args, ['--description', '-d', '--title', '-t']), [], dir, ctx);
   }
   return allow;
 }

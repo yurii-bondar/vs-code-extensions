@@ -47,3 +47,11 @@ test('requests: a task command takes its task from an id, the sidebar row or the
   assert.equal(commandTaskId({ webview: 'claudestrator.dashboard', webviewSection: 'task', taskId: 'T-3', taskStatus: 'done' }), 'T-3', "the rail's data-vscode-context");
   for (const arg of [undefined, '', {}, { taskId: 7 }, { card: null }, { card: { taskId: '' } }, null]) assert.equal(commandTaskId(arg), undefined, JSON.stringify(arg));
 });
+
+test("requests: Bitbucket's credentials from the page are strings, and its test takes none", () => {
+  assert.ok(parsePageRequest({ type: 'req', id: 1, method: 'saveBitbucket', params: { email: 'dev@acme.com', token: 't' } })?.ok);
+  assert.ok(parsePageRequest({ type: 'req', id: 2, method: 'saveBitbucket', params: {} })?.ok, 'both may be left out');
+  const bad = parsePageRequest({ type: 'req', id: 3, method: 'saveBitbucket', params: { token: 42 } });
+  assert.ok(bad && !bad.ok && /token: expected a string/.test(bad.error));
+  assert.ok(parsePageRequest({ type: 'req', id: 4, method: 'testBitbucket' })?.ok);
+});

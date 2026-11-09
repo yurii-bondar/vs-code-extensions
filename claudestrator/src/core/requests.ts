@@ -70,6 +70,8 @@ const PARAMS: { [M in keyof Rpc]: Check } = {
   pickClaude: none,
   saveAtlassian: obj({ 'site?': T.str(), 'email?': T.str(), 'token?': T.str() }),
   testAtlassian: none,
+  saveBitbucket: obj({ 'email?': T.str(), 'token?': T.str() }),
+  testBitbucket: none,
   mcp: obj({ 'refresh?': T.bool() }),
   mcpLogin: named,
   mcpShowLogin: named,

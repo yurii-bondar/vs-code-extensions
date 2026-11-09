@@ -692,6 +692,20 @@ interface Views {
     return (keyPath: string[]) => (fromProject(keyPath) ? '<span class="chip small" title="Set in this workspace\'s config.yaml">workspace</span>' : '');
   }
 
+  /** Bitbucket Cloud, on the Integrations page: the API token its repos' pull requests are opened with. */
+  function bitbucketSection(s: SettingsData) {
+    const b = s.bitbucket;
+    return `<section class="card settings-card" id="sec-bitbucket"><h3>${icon('pr')}Bitbucket Cloud</h3>
+      ${b.connected ? `<div class="tool-check ok">${icon('check')}<b>Opening pull requests</b><span>with the API token below, for repos whose origin is on bitbucket.org</span></div>` : `<div class="tool-check">${icon('info')}<b>Opening pull requests</b><span>not set up: needed only for repos on bitbucket.org (GitHub uses gh, GitLab glab)</span></div>`}
+      <p class="muted small">Bitbucket has no CLI like gh, so Claudestrator opens its pull requests over Bitbucket's API, with an Atlassian API token with Bitbucket's scopes (pull requests: read and write; repositories and your account: read). It is kept in VS Code's secret storage, and no agent gets it. Create one at <a data-href="https://id.atlassian.com/manage-profile/security/api-tokens">id.atlassian.com</a>.</p>
+      <div class="field-row">
+        <label class="field"><span>Email <span class="muted">empty = the Jira email</span></span><input id="bb-email" class="input" value="${esc(b.email)}" placeholder="${esc(s.atlassian.email || 'you@acme.com')}"></label>
+        <label class="field"><span>API token ${b.hasToken ? '<span class="badge tone-ok">saved</span>' : b.fromEnv ? '<span class="chip small">from env</span>' : ''}</span><input id="bb-token" class="input mono" type="password" placeholder="${b.hasToken ? '•••••••• (leave empty to keep)' : 'paste the token'}"></label>
+      </div>
+      <div class="row"><button class="btn primary sm" data-action="bb-save">${icon('check')}Save</button><button class="btn sm" data-action="bb-test" ${b.connected ? '' : 'disabled'}>${icon('zap')}Test connection</button>${b.hasToken ? `<button class="btn ghost sm danger" data-action="bb-forget">Forget token</button>` : ''}</div>
+    </section>`;
+  }
+
   /** Jira & Confluence, on the Integrations page: how tickets are read, the API token, the projects tasks may come from. */
   function atlassianSection(s: SettingsData, c: ConfigData) {
     const cfg = c.ok ? c.config : null;
@@ -961,10 +975,10 @@ interface Views {
       patch(
         'mcp',
         `<div class="page-head"><div><h1>${icon('plug')}Integrations</h1>
-          <p class="lead">Tickets, docs and tools the agents can reach: Jira and Confluence, and the MCP servers Claude Code loads for your account. The check runs <code>claude mcp list</code>, which contacts every server.</p>
+          <p class="lead">Tickets, docs and tools the agents can reach: Jira and Confluence, and the MCP servers Claude Code loads for your account; and Bitbucket, where pull requests open. The check runs <code>claude mcp list</code>, which contacts every server.</p>
           ${m.account ? `<div class="acc-line">${icon('user')}Account <b>${esc(m.account.email || m.account.label)}</b><span class="muted small">${esc(m.account.shownDir.replace(/^\/Users\/[^/]+/, '~'))} · ${esc(m.account.sourceText)}</span><button class="link small" data-action="open-account-menu">Switch account</button></div>` : ''}</div>
           <div class="row"><span class="muted small">${m.checking ? '<span class="spinner xs"></span> checking…' : m.checkedAt ? `checked ${ago(m.checkedAt)}` : ''}</span><button class="btn" data-action="mcp-refresh" ${m.checking ? 'disabled' : ''}>${icon('refresh')}Check again</button></div></div>
-        ${this.s && this.c ? `<h3 class="section-title">Tickets</h3>${atlassianSection(this.s, this.c)}` : ''}
+        ${this.s && this.c ? `<h3 class="section-title">Tickets</h3>${atlassianSection(this.s, this.c)}<h3 class="section-title">Pull requests</h3>${bitbucketSection(this.s)}` : ''}
         <h3 class="section-title">MCP servers</h3>
         <div class="mcp-legend">
           <span><span class="mcp-dot s-connected"></span>connected · ${count('connected')}</span>
@@ -1017,6 +1031,17 @@ interface Views {
       },
       'at-forget': async () => {
         if (await save('saveAtlassian', { site: $<HTMLInputElement>('#at-site')!.value, email: $<HTMLInputElement>('#at-email')!.value, token: '' }, 'Token removed')) views.mcp.load();
+      },
+      'bb-save': async () => {
+        const token = $<HTMLInputElement>('#bb-token')!.value.trim();
+        if (await save('saveBitbucket', { email: $<HTMLInputElement>('#bb-email')!.value, ...(token && { token }) })) views.mcp.load();
+      },
+      'bb-forget': async () => {
+        if (await save('saveBitbucket', { email: $<HTMLInputElement>('#bb-email')!.value, token: '' }, 'Token removed')) views.mcp.load();
+      },
+      'bb-test': async () => {
+        const me = await attempt('testBitbucket');
+        if (me) toast(`Bitbucket: connected as ${me.name}${me.email ? ` (${me.email})` : ''}`, 'ok');
       },
       'at-test': async () => {
         const me = await attempt('testAtlassian');

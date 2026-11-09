@@ -307,7 +307,7 @@ test('engine: "PROJ-805 перевір готовність…" runs a read-only
 
     const prompt = fs.readFileSync(path.join(h.state, 'prompt-verifier.txt'), 'utf8');
     assert.match(prompt, new RegExp(`- api at ${path.join(ws, 'api').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\(base branch main\\): Betting API`));
-    assert.match(prompt, /Jira issue: PROJ-805\. Search branches and commits for this key; the pull requests GitHub has for it are listed in .*github\/prs\.md/);
+    assert.match(prompt, /Jira issue: PROJ-805\. Search branches and commits for this key; the pull and merge requests that mention it are listed in .*github\/prs\.md/);
     assert.match(await h.engine.svc.readArtifact(taskId, 'github/prs.md'), /## api\n\n- #42 \[merged, merged 2026-10-01\] PROJ-805 cap bets: feat\/PROJ-805-cap → main, https:\/\/github\.com\/acme\/api\/pull\/42/);
     assert.ok(!fs.existsSync(path.join(ws, 'api', 'audit-notes.txt')), 'the verifier cannot write');
     assert.ok(h.outputs.some((o) => o.item.type === 'blocked' && /does not change files/.test(text(o.item.reason))));
@@ -417,6 +417,25 @@ test('engine: checks and git hooks get no credential of yours, and the pre-push 
     const runs = fs.readFileSync(path.join(h.state, 'pre-push.log'), 'utf8').trim().split('\n');
     assert.deepEqual(runs, [`origin ${remote} refs/heads/${branch} ${sha} refs/heads/${branch} ${'0'.repeat(40)} token=none`], 'once, as git would run it, without your credentials');
     assert.equal(git(remote, 'rev-parse', branch), sha, 'then git pushed');
+  } finally {
+    h.hooks.dispose();
+  }
+});
+
+test('engine: a repo on Bitbucket without a saved token stops the publish before anything is pushed', async () => {
+  const ws = workspace(['api'], 'pipeline: [planner, developer]\nrepos:\n  api: {}\n');
+  const { path: PATH } = remoteSetup(ws, '#!/bin/sh\necho ran >> "$FAKE_STATE/pre-push.log"\n');
+  git(path.join(ws, 'api'), 'remote', 'set-url', 'origin', 'git@bitbucket.org:acme/api.git');
+  const h = await harness(ws, { FAKE_REPOS: 'api', PATH });
+  try {
+    const { taskId } = await h.engine.start({ text: 'Add the feature', auto: true });
+    await runTask(h.engine, taskId);
+    await h.engine.answer(taskId, 'confirm-push', 'push');
+    await waitFor(async () => !h.engine.isRunning(taskId));
+    const err = h.engine.lastError(taskId);
+    assert.equal(err && err.code, 'pr_failed');
+    assert.match(err!.message, /^api: acme\/api is on Bitbucket.*API token.*Integrations → Bitbucket/);
+    assert.ok(!fs.existsSync(path.join(h.state, 'pre-push.log')), 'not even the pre-push hook ran');
   } finally {
     h.hooks.dispose();
   }

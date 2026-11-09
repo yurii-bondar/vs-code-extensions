@@ -1,6 +1,7 @@
 // The first user message of an agent run, and the report parsing that checks what it hands back.
 import * as path from 'path';
 import { parsePlanMeta, parseVerdict, parseReadiness, parseAudit, parseWork } from './protocol';
+import { deriveTaskId, sourceRef } from './intake';
 import type { RunAction } from './machine';
 import type { Audit, GroupType, NextMode, Output, ParseResult, PlanMeta, Readiness, TaskState, Verdict, WorkReport } from './types';
 
@@ -92,8 +93,12 @@ function buildAgentPrompt({ state, next, taskDir, language, repoDir, workRepos, 
     lines.push('', 'Repositories (read them where they are; change nothing):', ...repos.map((r) => `- ${r.name} at ${r.dir} (base branch ${r.baseBranch})${r.role ? `: ${r.role}` : ''}`));
     if (next.output === 'plan') lines.push('Name the repos of your plan exactly as listed here.');
   }
-  if (state.source && state.source.kind === 'jira' && next.output === 'readiness') {
-    lines.push('', `Jira issue: ${state.source.key}. Search branches and commits for this key${prsPath ? `; the pull requests GitHub has for it are listed in ${prsPath}` : ''}.`);
+  if (state.source && (state.source.kind === 'jira' || state.source.kind === 'linear') && next.output === 'readiness') {
+    lines.push('', `${state.source.kind === 'jira' ? 'Jira' : 'Linear'} issue: ${state.source.key}. Search branches and commits for this key${prsPath ? `; the pull and merge requests that mention it are listed in ${prsPath}` : ''}.`);
+  }
+  if (state.source && (state.source.kind === 'github' || state.source.kind === 'gitlab') && next.output === 'readiness') {
+    const ref = sourceRef(state.source);
+    lines.push('', `${state.source.kind === 'github' ? 'GitHub' : 'GitLab'} issue: ${ref}. Its work is on branches named <type>/${deriveTaskId(state.source, new Date(0))}-<slug>, and its commits say "Refs: ${ref}": search branches and commits for both.`);
   }
   lines.push('', 'Read these files first, in this order:', ...inputs.map((p) => `- ${p}`));
   // The ticket comes from Jira or Confluence, where anyone with access writes; the repos and earlier reports are not

@@ -219,6 +219,8 @@ export interface RepoConfig {
   path: string;
   baseBranch: string;
   gates: Gate[];
+  /** Where its PRs go when origin's host does not say (a self-managed GitLab on `git.acme.com`). */
+  forge?: ForgeOverride;
 }
 
 export interface Agent {
@@ -382,9 +384,20 @@ export interface Diagnostic {
 
 // ---------- tickets ----------
 
+/** Where a repo's pull or merge requests go: GitHub, GitLab (also where a task's issue may be), Bitbucket Cloud. */
+export type ForgeKind = 'github' | 'gitlab' | 'bitbucket';
+/** The forges `repos.<name>.forge` can name, for a host whose name does not say (Bitbucket Cloud is bitbucket.org). */
+export type ForgeOverride = 'github' | 'gitlab';
+
 export type Source = (
   | { kind: 'jira'; key: string; site?: string }
   | { kind: 'confluence'; pageId: string; url: string }
+  /** A GitHub issue: `repo` is `owner/name`, `host` github.com or a GitHub Enterprise host. */
+  | { kind: 'github'; host: string; repo: string; number: number }
+  /** A GitLab issue: `project` is its full path (`group/sub/name`), `host` gitlab.com or a self-managed host. */
+  | { kind: 'gitlab'; host: string; project: string; number: number }
+  /** A Linear issue, read through the account's Linear MCP server. */
+  | { kind: 'linear'; key: string; url: string }
   | { kind: 'text'; text: string }
 ) & {
   /** What the user wrote next to the issue key ("check it is ready"). */

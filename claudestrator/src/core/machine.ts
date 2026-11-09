@@ -769,10 +769,13 @@ function inputsFor(s: TaskState, step: Step, output: Output): string[] {
 
 const unique = <T>(xs: T[]): T[] => [...new Set(xs)];
 
-/** `<type>/<KEY>-<slug>` for a Jira task, `<type>/<slug>` otherwise. Null until a plan exists. */
+/**
+ * `<type>/<KEY>-<slug>` for a task of an issue (Jira, Linear: whose integrations link a branch by its key; GitHub,
+ * GitLab: `api-12`), `<type>/<slug>` otherwise. Null until a plan exists.
+ */
 function branchName(s: TaskState): string | null {
   if (!s.plan) return null;
-  const key = s.source.kind === 'jira' ? `${s.taskId}-` : '';
+  const key = s.source.kind !== 'text' && s.source.kind !== 'confluence' ? `${s.taskId}-` : '';
   return `${s.plan.type}/${key}${s.plan.slug}`;
 }
 
