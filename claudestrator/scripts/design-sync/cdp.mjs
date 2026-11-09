@@ -66,7 +66,9 @@ export async function launch({ port = 9333, profile, width = 1440, height = 900,
     /** A PNG of the page as it is now: the whole of it, or (`viewport`) what the window shows. */
     async shot(file, { viewport = false } = {}) {
       const h = viewport ? height : await api.eval('Math.max(document.documentElement.scrollHeight, document.body.scrollHeight)');
-      const r = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: !viewport, clip: { x: 0, y: 0, width, height: Math.min(h, 4000), scale: 1 } });
+      // The clip is in page coordinates: the window's view starts where it is scrolled to.
+      const y = viewport ? await api.eval('window.scrollY') : 0;
+      const r = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: !viewport, clip: { x: 0, y, width, height: Math.min(h, 4000), scale: 1 } });
       writeFileSync(file, Buffer.from(r.data, 'base64'));
     },
     close() {

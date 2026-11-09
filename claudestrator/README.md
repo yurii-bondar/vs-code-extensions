@@ -38,6 +38,10 @@ The orchestration is code, not a prompt: a pure state machine decides what runs 
 
 ![Agents at work: developer per repo, then the tester across all of them](https://raw.githubusercontent.com/yurii-bondar/vs-code-extensions/main/claudestrator/media/screenshots/03-running.png)
 
+**Two reviewers at once: the reviewer and the appsec reviewer, each in its own session**
+
+![Two reviewers at once: the reviewer and the appsec reviewer, each in its own session](https://raw.githubusercontent.com/yurii-bondar/vs-code-extensions/main/claudestrator/media/screenshots/11-parallel-review.png)
+
 **The reviewer found a blocker: a fix round**
 
 ![The reviewer found a blocker: a fix round](https://raw.githubusercontent.com/yurii-bondar/vs-code-extensions/main/claudestrator/media/screenshots/04-fix-round.png)
@@ -45,6 +49,10 @@ The orchestration is code, not a prompt: a pure state machine decides what runs 
 **Everything is committed locally; the push and the draft PRs wait for you**
 
 ![Everything is committed locally; the push and the draft PRs wait for you](https://raw.githubusercontent.com/yurii-bondar/vs-code-extensions/main/claudestrator/media/screenshots/05-confirm-push.png)
+
+**The task's flow: the review loop, its round, and the reviewers that work in parallel**
+
+![The task's flow: the review loop, its round, and the reviewers that work in parallel](https://raw.githubusercontent.com/yurii-bondar/vs-code-extensions/main/claudestrator/media/screenshots/12-task-flow.png)
 
 **Tasks grouped by what needs you**
 
@@ -54,9 +62,9 @@ The orchestration is code, not a prompt: a pure state machine decides what runs 
 
 ![Agents and the pipeline: models, effort, order](https://raw.githubusercontent.com/yurii-bondar/vs-code-extensions/main/claudestrator/media/screenshots/07-agents.png)
 
-**Scenarios: Deliver, Check readiness, Audit and your own**
+**Scenarios: Deliver, the built-in ones and your own**
 
-![Scenarios: Deliver, Check readiness, Audit and your own](https://raw.githubusercontent.com/yurii-bondar/vs-code-extensions/main/claudestrator/media/screenshots/08-scenarios.png)
+![Scenarios: Deliver, the built-in ones and your own](https://raw.githubusercontent.com/yurii-bondar/vs-code-extensions/main/claudestrator/media/screenshots/08-scenarios.png)
 
 **Repos and the checks that run after each agent**
 
@@ -65,6 +73,10 @@ The orchestration is code, not a prompt: a pure state machine decides what runs 
 **A group (epic, story) with its Jira key and the instructions it brings**
 
 ![A group (epic, story) with its Jira key and the instructions it brings](https://raw.githubusercontent.com/yurii-bondar/vs-code-extensions/main/claudestrator/media/screenshots/10-groups.png)
+
+**A scenario as a diagram: a Loop, a Parallel of reviewers, You approve, and one step's own instructions**
+
+![A scenario as a diagram: a Loop, a Parallel of reviewers, You approve, and one step's own instructions](https://raw.githubusercontent.com/yurii-bondar/vs-code-extensions/main/claudestrator/media/screenshots/13-scenario-diagram.png)
 
 ## Using it
 
