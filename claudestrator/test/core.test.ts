@@ -325,6 +325,8 @@ test('prompt: a code stage hands its report over with its status, in the structu
   // The status comes after the report, so nothing may follow the report but it.
   assert.doesNotMatch(prompt, /nothing may follow it\./);
   assert.match(prompt, /nothing may follow it but the json or the status asked for above/);
+  // The one place that says it, for every agent, built in or not: their instructions do not repeat it.
+  assert.match(prompt, /Do not commit, push, stash, reset, rebase or switch branches: Claudestrator owns git\./);
   // A status alone (what agents sent before the report was part of it) goes back, saying where the report goes.
   assert.match(failed(parseStageReport('code', '', { status: 'done' })).error, /only its status: hand over the status again with the whole report in its `report` field/);
 });
@@ -827,7 +829,7 @@ test('config: effort is validated and inherited along extends', async () => {
   const r = passed(await loadCfg({ workspace: ws, home: tmp('cs-h-') }));
   assert.equal(r.config.agents.security!.effort, 'high');
   assert.equal(r.config.agents.planner!.effort, 'high', 'the built-in effort of the planner');
-  assert.equal(r.config.agents.verifier!.effort, undefined);
+  assert.deepEqual(['verifier', 'auditor'].map((n) => r.config.agents[n]!.effort), ['high', 'high'], 'the report agents dig as deep as the reviewer');
   assert.deepEqual(['planner', 'developer', 'tester', 'reviewer'].map((n) => r.config.agents[n]!.mcp), [undefined, false, false, false], 'only agents that work on the repo run without MCP');
   assert.equal(r.config.agents.security!.mcp, false, 'an agent that extends the reviewer inherits it');
   await config.updateAgentConfig(ws, 'developer', { mcp: true });
