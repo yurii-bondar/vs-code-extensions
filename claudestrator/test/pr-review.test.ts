@@ -38,16 +38,24 @@ function prWorkspace(config = 'repos:\n  api: {}\n') {
   return { ws, api, sha };
 }
 
-/** gh as GitHub would answer it about #12, recording the reviews posted. */
-function fakeGh(sha: string, posted: Record<string, unknown>[], { refuseLines = false } = {}): Run {
+/**
+ * gh as GitHub would answer it about #12, recording the reviews posted and the line comments sent on their own.
+ * `refuseLine`: a review with line comments is refused (422), and so is a line comment on that line.
+ */
+function fakeGh(sha: string, posted: Record<string, unknown>[], { refuseLine, single = [] }: { refuseLine?: number; single?: Record<string, unknown>[] } = {}): Run {
   return async (cmd, args) => {
     const line = [cmd, ...args].join(' ');
     if (/^gh pr view 12 --repo acme\/api --json /.test(line)) return ok({ title: 'Cap bets at 100', body: 'Bets above the cap must be refused.\n\n## Acceptance criteria\n- a bet over 100 is refused', url: 'https://github.com/acme/api/pull/12', baseRefName: 'main', headRefName: 'feat/cap', headRefOid: sha, comments: [{ author: { login: 'ann' }, createdAt: '2026-11-08T00:00:00Z', body: 'please check the cap' }] });
     if (/^gh api --hostname github\.com --method POST .* repos\/acme\/api\/pulls\/12\/reviews$/.test(line)) {
       const body = JSON.parse(fs.readFileSync(args[args.indexOf('--input') + 1]!, 'utf8')) as Record<string, unknown>;
       posted.push(body);
-      if (refuseLines && (body.comments as unknown[]).length) return { code: 1, stdout: '', stderr: 'gh: Unprocessable Entity (HTTP 422): Line could not be resolved' };
+      if (refuseLine !== undefined && (body.comments as unknown[]).length) return { code: 1, stdout: '', stderr: 'gh: Unprocessable Entity (HTTP 422): Line could not be resolved' };
       return ok({ html_url: 'https://github.com/acme/api/pull/12#pullrequestreview-1' });
+    }
+    if (/^gh api --hostname github\.com --method POST .* repos\/acme\/api\/pulls\/12\/comments$/.test(line)) {
+      const body = JSON.parse(fs.readFileSync(args[args.indexOf('--input') + 1]!, 'utf8')) as Record<string, unknown>;
+      single.push(body);
+      return body.line === refuseLine ? { code: 1, stdout: '', stderr: 'gh: Unprocessable Entity (HTTP 422): line must be part of the diff' } : ok({ id: 9 });
     }
     return { code: 1, stdout: '', stderr: `no rule for ${line}` };
   };
@@ -99,8 +107,11 @@ test('PR review: a pull request link is reviewed in a worktree at its head, and 
     assert.match(ctx.text, /### On the changed lines\n\n\*\*`src\/cap\.js:2`\*\*\n\n\*\*Major:\*\* bet\(\) never checks CAP\n\n\*\*Fix:\*\* refuse x > CAP/);
     assert.match(ctx.text, /### Findings\n\n- \*\*Minor\*\* `README\.md:99` the cap is not documented/, 'off the diff: in the summary, without the repo before its path');
     assert.equal(posted.length, 0, 'nothing posted before you say so');
+    assert.deepEqual(ctx.review!.items.map((i) => [i.severity, i.path, i.line, i.inline]), [['major', 'src/cap.js', 2, true], ['minor', 'README.md', 99, false]], 'each finding, where it would go, to untick');
 
-    await h.engine.answer(taskId, 'post-review', 'post');
+    // The minor one unticked: it goes nowhere.
+    const minor = ctx.review!.items.find((i) => i.severity === 'minor')!.id;
+    await h.engine.answer(taskId, 'post-review', 'post', { omit: [minor] });
     s = await waitFor(async () => (h.engine.isRunning(taskId) ? null : await h.engine.svc.state(taskId)));
     assert.equal(s.outcome, 'posted', JSON.stringify(h.engine.lastError(taskId)));
     assert.deepEqual(s.reviewPosted, { url: 'https://github.com/acme/api/pull/12#pullrequestreview-1', inline: 1 });
@@ -108,7 +119,8 @@ test('PR review: a pull request link is reviewed in a worktree at its head, and 
     assert.equal(review.commit_id, sha, 'on the commit that was reviewed');
     assert.equal(review.event, 'COMMENT', 'neither an approval nor a request for changes: yours to give');
     assert.deepEqual(review.comments, [{ path: 'src/cap.js', line: 2, side: 'RIGHT', body: '**Major:** bet() never checks CAP\n\n**Fix:** refuse x > CAP' }]);
-    assert.match(String(review.body), /^## Review\n\n\*\*reviewer\*\* \(changes requested\): reviewer read it\n\n1 comment on the changed lines\.\n\n### Findings\n\n- \*\*Minor\*\* `README\.md:99`/);
+    assert.equal(String(review.body), '## Review\n\n**reviewer** (changes requested): reviewer read it\n\n1 comment on the changed lines.\n', 'the one you unticked is not in it');
+    assert.deepEqual(s.reviewOmit, [minor]);
     assert.equal((await view.detail(h.engine, taskId)).status.label, 'Review posted');
     assert.ok(!fs.existsSync(dir), "the worktree is gone once it is done");
     assert.equal(git(api, 'worktree', 'list').split('\n').length, 1);
@@ -145,22 +157,30 @@ test('PR review: with the appsec reviewer on, the two review at once; finishing 
   }
 });
 
-test('PR review: a line GitHub refuses sends its comment into the summary, and the review still goes', async () => {
+test('PR review: a line GitHub refuses keeps its comment out of the review, and the other lines still get theirs', async () => {
   const { ws, sha } = prWorkspace();
-  const h = await harness(ws, { FAKE_REPOS: 'api', FAKE_PR_FINDINGS: FINDINGS });
+  const two = JSON.stringify([
+    { severity: 'major', repo: 'api', file: 'src/cap.js', line: 2, problem: 'bet() never checks CAP' },
+    { severity: 'minor', repo: 'api', file: 'src/cap.js', line: 1, problem: 'name the cap' },
+  ]);
+  const h = await harness(ws, { FAKE_REPOS: 'api', FAKE_PR_FINDINGS: two });
   const posted: Record<string, unknown>[] = [];
-  h.engine.cli = fakeGh(sha, posted, { refuseLines: true });
+  const single: Record<string, unknown>[] = [];
+  h.engine.cli = fakeGh(sha, posted, { refuseLine: 1, single });
   try {
     const { taskId } = await h.engine.start({ text: PR });
     await runTask(h.engine, taskId);
     await h.engine.answer(taskId, 'post-review', 'post');
     const s = await waitFor(async () => (h.engine.isRunning(taskId) ? null : await h.engine.svc.state(taskId)));
     assert.equal(s.outcome, 'posted', JSON.stringify(h.engine.lastError(taskId)));
-    assert.equal(posted.length, 2);
-    assert.deepEqual(posted[1]!.comments, []);
-    assert.match(String(posted[1]!.body), /### On lines that could not take a comment\n\n- `src\/cap\.js:2` \*\*Major:\*\* bet\(\) never checks CAP \*\*Fix:\*\* refuse x > CAP/);
-    assert.doesNotMatch(String(posted[1]!.body), /comment on the changed lines/, 'none landed on a line');
-    assert.deepEqual(s.reviewPosted, { url: 'https://github.com/acme/api/pull/12#pullrequestreview-1', inline: 0 });
+    assert.equal((posted[0]!.comments as unknown[]).length, 2, 'first as one review, which GitHub refused');
+    assert.deepEqual(single.map((c) => [c.path, c.line, c.side, c.commit_id]), [['src/cap.js', 2, 'RIGHT', sha], ['src/cap.js', 1, 'RIGHT', sha]], 'then each line on its own');
+    assert.deepEqual(posted[1]!.comments, [], 'the review carries the summary');
+    const body = String(posted[1]!.body);
+    assert.match(body, /1 comment on the changed lines\./);
+    assert.match(body, /### On lines that could not take a comment\n\n- `src\/cap\.js:1` \*\*Minor:\*\* name the cap/);
+    assert.doesNotMatch(body, /never checks CAP/, 'the line that took its comment is not repeated');
+    assert.deepEqual(s.reviewPosted, { url: 'https://github.com/acme/api/pull/12#pullrequestreview-1', inline: 1 });
   } finally {
     h.hooks.dispose();
   }

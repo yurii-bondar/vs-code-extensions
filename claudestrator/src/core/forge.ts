@@ -456,8 +456,9 @@ interface Posted {
 
 /**
  * Posts a review: on GitHub one review (a comment, neither an approval nor a request for changes) on the commit that
- * was reviewed, with its line comments; a line GitHub refuses sends them all into the summary instead. On GitLab and
- * Bitbucket each line comment on its own, then the summary, which lists the ones a line refused.
+ * was reviewed, with its line comments. GitHub refuses the whole review for one line it will not take (it does not say
+ * which): then each line comment goes on its own, and the review carries the summary, which lists the ones refused.
+ * On GitLab and Bitbucket each line comment on its own, then the summary, which lists the ones a line refused.
  */
 async function postReview({ src, pr, post, run, bitbucket, tmp }: PostArgs): Promise<Posted> {
   if (src.forge === 'bitbucket') {
@@ -470,23 +471,28 @@ async function postReview({ src, pr, post, run, bitbucket, tmp }: PostArgs): Pro
     return file;
   };
   if (src.forge === 'github') {
-    const endpoint = `repos/${src.project}/pulls/${src.number}/reviews`;
-    const send = async (inline: InlineComment[], missed: InlineComment[]): Promise<ExecResult> =>
-      run('gh', ['api', '--hostname', src.host, '--method', 'POST', '--header', 'Content-Type: application/json', '--input', await input(`review-${inline.length}.json`, { commit_id: pr.headSha, event: 'COMMENT', body: post.summary(missed), comments: inline.map((c) => ({ path: c.path, line: c.line, side: 'RIGHT', body: c.body })) }), endpoint], { timeoutMs: 120000 });
-    let res = await send(post.inline, []);
-    let inline = post.inline.length;
+    const pulls = `repos/${src.project}/pulls/${src.number}`;
+    const gh = async (endpoint: string, file: string, body: unknown): Promise<ExecResult> => run('gh', ['api', '--hostname', src.host, '--method', 'POST', '--header', 'Content-Type: application/json', '--input', await input(file, body), endpoint], { timeoutMs: 120000 });
+    const line = (c: InlineComment) => ({ path: c.path, line: c.line, side: 'RIGHT', body: c.body });
+    const review = (inline: InlineComment[], missed: InlineComment[]): Promise<ExecResult> => gh(`${pulls}/reviews`, `review-${inline.length}.json`, { commit_id: pr.headSha, event: 'COMMENT', body: post.summary(missed), comments: inline.map(line) });
+    let res = await review(post.inline, []);
+    let missed: InlineComment[] = [];
     // A line GitHub will not take (it moved, it is not in the diff it has) fails the whole review: nothing was posted.
     if (res.code !== 0 && post.inline.length && /\b422\b|Unprocessable|could not be resolved|pull_request_review_thread/i.test(`${res.stderr}${res.stdout}`)) {
-      res = await send([], post.inline);
-      inline = 0;
+      for (const [i, c] of post.inline.entries()) {
+        const one = await gh(`${pulls}/comments`, `line-${i}.json`, { commit_id: pr.headSha, ...line(c) });
+        if (one.code !== 0) missed = [...missed, c];
+      }
+      res = await review([], missed);
     }
     if (res.code !== 0) throw failure('github', res, `post the review to ${prRef(src)}`);
-    return { url: str(obj(parseJson(res, 'github', 'post the review')).html_url) || pr.url, inline };
+    return { url: str(obj(parseJson(res, 'github', 'post the review')).html_url) || pr.url, inline: post.inline.length - missed.length };
   }
   const base = `${gitlabProject(src.project)}/merge_requests/${src.number}`;
   const missed: InlineComment[] = [];
   for (const c of post.inline) {
-    const position = { position_type: 'text', base_sha: pr.baseSha, start_sha: pr.startSha, head_sha: pr.headSha, new_path: c.path, old_path: c.path, new_line: c.line };
+    // A line the PR did not change is named by both its numbers; an added one by its new number only.
+    const position = { position_type: 'text', base_sha: pr.baseSha, start_sha: pr.startSha, head_sha: pr.headSha, new_path: c.path, old_path: c.oldPath ?? c.path, new_line: c.line, ...(c.oldLine !== undefined && { old_line: c.oldLine }) };
     const res = await glabApi(run, src.host, ['--method', 'POST', '--header', 'Content-Type: application/json', '--input', await input(`line-${missed.length}-${c.line}.json`, { body: c.body, position }), `${base}/discussions`], { timeoutMs: 120000 });
     if (res.code !== 0) missed.push(c);
   }

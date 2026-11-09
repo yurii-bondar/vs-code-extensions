@@ -410,6 +410,18 @@ export type TaskDetail = Omit<Card, 'result'> & {
   liveUsage: (UsageItem & { key: string }) | null;
 };
 
+/** A finding of a pull request's review, as the question before it is posted lists it. */
+export interface ReviewItemView {
+  id: string;
+  agent: string;
+  severity: string;
+  problem: string;
+  fix?: string;
+  path?: string;
+  line?: number;
+  inline: boolean;
+}
+
 export interface CheckpointContext {
   format: 'markdown' | 'log';
   text: string;
@@ -426,6 +438,8 @@ export interface CheckpointContext {
   protectedChanges?: { repo: string; file: string; before: string | null; after: string | null; instructionsOnly: boolean }[];
   /** Whether Claudestrator applies them when you say so (`policy.protectedChanges` is not `off`). */
   canApply?: boolean;
+  /** Before a pull request's review is posted: each finding, and whether it would be a comment on its line. */
+  review?: { url: string; items: ReviewItemView[] };
   /** A review whose blocking findings are all about files no agent changes: those files. */
   humanFiles?: string[];
 }
@@ -889,7 +903,7 @@ export interface Rpc {
   run: { params: { taskId: string }; result: Void };
   stop: { params: { taskId: string }; result: Void };
   /** `at`: when the question the page showed was asked; another one asked since (a new plan) is not answered by it. */
-  answer: { params: { taskId: string; checkpointId: string; option: string; feedback?: string | undefined; at?: string | undefined }; result: Void };
+  answer: { params: { taskId: string; checkpointId: string; option: string; feedback?: string | undefined; at?: string | undefined; omit?: string[] | undefined }; result: Void };
   postReport: { params: { taskId: string }; result: CommentResult };
   retryComment: { params: { taskId: string; seq: number }; result: CommentResult };
   message: { params: { taskId: string; text: string }; result: Void };

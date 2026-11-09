@@ -17,8 +17,11 @@ const EFFORT_LABEL: Record<string, string> = { '': 'Default effort', low: 'Low',
 const node = () => ({ innerHTML: '', textContent: '', classList: { add() {}, remove() {}, toggle() {}, contains: () => false }, dataset: {}, scrollIntoView() {}, querySelector: () => null, querySelectorAll: () => [] });
 
 /** The task screen of a task in `screen`: the HTML each region got, and what its actions asked the host. */
-/** `screen` is what the host sends that the test sets; the rest is a task waiting at nothing. */
-async function taskScreen(screen: Record<string, unknown>, ui: Record<string, unknown> = {}) {
+/**
+ * `screen` is what the host sends that the test sets; the rest is a task waiting at nothing. `elements`: what the
+ * page's `$$` finds for a selector (checkboxes as the test ticks them).
+ */
+async function taskScreen(screen: Record<string, unknown>, ui: Record<string, unknown> = {}, elements: Record<string, unknown[]> = {}) {
   const regions: Record<string, string> = {};
   const calls: Calls = { attempts: [], persisted: 0 };
   const picks = [node(), node()];
@@ -43,7 +46,7 @@ async function taskScreen(screen: Record<string, unknown>, ui: Record<string, un
     attempt: async (method: string, params: unknown) => (calls.attempts.push([method, params]), null),
     persist: () => void calls.persisted++,
     $: (sel: string) => (sel === '#view' || sel === '#transcript' ? node() : null),
-    $$: (sel: string) => (sel === '.fix-pick' ? picks : []),
+    $$: (sel: string) => (sel === '.fix-pick' ? picks : (elements[sel] ?? [])),
     // The CLI's model list has not come yet: the fallback aliases, as on a page that just opened.
     modelChoices: () => [['inherit', 'Default (checking…)'], ['opus', 'Opus'], ['sonnet', 'Sonnet'], ['haiku', 'Haiku']],
     statusBadge: () => '',

@@ -59,6 +59,7 @@ type StepItem = import('../src/core/wire').StepItem;
 type FeedEvent = import('../src/core/wire').FeedEvent;
 type PipelineEdit = import('../src/core/wire').PipelineEdit;
 type CheckpointContext = import('../src/core/wire').CheckpointContext;
+type ReviewItemView = import('../src/core/wire').ReviewItemView;
 
 // ---------- requests ----------
 

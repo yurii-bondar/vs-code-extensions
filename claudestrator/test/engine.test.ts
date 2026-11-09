@@ -519,9 +519,9 @@ test('engine: an answer from a page that showed an earlier question does not ans
     const s = await runTask(h.engine, taskId);
     assert.equal(s.checkpoint && s.checkpoint.id, 'approve-plan');
     // The page still showed the plan before a re-plan: its question was asked at another time.
-    await assert.rejects(() => h.engine.answer(taskId, 'approve-plan', 'approve', undefined, '2020-01-01T00:00:00.000Z'), /question changed since this page showed it/);
+    await assert.rejects(() => h.engine.answer(taskId, 'approve-plan', 'approve', { at: '2020-01-01T00:00:00.000Z' }), /question changed since this page showed it/);
     assert.equal((await h.engine.svc.state(taskId)).checkpoint!.id, 'approve-plan', 'still asked');
-    await h.engine.answer(taskId, 'approve-plan', 'approve', undefined, s.checkpoint!.at);
+    await h.engine.answer(taskId, 'approve-plan', 'approve', { at: s.checkpoint!.at });
     const after = await waitFor(async () => (h.engine.isRunning(taskId) ? null : await h.engine.svc.state(taskId)));
     assert.equal(after.checkpoint && after.checkpoint.id, 'confirm-push', 'the plan it was asked about was approved');
   } finally {

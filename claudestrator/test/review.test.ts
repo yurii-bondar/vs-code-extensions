@@ -6,7 +6,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-import { changedLines, postPreview, reviewPost } from '../src/core/review';
+import { changedLines, placeFindings, postPreview, reviewPost } from '../src/core/review';
 import { postReview, prFetchRef, prRef, readPullRequest, type Run } from '../src/core/forge';
 import { BitbucketClient } from '../src/core/bitbucket';
 import { classifyInput, deriveTaskId, sourceRef } from '../src/core/intake';
@@ -32,6 +32,16 @@ diff --git a/src/old.js b/src/old.js
 -gone();
 +added();
  tail();
+diff --git a/src/before.js b/src/after.js
+similarity index 90%
+rename from src/before.js
+rename to src/after.js
+--- a/src/before.js
++++ b/src/after.js
+@@ -3,2 +3,2 @@
+ same();
+-old();
++renamed();
 diff --git a/src/removed.js b/src/removed.js
 deleted file mode 100644
 --- a/src/removed.js
@@ -42,11 +52,30 @@ deleted file mode 100644
 
 const verdict = (agent: string, findings: RecordedVerdict['findings'], status: RecordedVerdict['status'] = 'changes_requested'): RecordedVerdict => ({ agent, artifact: `reviews/r1/${agent}.md`, status, findings });
 
-test('review: the lines a pull request shows, on its new side', () => {
-  const lines = changedLines(DIFF);
-  assert.deepEqual([...lines.get('src/cap.js')!], [1, 2, 3]);
-  assert.deepEqual([...lines.get('src/old.js')!], [10, 11, 12], 'a removed line takes no number on the new side');
-  assert.equal(lines.has('src/removed.js'), false, 'a deleted file has no new lines');
+test('review: the lines a pull request shows, on its new side, with their numbers before it', () => {
+  const files = changedLines(DIFF);
+  assert.deepEqual([...files.get('src/cap.js')!.lines], [[1, null], [2, null], [3, null]], 'added: no number before');
+  assert.deepEqual([...files.get('src/old.js')!.lines], [[10, 10], [11, null], [12, 12]], 'a line around the change keeps its old number; a removed one has no new number');
+  assert.deepEqual(files.get('src/after.js'), { oldPath: 'src/before.js', lines: new Map([[3, 3], [4, null]]) }, 'a renamed file, by its new path, knows its old one');
+  assert.equal(files.get('src/cap.js')!.oldPath, 'src/cap.js');
+  assert.equal(files.has('src/removed.js'), false, 'a deleted file has no new lines');
+});
+
+test('review: a comment on a line the PR did not change names its old number too; you may leave findings out', () => {
+  const verdicts = [verdict('reviewer', [
+    { severity: 'minor', repo: 'api', file: 'src/old.js', line: 12, problem: 'context line' },
+    { severity: 'major', repo: 'api', file: 'src/after.js', line: 4, problem: 'renamed file' },
+    { severity: 'minor', repo: 'api', file: 'src/cap.js', line: 1, problem: 'added line' },
+  ])];
+  const items = placeFindings({ verdicts, diff: DIFF, repo: 'api' });
+  assert.deepEqual(items.map((i) => [i.id, i.inline, i.oldLine ?? null, i.oldPath ?? null]), [['0.1', true, null, 'src/before.js'], ['0.0', true, 12, null], ['0.2', true, null, null]], 'ids stay as recorded; the most severe first');
+  const post = reviewPost({ verdicts, summaries: [], diff: DIFF, repo: 'api', omit: ['0.2'] });
+  assert.deepEqual(post.inline.map((c) => ({ path: c.path, line: c.line, oldLine: c.oldLine, oldPath: c.oldPath })), [
+    { path: 'src/after.js', line: 4, oldLine: undefined, oldPath: 'src/before.js' },
+    { path: 'src/old.js', line: 12, oldLine: 12, oldPath: undefined },
+  ]);
+  assert.doesNotMatch(post.summary([]), /added line/, 'left out: in no comment and not in the summary');
+  assert.equal(reviewPost({ verdicts, summaries: [], diff: DIFF, repo: 'api', omit: ['0.0', '0.1', '0.2'] }).inline.length, 0);
 });
 
 test("review: a finding on a changed line is a comment there, the rest the summary's, the most severe first", () => {
@@ -123,10 +152,11 @@ test('review: a GitLab merge request is read with its diff refs, and its review 
   assert.deepEqual({ ...pr, comments: pr.comments.length }, { title: 'Dark mode', url: GL_PR.url, body: 'Adds it', labels: [], comments: 1, base: 'main', head: 'feat/dark', headSha: 'h', baseSha: 'b', startSha: 's' });
 
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-review-'));
-  const post = { inline: [{ path: 'src/a.ts', line: 3, body: 'one' }, { path: 'src/b.ts', line: 9, body: 'two' }], summary: (missed: { path: string }[]) => `summary; missed ${missed.map((m) => m.path).join(',') || 'none'}` };
+  const post = { inline: [{ path: 'src/a.ts', line: 3, oldLine: 2, oldPath: 'src/z.ts', body: 'one' }, { path: 'src/b.ts', line: 9, body: 'two' }], summary: (missed: { path: string }[]) => `summary; missed ${missed.map((m) => m.path).join(',') || 'none'}` };
   const posted = await postReview({ src: GL, pr: GL_PR, post, run, bitbucket: null, tmp });
   assert.deepEqual(posted, { url: `${GL_PR.url}#note_77`, inline: 1 });
-  assert.deepEqual(sent[0]!.body, { body: 'one', position: { position_type: 'text', base_sha: 'b', start_sha: 's', head_sha: 'h', new_path: 'src/a.ts', old_path: 'src/a.ts', new_line: 3 } });
+  assert.deepEqual(sent[0]!.body, { body: 'one', position: { position_type: 'text', base_sha: 'b', start_sha: 's', head_sha: 'h', new_path: 'src/a.ts', old_path: 'src/z.ts', new_line: 3, old_line: 2 } }, 'a line the PR did not change: both its numbers, and the path before a rename');
+  assert.deepEqual(sent[1]!.body.position, { position_type: 'text', base_sha: 'b', start_sha: 's', head_sha: 'h', new_path: 'src/b.ts', old_path: 'src/b.ts', new_line: 9 }, 'an added line: its new number only');
   assert.equal(sent[2]!.endpoint, 'projects/group%2Fweb/merge_requests/7/notes');
   assert.deepEqual(sent[2]!.body, { body: 'summary; missed src/b.ts' }, 'the summary comes last, with what a line refused');
 });
@@ -184,6 +214,9 @@ test('machine: a pull request reviewed waits for you to post it; posting is reco
   assert.equal(posted.status, 'done');
   assert.equal(posted.outcome, 'posted');
   assert.deepEqual(posted.reviewPosted, { url: 'https://x/pull/12#r', inline: 2 });
+
+  const picked = replay([...reviewed(), { type: 'checkpoint_answered', id: 'post-review', option: 'post', omit: ['0.1', '0.3'], at: at(4) } as OrchEvent]);
+  assert.deepEqual(picked.reviewOmit, ['0.1', '0.3'], 'what you left out waits for the post, also after a reload');
 
   const skipped = replay([...reviewed(), { type: 'checkpoint_answered', id: 'post-review', option: 'skip', at: at(4) } as OrchEvent]);
   assert.equal(skipped.outcome, 'completed');

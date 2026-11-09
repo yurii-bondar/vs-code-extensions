@@ -423,7 +423,9 @@ interface Views {
         }
         $$<HTMLButtonElement>('.checkpoint button').forEach((b) => (b.disabled = true));
         el.classList.add('busy');
-        const ok = await attempt('answer', { taskId: T.taskId, checkpointId, option, feedback: spec?.feedback ? feedback || undefined : undefined, at: T.d!.checkpointFull!.at });
+        // Posting a review: the findings you unticked stay out of it.
+        const omit = checkpointId === 'post-review' && option === 'post' ? $$<HTMLInputElement>('.rv-pick').filter((c) => !c.checked).map((c) => c.dataset.id ?? '').filter(Boolean) : [];
+        const ok = await attempt('answer', { taskId: T.taskId, checkpointId, option, feedback: spec?.feedback ? feedback || undefined : undefined, at: T.d!.checkpointFull!.at, ...(omit.length && { omit }) });
         $$<HTMLButtonElement>('.checkpoint button').forEach((b) => (b.disabled = false));
         el.classList.remove('busy');
         if (ok !== undefined) {
@@ -703,7 +705,7 @@ interface Views {
         body += `<div class="banner warn">${icon('alert')}<div class="grow"><b>The agents changed what acts outside the sandbox.</b> Git hooks run when you use git in ${hooks.length === 1 ? 'that repo' : 'those repos'}, <code>.lfsconfig</code> says where Git LFS uploads, every Claude Code session there takes <code>CLAUDE.md</code> as instructions, and Claude Code's and VS Code's settings (<code>.claude/</code>, <code>.mcp.json</code>, <code>.vscode/</code>) run hooks, MCP servers and tasks: read them first.<ul>${hooks.map((h) => `<li><code>${esc(h.repo)}/${esc(h.file)}</code></li>`).join('')}</ul></div></div>`;
       }
     } else if (cp.id === 'post-review') {
-      body = `<div class="doc-frame"><div class="markdown">${md(ctx.text || '')}</div></div>`;
+      body = postReviewHtml(ctx);
     } else if (cp.id === 'approve-step') {
       // What the step wrote (one report per repo), each without its data block.
       body = `<div class="doc-frame"><div class="markdown">${(ctx.text || '').split('\n\n---\n\n').map((part) => md(stripJsonBlock(part))).join('<hr>')}</div></div>`;
@@ -738,6 +740,21 @@ interface Views {
       ${needsFeedback ? `<textarea id="cp-feedback" class="input autosize" rows="2" data-input="cp-feedback" placeholder="${esc(ui.placeholder || 'Feedback (optional)')}">${esc(T.feedback)}</textarea>` : ''}
       <div class="cp-actions">${buttons}${d.fix === 'checkpoint' ? fixButton('') : ''}<span class="muted small kbd-hint"><kbd>⌘↵</kbd> <span id="cp-kbd">${esc((keyed !== undefined && ui.options[keyed]?.label) || '')}</span></span></div>
     </section>`;
+  }
+
+  /**
+   * A pull request's review before it is posted: each finding, ticked, where it would go (a comment on its line, or the
+   * summary), for you to untick what should not; then the whole of it as it would be posted.
+   */
+  function postReviewHtml(ctx: Partial<CheckpointContext>): string {
+    const items = (ctx.review && ctx.review.items) || [];
+    const item = (i: ReviewItemView) =>
+      `<label class="rv-item sev-${esc(i.severity)}"><input type="checkbox" class="rv-pick" data-id="${esc(i.id)}" checked><span class="sev">${esc(i.severity)}</span><span class="grow">${i.path ? `<code>${esc(i.path)}${i.line !== undefined ? `:${i.line}` : ''}</code> ` : ''}${esc(i.problem)}${i.fix ? `<span class="muted"> → ${esc(i.fix)}</span>` : ''}</span><span class="muted small">${esc(i.agent)}</span></label>`;
+    const list = (title: string, of: ReviewItemView[]) => (of.length ? `<h4>${esc(title)}</h4><div class="rv-list">${of.map(item).join('')}</div>` : '');
+    const lists = items.length
+      ? `${list('Comments on the changed lines', items.filter((i) => i.inline))}${list('In the summary comment', items.filter((i) => !i.inline))}<p class="muted small">Untick what should not go. The summary with the reviewers' verdicts goes in any case.</p>`
+      : '<p class="muted">The reviewers found nothing: only the summary with their verdicts goes.</p>';
+    return `${lists}<details class="log-details"><summary>As it would be posted</summary><div class="doc-frame"><div class="markdown">${md(ctx.text || '')}</div></div></details>`;
   }
 
   /** The changes an agent made to the repo's settings: each file as written, and as it is now. */

@@ -1,13 +1,18 @@
 // A pull request's review, as it goes to the PR: each finding on a line the PR changed becomes a comment there, and
-// the rest goes into one summary with the reviewers' verdicts. Pure: the engine reads the diff and the reports, the
-// forges post.
+// the rest goes into one summary with the reviewers' verdicts. You may leave any finding out before it goes. Pure: the
+// engine reads the diff and the reports, the forges post.
 import { AI_CREDIT } from './guard';
 import type { Finding, RecordedVerdict } from './types';
 
-/** A comment on a line of the PR's head, by its path in the repo. */
+/**
+ * A comment on a line of the PR's head, by its path in the repo. `oldLine`: the same line's number before the PR, for
+ * a line the PR shows but did not change (GitLab names both); `oldPath`: the file's path before the PR renamed it.
+ */
 interface InlineComment {
   path: string;
   line: number;
+  oldLine?: number;
+  oldPath?: string;
   body: string;
 }
 
@@ -24,32 +29,48 @@ interface ReviewPost {
   summary: (missed: InlineComment[]) => string;
 }
 
+/** A file of the PR's diff: its path before the PR, and its lines after it, each with its number before (null: added). */
+interface DiffFile {
+  oldPath: string;
+  lines: Map<number, number | null>;
+}
+
 /**
  * The lines of each file that the PR's head has in its diff (added, or shown around a change): the lines a forge takes
- * a comment on. From a unified diff, `+++ b/<path>` and its hunks.
+ * a comment on, by the file's path after the PR. From a unified diff: `--- a/<old>`, `+++ b/<new>` and their hunks.
  */
-function changedLines(diff: string): Map<string, Set<number>> {
-  const out = new Map<string, Set<number>>();
-  let lines: Set<number> | null = null;
+function changedLines(diff: string): Map<string, DiffFile> {
+  const out = new Map<string, DiffFile>();
+  const unquote = (p: string): string => p.replace(/^"?[ab]\//, '').replace(/"$/, '');
+  let file: DiffFile | null = null;
+  let oldPath = '';
   let at = 0;
+  let was = 0;
   for (const raw of diff.split('\n')) {
+    if (raw.startsWith('--- ')) {
+      oldPath = raw.slice(4).trim() === '/dev/null' ? '' : unquote(raw.slice(4).trim());
+      continue;
+    }
     if (raw.startsWith('+++ ')) {
-      const file = raw.slice(4).trim();
-      if (file === '/dev/null') lines = null;
+      const name = raw.slice(4).trim();
+      if (name === '/dev/null') file = null;
       else {
-        const name = file.replace(/^"?b\//, '').replace(/"$/, '');
-        lines = out.get(name) ?? new Set<number>();
-        out.set(name, lines);
+        const path = unquote(name);
+        file = out.get(path) ?? { oldPath: oldPath || path, lines: new Map() };
+        out.set(path, file);
       }
       continue;
     }
-    const hunk = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    const hunk = raw.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
     if (hunk) {
-      at = Number(hunk[1]);
+      was = Number(hunk[1]);
+      at = Number(hunk[2]);
       continue;
     }
-    if (!lines || raw.startsWith('diff ') || raw.startsWith('--- ') || raw.startsWith('\\')) continue;
-    if (raw.startsWith('+') || raw.startsWith(' ')) lines.add(at++);
+    if (!file || raw.startsWith('diff ') || raw.startsWith('\\')) continue;
+    if (raw.startsWith('+')) file.lines.set(at++, null);
+    else if (raw.startsWith(' ')) file.lines.set(at++, was++);
+    else if (raw.startsWith('-')) was++;
   }
   return out;
 }
@@ -83,40 +104,82 @@ function listItem(f: Finding, forbid: boolean, path?: string): string {
 const ORDER: Record<Finding['severity'], number> = { blocker: 0, major: 1, minor: 2 };
 const VERDICT: Record<RecordedVerdict['status'], string> = { approved: 'no blocking findings', changes_requested: 'changes requested' };
 
+/**
+ * A finding where it would go: `id` names it while the task lasts (`<verdict>.<finding>`, in the order the reviewers
+ * recorded them), `inline` says it would be a comment on its line, `path` is its file as the repo has it.
+ */
+interface ReviewItem {
+  id: string;
+  agent: string;
+  finding: Finding;
+  path?: string;
+  inline: boolean;
+  oldLine?: number;
+  oldPath?: string;
+}
+
 interface PlaceArgs {
   verdicts: readonly RecordedVerdict[];
-  summaries: readonly ReviewerSummary[];
   /** The PR's diff, as the reviewers read it. */
   diff: string;
   /** The workspace's repo the PR is on, and where it was checked out. */
   repo: string;
   dir?: string | undefined;
+}
+
+/** Every finding of the review, the most severe first, each where it would go. */
+function placeFindings({ verdicts, diff, repo, dir }: PlaceArgs): ReviewItem[] {
+  const files = changedLines(diff);
+  const items: ReviewItem[] = [];
+  verdicts.forEach((v, vi) =>
+    v.findings.forEach((f, fi) => {
+      const path = f.file ? repoPath(f.file, repo, dir, files) : undefined;
+      const file = path !== undefined ? files.get(path) : undefined;
+      const inline = Boolean(file && f.line !== undefined && file.lines.has(f.line));
+      const was = inline ? file!.lines.get(f.line!) : null;
+      items.push({
+        id: `${vi}.${fi}`,
+        agent: v.agent,
+        finding: f,
+        ...(path && { path }),
+        inline,
+        ...(was !== null && was !== undefined && { oldLine: was }),
+        ...(inline && file!.oldPath !== path && { oldPath: file!.oldPath }),
+      });
+    })
+  );
+  return items.sort((a, b) => ORDER[a.finding.severity] - ORDER[b.finding.severity]);
+}
+
+interface PostArgs extends PlaceArgs {
+  summaries: readonly ReviewerSummary[];
   forbidAttribution?: boolean;
+  /** Findings you left out (their ids): they go nowhere. */
+  omit?: readonly string[];
 }
 
 /**
  * What the review posts: a finding on a line in the diff is a comment there (the first of several on the same line
- * keeps it, the others join it); every other one is listed in the summary, the most severe first.
+ * keeps it, the others join it); every other one is listed in the summary, the most severe first. What you left out
+ * is in neither.
  */
-function reviewPost({ verdicts, summaries, diff, repo, dir, forbidAttribution = false }: PlaceArgs): ReviewPost {
-  const lines = changedLines(diff);
-  const findings = verdicts.flatMap((v) => v.findings).sort((a, b) => ORDER[a.severity] - ORDER[b.severity]);
+function reviewPost({ summaries, forbidAttribution = false, omit = [], ...place }: PostArgs): ReviewPost {
+  const items = placeFindings(place).filter((i) => !omit.includes(i.id));
   const inline: InlineComment[] = [];
-  const rest: { f: Finding; path?: string }[] = [];
-  for (const f of findings) {
-    const path = f.file ? repoPath(f.file, repo, dir, lines) : undefined;
-    const onLine = path !== undefined && f.line !== undefined && Boolean(lines.get(path)?.has(f.line));
-    if (!onLine) {
-      rest.push({ f, ...(path && { path }) });
+  const rest: ReviewItem[] = [];
+  for (const item of items) {
+    const f = item.finding;
+    if (!item.inline) {
+      rest.push(item);
       continue;
     }
-    const same = inline.find((c) => c.path === path && c.line === f.line);
+    const same = inline.find((c) => c.path === item.path && c.line === f.line);
     if (same) same.body = `${same.body}\n\n---\n\n${commentBody(f, forbidAttribution)}`;
-    else inline.push({ path: path!, line: f.line!, body: commentBody(f, forbidAttribution) });
+    else inline.push({ path: item.path!, line: f.line!, ...(item.oldLine !== undefined && { oldLine: item.oldLine }), ...(item.oldPath && { oldPath: item.oldPath }), body: commentBody(f, forbidAttribution) });
   }
   const summary = (missed: InlineComment[]): string => {
     const head = summaries.map((s) => clean(`**${s.agent}** (${VERDICT[s.status]}): ${s.summary}`, forbidAttribution)).join('\n\n');
-    const listed = rest.map(({ f, path }) => listItem(f, forbidAttribution, path));
+    const listed = rest.map((i) => listItem(i.finding, forbidAttribution, i.path));
     const placed = inline.length - missed.length;
     const parts = [
       '## Review',
@@ -136,5 +199,5 @@ function postPreview(post: ReviewPost, url: string): string {
   return [`Posted to ${url} as you choose, not before.`, onLines, '### The summary comment', post.summary([])].filter(Boolean).join('\n\n');
 }
 
-export type { InlineComment, ReviewerSummary, ReviewPost };
-export { changedLines, reviewPost, postPreview };
+export type { DiffFile, InlineComment, ReviewerSummary, ReviewItem, ReviewPost };
+export { changedLines, placeFindings, reviewPost, postPreview };

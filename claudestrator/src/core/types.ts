@@ -566,6 +566,8 @@ export interface TaskState {
   prs: Record<string, string>;
   /** A pull request's review, once posted to it. */
   reviewPosted?: { url: string; inline: number };
+  /** The findings of a pull request's review you left out of what is posted. */
+  reviewOmit?: string[];
   createdAt: string;
   updatedAt: string;
   spec?: Spec;
@@ -650,7 +652,8 @@ export type OrchEvent = EventBase &
         /** What the step changed of the repos' settings before it failed, kept for you as when it completes. */
         protectedChanges?: ProtectedChange[];
       }
-    | { type: 'checkpoint_answered'; id: string; option: string; feedback?: string }
+    /** `omit`: posting a pull request's review, the findings you left out (their ids, `<verdict>.<finding>`). */
+    | { type: 'checkpoint_answered'; id: string; option: string; feedback?: string; omit?: string[] }
     | { type: 'committed'; repos: string[] }
     | { type: 'commit_failed'; repo: string; output: string }
     | { type: 'published'; prs: Record<string, string> }

@@ -55,3 +55,9 @@ test("requests: Bitbucket's credentials from the page are strings, and its test 
   assert.ok(bad && !bad.ok && /token: expected a string/.test(bad.error));
   assert.ok(parsePageRequest({ type: 'req', id: 4, method: 'testBitbucket' })?.ok);
 });
+
+test('requests: an answer may leave findings of a review out, by their ids', () => {
+  assert.ok(parsePageRequest({ type: 'req', id: 1, method: 'answer', params: { taskId: 'api-pr-12', checkpointId: 'post-review', option: 'post', omit: ['0.1', '1.0'] } })?.ok);
+  const bad = parsePageRequest({ type: 'req', id: 2, method: 'answer', params: { taskId: 'api-pr-12', checkpointId: 'post-review', option: 'post', omit: [3] } });
+  assert.ok(bad && !bad.ok && /omit/.test(bad.error));
+});

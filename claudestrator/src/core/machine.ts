@@ -333,7 +333,10 @@ function checkpointAnswered(s: TaskState, e: Ev<'checkpoint_answered'>): Transit
       break;
     case 'post-review':
       if (e.option === 'skip') finish(s, 'completed');
-      else s.finishStep = 'post';
+      else {
+        s.finishStep = 'post';
+        if (e.omit && e.omit.length) s.reviewOmit = e.omit;
+      }
       break;
   }
   return ok(s);

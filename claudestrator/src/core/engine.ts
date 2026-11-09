@@ -12,7 +12,7 @@ import { nextAction, groupPending, runOf, artifactPath, branchName, sameStep, ed
 import { contentAfter, humanFinding, isInstructionsOnly, isProtectedFile, refusedSettings } from './protected';
 import { parseInvocation, classifyInput, detectScenario, runIntake, renderTicket, IntakeError, extractAcceptanceCriteria, otherSite, planFromTicket, capSpec, projectAllowed, sourceName, sourceRef } from './intake';
 import { changeRequests, ForgeError, issueLine, parseRemote, postReview, prFetchRef, prRef, type Remote, type Run } from './forge';
-import { postPreview, reviewPost, type ReviewPost } from './review';
+import { placeFindings, postPreview, reviewPost, type ReviewPost } from './review';
 import { PR_REVIEW } from './config';
 import type { BitbucketClient } from './bitbucket';
 import { TaskService, type DispatchResult } from './store';
@@ -192,6 +192,13 @@ class EngineError extends Error {
     this.code = code;
     Object.assign(this, extra);
   }
+}
+
+/** An answer's words, the question it answers (`at`), and for a review's post the findings left out. */
+interface AnswerArgs {
+  feedback?: string | undefined;
+  at?: string | undefined;
+  omit?: string[] | undefined;
 }
 
 /** An MCP server to read tickets with: Atlassian's when there is no API token, Linear's for every Linear issue. */
@@ -1391,7 +1398,7 @@ class Engine extends EventEmitter {
       })
     );
     const diff = await this.svc.readArtifact(s.taskId, `reviews/r${s.review.round}/diff.patch`).catch(() => '');
-    return reviewPost({ verdicts, summaries, diff, repo: pr.repo, dir: worktreeDir(this.workspace, s.taskId, pr.repo), forbidAttribution: config.policy.forbidAiAttribution });
+    return reviewPost({ verdicts, summaries, diff, repo: pr.repo, dir: worktreeDir(this.workspace, s.taskId, pr.repo), forbidAttribution: config.policy.forbidAiAttribution, omit: s.reviewOmit ?? [] });
   }
 
   /** Posts a pull request's review, as you said: its line comments and its summary, under your own login or token. */
@@ -2362,13 +2369,13 @@ class Engine extends EventEmitter {
    * Answers the open question. With `at` (when the question you saw was asked) it answers that one only: a page that
    * had not caught up with a new plan must not approve one you never read.
    */
-  async answer(taskId: string, checkpointId: string, option: string, feedback?: string, at?: string): Promise<void> {
+  async answer(taskId: string, checkpointId: string, option: string, { feedback, at, omit }: AnswerArgs = {}): Promise<void> {
     let s = await this.svc.state(taskId);
     if (at !== undefined && s.checkpoint && s.checkpoint.at !== at) throw new EngineError('stale_checkpoint', 'The question changed since this page showed it (a new plan, say): look at it again and answer that one');
     // The changes go into the repos before the answer is recorded: one that cannot be written leaves the question open.
     if (checkpointId === 'protected-changes' && option === 'apply' && s.checkpoint && s.checkpoint.id === checkpointId) await this.applyProposed(s);
     if (s.status === 'stopped' && s.checkpoint) s = (await this.dispatch(taskId, { type: 'resumed' })).state;
-    const r = await this.dispatch(taskId, { type: 'checkpoint_answered', id: checkpointId, option, ...(feedback && { feedback }) });
+    const r = await this.dispatch(taskId, { type: 'checkpoint_answered', id: checkpointId, option, ...(feedback && { feedback }), ...(checkpointId === 'post-review' && omit && omit.length && { omit }) });
     if (option === 'approve-post') {
       const ctx = await this.checkpointContext(s, s.checkpoint);
       this.comment(r.state, `Plan approved.\n\n${(ctx.text || '').slice(0, 20000)}`, 'plan');
@@ -2497,8 +2504,22 @@ class Engine extends EventEmitter {
         return value;
       }
       case 'post-review': {
-        const post = await this.reviewToPost(s, await this.config());
-        return { format: 'markdown', text: postPreview(post, s.spec!.pr!.url) };
+        const config = await this.config();
+        const pr = s.spec!.pr!;
+        const post = await this.reviewToPost(s, config);
+        const diff = await this.svc.readArtifact(s.taskId, `reviews/r${s.review.round}/diff.patch`).catch(() => '');
+        // Each finding where it would go, for you to leave any out before it does.
+        const items = placeFindings({ verdicts: s.review.verdicts, diff, repo: pr.repo, dir: worktreeDir(this.workspace, s.taskId, pr.repo) }).map((i) => ({
+          id: i.id,
+          agent: i.agent,
+          severity: i.finding.severity,
+          problem: i.finding.problem,
+          ...(i.finding.fix && { fix: i.finding.fix }),
+          ...(i.path && { path: i.path }),
+          ...(i.finding.line !== undefined && { line: i.finding.line }),
+          inline: i.inline,
+        }));
+        return { format: 'markdown', text: postPreview(post, pr.url), review: { url: pr.url, items } };
       }
       default:
         return { format: 'log', text: cp.reason || '' };
