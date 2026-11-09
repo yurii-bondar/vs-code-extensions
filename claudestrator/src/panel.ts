@@ -289,6 +289,7 @@ class DashboardPanel implements RpcHandlers {
       atlassian: Boolean(this.orch.atlassianAuth()),
       atlassianMcp: ((await this.orch.mcpIntakeServer('atlassian')) || ({} as { server?: string })).server || null,
       linearMcp: ((await this.orch.mcpIntakeServer('linear')) || ({} as { server?: string })).server || null,
+      bitbucket: Boolean(this.orch.bitbucketAuth()),
     };
   }
 
@@ -327,7 +328,7 @@ class DashboardPanel implements RpcHandlers {
 
   async $preview(p: ComposerArgs): Promise<Preview> {
     const r = await this.engine.preview(p);
-    return r.ok && !r.empty ? { ...r, outline: outline(r.pipeline) } : r;
+    return r.ok && !r.empty ? { ...r, outline: outline(r.pipeline, { pr: r.source.kind === 'pr' }) } : r;
   }
 
   async $start(p: ComposerArgs) {

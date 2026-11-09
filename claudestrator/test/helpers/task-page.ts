@@ -34,6 +34,8 @@ async function taskScreen(screen: Record<string, unknown>, ui: Record<string, un
     S,
     views,
     esc,
+    // Markdown as a paragraph of its text: what a test reads of it.
+    md: (text: string) => `<p>${esc(text)}</p>`,
     EFFORT_LABEL,
     icon: (name: string) => `<i data-icon="${name}"></i>`,
     patch: (region: string, html: string) => ((regions[region] = html), true),

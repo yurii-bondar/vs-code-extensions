@@ -37,7 +37,7 @@ function fakeCli(rules: [RegExp, ExecResult | ((args: readonly string[]) => Exec
 test('intake: GitHub, GitLab and Linear issue links and references', () => {
   assert.deepEqual(classifyInput('https://github.com/acme/api/issues/12'), { kind: 'github', host: 'github.com', repo: 'acme/api', number: 12 });
   assert.deepEqual(classifyInput('https://github.acme.io/team/api/issues/7/'), { kind: 'github', host: 'github.acme.io', repo: 'team/api', number: 7 }, 'GitHub Enterprise');
-  assert.equal(classifyInput('https://github.com/acme/api/pull/12').kind, 'text', 'a PR is not an issue');
+  assert.equal(classifyInput('https://github.com/acme/api/pull/12').kind, 'pr', 'a PR is not an issue: it is reviewed');
   assert.deepEqual(classifyInput('https://gitlab.com/acme/platform/api/-/issues/42'), { kind: 'gitlab', host: 'gitlab.com', project: 'acme/platform/api', number: 42 });
   assert.deepEqual(classifyInput('https://git.acme.com/team/web/-/work_items/5'), { kind: 'gitlab', host: 'git.acme.com', project: 'team/web', number: 5 }, "GitLab's /-/ path on any host");
   assert.deepEqual(classifyInput('https://linear.app/acme/issue/ENG-123/fix-the-login'), { kind: 'linear', key: 'ENG-123', url: 'https://linear.app/acme/issue/ENG-123/fix-the-login' });

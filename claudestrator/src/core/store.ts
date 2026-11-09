@@ -324,7 +324,8 @@ class TaskService {
       for (let n = 2; await this.exists(taskId); n++) taskId = `${base}-${n}`;
       return { taskId, exists: false };
     }
-    if (scenario !== 'deliver') for (let n = 2; (await this.exists(taskId)) && (await this.finished(taskId)); n++) taskId = `${base}-${n}`;
+    // A report, or a pull request's review, run again after one finished is a new run: the code may have moved.
+    if (scenario !== 'deliver' || source.kind === 'pr') for (let n = 2; (await this.exists(taskId)) && (await this.finished(taskId)); n++) taskId = `${base}-${n}`;
     return { taskId, exists: await this.exists(taskId) };
   }
 

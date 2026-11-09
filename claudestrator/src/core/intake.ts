@@ -1,7 +1,8 @@
 // Intake: what the user typed → a task source → a ticket every agent reads first.
-import { ForgeError, forgeOfHost, issueRef, readIssue } from './forge';
+import { ForgeError, forgeOfHost, issueRef, prRef, readIssue, readPullRequest } from './forge';
 import { ATTEMPTS, RETRY_STATUS, RETRY_STATUS_POST, retryAfterMs } from './http';
 import type { Run } from './forge';
+import type { BitbucketClient } from './bitbucket';
 import type { PlanMeta, Source, Spec } from './types';
 
 const FLAG_RE = /(^|\s)--(auto|no|only|key|effort|scenario|repos)(?=[\s=]|$)/;
@@ -167,11 +168,19 @@ function classifyInput(input: string, { embedded = false, projects = [] }: { emb
 /**
  * A forge's or Linear's issue link: `https://github.com/owner/name/issues/12`, `https://<host>/group/name/-/issues/12`
  * (GitLab's `/-/` is its own, on any host; `/-/work_items/12` too), `https://linear.app/<team>/issue/ENG-12/<slug>`.
+ * Or a pull request to review: `https://github.com/owner/name/pull/12`, `https://<host>/group/name/-/merge_requests/7`,
+ * `https://bitbucket.org/<workspace>/<repo>/pull-requests/3`, also on one of its tabs (`/files`, `/diffs`).
  */
 function forgeIssue(url: URL): Source | null {
   if (!/^https?:$/.test(url.protocol)) return null;
   const host = url.host.toLowerCase();
   const path = decodeURIComponent(url.pathname).replace(/\/+$/, '');
+  const ghPr = path.match(/^\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)(?:\/[\w-]*)?$/);
+  if (ghPr && forgeOfHost(host) === 'github') return { kind: 'pr', forge: 'github', host, project: ghPr[1]!, number: Number(ghPr[2]) };
+  const glMr = path.match(/^\/(.+?)\/-\/merge_requests\/(\d+)(?:\/[\w-]*)?$/);
+  if (glMr) return { kind: 'pr', forge: 'gitlab', host, project: glMr[1]!, number: Number(glMr[2]) };
+  const bbPr = path.match(/^\/([\w.-]+\/[\w.-]+)\/pull-requests\/(\d+)(?:\/[\w-]*)?$/);
+  if (bbPr && forgeOfHost(host) === 'bitbucket') return { kind: 'pr', forge: 'bitbucket', host, project: bbPr[1]!, number: Number(bbPr[2]) };
   const linear = path.match(/^\/[\w.-]+\/issue\/([A-Za-z][A-Za-z0-9]*-\d+)(?:\/|$)/);
   if (linear && /(^|\.)linear\.app$/.test(host)) return { kind: 'linear', key: linear[1]!.toUpperCase(), url: url.href };
   const gitlab = path.match(/^\/(.+?)\/-\/(?:issues|work_items)\/(\d+)$/);
@@ -225,16 +234,24 @@ function deriveTaskId(source: Source, now: Date, scenario = 'deliver'): string {
     case 'confluence':
       return id(`DOC-${source.pageId}`);
     case 'github':
-    case 'gitlab': {
-      const name = (source.kind === 'github' ? source.repo : source.project).split('/').pop()!.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[^A-Za-z0-9]+/, '');
-      return id(`${name || 'issue'}-${source.number}`);
-    }
+    case 'gitlab':
+      return id(`${repoSlug(source.kind === 'github' ? source.repo : source.project)}-${source.number}`);
+    case 'pr':
+      return id(`${repoSlug(source.project)}-${source.forge === 'gitlab' ? 'mr' : 'pr'}-${source.number}`);
     case 'text':
       return suffix ? `${suffix.toUpperCase()}-${stamp(now)}` : `T-${stamp(now)}`;
   }
 }
 
-/** How the task's issue is written where people refer to it: `CP-12`, `ENG-7`, `owner/name#12`; none for text or a page. */
+/** A project's last path segment as a task id may start with it: `acme/api` → `api`. */
+function repoSlug(project: string): string {
+  return project.split('/').pop()!.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[^A-Za-z0-9]+/, '') || 'issue';
+}
+
+/**
+ * How the task's issue is written where people refer to it: `CP-12`, `ENG-7`, `owner/name#12`, a merge request
+ * `group/name!7`; none for text or a page.
+ */
 function sourceRef(source: Source): string | undefined {
   switch (source.kind) {
     case 'jira':
@@ -243,6 +260,8 @@ function sourceRef(source: Source): string | undefined {
     case 'github':
     case 'gitlab':
       return issueRef(source);
+    case 'pr':
+      return prRef(source);
     default:
       return undefined;
   }
@@ -281,8 +300,12 @@ function capSpec(spec: Spec): Spec {
 interface IntakeOptions {
   allowedProjects?: string[] | undefined;
   atlassian?: AtlassianClient | null | undefined;
-  /** How `gh` and `glab` run, for a GitHub or GitLab issue. */
+  /** How `gh` and `glab` run, for a GitHub or GitLab issue or pull request. */
   run?: Run | undefined;
+  /** Bitbucket Cloud's client, for one of its pull requests. */
+  bitbucket?: BitbucketClient | null | undefined;
+  /** The workspace's repo a pull request is on (the engine finds it by the repos' origins). */
+  prRepo?: string | undefined;
 }
 
 /** Turns a classified source into a task spec. Refuses disallowed Jira projects before any request is made. */
@@ -295,6 +318,8 @@ async function runIntake(taskId: string, source: Source, opts: IntakeOptions = {
       return fromForge(taskId, source, opts.run);
     case 'linear':
       throw new IntakeError('linear_mcp', `${source.key} is read through a Linear MCP server, not here`);
+    case 'pr':
+      return fromPullRequest(taskId, source, opts);
     case 'jira': {
       const allowed = opts.allowedProjects ?? [];
       if (!projectAllowed(source.key, allowed)) {
@@ -353,6 +378,32 @@ async function fromForge(taskId: string, source: Extract<Source, { kind: 'github
     acceptanceCriteria: extractAcceptanceCriteria(issue.body),
     links: [{ title: issueRef(source), url: issue.url }],
     ...(parts.length && { context: parts.join('\n\n') }),
+  };
+}
+
+/**
+ * A pull request to review: its title and description are the ticket, its comments the context, and where it comes
+ * from and goes to (with the commit reviewed) what the engine checks out and comments on.
+ */
+async function fromPullRequest(taskId: string, source: Extract<Source, { kind: 'pr' }>, opts: IntakeOptions): Promise<Spec> {
+  if (!opts.run || !opts.prRepo) throw new IntakeError('fetch_failed', `${prRef(source)} cannot be read here`);
+  let pr;
+  try {
+    pr = await readPullRequest(source, opts.run, opts.bitbucket ?? null);
+  } catch (e) {
+    if (e instanceof ForgeError) throw new IntakeError(e.code, e.message);
+    throw e;
+  }
+  const context = pr.comments.length ? `## Comments\n\n${pr.comments.map((c) => `**${c.author}** (${c.created.slice(0, 10)}):\n${c.body}`).join('\n\n')}` : undefined;
+  return {
+    id: taskId,
+    source,
+    title: pr.title.trim() || prRef(source),
+    description: pr.body,
+    acceptanceCriteria: extractAcceptanceCriteria(pr.body),
+    links: [{ title: prRef(source), url: pr.url }],
+    ...(context && { context }),
+    pr: { url: pr.url, repo: opts.prRepo, base: pr.base, head: pr.head, headSha: pr.headSha, ...(pr.baseSha && { baseSha: pr.baseSha }), ...(pr.startSha && { startSha: pr.startSha }) },
   };
 }
 

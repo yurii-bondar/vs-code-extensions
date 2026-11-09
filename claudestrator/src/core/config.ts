@@ -343,6 +343,14 @@ const REFACTOR_DEVELOPER = `Behaviour does not change: results, errors, side eff
 
 const REFACTOR_REVIEWER = `This task must not change behaviour. A change to what the code does (results, errors, side effects, public interfaces, the cost of a hot path) that the plan does not name is a blocker, and so is a change to what a test expects. A test changed only to follow an internal that was renamed or moved is fine.`;
 
+/** The built-in scenario that reviews a pull request; one pasted in the composer picks it. */
+const PR_REVIEW = 'pr-review';
+
+const PR_REVIEW_STEP = `This is a pull request someone opened, not a task's work: its title and description are the ticket, and there is no plan. Review it as a colleague of its author would.
+Its code at the commit under review is checked out where the prompt says, and its diff against the branch it merges into is in the diff file: read the code there, not in the repo's other checkout.
+Your findings go to the pull request as comments once the user agrees, each on the line it names when the diff has that line. So give each finding "file" as its path in the repository (no repo name or folder before it) and "line" as its line in the pull request's new code, and write it for the author: what is wrong, why it matters, what to do. Set "repo" to the repository the prompt names.
+Leave out praise and what a linter would catch; a review with no findings is a fine review.`;
+
 interface BuiltinConfig extends ConfigLayer {
   agents: Record<string, AgentLayer>;
   /** A report scenario's agents (`readiness`, `audit`), or a scenario in full, as a config.yaml writes it. */
@@ -448,6 +456,12 @@ const BUILTIN: BuiltinConfig = {
         { agent: 'tester', instructions: COVER_TESTER },
         { agent: 'reviewer', instructions: COVER_REVIEWER },
       ],
+    },
+    [PR_REVIEW]: {
+      label: 'PR review',
+      description: "Reviews a pull request's diff with fresh eyes, then posts the review to it as comments once you say so; changes nothing",
+      // The appsec reviewer is off until you turn it on (Agents), as in Deliver: then the two review at once.
+      agents: [{ parallel: [{ agent: 'reviewer', instructions: PR_REVIEW_STEP }, { agent: 'appsec-reviewer', instructions: PR_REVIEW_STEP }] }],
     },
     refactor: {
       label: 'Refactor',
@@ -1881,6 +1895,7 @@ export {
   CONFIG_FILE,
   PROMPTS_DIR,
   BUILTIN,
+  PR_REVIEW,
   builtinLayer,
   builtinAgentNames,
   builtinScenarioIds,

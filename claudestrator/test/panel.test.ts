@@ -166,7 +166,7 @@ test('panel: Fix in chat opens Claude in the repo of the failure, with it as the
   let checkpoint: { id: string; at: string } | null = { id: 'hook-failure', at: 'now' };
   const contexts: string[] = [];
   const engine = {
-    svc: { state: async () => ({ taskId: 'T-1', gitMode: 'branch', repos: [{ name: 'api' }, { name: 'web' }], checkpoint }) },
+    svc: { state: async () => ({ taskId: 'T-1', source: { kind: 'text', text: 'x' }, gitMode: 'branch', repos: [{ name: 'api' }, { name: 'web' }], checkpoint }) },
     checkpointContext: async (_s: unknown, cp: { id: string }) => (contexts.push(cp.id), { format: 'log', text: lint }),
   };
   const p = Object.assign(Object.create(DashboardPanel.prototype) as InstanceType<typeof DashboardPanel>, {
@@ -238,7 +238,7 @@ test('panel: the sidebar deletes a task and opens config.yaml without a dashboar
   const { deleteTask, openConfig } = await import('../src/panel');
   const done: string[] = [];
   const engine = {
-    svc: { state: async () => ({ gitMode: 'worktree', repos: [{ name: 'api' }] }), runsElsewhere: async () => null },
+    svc: { state: async () => ({ source: { kind: 'text', text: 'x' }, gitMode: 'worktree', repos: [{ name: 'api' }] }), runsElsewhere: async () => null },
     isRunning: () => true,
     stop: async () => void done.push('stop'),
     settled: async () => void done.push('settled'),

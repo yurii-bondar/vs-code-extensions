@@ -2,7 +2,8 @@
 // API token kept in VS Code's secret storage. Only Claudestrator calls it, never an agent.
 import * as fs from 'fs';
 import { ATTEMPTS, RETRY_STATUS, RETRY_STATUS_POST, retryAfterMs } from './http';
-import type { ChangeRequestItem, ChangeRequests, Remote } from './forge';
+import type { ChangeRequestItem, ChangeRequests, ForgePullRequest, Posted, Remote } from './forge';
+import type { InlineComment, ReviewPost } from './review';
 
 /** An Atlassian account's email and an API token with Bitbucket's scopes (Basic auth, as Bitbucket's API takes it). */
 interface BitbucketAuth {
@@ -193,5 +194,47 @@ function bitbucketRequests(remote: Remote, client: BitbucketClient | null): Chan
   };
 }
 
+/** A repo's path in Bitbucket's API: `/repositories/<workspace>/<repo>`. */
+function repoPath(project: string): string {
+  const [workspace, ...rest] = project.split('/');
+  return `/repositories/${encodeURIComponent(workspace!)}/${encodeURIComponent(rest.join('/'))}`;
+}
+
+/** A pull request to review: its text and comments, and the branches and commit it is about. */
+async function readBitbucketPullRequest(client: BitbucketClient, project: string, n: number): Promise<ForgePullRequest> {
+  const base = `${repoPath(project)}/pullrequests/${n}`;
+  const pr = obj(await client.request('GET', base));
+  // Comments are a ticket's context, not the ticket: a pull request whose comments cannot be read is still read.
+  const comments = await client.request('GET', `${base}/comments?pagelen=100`).then(
+    (d) => list(obj(d).values).map(obj),
+    () => []
+  );
+  return {
+    title: str(pr.title),
+    url: pageOf(pr) || `https://bitbucket.org/${project}/pull-requests/${n}`,
+    body: str(pr.description),
+    labels: [],
+    comments: comments.filter((c) => c.deleted !== true).map((c) => ({ author: str(obj(c.user).display_name) || 'unknown', created: str(c.created_on), body: str(obj(c.content).raw) })),
+    base: str(obj(obj(pr.destination).branch).name),
+    head: str(obj(obj(pr.source).branch).name),
+    headSha: str(obj(obj(pr.source).commit).hash),
+  };
+}
+
+/** Each line comment on its own, then the summary, which lists the ones a line refused. */
+async function postBitbucketReview(client: BitbucketClient, project: string, n: number, post: ReviewPost): Promise<Posted> {
+  const endpoint = `${repoPath(project)}/pullrequests/${n}/comments`;
+  const missed: InlineComment[] = [];
+  for (const c of post.inline) {
+    try {
+      await client.request('POST', endpoint, { content: { raw: c.body }, inline: { path: c.path, to: c.line } });
+    } catch {
+      missed.push(c);
+    }
+  }
+  const summary = obj(await client.request('POST', endpoint, { content: { raw: post.summary(missed) } }));
+  return { url: pageOf(summary) || `https://bitbucket.org/${project}/pull-requests/${n}`, inline: post.inline.length - missed.length };
+}
+
 export type { BitbucketAuth };
-export { BitbucketClient, BitbucketError, bitbucketRequests };
+export { BitbucketClient, BitbucketError, bitbucketRequests, postBitbucketReview, readBitbucketPullRequest };

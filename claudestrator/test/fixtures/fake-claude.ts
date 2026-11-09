@@ -285,6 +285,14 @@ function main(): void {
       case 'security':
       case 'appsec-reviewer':
       case 'reviewer': {
+        // FAKE_PR_FINDINGS: the findings of a pull request's review, as JSON; its prompt is kept to read.
+        if (process.env.FAKE_PR_FINDINGS) {
+          if (state) fs.writeFileSync(path.join(state, `prompt-${role}.txt`), prompt);
+          // The reviewer finds them; a second reviewer at once finds nothing.
+          const findings = role === 'reviewer' ? (JSON.parse(process.env.FAKE_PR_FINDINGS) as { severity: string }[]) : [];
+          const blocking = findings.some((f) => f.severity === 'blocker' || f.severity === 'major');
+          return reply(`Reviewed the pull request.\n\`\`\`json\n${JSON.stringify({ status: blocking ? 'changes_requested' : 'approved', summary: `${role} read it`, findings })}\n\`\`\``, uuid);
+        }
         const marker = path.join(state!, 'reviewed-once');
         if (process.env.FAKE_REVIEW === 'fail-once' && !fs.existsSync(marker)) {
           fs.writeFileSync(marker, '1');

@@ -143,6 +143,26 @@ test('composer: #12 with repos on two forges asks which project; a Jira key stil
   assert.doesNotMatch(jira, /GitHub CLI|GitLab CLI|Linear is not connected/);
 });
 
+test('composer: a pull request link picks PR review, says what it will do, and what is missing to read it', async () => {
+  await setHealth({ gh: cli(true), bitbucket: false });
+  const pr = await detect('https://github.com/acme/api/pull/12', 'Pull request');
+  assert.match(pr, /Pull request acme\/api#12 → api-pr-12/);
+  assert.match(pr, /reviewer → you decide → review posted to the PR/);
+  assert.doesNotMatch(pr, /draft PRs|commit/, 'it changes nothing in the repo');
+  assert.equal(await b.eval(`window.CS.S.draft.scenario`), 'auto', 'picked by the link, not by you');
+  assert.equal(await b.eval(`window.CS.views.home.detected`), 'pr-review');
+
+  await setHealth({ gh: cli(false, true) });
+  assert.match(await detect('https://github.com/acme/api/pull/12', 'GitHub CLI is not ready'), /GitHub CLI is not ready \(not logged in\): run gh auth login/);
+
+  const mr = await detect('https://gitlab.com/acme/web/-/merge_requests/7', 'Merge request');
+  assert.match(mr, /Merge request acme\/web!7 → web-mr-7/);
+  const bb = await detect('https://bitbucket.org/acme/shop/pull-requests/3', 'Bitbucket is not connected');
+  assert.match(bb, /Pull request acme\/shop#3 → shop-pr-3/);
+  assert.match(bb, /no repo of this workspace has acme\/shop on bitbucket\.org as its origin/);
+  assert.match(bb, /Bitbucket is not connected: add its API token/);
+});
+
 test("tools: GitLab's CLI shows once installed; with it ready, a missing gh is not a problem", async () => {
   // The Tasks page shows the whole line only when something is wrong: Claude Code here.
   const health = `document.querySelector('[data-region="health"]')`;

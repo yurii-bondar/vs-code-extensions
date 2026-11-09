@@ -808,7 +808,7 @@ interface Views {
 
   function sourceChip(src: TaskSource | null | undefined) {
     if (!src) return '';
-    const ic = src.kind === 'jira' ? 'jira' : src.kind === 'confluence' ? 'doc' : src.kind === 'text' ? 'text' : 'issue';
+    const ic = src.kind === 'jira' ? 'jira' : src.kind === 'confluence' ? 'doc' : src.kind === 'text' ? 'text' : src.kind === 'pr' ? 'pr' : 'issue';
     if (src.url) return `<a class="chip link-chip" data-action="open-url" data-url="${esc(src.url)}" title="${esc(src.url)}">${icon(ic)}${esc(src.label)}</a>`;
     return `<span class="chip">${icon(ic)}${esc(src.label)}</span>`;
   }
@@ -1230,13 +1230,16 @@ interface Views {
                   ? `${icon('issue')}GitLab issue <b>${esc(`${src.project}#${src.number}`)}</b>`
                   : src.kind === 'linear'
                     ? `${icon('issue')}Linear issue <b>${esc(src.key)}</b>`
+                    : src.kind === 'pr'
+                      ? `${icon('pr')}${src.forge === 'gitlab' ? 'Merge request' : 'Pull request'} <b>${esc(`${src.project}${src.forge === 'gitlab' ? '!' : '#'}${src.number}`)}</b>`
                     : `${icon('text')}${p.scenario === 'audit' ? 'Audit scope in your words' : p.scenario === 'readiness' ? 'What to check, in your words' : 'Task described in your words'}`;
         const health = S.overview!.health;
         const ready = !health.checking;
         const needsAtlassian = (src.kind === 'jira' || src.kind === 'confluence') && !(ready && (health.atlassian || health.atlassianMcp));
-        // What reads the issue: gh or glab under your login, Linear's MCP server.
+        // What reads the issue or pull request: gh or glab under your login, Bitbucket's token, Linear's MCP server.
+        const forge = src.kind === 'pr' ? src.forge : src.kind;
         const missing =
-          !ready ? '' : src.kind === 'github' && !health.gh.ok ? `GitHub CLI is not ready (${esc(health.gh.error || 'gh')}): run <code>gh auth login</code>` : src.kind === 'gitlab' && !health.glab.ok ? `GitLab CLI is not ready (${esc(health.glab.error || 'glab')}): run <code>glab auth login</code>` : src.kind === 'linear' && !health.linearMcp ? `Linear is not connected: add its MCP server (<code>claude mcp add --transport http linear https://mcp.linear.app/mcp</code>) and <a data-action="nav" data-name="mcp">sign in</a>` : '';
+          !ready ? '' : forge === 'bitbucket' && !health.bitbucket ? `Bitbucket is not connected: <a data-action="nav" data-name="mcp" data-section="bitbucket">add its API token</a>` : forge === 'github' && !health.gh.ok ? `GitHub CLI is not ready (${esc(health.gh.error || 'gh')}): run <code>gh auth login</code>` : forge === 'gitlab' && !health.glab.ok ? `GitLab CLI is not ready (${esc(health.glab.error || 'glab')}): run <code>glab auth login</code>` : src.kind === 'linear' && !health.linearMcp ? `Linear is not connected: add its MCP server (<code>claude mcp add --transport http linear https://mcp.linear.app/mcp</code>) and <a data-action="nav" data-name="mcp">sign in</a>` : '';
         patch(
           'detect',
           `<div class="detect">
@@ -1588,7 +1591,7 @@ interface Views {
   const actions: Record<string, ActionFn> = {
     nav: (el) => {
       setNavOpen(false);
-      go({ name: el.dataset.name });
+      go({ name: el.dataset.name, ...(el.dataset.section && { section: el.dataset.section }) });
     },
     'toggle-nav': () => setNavOpen(!$('.shell')?.classList.contains('nav-open')),
     'nav-settings': () => go({ name: 'settings' }),

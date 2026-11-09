@@ -6,6 +6,8 @@
 //   LIVE_GITLAB_ISSUE=https://gitlab.com/<group>/<project>/-/issues/<n>   glab: the issue, then MRs of its project
 //   LIVE_BITBUCKET_REPO=<workspace>/<repo> with BITBUCKET_EMAIL and BITBUCKET_API_TOKEN      Bitbucket Cloud's API
 //   LIVE_LINEAR_ISSUE=https://linear.app/<team>/issue/<KEY>   the intake agent (haiku, low) through your Linear MCP server
+//   LIVE_PR=<a pull or merge request's link on any of the three>      read as PR review reads it (posting is not tried live:
+//                                                                     it would comment on someone's pull request)
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -13,7 +15,7 @@ import { execFileSync } from 'child_process';
 
 import { BitbucketClient } from '../../src/core/bitbucket';
 import { Engine } from '../../src/core/engine';
-import { changeRequests, parseRemote, readIssue } from '../../src/core/forge';
+import { changeRequests, parseRemote, prFetchRef, readIssue, readPullRequest } from '../../src/core/forge';
 import { exec, setChildEnv } from '../../src/core/git';
 import { HookServer } from '../../src/core/hookserver';
 import { classifyInput } from '../../src/core/intake';
@@ -139,6 +141,15 @@ async function main(): Promise<void> {
     } finally {
       hooks.dispose();
     }
+  });
+
+  await check('a pull request, as PR review reads it', ['LIVE_PR'], async () => {
+    const src = sourceOf(process.env.LIVE_PR!);
+    expect(src.kind === 'pr', `${process.env.LIVE_PR} is not a pull or merge request link`);
+    const bitbucket = process.env.BITBUCKET_EMAIL && process.env.BITBUCKET_API_TOKEN ? new BitbucketClient({ email: process.env.BITBUCKET_EMAIL, token: process.env.BITBUCKET_API_TOKEN }) : null;
+    const pr = await readPullRequest(src, exec, bitbucket);
+    expect(pr.title && pr.base && pr.head && /^[0-9a-f]{7,40}$/.test(pr.headSha), `incomplete: ${JSON.stringify({ ...pr, body: undefined, comments: pr.comments.length })}`);
+    return `"${pr.title}", ${pr.head} → ${pr.base} at ${pr.headSha.slice(0, 12)}, ${pr.comments.length} comment(s); its head is fetched as ${prFetchRef(src, pr)}`;
   });
 
   console.log(results.join('\n'));

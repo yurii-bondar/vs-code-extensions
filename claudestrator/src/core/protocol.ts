@@ -52,6 +52,7 @@ const CHECKPOINT_OPTIONS: Record<CheckpointId, string[]> = {
   'protected-changes': ['apply', 'retry', 'skip', 'stop'],
   'hook-failure': ['retry', 'stop'],
   'confirm-push': ['push', 'push-comment', 'local'],
+  'post-review': ['post', 'skip'],
 };
 const JIRA_ONLY_OPTIONS = ['approve-post', 'push-comment'];
 
@@ -64,7 +65,7 @@ const isInfoEvent = (e: OrchEvent): e is InfoEvent => INFO_EVENTS.has(e.type);
 
 const STATE_EVENTS = new Set<string>([
   'task_created', 'intake_completed', 'stage_started', 'stage_completed', 'stage_failed',
-  'checkpoint_answered', 'committed', 'commit_failed', 'published', 'stopped', 'resumed', 'pipeline_changed',
+  'checkpoint_answered', 'committed', 'commit_failed', 'published', 'review_posted', 'stopped', 'resumed', 'pipeline_changed',
 ]);
 
 const isBlocking = (f: { severity: string }): boolean => f.severity !== 'minor';

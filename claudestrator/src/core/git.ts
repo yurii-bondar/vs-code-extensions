@@ -375,7 +375,8 @@ function taskRepos(workspace: string, state: TaskState, config: RepoLookup | nul
     const r = config && config.repos[name];
     const planned = state.repos.find((x) => x.name === name);
     const checkout = path.resolve(workspace, (r && r.path) || name);
-    const dir = state.gitMode === 'worktree' ? worktreeDir(workspace, state.taskId, name) : checkout;
+    // A pull request under review is read in a worktree at its head, whatever the git mode: your checkout stays as it is.
+    const dir = state.gitMode === 'worktree' || state.source.kind === 'pr' ? worktreeDir(workspace, state.taskId, name) : checkout;
     return { name, checkout, dir, base: (planned && planned.baseBranch) || (r && r.baseBranch) || (config && config.baseBranch) || 'main', git: new GitRepo(dir) };
   });
 }
@@ -503,7 +504,7 @@ async function taskDiff(repos: TaskRepo[]): Promise<{ text: string; empty: boole
 
 /** Removes a finished task's worktrees. Refuses a worktree with uncommitted work unless `force`. */
 async function removeWorktrees(workspace: string, state: TaskState, config: RepoLookup | null | undefined, force = false): Promise<{ repo: string; status: string; error?: string }[]> {
-  if (state.gitMode !== 'worktree') return [];
+  if (state.gitMode !== 'worktree' && state.source.kind !== 'pr') return [];
   const out: { repo: string; status: string; error?: string }[] = [];
   for (const { name, checkout, dir } of taskRepos(workspace, state, config, state.repos.map((r) => r.name))) {
     if (!(await exists(dir))) {

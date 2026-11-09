@@ -108,6 +108,14 @@ interface Views {
         local: { label: 'Keep it local', kind: 'secondary', icon: 'commit', hint: 'Branches and commits stay; push them yourself later.' },
       },
     },
+    'post-review': {
+      title: 'Post the review to the pull request?',
+      lead: 'The reviewers are done. Below is what would be posted: comments on the lines the pull request changed, and one summary with the rest. Nothing is posted until you choose.',
+      options: {
+        post: { label: 'Post the review', kind: 'primary', icon: 'pr' },
+        skip: { label: 'Finish without posting', kind: 'secondary', icon: 'check', hint: 'The review stays here, in the steps and their reports.' },
+      },
+    },
   };
 
   const STATUS_ICON: Record<string, string | null> = { done: 'check', running: null, failed: 'alert', waiting: 'bell', paused: 'pause', interrupted: 'alert', next: 'play', pending: null, skipped: 'x' };
@@ -694,6 +702,8 @@ interface Views {
       if (hooks.length) {
         body += `<div class="banner warn">${icon('alert')}<div class="grow"><b>The agents changed what acts outside the sandbox.</b> Git hooks run when you use git in ${hooks.length === 1 ? 'that repo' : 'those repos'}, <code>.lfsconfig</code> says where Git LFS uploads, every Claude Code session there takes <code>CLAUDE.md</code> as instructions, and Claude Code's and VS Code's settings (<code>.claude/</code>, <code>.mcp.json</code>, <code>.vscode/</code>) run hooks, MCP servers and tasks: read them first.<ul>${hooks.map((h) => `<li><code>${esc(h.repo)}/${esc(h.file)}</code></li>`).join('')}</ul></div></div>`;
       }
+    } else if (cp.id === 'post-review') {
+      body = `<div class="doc-frame"><div class="markdown">${md(ctx.text || '')}</div></div>`;
     } else if (cp.id === 'approve-step') {
       // What the step wrote (one report per repo), each without its data block.
       body = `<div class="doc-frame"><div class="markdown">${(ctx.text || '').split('\n\n---\n\n').map((part) => md(stripJsonBlock(part))).join('<hr>')}</div></div>`;
@@ -720,7 +730,7 @@ interface Views {
     const keyed = submitOption(cp, ui);
     return `<section class="checkpoint card cp-${cp.id}">
       <div class="cp-head">
-        <div class="cp-icon">${icon(cp.id === 'confirm-push' ? 'pr' : cp.id === 'approve-plan' ? 'eye' : 'alert')}</div>
+        <div class="cp-icon">${icon(cp.id === 'confirm-push' || cp.id === 'post-review' ? 'pr' : cp.id === 'approve-plan' ? 'eye' : 'alert')}</div>
         <div><h2>${esc(ui.title)}</h2><p>${esc(ui.lead)}</p>${stopped ? '<p class="muted small">The task is paused here; answering continues it.</p>' : ''}</div>
       </div>
       ${cp.step ? `<div class="muted small cp-step">At ${esc(stepName(cp.step))}</div>` : ''}

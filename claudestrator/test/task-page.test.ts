@@ -36,3 +36,19 @@ test('task page: a task from an issue shows the branch with its id, as the engin
     assert.equal(branchChip(regions['task-checkpoint']!), branch, `${source ? String(source.kind) : 'no source'}`);
   }
 });
+
+test('task page: a reviewed pull request asks before its review is posted, and shows what would be', async () => {
+  const { regions } = await taskScreen({
+    taskId: 'api-pr-12',
+    source: { kind: 'pr', label: 'acme/api#12', url: 'https://github.com/acme/api/pull/12' },
+    status: { key: 'waiting', tone: 'warn', label: 'Post the review', resumable: false },
+    checkpointFull: { id: 'post-review', options: ['post', 'skip'], at: 'now' },
+    checkpointContext: { format: 'markdown', text: 'Posted to https://github.com/acme/api/pull/12 as you choose, not before.' },
+  });
+  const cp = regions['task-checkpoint']!;
+  assert.match(cp, /<h2>Post the review to the pull request\?<\/h2>/);
+  assert.match(cp, /<div class="doc-frame"><div class="markdown">[\s\S]*as you choose, not before\.[\s\S]*<\/div><\/div>/, 'what would be posted, as Markdown');
+  assert.match(cp, /data-action="answer" data-option="post" data-kind="primary"[^>]*>[\s\S]*?Post the review<\/button>/);
+  assert.match(cp, /data-option="skip"[^>]*>[\s\S]*?Finish without posting<\/button>/);
+  assert.match(cp, /<div class="cp-icon"><i data-icon="pr"><\/i><\/div>/);
+});

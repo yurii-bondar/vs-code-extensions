@@ -11,10 +11,12 @@ import { buildPipeline, fixedFlow, scenarioKind, taskPipeline, fitsScenario, onR
 import { nextAction, groupPending, runOf, artifactPath, branchName, sameStep, editableFrom, spentOf, stepRepos, unknownRepos, onlyHumanFindings, TASK_FILES, type NextAction, type RunAction } from './machine';
 import { contentAfter, humanFinding, isInstructionsOnly, isProtectedFile, refusedSettings } from './protected';
 import { parseInvocation, classifyInput, detectScenario, runIntake, renderTicket, IntakeError, extractAcceptanceCriteria, otherSite, planFromTicket, capSpec, projectAllowed, sourceName, sourceRef } from './intake';
-import { changeRequests, issueLine, parseRemote, type Remote, type Run } from './forge';
+import { changeRequests, ForgeError, issueLine, parseRemote, postReview, prFetchRef, prRef, type Remote, type Run } from './forge';
+import { postPreview, reviewPost, type ReviewPost } from './review';
+import { PR_REVIEW } from './config';
 import type { BitbucketClient } from './bitbucket';
 import { TaskService, type DispatchResult } from './store';
-import { AS_TEXT, exec, getChildEnv, GitRepo, branchAt, taskRepos, prepareRepos, taskDiff, removeWorktrees, SLOW_GIT_MS } from './git';
+import { AS_TEXT, exec, getChildEnv, GitRepo, branchAt, taskRepos, prepareRepos, taskDiff, removeWorktrees, worktreeDir, SLOW_GIT_MS } from './git';
 import { runGates, runShell, sandboxNote, withoutCredentials } from './gates';
 import { guardBash, inGitMetadata, inside, outsideLabel } from './guard';
 import { buildAgentPrompt, parseStageReport, lastJsonBlock, withStepInstructions, workReport, workTurn, type StageReport } from './prompt';
@@ -507,12 +509,13 @@ class Engine extends EventEmitter {
     const available = [...SCENARIOS.filter((id) => !removed.includes(id)), ...Object.keys(custom)];
     const explicit = scenario && scenario !== 'auto' ? scenario : inv.scenario;
     if (explicit && !available.includes(explicit)) throw new EngineError('bad_scenario', `there is no scenario "${explicit}" here; choose one of ${available.join(', ')}`);
-    // Words can only pick a built-in scenario that is still there.
+    // Words can only pick a built-in scenario that is still there; a pull request's link picks its review.
     const detected = detectScenario(inv.input);
-    const name = explicit || (available.includes(detected) ? detected : 'deliver');
-    const kind = scenarioKind(config, name);
     const input = inv.input || inv.key || '';
-    const source = classifyInput(input, { embedded: kind === 'readiness', projects: config.jira.allowedProjects });
+    const pasted = classifyInput(input, { projects: config.jira.allowedProjects });
+    const name = explicit || (pasted.kind === 'pr' && available.includes(PR_REVIEW) ? PR_REVIEW : available.includes(detected) ? detected : 'deliver');
+    const kind = scenarioKind(config, name);
+    const source = kind === 'readiness' ? classifyInput(input, { embedded: true, projects: config.jira.allowedProjects }) : pasted;
     return { scenario: kind, name, ...(custom[name] && { label: custom[name]!.label }), detected: !explicit && name !== 'deliver', source };
   }
 
@@ -532,21 +535,39 @@ class Engine extends EventEmitter {
    * on, `owner/name#12` of that project where a repo's origin is (else github.com, where people write it so). Anything
    * else is the source it was classified as.
    */
-  async resolveSource(classified: Classified, config: Config): Promise<Source> {
+  async resolveSource(classified: Classified, config: Config, { pr = false }: { pr?: boolean } = {}): Promise<Source> {
     if (classified.kind !== 'issue') return classified;
-    // Bitbucket's issues are not read: its teams keep them in Jira.
-    const remotes = (await this.remotes(config)).filter((x) => x.remote.forge !== 'bitbucket');
+    // Bitbucket's issues are not read: its teams keep them in Jira. Its pull requests are.
+    const remotes = (await this.remotes(config)).filter((x) => pr || x.remote.forge !== 'bitbucket');
     const ref = `${classified.project ?? ''}#${classified.number}`;
     const wanted = classified.project && classified.project.toLowerCase();
     const matching = remotes.filter((x) => !wanted || x.remote.project.toLowerCase() === wanted);
     const projects = [...new Map(matching.map((x) => [`${x.remote.forge}:${x.remote.host}/${x.remote.project}`.toLowerCase(), x.remote])).values()];
     const one = projects.length === 1 ? projects[0]! : null;
-    if (!one && wanted && !projects.length) return { kind: 'github', host: 'github.com', repo: classified.project!, number: classified.number };
+    if (!one && wanted && !projects.length) return pr ? { kind: 'pr', forge: 'github', host: 'github.com', project: classified.project!, number: classified.number } : { kind: 'github', host: 'github.com', repo: classified.project!, number: classified.number };
     if (!one) {
-      const where = projects.length ? `the repos are in ${projects.map((p) => `${p.project} (${p.host})`).join(', ')}` : 'no configured repo has its origin on GitHub or GitLab';
-      throw new EngineError('issue_ambiguous', `${ref} names no one project: ${where}. Write it as owner/name#${classified.number}, or paste the issue's link`);
+      const where = projects.length ? `the repos are in ${projects.map((p) => `${p.project} (${p.host})`).join(', ')}` : `no configured repo has its origin on ${pr ? 'GitHub, GitLab or Bitbucket' : 'GitHub or GitLab'}`;
+      throw new EngineError('issue_ambiguous', `${ref} names no one project: ${where}. Write it as owner/name#${classified.number}, or paste the ${pr ? 'pull request' : 'issue'}'s link`);
     }
+    if (pr) return { kind: 'pr', forge: one.forge, host: one.host, project: one.project, number: classified.number };
     return one.forge === 'github' ? { kind: 'github', host: one.host, repo: one.project, number: classified.number } : { kind: 'gitlab', host: one.host, project: one.project, number: classified.number };
+  }
+
+  /** The workspace's repo whose origin a pull request is on, or null. */
+  async repoOfPr(src: Extract<Source, { kind: 'pr' }>, config: Config): Promise<string | null> {
+    const hit = (await this.remotes(config)).find((x) => x.remote.forge === src.forge && x.remote.host === src.host.toLowerCase() && x.remote.project.toLowerCase() === src.project.toLowerCase());
+    return hit ? hit.repo : null;
+  }
+
+  /**
+   * Why a task of this source cannot run this pipeline: a pull request is reviewed (its scenario runs reviewers only) on
+   * a repo of this workspace, and the PR review scenario takes nothing but a pull request. Null when it can.
+   */
+  async prProblem(source: Source, pipeline: Pick<Pipeline, 'stages'>, scenario: string, config: Config): Promise<string | null> {
+    if (source.kind !== 'pr') return scenario === PR_REVIEW ? 'PR review takes a pull request: paste its link (or #12 for one of the repo the workspace has)' : null;
+    if (!pipeline.stages.length || pipeline.stages.some((st) => st.output !== 'verdict')) return `${prRef(source)} is a pull request to review: choose PR review, or a scenario that runs reviewers only`;
+    if (!(await this.repoOfPr(source, config))) return `no repo of this workspace has ${source.project} on ${source.host} as its origin: add it in Repos & checks to review its pull requests`;
+    return null;
   }
 
   /**
@@ -641,12 +662,13 @@ class Engine extends EventEmitter {
     let problem: string | undefined;
     let source: Source;
     try {
-      source = await this.resolveSource(sc.source, r.config);
+      source = await this.resolveSource(sc.source, r.config, { pr: sc.name === PR_REVIEW });
     } catch (e) {
       source = { kind: 'text', text: input };
       problem = (e as Error).message;
     }
     const pipeline = buildPipeline(r.config, { auto: auto || inv.auto, scenario: sc.name });
+    problem = problem || (await this.prProblem(source, pipeline, sc.name, r.config)) || undefined;
     const { taskId, exists } = await this.svc.idFor({ taskId: key || inv.key, source, scenario: sc.scenario });
     if (source.kind === 'jira') {
       const allowed = r.config.jira.allowedProjects;
@@ -699,7 +721,7 @@ class Engine extends EventEmitter {
     const flags = { no: [...new Set([...(inv.flags.no || []), ...no])], ...(inv.flags.only && { only: inv.flags.only }) };
     const config = await this.config(flags);
     const sc = this.resolveScenario({ ...inv, input: (inv.input || key || inv.key) as string }, scenario, config);
-    const source = await this.resolveSource(sc.source, config);
+    const source = await this.resolveSource(sc.source, config, { pr: sc.name === PR_REVIEW });
     if (source.kind === 'jira') {
       const allowed = config.jira.allowedProjects;
       const project = source.key.split('-')[0]!;
@@ -707,6 +729,8 @@ class Engine extends EventEmitter {
     }
     const isAuto = auto || inv.auto;
     const pipeline = buildPipeline(config, { auto: isAuto, scenario: sc.name });
+    const notPr = await this.prProblem(source, pipeline, sc.name, config);
+    if (notPr && pipeline.stages.length) throw new EngineError('pr_review', notPr);
     if (pipeline.stages.length === 0) throw new EngineError('empty_pipeline', sc.name === 'deliver' ? 'Every agent is switched off; turn at least one on' : `No agent is on for the ${sc.label || sc.name} scenario; add one or turn one on in Agents`);
     const repos = this.reposWithoutPlan(inv.repos, config, pipeline);
     if (!repos.ok) throw new EngineError('repos_required', repos.error);
@@ -855,6 +879,8 @@ class Engine extends EventEmitter {
         const next = nextAction(s);
         switch (next.kind) {
           case 'done':
+            // A reviewed pull request's worktree has done its job: its code is the forge's.
+            if (s.source.kind === 'pr') await this.cleanup(taskId, true).catch((e: Error) => this.log('warn', `the review's worktree stays: ${e.message}`, taskId));
             this.emit('finished', { taskId, state: s });
             return s;
           case 'stopped':
@@ -877,6 +903,9 @@ class Engine extends EventEmitter {
             break;
           case 'publish':
             await this.publish(s);
+            break;
+          case 'post-review':
+            await this.postPr(s);
             break;
         }
       }
@@ -932,7 +961,9 @@ class Engine extends EventEmitter {
     await this.svc.writeArtifact(s.taskId, TASK_FILES.ticket, renderTicket(spec));
     // The pipeline as it is now: it may have been edited while the ticket was read.
     const plan = await this.planWithoutPlanner(await this.svc.state(s.taskId), spec);
-    await this.dispatch(s.taskId, { type: 'intake_completed', spec, ...(plan && { plan }) });
+    // A pull request's review is of its one repo, against the branch it merges into.
+    const repos = spec.pr ? [{ name: spec.pr.repo, mode: 'full' as const, baseBranch: spec.pr.base }] : undefined;
+    await this.dispatch(s.taskId, { type: 'intake_completed', spec, ...(plan && { plan }), ...(repos && { repos }) });
   }
 
   /** Streams an agent session's output to the UI and its transcript. */
@@ -1043,6 +1074,11 @@ class Engine extends EventEmitter {
         const client = this.atlassian();
         const via = !client || otherSite(src, client.site) ? await this.mcpIntake('atlassian') : null;
         return via ? this.intakeViaMcp(s, via) : this.intakeOverRest(s, client);
+      }
+      case 'pr': {
+        const repo = await this.repoOfPr(src, await this.config());
+        if (!repo) throw new EngineError('pr_repo_unknown', `no repo of this workspace has ${src.project} on ${src.host} as its origin: add it in Repos & checks, then start the review again`);
+        return runIntake(s.taskId, src, { run: this.cli, bitbucket: this.bitbucket(), prRepo: repo });
       }
     }
   }
@@ -1291,7 +1327,7 @@ class Engine extends EventEmitter {
     const running = this.reviewDiffs.get(key);
     if (running) return running;
     const collect = (async () => {
-      const diff = await taskDiff(taskRepos(this.workspace, s, config, s.repos.map((r) => r.name)));
+      const diff = s.spec && s.spec.pr ? await this.prDiff(s, config) : await taskDiff(taskRepos(this.workspace, s, config, s.repos.map((r) => r.name)));
       return { path: await this.svc.writeArtifact(s.taskId, rel, diff.text), empty: diff.empty };
     })();
     this.reviewDiffs.set(key, collect);
@@ -1301,6 +1337,79 @@ class Engine extends EventEmitter {
       // Collected again by a later review of the round (one run again), which reads the repos as they are then.
       this.reviewDiffs.delete(key);
     }
+  }
+
+  /**
+   * A pull request's code at the commit the task read, in a worktree of its own (your checkout stays as it is), and its
+   * diff against where its branch left the one it merges into: what its reviewers read. Fetched once; a reviewer run
+   * again finds the worktree there. A pull request with new commits since is reviewed as it was read: its comments go on
+   * that commit.
+   */
+  async prDiff(s: TaskState, config: Config): Promise<{ text: string; empty: boolean }> {
+    const pr = s.spec!.pr!;
+    const src = s.source as Extract<Source, { kind: 'pr' }>;
+    const r = config.repos[pr.repo];
+    if (!r) throw new EngineError('pr_repo_unknown', `${pr.repo}, the repo of ${prRef(src)}, is not in the config any more`);
+    const main = new GitRepo(path.resolve(this.workspace, r.path));
+    const dir = worktreeDir(this.workspace, s.taskId, pr.repo);
+    const fetch = async (ref: string): Promise<string> => {
+      const f = await main.gitWith({ timeoutMs: SLOW_GIT_MS }, 'fetch', '--no-tags', 'origin', ref);
+      if (f.code !== 0) throw new EngineError('pr_fetch_failed', `${pr.repo}: git fetch origin ${ref} failed: ${(f.stderr || f.stdout).trim().split('\n').slice(-3).join(' ')}`);
+      return (await main.git('rev-parse', 'FETCH_HEAD')).stdout.trim();
+    };
+    const baseTip = await fetch(pr.base);
+    await fetch(prFetchRef(src, pr));
+    const sha = (await main.git('rev-parse', '--verify', '--quiet', `${pr.headSha}^{commit}`)).stdout.trim();
+    if (!sha) throw new EngineError('pr_moved', `${prRef(src)} no longer has the commit ${pr.headSha.slice(0, 12)} it had when the task read it (force-pushed?): start its review again`);
+    const here = new GitRepo(dir);
+    if (!(await exists(dir)) || (await here.git('rev-parse', 'HEAD')).stdout.trim() !== sha) {
+      if (await exists(dir)) await main.git('worktree', 'remove', '--force', dir);
+      const add = await main.gitWith({ timeoutMs: SLOW_GIT_MS }, 'worktree', 'add', '--detach', dir, sha);
+      if (add.code !== 0) {
+        await main.git('worktree', 'remove', '--force', dir);
+        await fs.promises.rm(dir, { recursive: true, force: true });
+        throw new EngineError('pr_checkout_failed', `${pr.repo}: the worktree of ${prRef(src)} could not be made: ${add.stderr.trim()}`);
+      }
+    }
+    // GitLab says where its diff starts; elsewhere it is where the branch left the one it merges into.
+    const known = pr.baseSha && (await main.git('rev-parse', '--verify', '--quiet', `${pr.baseSha}^{commit}`)).stdout.trim();
+    const from = known || (await main.git('merge-base', baseTip, sha)).stdout.trim() || baseTip;
+    const diff = await here.git('--no-pager', 'diff', ...AS_TEXT, '--no-color', from, sha);
+    if (diff.code !== 0) throw new EngineError('pr_diff_failed', `${pr.repo}: the diff of ${prRef(src)} could not be read: ${diff.stderr.trim()}`);
+    return { text: `################ ${pr.repo} (${prRef(src)}: ${pr.head} → ${pr.base}, at ${sha.slice(0, 12)})\n${diff.stdout}`, empty: !diff.stdout.trim() };
+  }
+
+  /** What a pull request's review would post: from the reviewers' verdicts, on the diff they read. */
+  async reviewToPost(s: TaskState, config: Config): Promise<ReviewPost> {
+    const pr = s.spec!.pr!;
+    const verdicts = s.review.verdicts;
+    const summaries = await Promise.all(
+      verdicts.map(async (v) => {
+        const block = lastJsonBlock(await this.svc.readArtifact(s.taskId, v.artifact).catch(() => ''));
+        const value = block.ok ? (block.value as { summary?: unknown }) : null;
+        return { agent: v.agent, status: v.status, summary: value && typeof value.summary === 'string' ? value.summary : '' };
+      })
+    );
+    const diff = await this.svc.readArtifact(s.taskId, `reviews/r${s.review.round}/diff.patch`).catch(() => '');
+    return reviewPost({ verdicts, summaries, diff, repo: pr.repo, dir: worktreeDir(this.workspace, s.taskId, pr.repo), forbidAttribution: config.policy.forbidAiAttribution });
+  }
+
+  /** Posts a pull request's review, as you said: its line comments and its summary, under your own login or token. */
+  async postPr(s: TaskState): Promise<void> {
+    const src = s.source as Extract<Source, { kind: 'pr' }>;
+    const config = await this.config();
+    const post = await this.reviewToPost(s, config);
+    this.setLive(s.taskId, { phase: 'publishing', text: `Posting the review to ${prRef(src)}` });
+    const tmp = await ownTemp('review-');
+    let posted;
+    try {
+      posted = await postReview({ src, pr: s.spec!.pr!, post, run: this.cli, bitbucket: this.bitbucket(), tmp });
+    } catch (e) {
+      throw e instanceof ForgeError ? new EngineError('post_failed', e.message) : e;
+    } finally {
+      await fs.promises.rm(tmp, { recursive: true, force: true });
+    }
+    await this.dispatch(s.taskId, { type: 'review_posted', url: posted.url, inline: posted.inline });
   }
 
   /** The task's budget is spent: it stops, and no agent starts. */
@@ -1395,14 +1504,17 @@ class Engine extends EventEmitter {
     const run = next.kind === 'run' ? next : runOf(state, step);
     // A planner names the repos its plan works in, and readiness and audit agents read them: each gets every configured
     // repo, where it is (also outside the workspace folder), by the name the plan must use.
-    const readRepos = REPORT_OUTPUTS.has(stage.output) || stage.output === 'plan' ? Object.values(config.repos).map((r) => ({ name: r.name, dir: path.resolve(this.workspace, r.path), baseBranch: r.baseBranch, ...(r.role && { role: r.role }) })) : [];
+    const pr = state.spec && state.spec.pr;
+    // A pull request's reviewers read its repo where its head is checked out.
+    const prRepo = pr && config.repos[pr.repo];
+    const readRepos = REPORT_OUTPUTS.has(stage.output) || stage.output === 'plan' ? Object.values(config.repos).map((r) => ({ name: r.name, dir: path.resolve(this.workspace, r.path), baseBranch: r.baseBranch, ...(r.role && { role: r.role }) })) : pr ? [{ name: pr.repo, dir: worktreeDir(this.workspace, taskId, pr.repo), baseBranch: pr.base, ...(prRepo && prRepo.role && { role: prRepo.role }) }] : [];
     let prsPath: string | undefined;
     if (stage.output === 'readiness' && (s.source.kind === 'jira' || s.source.kind === 'linear') && readRepos.length) {
       live({ phase: 'preparing', step, text: `Listing the PRs and MRs for ${s.source.key}` });
       prsPath = await this.listPrs(taskId, s.source.key, readRepos, config);
     }
     const failed = run.mode === 'retry' ? await this.lastFailure(taskId, step) : null;
-    const prompt = buildAgentPrompt({ state, next: run, taskDir, language: config.language, ...(repoDir && { repoDir }), ...(workRepos.length && { workRepos }), ...(diffPath && { diffPath }), ...(prsPath && { prsPath }), ...(next.kind === 'running' && { rerun: true }), ...(readRepos.length && { repos: readRepos }), ...(failed && { failed }), ...(redChecks && { redChecks }), ...(config.policy.sandbox && { sandboxed: true }), ...(config.policy.checkEnv.length > 0 && { checkEnv: config.policy.checkEnv }) });
+    const prompt = buildAgentPrompt({ state, next: run, taskDir, language: config.language, ...(repoDir && { repoDir }), ...(workRepos.length && { workRepos }), ...(diffPath && { diffPath }), ...(prsPath && { prsPath }), ...(next.kind === 'running' && { rerun: true }), ...(readRepos.length && { repos: readRepos }), ...(pr && { pullRequest: { url: pr.url, repo: pr.repo, base: pr.base, head: pr.head } }), ...(failed && { failed }), ...(redChecks && { redChecks }), ...(config.policy.sandbox && { sandboxed: true }), ...(config.policy.checkEnv.length > 0 && { checkEnv: config.policy.checkEnv }) });
     // A stage that writes starts in the repo it writes (the first of them for a stage across repos): Claude Code's
     // sandbox lets a session write its working directories, so the workspace around the repos is never one of them.
     const cwd = repoDir || (workRepos.length ? workRepos[0]!.dir : this.workspace);
@@ -2383,6 +2495,10 @@ class Engine extends EventEmitter {
         const value: CheckpointContext = { format: 'log', text: parts.join('\n\n'), repos, ...(secrets.length && { secrets }), ...(hooks.length && { hooks }) };
         this.pushContext.set(s.taskId, { at: cp.at, value });
         return value;
+      }
+      case 'post-review': {
+        const post = await this.reviewToPost(s, await this.config());
+        return { format: 'markdown', text: postPreview(post, s.spec!.pr!.url) };
       }
       default:
         return { format: 'log', text: cp.reason || '' };

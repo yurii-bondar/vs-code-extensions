@@ -148,6 +148,8 @@ export interface HealthReport {
   atlassian: boolean;
   atlassianMcp: string | null;
   linearMcp: string | null;
+  /** Whether Bitbucket Cloud's API token is there: its pull requests are read and commented on with it. */
+  bitbucket: boolean;
 }
 
 export type HealthSummary = HealthChecking | HealthReport;

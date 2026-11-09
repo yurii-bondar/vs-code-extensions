@@ -1,14 +1,17 @@
 // Forges: GitHub and GitLab, reached through their own CLIs (gh, glab) under your login, never by an agent. Their issues
 // are tasks' sources; their pull and merge requests are where a task's branches go.
 import * as fs from 'fs';
-import { bitbucketRequests, type BitbucketClient } from './bitbucket';
+import * as path from 'path';
+import { bitbucketRequests, postBitbucketReview, readBitbucketPullRequest, type BitbucketClient } from './bitbucket';
 import type { ExecResult } from './git';
-import type { ForgeKind, ForgeOverride, Source } from './types';
+import type { InlineComment, ReviewPost } from './review';
+import type { ForgeKind, ForgeOverride, PullRequestInfo, Source } from './types';
 
 /** How a command runs: `exec` in the extension, a fake in tests. Never rejects. */
 type Run = (cmd: string, args: readonly string[], opts: { cwd?: string; timeoutMs?: number; signal?: AbortSignal }) => Promise<ExecResult>;
 
 type GithubSource = Extract<Source, { kind: 'github' }>;
+type PrSource = Extract<Source, { kind: 'pr' }>;
 type GitlabSource = Extract<Source, { kind: 'gitlab' }>;
 type ForgeIssue = GithubSource | GitlabSource;
 
@@ -85,6 +88,9 @@ function parseRemote(url: string, forge?: ForgeOverride): Remote | null {
 
 /** `owner/name#12`: how a forge writes an issue of another project. */
 const issueRef = (src: ForgeIssue): string => `${src.kind === 'github' ? src.repo : src.project}#${src.number}`;
+
+/** `owner/name#12`, or GitLab's `group/name!7` for a merge request. */
+const prRef = (src: PrSource): string => `${src.project}${src.forge === 'gitlab' ? '!' : '#'}${src.number}`;
 
 // ---------- issues ----------
 
@@ -360,5 +366,136 @@ function issueLine(source: Source, remote: Remote | null, prs: number): string |
   return `${prs > 1 ? 'Refs' : 'Closes'} ${ref}`;
 }
 
-export type { ChangeRequestItem, ChangeRequests, CreateArgs, ForgeIssue, ForgeIssueRead, Outcome, Remote, Run };
-export { CLI, ForgeError, changeRequests, forgeOfHost, issueLine, issueRef, parseRemote, readIssue };
+// ---------- pull requests under review ----------
+
+/** A pull request as its review needs it: the ticket's text, and what to check out and comment on. */
+interface ForgePullRequest extends ForgeIssueRead {
+  base: string;
+  head: string;
+  headSha: string;
+  baseSha?: string;
+  startSha?: string;
+}
+
+/** Reads a pull request with its forge's CLI, or Bitbucket's API. */
+async function readPullRequest(src: PrSource, run: Run, bitbucket: BitbucketClient | null): Promise<ForgePullRequest> {
+  const what = `read ${prRef(src)}`;
+  if (src.forge === 'bitbucket') {
+    if (!bitbucket) throw new ForgeError('forge_auth', `${prRef(src)} is on Bitbucket, read with an API token: save one in Integrations → Bitbucket`);
+    try {
+      return await readBitbucketPullRequest(bitbucket, src.project, src.number);
+    } catch (e) {
+      throw new ForgeError('forge_failed', `Bitbucket could not ${what}: ${(e as Error).message}`);
+    }
+  }
+  if (src.forge === 'github') {
+    const repo = src.host === 'github.com' ? src.project : `${src.host}/${src.project}`;
+    const res = await run('gh', ['pr', 'view', String(src.number), '--repo', repo, '--json', 'title,body,url,baseRefName,headRefName,headRefOid,comments'], { timeoutMs: 60000 });
+    if (res.code !== 0) throw failure('github', res, what);
+    const d = obj(parseJson(res, 'github', what));
+    return {
+      title: str(d.title),
+      url: str(d.url) || `https://${src.host}/${src.project}/pull/${src.number}`,
+      body: str(d.body),
+      labels: [],
+      comments: list(d.comments)
+        .slice(-MAX_COMMENTS)
+        .map((c) => ({ author: str(obj(obj(c).author).login) || 'unknown', created: str(obj(c).createdAt), body: str(obj(c).body) })),
+      base: str(d.baseRefName),
+      head: str(d.headRefName),
+      headSha: str(d.headRefOid),
+    };
+  }
+  const base = `${gitlabProject(src.project)}/merge_requests/${src.number}`;
+  const [mr, notes] = await Promise.all([glabApi(run, src.host, [base]), glabApi(run, src.host, [`${base}/notes?sort=asc&order_by=created_at&per_page=${MAX_COMMENTS}`])]);
+  if (mr.code !== 0) throw failure('gitlab', mr, what);
+  const d = obj(parseJson(mr, 'gitlab', what));
+  const refs = obj(d.diff_refs);
+  return {
+    title: str(d.title),
+    url: str(d.web_url) || `https://${src.host}/${src.project}/-/merge_requests/${src.number}`,
+    body: str(d.description),
+    labels: list(d.labels).map(str).filter(Boolean),
+    comments: (notes.code === 0 ? list(parseJson(notes, 'gitlab', what)) : [])
+      .map(obj)
+      .filter((n) => n.system !== true)
+      .map((n) => ({ author: str(obj(n.author).username) || 'unknown', created: str(n.created_at), body: str(n.body) })),
+    base: str(d.target_branch),
+    head: str(d.source_branch),
+    headSha: str(refs.head_sha) || str(d.sha),
+    ...(str(refs.base_sha) && { baseSha: str(refs.base_sha) }),
+    ...(str(refs.start_sha) && { startSha: str(refs.start_sha) }),
+  };
+}
+
+/**
+ * What `git fetch origin <ref>` brings of a pull request's head: GitHub's and GitLab's own refs (forks too), else the
+ * branch it comes from, which on Bitbucket is in the repo itself.
+ */
+function prFetchRef(src: PrSource, pr: Pick<PullRequestInfo, 'head'>): string {
+  if (src.forge === 'github') return `pull/${src.number}/head`;
+  if (src.forge === 'gitlab') return `merge-requests/${src.number}/head`;
+  return `refs/heads/${pr.head}`;
+}
+
+interface PostArgs {
+  src: PrSource;
+  pr: PullRequestInfo;
+  post: ReviewPost;
+  run: Run;
+  bitbucket: BitbucketClient | null;
+  /** Claudestrator's own temp folder, where the requests' bodies are written. */
+  tmp: string;
+}
+
+/** Where the review is, and how many of its comments landed on lines. */
+interface Posted {
+  url: string;
+  inline: number;
+}
+
+/**
+ * Posts a review: on GitHub one review (a comment, neither an approval nor a request for changes) on the commit that
+ * was reviewed, with its line comments; a line GitHub refuses sends them all into the summary instead. On GitLab and
+ * Bitbucket each line comment on its own, then the summary, which lists the ones a line refused.
+ */
+async function postReview({ src, pr, post, run, bitbucket, tmp }: PostArgs): Promise<Posted> {
+  if (src.forge === 'bitbucket') {
+    if (!bitbucket) throw new ForgeError('forge_auth', `${prRef(src)} is on Bitbucket, posted to with an API token: save one in Integrations → Bitbucket`);
+    return postBitbucketReview(bitbucket, src.project, src.number, post);
+  }
+  const input = async (name: string, body: unknown): Promise<string> => {
+    const file = path.join(tmp, name);
+    await fs.promises.writeFile(file, JSON.stringify(body));
+    return file;
+  };
+  if (src.forge === 'github') {
+    const endpoint = `repos/${src.project}/pulls/${src.number}/reviews`;
+    const send = async (inline: InlineComment[], missed: InlineComment[]): Promise<ExecResult> =>
+      run('gh', ['api', '--hostname', src.host, '--method', 'POST', '--header', 'Content-Type: application/json', '--input', await input(`review-${inline.length}.json`, { commit_id: pr.headSha, event: 'COMMENT', body: post.summary(missed), comments: inline.map((c) => ({ path: c.path, line: c.line, side: 'RIGHT', body: c.body })) }), endpoint], { timeoutMs: 120000 });
+    let res = await send(post.inline, []);
+    let inline = post.inline.length;
+    // A line GitHub will not take (it moved, it is not in the diff it has) fails the whole review: nothing was posted.
+    if (res.code !== 0 && post.inline.length && /\b422\b|Unprocessable|could not be resolved|pull_request_review_thread/i.test(`${res.stderr}${res.stdout}`)) {
+      res = await send([], post.inline);
+      inline = 0;
+    }
+    if (res.code !== 0) throw failure('github', res, `post the review to ${prRef(src)}`);
+    return { url: str(obj(parseJson(res, 'github', 'post the review')).html_url) || pr.url, inline };
+  }
+  const base = `${gitlabProject(src.project)}/merge_requests/${src.number}`;
+  const missed: InlineComment[] = [];
+  for (const c of post.inline) {
+    const position = { position_type: 'text', base_sha: pr.baseSha, start_sha: pr.startSha, head_sha: pr.headSha, new_path: c.path, old_path: c.path, new_line: c.line };
+    const res = await glabApi(run, src.host, ['--method', 'POST', '--header', 'Content-Type: application/json', '--input', await input(`line-${missed.length}-${c.line}.json`, { body: c.body, position }), `${base}/discussions`], { timeoutMs: 120000 });
+    if (res.code !== 0) missed.push(c);
+  }
+  const res = await glabApi(run, src.host, ['--method', 'POST', '--header', 'Content-Type: application/json', '--input', await input('summary.json', { body: post.summary(missed) }), `${base}/notes`], { timeoutMs: 120000 });
+  if (res.code !== 0) throw failure('gitlab', res, `post the review to ${prRef(src)}`);
+  const id = obj(parseJson(res, 'gitlab', 'post the review')).id;
+  const note = typeof id === 'number' || typeof id === 'string' ? String(id) : '';
+  return { url: note ? `${pr.url}#note_${note}` : pr.url, inline: post.inline.length - missed.length };
+}
+
+export type { ChangeRequestItem, ChangeRequests, CreateArgs, ForgeIssue, ForgeIssueRead, ForgePullRequest, Outcome, Posted, Remote, Run };
+export { CLI, ForgeError, changeRequests, forgeOfHost, issueLine, issueRef, parseRemote, postReview, prFetchRef, prRef, readIssue, readPullRequest };
