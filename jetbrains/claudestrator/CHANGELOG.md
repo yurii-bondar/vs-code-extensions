@@ -1,3 +1,13 @@
+## [0.11.0](https://github.com/yurii-bondar/vs-code-extensions/compare/jetbrains-claudestrator-v0.10.0...jetbrains-claudestrator-v0.11.0) (2026-11-09)
+
+### Features
+
+* **claudestrator:** built-in scenarios in full, and an optional appsec reviewer in Deliver ([cc13568](https://github.com/yurii-bondar/vs-code-extensions/commit/cc135688b7a4c3ebc96eb8a26b50abf47c5b9e63))
+
+### Bug Fixes
+
+* **claudestrator:** sharpen the built-in agents' instructions ([89a0d25](https://github.com/yurii-bondar/vs-code-extensions/commit/89a0d254352c8789062d85721da177e44159d517))
+
 ## [0.10.0](https://github.com/yurii-bondar/vs-code-extensions/compare/jetbrains-claudestrator-v0.9.0...jetbrains-claudestrator-v0.10.0) (2026-11-08)
 
 ### Features
