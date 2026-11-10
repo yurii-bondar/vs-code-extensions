@@ -1,3 +1,14 @@
+## [0.12.0](https://github.com/yurii-bondar/vs-code-extensions/compare/jetbrains-claudestrator-v0.11.0...jetbrains-claudestrator-v0.12.0) (2026-11-09)
+
+### Features
+
+* **claudestrator:** PR review, a scenario that reviews a pull request and posts the review to it once you say so ([f023c13](https://github.com/yurii-bondar/vs-code-extensions/commit/f023c13e6d5e2611c5499ac25a572e58be6737b5))
+* **claudestrator:** tasks from GitHub, GitLab and Linear issues; GitLab merge requests and Bitbucket Cloud pull requests ([770770f](https://github.com/yurii-bondar/vs-code-extensions/commit/770770f5918dd846934e821f9f890df4d2aaf010)), closes [#12](https://github.com/yurii-bondar/vs-code-extensions/issues/12) [owner/repo#12](https://github.com/owner/repo/issues/12) [#12](https://github.com/yurii-bondar/vs-code-extensions/issues/12)
+
+### Bug Fixes
+
+* **claudestrator:** PR review comments on unchanged GitLab lines, GitHub lines one by one when the review is refused, and findings to untick before posting ([79a1cbb](https://github.com/yurii-bondar/vs-code-extensions/commit/79a1cbb4a630e483cf2c63534af8cf5848824213))
+
 ## [0.11.0](https://github.com/yurii-bondar/vs-code-extensions/compare/jetbrains-claudestrator-v0.10.0...jetbrains-claudestrator-v0.11.0) (2026-11-09)
 
 ### Features

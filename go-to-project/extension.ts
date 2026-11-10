@@ -4,7 +4,8 @@ import * as path from 'path';
 import { Commands } from './src/commands';
 import { ProjectItems } from './src/items';
 import { WindowRegistry } from './src/windows';
-import { ownProject } from './src/workspace';
+import { ownProject, settings } from './src/workspace';
+import { DIRECTORY_SLOTS } from './src/core/directory';
 import type { WindowId } from './src/core/types';
 
 const HEARTBEAT_MS = 5000;
@@ -32,12 +33,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (own) await registry.focus(own);
   }
 
+  // Drives the `when` clauses that list only the directory commands that have a directory.
+  const countDirectories = (): Thenable<unknown> => vscode.commands.executeCommand('setContext', 'goToProject.directoryCount', settings().directories.length);
+
   timer = setInterval(() => void heartbeat(), HEARTBEAT_MS);
 
   context.subscriptions.push(
     vscode.commands.registerCommand('goToProject.open', () => commands.open()),
     vscode.commands.registerCommand('goToProject.recent', () => commands.recent()),
     vscode.commands.registerCommand('goToProject.last', () => commands.last()),
+    vscode.commands.registerCommand('goToProject.currentDirectory', () => commands.currentDirectory()),
+    vscode.commands.registerCommand('goToProject.addDirectory', () => commands.addDirectory()),
+    ...Array.from({ length: DIRECTORY_SLOTS }, (_, i) => vscode.commands.registerCommand(`goToProject.directory${i + 1}`, () => commands.directory(i + 1))),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('goToProject.directories')) void countDirectories();
+    }),
     vscode.window.onDidChangeWindowState((s) => {
       if (s.focused) void onFocused().then(heartbeat);
     }),
@@ -45,6 +55,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     { dispose: () => clearInterval(timer) }
   );
 
+  void countDirectories();
   void heartbeat().then(() => (vscode.window.state.focused ? onFocused() : undefined));
 }
 

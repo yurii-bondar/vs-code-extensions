@@ -2,15 +2,18 @@ import * as vscode from 'vscode';
 import { promises as fs } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { isUnder } from './core/paths';
+import { DIRECTORY_SLOTS, projectsIn } from './core/directory';
+import { isUnder, tildify, untildify } from './core/paths';
 import { parseRecent } from './core/recent';
 import { previousFirst } from './core/state';
-import { ownProject, projectUri, settings } from './workspace';
+import { currentTarget, ownProject, projectUri, settings } from './workspace';
 import type { ProjectItem, ProjectItems } from './items';
 import type { WindowRegistry } from './windows';
 
 const RECENT_KEY = process.platform === 'darwin' ? '⌥⌘E' : 'Ctrl+Alt+E';
 const PLACEHOLDER = 'Type a project name, branch or path';
+const HOME = os.homedir();
+const ADD_DIRECTORY = 'Add Directory';
 
 // Recent entries that cannot be (or should not be) opened: deleted folders, the Trash, temp folders.
 const HIDDEN = [path.join(os.homedir(), '.Trash'), os.tmpdir(), '/tmp', '/private/tmp', '/private/var/folders', '/var/folders'];
@@ -134,6 +137,71 @@ export class Commands {
       return;
     }
     await openTarget(vscode.Uri.parse(last));
+  }
+
+  /** Projects next to this window's: the folder its project lives in. */
+  async currentDirectory(): Promise<void> {
+    const target = currentTarget();
+    if (target?.scheme !== 'file') {
+      vscode.window.showInformationMessage('Go To Project: this window has no local project.');
+      return;
+    }
+    return this.inDirectory(path.dirname(target.fsPath));
+  }
+
+  /** Projects in the `slot`th entry of `goToProject.directories` (from 1). */
+  async directory(slot: number): Promise<void> {
+    const dir = settings().directories[slot - 1];
+    if (dir) return this.inDirectory(untildify(dir, HOME));
+    const answer = await vscode.window.showInformationMessage(`Go To Project: there is no directory ${slot} in goToProject.directories.`, ADD_DIRECTORY);
+    if (answer === ADD_DIRECTORY) await this.addDirectory();
+  }
+
+  /** Appends a folder to `goToProject.directories`, then opens Keyboard Shortcuts at its command to give it a key. */
+  async addDirectory(): Promise<void> {
+    const { directories } = settings();
+    if (directories.length >= DIRECTORY_SLOTS) {
+      vscode.window.showWarningMessage(`Go To Project: ${DIRECTORY_SLOTS} directories is the most; remove one from goToProject.directories first.`);
+      return;
+    }
+    const target = currentTarget();
+    const picked = await vscode.window.showOpenDialog({
+      title: 'Add a Projects Directory',
+      openLabel: ADD_DIRECTORY,
+      canSelectFolders: true,
+      canSelectFiles: false,
+      canSelectMany: false,
+      ...(target?.scheme === 'file' ? { defaultUri: vscode.Uri.file(path.dirname(target.fsPath)) } : {}),
+    });
+    const dir = picked?.[0]?.fsPath;
+    if (!dir) return;
+    const shown = tildify(dir, HOME);
+    const existing = directories.findIndex((d) => untildify(d, HOME) === dir);
+    if (existing >= 0) {
+      vscode.window.showInformationMessage(`Go To Project: ${shown} is already directory ${existing + 1}.`);
+      return;
+    }
+    await vscode.workspace.getConfiguration('goToProject').update('directories', [...directories, shown], vscode.ConfigurationTarget.Global);
+    const slot = directories.length + 1;
+    await vscode.commands.executeCommand('workbench.action.openGlobalKeybindings', `goToProject.directory${slot}`);
+    vscode.window.showInformationMessage(`Go To Project: ${shown} is directory ${slot}. Double-click "Go To Project in Directory ${slot}" to give it a key.`);
+  }
+
+  private async inDirectory(dir: string): Promise<void> {
+    const shown = tildify(dir, HOME);
+    let found: string[];
+    try {
+      found = await projectsIn(dir);
+    } catch {
+      vscode.window.showWarningMessage(`Go To Project: cannot read ${shown}.`);
+      return;
+    }
+    if (!found.length) {
+      vscode.window.showInformationMessage(`Go To Project: no projects in ${shown}.`);
+      return;
+    }
+    const r = await pick(await this.items.list(found.map((f) => vscode.Uri.file(f))), { title: `Projects in ${shown}`, placeholder: PLACEHOLDER });
+    if (r?.item && !r.item.current) await openTarget(r.item.uri);
   }
 
   /** Open windows, the one focused before this one first so Enter jumps straight back; then a way to the recent list. */
