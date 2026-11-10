@@ -9,13 +9,13 @@ Switch between VS Code windows the way JetBrains IDEs do: one shortcut, a search
 | **Go To Project** | `cmd+alt+p` | `ctrl+alt+p` | The open project windows, the one you came from first. The last row, *Recent projects…*, opens the recent list and keeps what you typed. |
 | **Go To Recent Project** | `cmd+alt+e` | `ctrl+alt+e` | Recent projects that are not open. Deleted folders, the Trash and temp folders are left out. |
 | **Go To Last Project** | — | — | Jump straight back to the window you were in before this one. |
-| **Go To Project in This Directory** | `cmd+r` | `ctrl+alt+r` | The projects next to this one: every folder and `.code-workspace` file in the folder this window's project lives in. Hidden folders are left out. |
+| **Go To Project in This Directory** | `cmd+r` | `ctrl+alt+r` | The projects inside the folder open in this window (the first folder of a multi-root workspace): every folder and `.code-workspace` file in it. Hidden folders are left out. |
 | **Go To Project in Directory 1…9** | your key | your key | The projects in a folder from `goToProject.directories`. |
 | **Go To Project: Add Directory…** | — | — | Pick a folder, add it to `goToProject.directories`, and give its command a key. |
 
 ## Directories
 
-Besides the folder of the current project you can keep up to nine folders of projects one key away, say `~/work` and `~/oss`. **Go To Project: Add Directory…** adds a folder as the next entry *n*, then opens Keyboard Shortcuts at **Go To Project in Directory *n*** so you can press its key there. Or write the list yourself:
+Besides the folder open in this window you can keep up to nine folders of projects one key away, say `~/work` and `~/oss`. **Go To Project: Add Directory…** adds a folder as the next entry *n*, then opens Keyboard Shortcuts at **Go To Project in Directory *n*** so you can press its key there. Or write the list yourself:
 
 ```json
 "goToProject.directories": ["~/work", "~/oss"]

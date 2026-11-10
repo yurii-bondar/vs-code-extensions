@@ -139,14 +139,14 @@ export class Commands {
     await openTarget(vscode.Uri.parse(last));
   }
 
-  /** Projects next to this window's: the folder its project lives in. */
+  /** Projects inside the folder open in this window (the first one of a multi-root workspace). */
   async currentDirectory(): Promise<void> {
-    const target = currentTarget();
-    if (target?.scheme !== 'file') {
-      vscode.window.showInformationMessage('Go To Project: this window has no local project.');
+    const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
+    if (folder?.scheme !== 'file') {
+      vscode.window.showInformationMessage('Go To Project: this window has no local folder open.');
       return;
     }
-    return this.inDirectory(path.dirname(target.fsPath));
+    return this.inDirectory(folder.fsPath);
   }
 
   /** Projects in the `slot`th entry of `goToProject.directories` (from 1). */
