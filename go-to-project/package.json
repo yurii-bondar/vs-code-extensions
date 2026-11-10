@@ -2,7 +2,7 @@
   "name": "go-to-project",
   "displayName": "Go To Project",
   "description": "Switch between open project windows with quick search, open recent projects or the projects in a directory, and jump back to the last project.",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "publisher": "bondevn",
   "license": "MIT",
   "author": "Yurii Bondar",

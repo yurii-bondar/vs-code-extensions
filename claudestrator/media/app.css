@@ -761,6 +761,7 @@ span.gate-chip { cursor: default; }
 .kv .chip { margin: 0 4px 4px 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; text-align: left; }
 .finding { font-size: var(--cs-font-sm); padding: 4px 0; border-top: 1px solid var(--cs-border-default); }
 .finding:first-of-type { border-top: 0; }
+.finding code { word-break: break-all; }
 .sev { display: inline-block; font-size: var(--cs-font-xs); text-transform: uppercase; font-weight: var(--cs-weight-strong); letter-spacing: 0.04em; padding: 0 5px; border-radius: var(--cs-radius-sm); margin-right: 5px; background: var(--cs-button-secondary-bg); }
 .sev-blocker .sev { background: var(--cs-status-err-tint); color: var(--cs-status-err-text); box-shadow: inset 0 0 0 1px var(--cs-status-err-border); }
 .sev-major .sev { background: var(--cs-status-warn-tint); color: var(--cs-status-warn-text); box-shadow: inset 0 0 0 1px var(--cs-status-warn-border); }
