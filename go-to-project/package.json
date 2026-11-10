@@ -1,7 +1,7 @@
 {
   "name": "go-to-project",
   "displayName": "Go To Project",
-  "description": "Switch between open project windows with quick search, open recent projects, and jump back to the last project.",
+  "description": "Switch between open project windows with quick search, open recent projects or the projects in a directory, and jump back to the last project.",
   "version": "0.1.1",
   "publisher": "bondevn",
   "license": "MIT",
@@ -63,6 +63,50 @@
       {
         "command": "goToProject.last",
         "title": "Go To Last Project"
+      },
+      {
+        "command": "goToProject.currentDirectory",
+        "title": "Go To Project in This Directory"
+      },
+      {
+        "command": "goToProject.addDirectory",
+        "title": "Go To Project: Add Directory…"
+      },
+      {
+        "command": "goToProject.directory1",
+        "title": "Go To Project in Directory 1"
+      },
+      {
+        "command": "goToProject.directory2",
+        "title": "Go To Project in Directory 2"
+      },
+      {
+        "command": "goToProject.directory3",
+        "title": "Go To Project in Directory 3"
+      },
+      {
+        "command": "goToProject.directory4",
+        "title": "Go To Project in Directory 4"
+      },
+      {
+        "command": "goToProject.directory5",
+        "title": "Go To Project in Directory 5"
+      },
+      {
+        "command": "goToProject.directory6",
+        "title": "Go To Project in Directory 6"
+      },
+      {
+        "command": "goToProject.directory7",
+        "title": "Go To Project in Directory 7"
+      },
+      {
+        "command": "goToProject.directory8",
+        "title": "Go To Project in Directory 8"
+      },
+      {
+        "command": "goToProject.directory9",
+        "title": "Go To Project in Directory 9"
       }
     ],
     "keybindings": [
@@ -75,6 +119,11 @@
         "command": "goToProject.recent",
         "key": "ctrl+alt+e",
         "mac": "cmd+alt+e"
+      },
+      {
+        "command": "goToProject.currentDirectory",
+        "key": "ctrl+alt+r",
+        "mac": "cmd+r"
       }
     ],
     "menus": {
@@ -82,6 +131,42 @@
         {
           "command": "goToProject.last",
           "when": "goToProject.hasLast"
+        },
+        {
+          "command": "goToProject.directory1",
+          "when": "goToProject.directoryCount >= 1"
+        },
+        {
+          "command": "goToProject.directory2",
+          "when": "goToProject.directoryCount >= 2"
+        },
+        {
+          "command": "goToProject.directory3",
+          "when": "goToProject.directoryCount >= 3"
+        },
+        {
+          "command": "goToProject.directory4",
+          "when": "goToProject.directoryCount >= 4"
+        },
+        {
+          "command": "goToProject.directory5",
+          "when": "goToProject.directoryCount >= 5"
+        },
+        {
+          "command": "goToProject.directory6",
+          "when": "goToProject.directoryCount >= 6"
+        },
+        {
+          "command": "goToProject.directory7",
+          "when": "goToProject.directoryCount >= 7"
+        },
+        {
+          "command": "goToProject.directory8",
+          "when": "goToProject.directoryCount >= 8"
+        },
+        {
+          "command": "goToProject.directory9",
+          "when": "goToProject.directoryCount >= 9"
         }
       ]
     },
@@ -97,6 +182,15 @@
           "type": "boolean",
           "default": true,
           "description": "Show the current git branch next to each local project."
+        },
+        "goToProject.directories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "application",
+          "markdownDescription": "Folders whose projects you want one key away, besides the one this window's project is in. Entry *n* opens with **Go To Project in Directory n**; `~` is your home folder. **Go To Project: Add Directory…** adds one and opens Keyboard Shortcuts at its command."
         }
       }
     }
