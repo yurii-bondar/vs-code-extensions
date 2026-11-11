@@ -17,7 +17,6 @@
   "scripts": {
     "prepare": "husky",
     "release:build": "node scripts/release.mjs build",
-    "release:test": "node scripts/release.mjs test",
-    "release:live": "node scripts/release.mjs live"
+    "release:test": "node scripts/release.mjs test"
   }
 }
