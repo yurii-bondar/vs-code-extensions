@@ -1,18 +1,19 @@
 # vs-code-extensions
 
-Monorepo of five VS Code extensions, each a self-contained folder with its own `package.json`, `release.config.cjs`, README and LICENSE:
+Monorepo of four VS Code extensions, each a self-contained folder with its own `package.json`, `release.config.cjs`, README and LICENSE:
 
 | Folder | Extension | Notes |
 |---|---|---|
 | `personify/` | Personify | settings panel (hotkeys, colors, fonts, syntax); settings and keybindings logic in `src/core/`, catalog in `src/catalog/`, webview in `media/main.ts` |
 | `claude-ctx-man/` | Claude Ctx Man | accounts/sessions tree, statusline (`src/`, `statusline/`) |
-| `claudestrator/` | Claudestrator | orchestrator; engine in `src/core/`, hook in `hook/`, tests in `test/`; `scripts/design-sync/` rebuilds the Penpot design file's Screens page from the dashboard (its README) |
 | `go-to-project/` | Go to Project | quick pick in `src/`, pure logic (cross-window state, git branch, icons) in `src/core/`, tests in `test/` |
 | `scriptor/` | Scriptor | script launcher: groups of `.sh`/`.js`/`.py` scripts run in a terminal; pure logic in `src/core/`, dashboard webview in `media/` |
 
+Claudestrator (the VS Code extension and its JetBrains plugin) moved to its own repo, `github.com/yurii-bondar/claudestrator`, with its history and release tags.
+
 The root `package.json` is release tooling only (semantic-release + `semantic-release-monorepo`). It has no app code.
 
-**Current state.** All five extensions are TypeScript (strict, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`): host code in `extension.ts` and `src/`, webview scripts in `media/*.ts` (plain scripts with their own `tsconfig.webview.json`), tests in `test/`. Compiler options live in the root `tsconfig.base.json`; each extension's `tsconfig.json` extends it and sets only `outDir`, `rootDir`, `include` and `exclude` (paths in a config resolve against the file that sets them, so they cannot move to the base). Build output goes to `dist/` (git-ignored, `main` is `./dist/extension.js`). In each: `npm run build`, `npm run typecheck`, `npm run lint`, `npm test` (builds, then `node --test dist/test/*.test.js`).
+**Current state.** All four extensions are TypeScript (strict, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`): host code in `extension.ts` and `src/`, webview scripts in `media/*.ts` (plain scripts with their own `tsconfig.webview.json`), tests in `test/`. Compiler options live in the root `tsconfig.base.json`; each extension's `tsconfig.json` extends it and sets only `outDir`, `rootDir`, `include` and `exclude` (paths in a config resolve against the file that sets them, so they cannot move to the base). Build output goes to `dist/` (git-ignored, `main` is `./dist/extension.js`). In each: `npm run build`, `npm run typecheck`, `npm run lint`, `npm test` (builds, then `node --test dist/test/*.test.js`).
 
 `claude-ctx-man/statusline/render.ts` is special: Install copies its compiled `dist/statusline/render.js` to `~/.ctx-man/statusline.js`, where Claude Code runs it alone. It must stay one self-contained file that loads only Node's own modules; its imports from `statusline/types.ts` are `import type` (erased).
 
@@ -29,14 +30,13 @@ Everything is adapted to this repo and lives in `.claude/`:
 
 `principles.md` and `typescript.md` apply to every `.ts`. `ts-performance` is loaded only for the hot paths listed in its description, and readability wins elsewhere.
 
-The only git hook is husky's `commit-msg` (`.husky/commit-msg`), which strips AI-attribution trailers from commit messages. The root `npm install` activates it through the `prepare` script (`core.hooksPath` becomes `.husky/_`), so run it once after cloning. There is no pre-commit hook and no pre-commit version bump. CI (`ci.yml`: the `pr-title` check, then typecheck, lint, test and package of every extension) and releases (`release.yml`) are paused (`workflow_dispatch` only): run those checks locally and verify PR titles by hand. Releases (each extension's `.vsix` and Claudestrator's JetBrains plugin) come from `scripts/release.mjs` (`npm run release:build | release:test | release:live` in the root), which versions them by semantic-release's rules and tags them; see `rules/git.md`.
+The only git hook is husky's `commit-msg` (`.husky/commit-msg`), which strips AI-attribution trailers from commit messages. The root `npm install` activates it through the `prepare` script (`core.hooksPath` becomes `.husky/_`), so run it once after cloning. There is no pre-commit hook and no pre-commit version bump. CI (`ci.yml`: the `pr-title` check, then typecheck, lint, test and package of every extension) and releases (`release.yml`) are paused (`workflow_dispatch` only): run those checks locally and verify PR titles by hand. Releases (each extension's `.vsix`) come from `scripts/release.mjs` (`npm run release:build | release:test` in the root), which versions them by semantic-release's rules and tags them; see `rules/git.md`.
 
 ## Writing code
 
 Hold every change to `typescript.md` and `principles.md`:
 - Match the surrounding style (naming, comment density, how sibling extensions solve the same thing).
 - Data from outside arrives as `unknown` and is narrowed once, at the boundary: `settings.json` and `getConfiguration().get()`, `~/.claude` files, hook payloads, `globalState`, files the user picks. Downstream code sees one shape.
-- Claudestrator's dashboard CSS uses only the `--cs-*` design tokens declared at the top of `claudestrator/media/app.css`. Host theme variables (`--vscode-*`) are read there and nowhere else, and components have no colour literals. Light and high-contrast variants key on the `<body>` class that VS Code sets; the JetBrains plugin sets the same class (`ThemeCss.bodyClass()`).
 - Webview messages are typed in `src/protocol.ts`: a `ClientMessage` / `HostMessage` union, `parseClientMessage` on the host side, an exhaustive `switch` with a `never` default on both sides. The webview script imports only types (`media/globals.d.ts`).
 - Functions with 3+ positional parameters take an options object.
 - Pure logic goes in `src/core/` and does not import `vscode`, so it is tested with `node --test` against the build. Edges (fs, settings, clock) come in as small interfaces where a test needs a fake. Keep `extension.ts` thin.
@@ -48,12 +48,12 @@ Hold every change to `typescript.md` and `principles.md`:
 
 The rules the migration followed, kept for reference.
 
-1. **Per-extension migration**, one extension per PR, matching the release model. Order: `go-to-project` (smallest, has tests) → `personify` → `claude-ctx-man` → `claudestrator`. Done: all of them (`scriptor` was written in TypeScript from the start).
+1. **Per-extension migration**, one extension per PR, matching the release model. Order: `go-to-project` (smallest, has tests) → `personify` → `claude-ctx-man` → `claudestrator`. Done: all of them (`scriptor` was written in TypeScript from the start; `claudestrator` has since moved to its own repo).
 2. **`tsconfig`**: `strict: true`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes` (required by `typescript.md`), `noImplicitReturns`, target matching the VS Code engine's Node (check `engines.vscode`). Prefer one shared `tsconfig.base.json` at the root that each extension extends.
 3. **Types**: `@types/vscode` pinned to the same range as `engines.vscode`. `@types/node`.
 4. **No `any`.** Type JSON from disk, hook payloads and webview messages as `unknown` and narrow them at the boundary. Webview messages are a discriminated union with an exhaustive `switch` and a `never` default.
 5. **Branded types** for IDs that are all strings: session id, account id, project path, task id.
-6. **Interfaces and DI** (`principles.md`): `claudestrator/src/core/` is the natural seam. Pass fs, process runner, git and clock in as small interfaces so the engine can be tested with fakes (this replaces `test/fixtures/fake-claude.js`-style stubs where possible).
+6. **Interfaces and DI** (`principles.md`): each extension's `src/core/` is the natural seam. Pass fs, process runner, git and clock in as small interfaces so the engine can be tested with fakes (this replaces `test/fixtures/fake-claude.js`-style stubs where possible).
 7. **Build**: the output must still be what `package.json` `"main"` points to. Decide on `tsc` vs. a bundler (esbuild) per extension. Update `.vscodeignore` (currently empty) so `src/*.ts` and `node_modules` are not shipped, and so the `.vsix` contains only the build output and `media/`. Build before `vsce package`.
 8. **Release pipeline**: add the build step to `.github/workflows/release.yml` and `ci.yml` (`npm run build` before `npm test`/`vsce package`). Tests: either keep `node --test` against compiled output, or run `.ts` directly (`node --experimental-strip-types`; note that Node 22.14 needs the flag and CI uses Node 24).
 9. **Webview scripts** (`media/*.js`) run in the browser, not Node. They need their own `tsconfig` (DOM lib, no Node types).

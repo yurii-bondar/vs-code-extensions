@@ -13,7 +13,7 @@ Always-on for every `.ts` in the extension folders, not just in hot-path code. E
 - **Strict tsconfig** — `strict: true` minimum. Add `noUncheckedIndexedAccess` (index access may return `undefined`) and `exactOptionalPropertyTypes` (optional field ≠ explicit `undefined`). Share one `tsconfig.base.json` at the repo root; each extension extends it.
 - **No `any`.** `any` silently disables type checking across the entire call chain. Type external data as `unknown` and narrow immediately via type guards or explicit parsing. Situations that truly require `unknown` are rare; if you reach for it, verify the data cannot be typed at the boundary instead.
 - **Boundaries of this repo** — everything below arrives untyped and is narrowed once, at the edge:
-  - JSON/YAML from disk: `~/.claude*/` (`.claude.json`, session `.jsonl`), `settings.json`, `.claudestrator/` config
+  - JSON/YAML from disk: `~/.claude*/` (`.claude.json`, session `.jsonl`), `settings.json`
   - Claude Code hook payloads and statusline stdin
   - `webview.postMessage` / `onDidReceiveMessage` messages
   - `vscode.workspace.getConfiguration().get()` results
